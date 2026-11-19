@@ -1164,12 +1164,13 @@ mod tests {
     ///
     /// `Command` is `#[serde(tag = "type")]` with no catch-all, so a persisted
     /// undo entry naming a deleted variant stops deserializing - and
-    /// `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad entry rather
-    /// than truncating, keeping the entries on BOTH sides. The stack then loads
-    /// with a HOLE, and undoing past it replays older entries against a tree they
-    /// no longer describe. `ApplyCollabChanges` is the worked example: schema v15
-    /// has to call `drop_legacy_undo_history` for exactly that reason, as v11->v12
-    /// and v12->v13 did before it.
+    /// `UndoStack::load_from_persisted_with_timestamps` then drops the WHOLE
+    /// history (a compact entry is relative to the one above it, so a history
+    /// with a hole would undo onto the wrong project), showing the
+    /// "could not be read" banner. A removal therefore costs every user's
+    /// history on their next open; it must be deliberate, with a schema
+    /// migration that drops the history explicitly, as v15 did for
+    /// `ApplyCollabChanges` and v11->v12 and v12->v13 before it.
     ///
     /// Its sibling `legacy_set_shot_reference_undo_entries_still_deserialize`
     /// covers the other half of this hazard - a RENAMED tag, which can be kept

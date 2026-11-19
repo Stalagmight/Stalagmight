@@ -176,8 +176,8 @@
  *     `ZeroDatumInfo` name lines and line ids ARE persisted; `ClosureInfo`
  *     and every stored station reference use `StationKey`
  *     (`LineStart` / `AfterShot(uuid)`, models/station.rs), which is
- *     uuid-anchored on purpose. Six further variants have restore arms but no
- *     live producer at all - see `UNREACHABLE_VARIANTS`.
+ *     uuid-anchored on purpose. `ProjectSnapshotPair` has restore arms but no
+ *     live entry holds one - see `UNREACHABLE_VARIANTS`.
  *
  * 13. WEDGED HISTORY. Same mechanism, opposite outcome. A line that has had a
  *     shot DELETED has handed out more ids than it has shots, so the newest

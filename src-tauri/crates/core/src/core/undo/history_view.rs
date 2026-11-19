@@ -2,6 +2,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use super::history_names::{describe, describe_entry, NameBook};
+use super::{BeforePreview, Doc};
 use crate::core::{Command, UndoData, UndoEntry};
 use crate::models::{LineId, ShotKind, ShotUpdates};
 
@@ -91,7 +92,7 @@ fn get_command_type(command: &Command) -> String {
 }
 
 /// The most sub-commands a batch's preview lists before it counts the rest.
-const BATCH_PREVIEW_ROWS: usize = 8;
+pub(super) const BATCH_PREVIEW_ROWS: usize = 8;
 
 /// What a preview row shows for a station no name can be read for (its line
 /// is gone): never the positional handle.
@@ -114,12 +115,92 @@ fn format_station_key_with_name(key: &crate::models::StationKey, names: &NameBoo
 
 /// The name of line `line_id` in a recorded project snapshot (a deleted
 /// line's history label), read without building the project.
-pub(super) fn snapshot_line_name(snapshot_json: &str, line_id: LineId) -> Option<String> {
+fn snapshot_line_name(snapshot_json: &str, line_id: LineId) -> Option<String> {
     SnapshotPreview::parse(snapshot_json)?
         .line(line_id)?
         .name
         .clone()
         .filter(|n| !n.trim().is_empty())
+}
+
+/// The two rows a Delete Line entry previews: the line's name and its
+/// shot count, both going away.
+fn deleted_line_preview(name: Option<&str>, shots: usize) -> PreviewData {
+    PreviewData {
+        changes: vec![
+            FieldChange {
+                field: "Name".to_string(),
+                old_value: name.unwrap_or("unnamed").to_string(),
+                new_value: String::new(),
+            },
+            FieldChange {
+                field: "Shots".to_string(),
+                old_value: shots.to_string(),
+                new_value: "0".to_string(),
+            },
+        ],
+        additional_changes: 0,
+    }
+}
+
+/// What the preview of `command` will need from its `before` state, read
+/// while the capture still has it: [`UndoData::compact`] then drops it.
+/// `None` for every command whose preview reads nothing from it.
+///
+/// Read off the split state (`Doc`), so only what the preview names is
+/// parsed - the deleted line, the datums and the lines they stand on - not
+/// the whole project.
+pub(crate) fn before_preview(command: &Command, before: &Doc<'_>) -> Option<BeforePreview> {
+    let line = |id: LineId| SnapshotLine::parse(before.line_text(id)?);
+    match command {
+        Command::DeleteLine { line_id } => {
+            let line = line(*line_id)?;
+            Some(BeforePreview::Line {
+                name: line.name,
+                shots: line.shots.len(),
+            })
+        }
+        Command::RemoveZeroDatum { station_ref } => Some(BeforePreview::Datum(
+            SnapshotPreview::of_doc(before).and_then(|snapshot| snapshot.datum_gps(*station_ref)),
+        )),
+        Command::Batch { commands, .. } => {
+            let names: Vec<(LineId, String)> = commands
+                .iter()
+                .take(BATCH_PREVIEW_ROWS)
+                .filter_map(|cmd| match cmd {
+                    Command::DeleteLine { line_id } => Some(*line_id),
+                    _ => None,
+                })
+                .filter_map(|line_id| {
+                    let name = line(line_id)?.name?;
+                    (!name.trim().is_empty()).then_some((line_id, name))
+                })
+                .collect();
+            (!names.is_empty()).then_some(BeforePreview::DeletedLines(names))
+        }
+        _ => None,
+    }
+}
+
+/// The name a deleted line had, as the entry recorded it: from a snapshot
+/// pair's `before`, or from the facts a compact entry kept of it at capture
+/// ([`before_preview`]). `None` when the entry recorded no name for it.
+pub(super) fn recorded_line_name(undo_data: &UndoData, line_id: LineId) -> Option<String> {
+    match undo_data {
+        UndoData::ProjectSnapshotPair { before, .. } => snapshot_line_name(before, line_id),
+        UndoData::Delta(delta) => match &delta.preview {
+            Some(BeforePreview::Line {
+                name: Some(name), ..
+            }) => Some(name.clone()),
+            Some(BeforePreview::DeletedLines(names)) => names
+                .iter()
+                .find(|(id, _)| *id == line_id)
+                .map(|(_, name)| name.clone()),
+            _ => None,
+        }
+        .filter(|name| !name.trim().is_empty()),
+        _ => None,
+    }
 }
 
 /// The slice of a persisted project snapshot the preview arms that read one
@@ -171,12 +252,46 @@ struct SnapshotShot {
     uuid: Option<String>,
 }
 
+impl SnapshotLine {
+    /// One line of a split state, or `None` if it is not one this build can
+    /// read.
+    fn parse(raw: &str) -> Option<Self> {
+        serde_json::from_str(raw).ok()
+    }
+}
+
 impl SnapshotPreview {
     /// Parse a snapshot half, or `None` if it is not one this build can read.
     /// A preview is decoration: an unreadable snapshot loses the extra rows,
     /// never the entry.
     fn parse(snapshot_json: &str) -> Option<Self> {
         serde_json::from_str(snapshot_json).ok()
+    }
+
+    /// What [`Self::parse`] reads, off a split state: its datums and GPS
+    /// fixes, and only the lines they stand on.
+    fn of_doc(doc: &Doc<'_>) -> Option<Self> {
+        let member = |key: &str| doc.member(key).unwrap_or("[]");
+        let zero_datums: Vec<crate::models::ZeroDatum> =
+            serde_json::from_str(member("zero_datums")).ok()?;
+        let zero_datum_fixes: Vec<super::snapshot_fixes::SnapshotFix> =
+            serde_json::from_str(member(super::snapshot_fixes::FIXES_KEY)).ok()?;
+        let mut ids: Vec<LineId> = zero_datums
+            .iter()
+            .chain(zero_datum_fixes.iter().map(|fix| &fix.datum))
+            .map(|zd| zd.station_ref.line_id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let lines = ids
+            .into_iter()
+            .filter_map(|id| SnapshotLine::parse(doc.line_text(id)?))
+            .collect();
+        Some(Self {
+            lines,
+            zero_datums,
+            zero_datum_fixes,
+        })
     }
 
     fn line(&self, id: LineId) -> Option<&SnapshotLine> {
@@ -609,45 +724,20 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
 
         // DeleteLine - extract line info from ProjectSnapshotPair before snapshot
         (Command::DeleteLine { line_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
-            if let Some(snapshot) = SnapshotPreview::parse(before) {
-                snapshot.line(*line_id).map(|line| PreviewData {
-                    changes: vec![
-                        FieldChange {
-                            field: "Name".to_string(),
-                            old_value: line.name.clone().unwrap_or_else(|| "unnamed".to_string()),
-                            new_value: String::new(),
-                        },
-                        FieldChange {
-                            field: "Shots".to_string(),
-                            old_value: line.shots.len().to_string(),
-                            new_value: "0".to_string(),
-                        },
-                    ],
-                    additional_changes: 0,
-                })
-            } else {
-                None
-            }
-        }
-
-        // DeleteShot - show length and azimuth from ShotSnapshot
-        (Command::DeleteShot { .. }, UndoData::ShotSnapshot { shot_data, .. }) => {
-            Some(PreviewData {
-                changes: vec![
-                    FieldChange {
-                        field: "Length".to_string(),
-                        old_value: format!("{:.2}", shot_data.length),
-                        new_value: String::new(),
-                    },
-                    FieldChange {
-                        field: "Azimuth".to_string(),
-                        old_value: format!("{:.1}", shot_data.azimuth_in),
-                        new_value: String::new(),
-                    },
-                ],
-                additional_changes: 0,
+            SnapshotPreview::parse(before).and_then(|snapshot| {
+                snapshot
+                    .line(*line_id)
+                    .map(|line| deleted_line_preview(line.name.as_deref(), line.shots.len()))
             })
         }
+
+        // DeleteLine - the compact entry recorded the same two facts at capture.
+        (Command::DeleteLine { .. }, UndoData::Delta(delta)) => match &delta.preview {
+            Some(BeforePreview::Line { name, shots }) => {
+                Some(deleted_line_preview(name.as_deref(), *shots))
+            }
+            _ => None,
+        },
 
         // SetZeroDatum - show coordinates from command
         (Command::SetZeroDatum { coordinates, .. }, _) => Some(PreviewData {
@@ -667,11 +757,7 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
         }),
 
         // SetShotKind - the undo data carries the real previous kind (#27 q12),
-        // so show it rather than guessing as the old boolean did. Two shapes,
-        // one meaning: `PreviousValues` is what the capture records now (it can
-        // carry the target's uuid, which the newtype `InverseCommand` cannot -
-        // #413), and `InverseCommand` is what a persisted entry from before that
-        // change still holds.
+        // so show it rather than guessing as the old boolean did.
         (Command::SetShotKind { kind, .. }, undo_data) => {
             let old_value = match undo_data {
                 UndoData::PreviousValues { values_json, .. } => {
@@ -679,9 +765,6 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
                         .ok()
                         .and_then(|prev| prev.kind)
                         .map_or_else(String::new, |prev| prev.label().to_string())
-                }
-                UndoData::InverseCommand(Command::SetShotKind { kind: prev, .. }) => {
-                    prev.label().to_string()
                 }
                 _ => String::new(),
             };
@@ -881,6 +964,19 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
             })
         }
 
+        // RemoveZeroDatum - the compact entry recorded the removed datum's GPS at
+        // capture, read out of the same `before` half the arm above reads.
+        (Command::RemoveZeroDatum { station_ref }, UndoData::Delta(delta)) => {
+            let previous_gps = match &delta.preview {
+                Some(BeforePreview::Datum(gps)) => *gps,
+                _ => None,
+            };
+            Some(PreviewData {
+                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref(), line_names),
+                additional_changes: 0,
+            })
+        }
+
         // RemoveZeroDatum - show station and previous GPS if available. LEGACY
         // entries only, since the capture above; kept because a persisted stack
         // written before it still carries `ZeroDatumInfo`.
@@ -923,12 +1019,13 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
 
         // Batch - list its sub-commands with their details: the first
         // BATCH_PREVIEW_ROWS, then a count (an import records one per line,
-        // merge and move). A line the batch deleted is named from the
+        // merge and move) that includes the ones a compact entry's stored
+        // command left out. A line the batch deleted is named from the
         // entry's before-snapshot, as a Delete Line entry's label is.
         (Command::Batch { commands, .. }, undo_data) => {
-            let before = match undo_data {
-                UndoData::ProjectSnapshotPair { before, .. } => Some(before.as_str()),
-                _ => None,
+            let omitted = match undo_data {
+                UndoData::Delta(delta) => delta.omitted_commands,
+                _ => 0,
             };
             let changes: Vec<FieldChange> = commands
                 .iter()
@@ -937,7 +1034,7 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
                     let details = derive_command_details(cmd, line_names).unwrap_or_default();
                     let gone = match cmd {
                         Command::DeleteLine { line_id } if line_names.line(*line_id).is_none() => {
-                            before.and_then(|b| snapshot_line_name(b, *line_id))
+                            recorded_line_name(undo_data, *line_id)
                         }
                         _ => None,
                     };
@@ -953,7 +1050,7 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
                 .collect();
             Some(PreviewData {
                 changes,
-                additional_changes: commands.len().saturating_sub(BATCH_PREVIEW_ROWS),
+                additional_changes: (commands.len() + omitted).saturating_sub(BATCH_PREVIEW_ROWS),
             })
         }
 
@@ -1224,12 +1321,7 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
             },
-            undo_data: UndoData::MergeInfo {
-                station_a: StationRef::new(0, 0),
-                station_b: StationRef::new(1, 0),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
+            undo_data: UndoData::None,
             timestamp: None,
         };
 
@@ -1249,12 +1341,7 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
             },
-            undo_data: UndoData::MergeInfo {
-                station_a: StationRef::new(0, 0),
-                station_b: StationRef::new(1, 0),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
+            undo_data: UndoData::None,
             timestamp: None,
         };
 
@@ -1333,8 +1420,12 @@ mod tests {
 
     #[test]
     fn test_derive_preview_data_set_shot_kind() {
-        // The inverse command supplies the previous kind, so the preview can
-        // show a real Jump -> Reference transition rather than a guessed one.
+        // The recorded previous values supply the previous kind, so the preview
+        // can show a real Jump -> Reference transition rather than a guessed one.
+        let previous = ShotUpdates {
+            kind: Some(ShotKind::Jump),
+            ..Default::default()
+        };
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::SetShotKind {
@@ -1342,11 +1433,13 @@ mod tests {
                 shot_id: 2,
                 kind: ShotKind::Reference,
             },
-            undo_data: UndoData::InverseCommand(Command::SetShotKind {
+            undo_data: UndoData::PreviousValues {
                 line_id: 1,
-                shot_id: 2,
-                kind: ShotKind::Jump,
-            }),
+                shot_id: Some(2),
+                shot_uuid: None,
+                values_json: serde_json::to_string(&previous).unwrap(),
+                previous_offsets: HashMap::new(),
+            },
             timestamp: None,
         };
 
@@ -1616,6 +1709,90 @@ mod tests {
         // An entry from before labels keeps its old wording.
         let old = entry_to_history_item(&entry(None), 0, &names);
         assert_eq!(old.description, "Batch of 12 commands");
+    }
+
+    /// A compact entry stores a long batch cut down: its first sub-commands
+    /// and every reverse, with the rest counted. The history lists the same
+    /// rows and the same total, the label counts every sub-command, and the
+    /// reverse settle reads the same net reverses.
+    #[test]
+    fn a_compact_entry_stores_a_long_batch_trimmed_and_previews_every_command() {
+        let mut project = crate::models::Project::new("Trim".to_string(), None);
+        for name in ["Main", "Side"] {
+            project.add_line(LineData {
+                name: Some(name.to_string()),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        let before = serde_json::to_string(&project).unwrap();
+        project.name = "Trimmed".to_string();
+        let after = serde_json::to_string(&project).unwrap();
+        let mut commands: Vec<Command> = (0..1_000)
+            .map(|i| Command::MoveLine {
+                line_id: i % 2,
+                offset: Coordinates::new(0.0, 1.0, 0.0),
+            })
+            .collect();
+        commands[500] = Command::ReverseLine {
+            line_id: 1,
+            swap_left_right: false,
+        };
+        commands[700] = Command::ReverseLine {
+            line_id: 0,
+            swap_left_right: true,
+        };
+        commands[3] = Command::CreateLine {
+            name: Some("New".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#fff".to_string(),
+            direction: None,
+            shots: vec![ShotData::default(); 30],
+            cave_section_id: None,
+        };
+        let batch = Command::Batch {
+            commands,
+            label: None,
+        };
+        let reversed = batch.reversed_line_ids();
+        let mut stack = crate::core::UndoStack::new();
+        stack.push_with_data(batch, UndoData::ProjectSnapshotPair { before, after });
+        let entry = stack.undo_entries().next().unwrap();
+        let (commands, label) = match &entry.command {
+            Command::Batch { commands, label } => Some((commands, label)),
+            _ => None,
+        }
+        .unwrap();
+        let omitted = match &entry.undo_data {
+            UndoData::Delta(delta) => Some(delta.omitted_commands),
+            _ => None,
+        }
+        .unwrap();
+        assert_eq!(commands.len(), super::super::KEPT_BATCH_COMMANDS + 2);
+        assert_eq!(omitted, 1_000 - commands.len());
+        assert_eq!(label.as_deref(), Some("Batch of 1000 commands"));
+        assert!(matches!(
+            &commands[3],
+            Command::CreateLine { shots, .. } if shots.is_empty()
+        ));
+        assert_eq!(entry.command.reversed_line_ids(), reversed);
+        let names = names_of(&["Main", "Side"]);
+        let item = entry_to_history_item(entry, 0, &names);
+        assert_eq!(item.description, "Batch of 1000 commands");
+        let preview = item.preview_data.unwrap();
+        assert_eq!(preview.changes.len(), BATCH_PREVIEW_ROWS);
+        assert_eq!(preview.additional_changes, 1_000 - BATCH_PREVIEW_ROWS);
+        // Persisted and read back, the count rides along.
+        let (command_json, data_json) = crate::core::UndoStack::serialize_entry(entry).unwrap();
+        let read = crate::core::UndoStack::deserialize_entry(&command_json, &data_json).unwrap();
+        let preview = entry_to_history_item(&read, 0, &names)
+            .preview_data
+            .unwrap();
+        assert_eq!(preview.additional_changes, 1_000 - BATCH_PREVIEW_ROWS);
     }
 
     #[test]

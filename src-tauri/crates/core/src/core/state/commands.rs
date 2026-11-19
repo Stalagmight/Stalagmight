@@ -451,6 +451,32 @@ impl AppState {
             return;
         };
         project.settle_datum_layout(before);
+        // The same forward epilogue drops the records that name a shot the edit
+        // removed, so the edit's undo entry carries them (see the method).
+        project.prune_dangling_shot_records();
+    }
+
+    /// Bring `held_gauges` to one entry per connected component, as a load
+    /// does (`Project::normalize_held_gauges`), for an edit that may have
+    /// joined two components that each held one - a Merge Stations, or a
+    /// batch or repair holding one. Left to the load, a save and a reopen
+    /// would change the project with no undo entry to say so, and an Add
+    /// (which normalizes the whole project) would drop one of the project's
+    /// own with an undo that cannot put it back.
+    ///
+    /// Only for edits whose entry captures the whole state (a snapshot pair,
+    /// stored as a compact delta), so the entry records the entry it drops and
+    /// the undo restores it. A typed entry records nothing of `held_gauges`:
+    /// a loop closure that joins two held components is left as the load
+    /// leaves it (see #809).
+    fn normalize_held_gauges_in_open_project(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(project) = guard.as_mut() {
+            project.normalize_held_gauges();
+        }
     }
 
     /// True iff the open project currently holds a Critical integrity violation.
@@ -471,7 +497,7 @@ impl AppState {
     fn guard_introduced_corruption(
         &self,
         pre_had_critical: bool,
-        snapshot: &str,
+        snapshot: &crate::core::ProjectText,
         cmd_desc: &str,
     ) -> Option<CommandResult> {
         if pre_had_critical || !self.project_has_critical() {
@@ -651,6 +677,8 @@ impl AppState {
             // Same order as execute()'s epilogue: renormalise onto the new frame
             // before the solve that lands on it.
             project.settle_datum_layout(&datums_before);
+            project.prune_dangling_shot_records();
+            project.normalize_held_gauges();
             project.resolve_offsets();
             // Repair does not go through `reconcile_geometry`, so it carries the
             // closure re-measure itself, last and off the geometry the re-solve
@@ -796,16 +824,22 @@ impl AppState {
         // (which must reject corruption BEFORE pushing its undo entry, #1), so it
         // is excluded here to avoid a redundant whole-project serialize and a
         // double rollback.
-        let integrity_snapshot =
-            if integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. }) {
-                self.capture_project_snapshot().ok()
-            } else {
-                None
-            };
+        //
+        // A command whose undo captures a snapshot pair holds that snapshot
+        // already: the project as it is now, which is the rollback point too,
+        // so it is not serialized a second time.
+        let guards_integrity = integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. });
+        let integrity_snapshot = if guards_integrity && undo_data.captured_before().is_none() {
+            self.capture_project_snapshot().ok()
+        } else {
+            None
+        };
+        let has_rollback_point = integrity_snapshot.is_some()
+            || (guards_integrity && undo_data.captured_before().is_some());
         // If the project is ALREADY corrupt (loaded that way), don't block - the
         // user repairs via the banner. We only reject commands that newly
         // introduce corruption into a clean project.
-        let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
+        let pre_had_critical = has_rollback_point && self.project_has_critical();
         // What the epilogue's orphan sweep needs to name the closures it removes
         // by the stations they had before this command (#738).
         // A Batch takes its own inside `execute_batch`, where its sweep runs.
@@ -969,8 +1003,11 @@ impl AppState {
         // project with dangling references, roll back to the pre-command
         // snapshot and reject it rather than committing (and later persisting)
         // a corrupt state (#17).
-        if result.success && !pre_had_critical {
-            if let Some(snapshot) = &integrity_snapshot {
+        if result.success && !pre_had_critical && has_rollback_point {
+            let snapshot = integrity_snapshot
+                .as_ref()
+                .or_else(|| undo_data.captured_before());
+            if let Some(snapshot) = snapshot {
                 if let Some(failure) =
                     self.guard_introduced_corruption(pre_had_critical, snapshot, &cmd.description())
                 {
@@ -1006,6 +1043,9 @@ impl AppState {
         // snapshot pair holds the result; settling twice is not idempotent.
         if result.success && cmd.affects_geometry() && !matches!(cmd, Command::Batch { .. }) {
             self.settle_datum_layout(&datums_before);
+            if undo_data.captured_before().is_some() {
+                self.normalize_held_gauges_in_open_project();
+            }
         }
 
         // Treat line offsets as derived: after any structural command,
@@ -1048,7 +1088,12 @@ impl AppState {
             // Batch commands handle their own undo push inside execute_batch()
             // (with before+after snapshots), so skip them here.
             // For create commands, finalize undo data with snapshot-based ID preservation
-            let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
+            let mut final_undo_data = self.finalize_undo_data(&cmd, undo_data);
+            if let Ok(guard) = self.project.lock() {
+                if let Some(project) = guard.as_ref() {
+                    final_undo_data.keep_changed_offsets(&project.line_offsets);
+                }
+            }
 
             // An entry `undo()` cannot apply must never enter the stack: `undo()`
             // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
@@ -1073,6 +1118,9 @@ impl AppState {
             // a provably-no-op forward command, such as reversing a shot-less
             // line, also drops the redo branch. "A successful forward command
             // invalidates redo" outranks preserving redo across a no-op.)
+            // A snapshot pair becomes its compact delta here, outside the
+            // stack's lock: the conversion diffs two whole projects.
+            let final_undo_data = final_undo_data.compact(&cmd);
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 if matches!(final_undo_data, UndoData::None) {
                     tracing::debug!(
@@ -1366,6 +1414,7 @@ impl AppState {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
             // first, then reconcile the geometry that lands on it (#469, item 1).
             self.settle_datum_layout(&datums_before);
+            self.normalize_held_gauges_in_open_project();
             self.reconcile_geometry();
         }
 

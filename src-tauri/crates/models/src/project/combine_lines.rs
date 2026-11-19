@@ -586,6 +586,14 @@ impl Project {
         if !append {
             line.shots.rotate_right(no as usize);
         }
+        // A shotless kept line can still hold a legacy surveyor/date (it
+        // waits there for the line's first shot). Shots have arrived, so it
+        // goes to every one of them without a credit of its own, exactly as
+        // the first shot appended takes it and as a reload would hand it out.
+        // Left on the line, the next restore of this state (an undo, a
+        // rollback) and every reload re-read it onto the shots, and the state
+        // would depend on the route taken to it.
+        line.absorb_legacy_credit();
         // Stored trimmed; an empty name leaves the line unnamed, as it may
         // have been (the command refuses one; a direct caller may not).
         line.name = Some(options.name.trim().to_string()).filter(|name| !name.is_empty());

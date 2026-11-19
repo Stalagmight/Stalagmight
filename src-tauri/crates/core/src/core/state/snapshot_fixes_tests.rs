@@ -142,29 +142,30 @@ fn a_snapshot_from_before_the_split_still_restores() {
     assert_eq!(summary(&restored(&old_format)), summary(&live));
 }
 
-/// Through a command: the `ProjectSnapshotPair` an undoable delete records
-/// (and a save persists verbatim) holds no fix in `zero_datums`, and undo and
-/// redo bring every datum back in order.
+/// Through a command: the compact entry an undoable delete records is
+/// persisted in an envelope an older build cannot parse at all - so no fix
+/// can reach it as a placement, it opens the file with no history - and undo
+/// and redo bring every datum back in order.
 #[test]
-fn a_snapshot_pair_hides_fixes_from_older_builds_and_undo_restores_them() {
+fn a_compact_delete_entry_is_unreadable_to_older_builds_and_undo_restores_the_fixes() {
     let (state, d) = surveyed();
     let expected = summary(&state.get_project_state().unwrap());
 
     let r = state.execute(Command::DeleteLine { line_id: d });
     assert!(r.success, "{:?}", r.error);
-    let (before, after) = {
+    let persisted = {
         let stack = state.undo_stack.lock().unwrap();
-        let Some(UndoData::ProjectSnapshotPair { before, after }) = stack.peek_undo_data() else {
-            panic!("premise: Delete Line records a snapshot pair");
-        };
-        (before.clone(), after.clone())
-    };
-    for half in [&before, &after] {
-        assert_eq!(
-            summary(&as_an_older_build_reads(half)),
-            vec![expected[0], expected[2]]
+        assert!(
+            matches!(stack.peek_undo_data(), Some(UndoData::Delta(_))),
+            "premise: Delete Line records a compact entry"
         );
-    }
+        let entry = stack.undo_entries().last().unwrap();
+        crate::core::UndoStack::serialize_entry(entry).unwrap().1
+    };
+    assert!(
+        serde_json::from_str::<UndoData>(&persisted).is_err(),
+        "an older build reads the row as a bare UndoData and must fail"
+    );
 
     assert!(state.undo().success);
     assert_eq!(summary(&state.get_project_state().unwrap()), expected);

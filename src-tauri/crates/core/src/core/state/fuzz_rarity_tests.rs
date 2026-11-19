@@ -225,7 +225,7 @@ use std::time::Instant;
 
 use super::fuzz_undo_tests::{
     failure_signature, fuzz_threads, panic_message, prologue_signatures, run_fuzz, run_seed_jobs,
-    Outcome, Plan, Rng, GATE_ITERATIONS,
+    Knobs, Outcome, Plan, Rng, GATE_ITERATIONS,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -533,6 +533,7 @@ fn plan_for(regime: Regime, iterations: usize, prologue: Option<(u32, usize)>) -
         horizon: false,
         config_fuzz: false,
         combined: false,
+        knobs: Knobs::OFF,
     }
 }
 

@@ -813,6 +813,15 @@ use crate::models::{
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
 use crate::test_helpers::isolated_config;
 
+// The coverage knobs' engines, split out of this file by concern (see `Knobs`).
+// Children of this module, so they see its private model directly.
+#[path = "fuzz_corrupt_tests.rs"]
+mod fuzz_corrupt_tests;
+#[path = "fuzz_extended_tests.rs"]
+mod fuzz_extended_tests;
+#[path = "fuzz_reload_tests.rs"]
+mod fuzz_reload_tests;
+
 // ===========================================================================
 // Deterministic PRNG
 // ===========================================================================
@@ -942,6 +951,7 @@ fn drop_key(path: &str) -> bool {
             | "next_line_id"
             | "next_closure_id"
             | "next_station_id"
+            | "next_cave_section_id"
             | "lines.*.next_shot_id"
     )
 }
@@ -1083,8 +1093,9 @@ fn diff_values(
     actual: &serde_json::Value,
     path: &str,
     out: &mut Vec<Diff>,
+    limit: usize,
 ) {
-    if out.len() >= WALK_DIFFS {
+    if out.len() >= limit {
         return;
     }
     let label = if path.is_empty() { "<root>" } else { path };
@@ -1100,14 +1111,14 @@ fn diff_values(
                     format!("{path}.{key}")
                 };
                 match (a.get(key), b.get(key)) {
-                    (Some(left), Some(right)) => diff_values(left, right, &child, out),
+                    (Some(left), Some(right)) => diff_values(left, right, &child, out, limit),
                     (left, right) => out.push(Diff {
                         path: child,
                         expected: left.map_or_else(|| ABSENT.to_string(), show),
                         actual: right.map_or_else(|| ABSENT.to_string(), show),
                     }),
                 }
-                if out.len() >= WALK_DIFFS {
+                if out.len() >= limit {
                     return;
                 }
             }
@@ -1121,8 +1132,14 @@ fn diff_values(
                 });
             }
             for index in 0..a.len().min(b.len()) {
-                diff_values(&a[index], &b[index], &format!("{path}[{index}]"), out);
-                if out.len() >= WALK_DIFFS {
+                diff_values(
+                    &a[index],
+                    &b[index],
+                    &format!("{path}[{index}]"),
+                    out,
+                    limit,
+                );
+                if out.len() >= limit {
                     return;
                 }
             }
@@ -1242,10 +1259,26 @@ pub(super) fn diff_snapshots_capped(expected: &str, actual: &str) -> (Vec<Diff>,
         );
     };
     let mut out = Vec::new();
-    diff_values(&left, &right, "", &mut out);
+    diff_values(&left, &right, "", &mut out, WALK_DIFFS);
     let truncated = out.len() > MAX_DIFFS;
     out.truncate(MAX_DIFFS);
     (out, truncated)
+}
+
+/// The same walk without the cap: every differing path. Only for taking the
+/// documented undo-less changes of a save or a reload out of a difference
+/// wider than the cap before the cap applies (`expect_state`), so the rules
+/// that speak for a path have seen every path.
+pub(super) fn diff_snapshots_all(expected: &str, actual: &str) -> Vec<Diff> {
+    let (Ok(left), Ok(right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return diff_snapshots_capped(expected, actual).0;
+    };
+    let mut out = Vec::new();
+    diff_values(&left, &right, "", &mut out, usize::MAX);
+    out
 }
 
 pub(super) fn describe_diffs(diffs: &[Diff]) -> String {
@@ -2153,6 +2186,9 @@ pub(super) enum Op {
         commands: Vec<BatchOp>,
         poisoned: bool,
     },
+    /// An action only `Knobs::extended` draws - see `fuzz_extended_tests.rs`.
+    /// Never in a trace recorded without that knob.
+    Extended(Box<fuzz_extended_tests::ExtOp>),
 }
 
 /// The sub-commands `gen_batch` builds. A batch is one undo entry over several
@@ -2210,6 +2246,11 @@ pub(super) struct TraceMove {
     pub(super) created: Created,
     /// The generator's state immediately before this move. See [`Rng::state`].
     pub(super) rng: u32,
+    /// The COVERAGE stream's state immediately before this move, when a
+    /// coverage knob is on (see [`Knobs`]); absent otherwise, and in every
+    /// trace written before the knobs existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) aux: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -2218,6 +2259,9 @@ pub(super) enum MoveKind {
     Undo(usize),
     Redo(usize),
     Cross,
+    /// A save with no close and no reopen (`Knobs::saves`). Never in a trace
+    /// recorded without that knob.
+    Save,
 }
 
 impl TraceMove {
@@ -2228,6 +2272,7 @@ impl TraceMove {
             MoveKind::Undo(steps) => format!("undo x{steps}"),
             MoveKind::Redo(steps) => format!("redo x{steps}"),
             MoveKind::Cross => "save/close/reopen".to_string(),
+            MoveKind::Save => "save in place".to_string(),
         }
     }
 }
@@ -2333,6 +2378,7 @@ impl Op {
             Self::Batch { commands, poisoned } => {
                 format!("batch(n={},poisoned={poisoned})", commands.len())
             }
+            Self::Extended(ext) => ext.describe(),
         }
     }
 }
@@ -2405,6 +2451,11 @@ impl Inventory {
 /// indistinguishable from a candidate that reproduced the bug.
 pub(super) struct Refs {
     identity: bool,
+    /// Pair what a move created only when both sides created the SAME NUMBER
+    /// of each kind of entity. Set for a replay of a plan with
+    /// `Knobs::extended`, whose imports and Add .stalx create any number of
+    /// lines and shots in one move (see `learn`).
+    checked: bool,
     lines: BTreeMap<LineId, LineId>,
     shots: BTreeMap<String, String>,
     closures: BTreeMap<u64, u64>,
@@ -2417,6 +2468,7 @@ impl Refs {
     pub(super) fn identity() -> Self {
         Self {
             identity: true,
+            checked: false,
             lines: BTreeMap::new(),
             shots: BTreeMap::new(),
             closures: BTreeMap::new(),
@@ -2443,6 +2495,7 @@ impl Refs {
         }
         let mut refs = Self {
             identity: false,
+            checked: false,
             lines: BTreeMap::new(),
             shots: BTreeMap::new(),
             closures: BTreeMap::new(),
@@ -2477,7 +2530,28 @@ impl Refs {
     /// it removed, which is already mapped and must not be re-paired against
     /// something else; a move that mints (a redo of a create) brings back a new
     /// one on both sides, and those two are each other's.
+    ///
+    /// The pairing is positional, which is sound only while every move creates
+    /// a FIXED number of entities. An import or an Add .stalx does not: a
+    /// candidate trace whose replay places one line fewer would pair a
+    /// prefix, silently. A `checked` resolver (an extended plan's) therefore
+    /// pairs a kind only when both sides created the same number of it, and
+    /// leaves it unmapped otherwise - a later move naming one of them is then
+    /// skipped, which a replay already knows how to do.
     fn learn(&mut self, recorded: &Created, live: &Created) {
+        if self.checked && !same_arity(&self.unknown_and_fresh(recorded, live)) {
+            self.skipped.push(format!(
+                "a move created {} line(s)/{} shot(s)/{} closure(s) in the recording and \
+                 {}/{}/{} here; left unpaired",
+                recorded.lines.len(),
+                recorded.shots.len(),
+                recorded.closures.len(),
+                live.lines.len(),
+                live.shots.len(),
+                live.closures.len()
+            ));
+            return;
+        }
         let fresh_lines: Vec<LineId> = live
             .lines
             .iter()
@@ -2522,6 +2596,51 @@ impl Refs {
         for (recorded_id, live_id) in unknown_closures.iter().zip(&fresh_closures) {
             self.closures.insert(*recorded_id, *live_id);
         }
+    }
+
+    /// A resolver that pairs only same-arity creations - see [`Self::learn`].
+    pub(super) const fn checked(mut self, on: bool) -> Self {
+        self.checked = on;
+        self
+    }
+
+    /// `(unknown recorded, fresh live)` counts for lines, shots, closures:
+    /// what `learn` would pair.
+    fn unknown_and_fresh(&self, recorded: &Created, live: &Created) -> [(usize, usize); 3] {
+        let lines = (
+            recorded
+                .lines
+                .iter()
+                .filter(|id| !self.lines.contains_key(id))
+                .count(),
+            live.lines
+                .iter()
+                .filter(|id| !self.lines.values().any(|live_id| live_id == *id))
+                .count(),
+        );
+        let shots = (
+            recorded
+                .shots
+                .iter()
+                .filter(|uuid| !self.shots.contains_key(*uuid))
+                .count(),
+            live.shots
+                .iter()
+                .filter(|uuid| !self.shots.values().any(|live_uuid| live_uuid == *uuid))
+                .count(),
+        );
+        let closures = (
+            recorded
+                .closures
+                .iter()
+                .filter(|id| !self.closures.contains_key(id))
+                .count(),
+            live.closures
+                .iter()
+                .filter(|id| !self.closures.values().any(|live_id| live_id == *id))
+                .count(),
+        );
+        [lines, shots, closures]
     }
 
     /// The live line a recorded line id names, if it still exists.
@@ -2581,6 +2700,12 @@ impl Refs {
         self.skipped.push(what.to_string());
         None
     }
+}
+
+/// Every kind paired one-to-one: the same number unknown on the recorded side
+/// as fresh on the live side.
+fn same_arity(counts: &[(usize, usize); 3]) -> bool {
+    counts.iter().all(|(recorded, live)| recorded == live)
 }
 
 /// A recorded run, and everything a replay of it needs.
@@ -2891,6 +3016,37 @@ pub(super) struct Outcome {
     /// the outcome so `summarize` can put it in the run header: a failing seed
     /// under the config knob is only a repro if the app it ran against is named.
     config: Option<DrawnConfig>,
+    /// The coverage knobs the run had on, for the run header - see [`Knobs`].
+    knobs: Knobs,
+    /// What the coverage knobs did. All zero, and left out of the summary
+    /// line, with every knob off.
+    coverage: CoverageCounts,
+}
+
+/// What the coverage knobs did in one run - the numbers that say a knob is
+/// reaching what it was built for rather than passing vacuously.
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct CoverageCounts {
+    /// Persisted rows `FORMAT_CORRUPT` rewrote before a reopen.
+    pub(super) corrupted: usize,
+    /// Reopens that dropped the whole history (only ever after a corruption).
+    pub(super) dropped: usize,
+    /// Reopens that kept a history with a corrupted row in it.
+    pub(super) kept_corrupted: usize,
+    /// Entries the persisted window cut at a `TRIM_CROSSINGS` crossing.
+    pub(super) window_cut: usize,
+    /// Crossings whose save trimmed the history to its persisted window.
+    pub(super) trimmed_crossings: usize,
+    /// Save-in-place moves (`SAVES`).
+    pub(super) saves_in_place: usize,
+    /// Back-to-back crossings with nothing in between (`SAVES`).
+    pub(super) double_crossings: usize,
+    /// Steps past the reachable window that were refused cleanly.
+    pub(super) refusals: usize,
+    /// Extended actions applied (`EXTENDED`), accepted or refused.
+    pub(super) extended: usize,
+    /// Compact entries the always-on fit oracle stepped through at a reload.
+    pub(super) fit_checked: usize,
 }
 
 /// The part of an [`Outcome`] a REPLAY has to reproduce exactly.
@@ -3004,7 +3160,7 @@ pub(super) fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
 /// Canonical, comparison-ready snapshot of the live project.
 pub(super) fn canonical_snapshot(state: &AppState, id_agnostic: bool) -> String {
     let raw = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     let parsed: serde_json::Value = serde_json::from_str(&raw).expect("snapshot is not JSON");
     canonicalize(&parsed, "", id_agnostic).to_string()
@@ -3248,11 +3404,18 @@ struct Fuzzer {
     /// precondition those defects needed, and the move log is where a reader
     /// wants to see it happen.
     stale_corruption: bool,
+    /// The coverage knobs this run was planned with - see [`Knobs`].
+    knobs: Knobs,
+    /// The COVERAGE stream, seeded `seed ^ COVERAGE_STREAM`: every draw a
+    /// knob makes comes from here and none from `rng`, so a run with every
+    /// knob off never touches it and its primary stream is the one it always
+    /// was. Carried on a recorded move beside `rng` (`TraceMove::aux`).
+    aux: Rng,
 }
 
 impl Fuzzer {
     fn new(seed: u32, closures: bool) -> Self {
-        Self::new_with_config(seed, closures, None)
+        Self::new_with_config(seed, closures, None, Knobs::OFF)
     }
 
     /// [`Self::new`], against an app configured the way this run drew it.
@@ -3271,7 +3434,12 @@ impl Fuzzer {
     ///
     /// The limit is then read BACK off the app, exactly as it always was: the
     /// model's authority on the window is the app, not what this asked for.
-    fn new_with_config(seed: u32, closures: bool, drawn: Option<DrawnConfig>) -> Self {
+    fn new_with_config(
+        seed: u32,
+        closures: bool,
+        drawn: Option<DrawnConfig>,
+        knobs: Knobs,
+    ) -> Self {
         let state = AppState::new().unwrap();
         if let (Some(config), Ok(mut stack)) = (drawn, state.undo_stack.lock()) {
             stack.set_history_limit(config.history_limit);
@@ -3282,6 +3450,13 @@ impl Fuzzer {
             .map_or(DEFAULT_HISTORY_LIMIT, |stack| stack.history_limit());
         let mut rng = Rng::new(seed);
         build_project(&state, &mut rng, closures);
+        let mut aux = Rng::new(seed ^ COVERAGE_STREAM);
+        // LARGE grows the starting project AFTER the ordinary builder has drawn
+        // everything it draws, and from the coverage stream, so the project's
+        // first seven lines are the ones every other mode starts from.
+        let large_dir = knobs
+            .large
+            .then(|| fuzz_extended_tests::grow_large(&state, &mut aux));
         let mut fuzzer = Self {
             state,
             rng,
@@ -3304,6 +3479,7 @@ impl Fuzzer {
             id_agnostic: false,
             outcome: Outcome {
                 config: drawn,
+                knobs,
                 ..Outcome::default()
             },
             temp: None,
@@ -3311,7 +3487,14 @@ impl Fuzzer {
             orphan_pending: false,
             last_split_join: None,
             stale_corruption: false,
+            knobs,
+            aux,
         };
+        // The LARGE project was saved and reopened to be built; its file lives
+        // in the run's own temp dir from then on.
+        if let Some(dir) = large_dir {
+            fuzzer.temp = Some(dir);
+        }
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
         // builder's history is scaffolding rather than something to fuzz over.
@@ -3538,7 +3721,32 @@ impl Fuzzer {
             self.expect_derived(depth, &format!("{what} (stored state EXACT)"), false);
             return;
         }
-        let (diffs, truncated) = diff_snapshots_capped(&expected, &actual);
+        let (mut diffs, mut truncated) = diff_snapshots_capped(&expected, &actual);
+        // Across an epoch boundary a save or a reload may have made a WIDE
+        // documented change - the first save of a long session captures a
+        // gauge pair on every line that has none. Those changes are taken out
+        // of the WHOLE difference, every path walked, before the cap below
+        // applies; what is left is judged exactly as a narrow difference is.
+        if truncated && self.epochs[depth] < self.epoch {
+            let all = diff_snapshots_all(&expected, &actual);
+            let walked = all.len();
+            let mut rest: Vec<Diff> = all
+                .into_iter()
+                .filter(|diff| {
+                    !(self.outcome.saves > 0 && attributable_to_save(diff))
+                        && !(self.outcome.reloads > 0 && attributable_to_reload(diff))
+                })
+                .collect();
+            self.outcome.attributed += walked - rest.len();
+            if rest.is_empty() {
+                self.resync(depth, actual);
+                self.expect_derived(depth, what, true);
+                return;
+            }
+            truncated = rest.len() > MAX_DIFFS;
+            rest.truncate(MAX_DIFFS);
+            diffs = rest;
+        }
         // A mismatch wider than the cap is NEVER read as explained. Every
         // tolerate path below - attributable, accumulated - reads "nothing
         // unexplained is left" off a list that stops at MAX_DIFFS, and the walk
@@ -4790,9 +4998,9 @@ impl Fuzzer {
                         kind: *kind,
                     }),
                 );
-                // `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })`,
-                // which names the shot by its in-session id on BOTH the undo and
-                // the redo.
+                // `UndoData::PreviousValues { line_id, shot_id, .. }` as for
+                // an update: the undo restores the kind on this id's shot, and
+                // `redo_inner`'s catch-all re-executes the command with it.
                 drawn.target = target;
                 Some(drawn)
             }
@@ -5209,6 +5417,7 @@ impl Fuzzer {
                     }),
                 ))
             }
+            Op::Extended(ext) => self.apply_extended(ext, refs, targets),
         }
     }
 }
@@ -5228,12 +5437,28 @@ const DEFAULT_HISTORY_LIMIT: usize = 100;
 /// when `Plan::jumps` is on. Raised from 10 while hunting finding 7, which only
 /// exists on that path: a jump is the only move that skips `reconcile_geometry`.
 const JUMP_PERCENT: u32 = 40;
+/// How often a crossing rewrites a persisted row, under `Knobs::format_corrupt`.
+/// Half, so a multi-crossing run sees clean crossings between corrupted ones.
+const CORRUPT_PERCENT: u32 = 50;
+/// How often a crossing is crossed twice in a row, under `Knobs::saves`.
+const DOUBLE_CROSSING_PERCENT: u32 = 25;
+/// How often an iteration is a save-in-place, under `Knobs::saves`.
+const SAVE_PERCENT: u32 = 3;
+/// How often a mutation is an extended action, under `Knobs::extended`.
+const EXTENDED_PERCENT: u32 = 10;
 
 impl Fuzzer {
     /// One mutation, with the full case analysis on what the stacks did.
     fn step_mutate(&mut self) {
         let targets = read_targets(&self.state);
-        let Some(op) = self.draw_op(&targets) else {
+        // EXTENDED: an action no generator below draws, from the coverage
+        // stream. The primary stream is not drawn from on that move at all.
+        let op = if self.knobs.extended && self.aux.chance(EXTENDED_PERCENT) {
+            self.draw_extended(&targets)
+        } else {
+            self.draw_op(&targets)
+        };
+        let Some(op) = op else {
             return;
         };
         self.step_apply(&op, &mut Refs::identity(), &targets);
@@ -5266,6 +5491,7 @@ impl Fuzzer {
         let label = drawn.label.clone();
         self.record_mutation(drawn, before_undo, before_redo, before_newest);
         self.expect_allocators_advanced(&allocators, &label);
+        self.expect_ids_sound(&label);
         self.record_growth();
         StepOutcome::Applied
     }
@@ -5309,6 +5535,7 @@ impl Fuzzer {
             kind,
             created: Created::default(),
             rng: self.rng.state(),
+            aux: self.knobs.any().then(|| self.aux.state()),
         });
         Some(before)
     }
@@ -5572,9 +5799,9 @@ impl Fuzzer {
             self.live_shot_ids(line_id)
         );
 
-        // Every id-bearing edit variant, contiguous, on top: `PreviousValues`
-        // (update_shot) and `InverseCommand` (set_shot_kind), each aimed at a
-        // shot whose id will address a DIFFERENT one after the renumbering.
+        // Every id-bearing edit, contiguous, on top: update_shot and
+        // set_shot_kind (both `PreviousValues`), each aimed at a shot whose id
+        // will address a DIFFERENT one after the renumbering.
         for &shot_id in colliding.iter().take(2) {
             let target = self.shot_target(line_id, shot_id);
             let before = self.stacks();
@@ -6213,6 +6440,7 @@ impl Fuzzer {
         self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
         self.expect_raw_and_resolved_agree(&label);
+        self.expect_ids_sound(&label);
         true
     }
 
@@ -6302,14 +6530,37 @@ impl Fuzzer {
     /// serialize into the `.stalx` and restore on open - so nothing below a save
     /// point is exercised until a run crosses this boundary. Findings 8, 12 and 13
     /// all live on the other side of it.
+    ///
+    /// Three coverage knobs reach in here, each drawing from the coverage stream
+    /// and only when it is on (see [`Knobs`]): `trim_crossings` crosses a
+    /// history the save will trim to its persisted window, `saves` sometimes
+    /// crosses twice in a row with nothing in between, and `format_corrupt`
+    /// rewrites one persisted row between the close and the reopen.
     fn cross_boundary(&mut self) -> bool {
         if self.orphan_pending {
             self.orphan_pending = false;
             self.expose_orphan_closure();
         }
-        if self.top == 0 || self.crossing_would_truncate() {
+        if self.top == 0 || (self.crossing_would_truncate() && !self.knobs.trim_crossings) {
             return false;
         }
+        let passes = if self.knobs.saves && self.aux.chance(DOUBLE_CROSSING_PERCENT) {
+            self.outcome.coverage.double_crossings += 1;
+            2
+        } else {
+            1
+        };
+        for pass in 0..passes {
+            if pass > 0 {
+                self.note("  ^ crossing again, with nothing in between".to_string());
+            }
+            self.cross_once();
+        }
+        true
+    }
+
+    /// One save/close/reopen: the body of [`Self::cross_boundary`].
+    fn cross_once(&mut self) {
         // The ENTRY-CONTENT oracle's baseline, read BEFORE the save so that the
         // save is inside the comparison too. See `expect_history_rows`.
         let items_before = self.history_rows();
@@ -6344,6 +6595,17 @@ impl Fuzzer {
                 &format!("  error: {:?}", closed.error),
             );
         }
+        // FORMAT_CORRUPT: one persisted row rewritten while nothing holds the
+        // file open, so the reopen reads what a damaged file would hold.
+        let corruption = if self.knobs.format_corrupt && self.aux.chance(CORRUPT_PERCENT) {
+            fuzz_corrupt_tests::corrupt_one_row(&path, &mut self.aux)
+        } else {
+            None
+        };
+        if let Some(corruption) = &corruption {
+            self.outcome.coverage.corrupted += 1;
+            self.note(format!("  ^ corrupted {corruption}"));
+        }
         let opened = self.state.execute(Command::OpenProject { path });
         self.finished_move();
         if !opened.success {
@@ -6358,10 +6620,9 @@ impl Fuzzer {
         self.epoch += 1;
         self.outcome.reloads += 1;
         self.note(format!("reload -> depth {}", self.cursor));
-        self.expect_stacks("reload");
-        self.expect_history_rows(&items_before);
+        self.settle_reload(&items_before, corruption.as_ref());
         self.expect_state(self.cursor, "reload", Vec::new(), StaleTargets::default());
-        true
+        self.expect_ids_sound("reload");
     }
 
     /// The closing guarantee: unwind every entry to depth 0, then replay every
@@ -6374,10 +6635,19 @@ impl Fuzzer {
                 return;
             }
         }
+        // Past the floor nothing is reachable: a coverage run asks, and the
+        // app has to refuse without touching anything. No draw - see
+        // `probe_refusal`.
+        if self.knobs.any() {
+            self.probe_refusal(true);
+        }
         while self.cursor < summit {
             if !self.step_history(false, 1) {
                 return;
             }
+        }
+        if self.knobs.any() {
+            self.probe_refusal(false);
         }
     }
 }
@@ -6495,6 +6765,93 @@ pub(super) struct Plan {
     /// means here exactly what it means alone.
     #[serde(default)]
     pub(super) combined: bool,
+    /// The coverage knobs - see [`Knobs`]. `#[serde(default)]` for the same
+    /// reason as `config_fuzz`: a trace written before they existed replays
+    /// with every one of them off, which is what it was recorded under.
+    #[serde(default)]
+    pub(super) knobs: Knobs,
+}
+
+/// The offset the COVERAGE stream is seeded at: `seed ^ COVERAGE_STREAM`.
+///
+/// Every knob in [`Knobs`] draws from this second generator and never from the
+/// run's own `Rng`, for the reason [`CONFIG_STREAM`] gives: a draw taken from
+/// the primary stream would move every later value and renumber every repro in
+/// the module header. With every knob off nothing draws from it at all.
+const COVERAGE_STREAM: u32 = 0x5EED_C0DE;
+
+/// The knobs a 2026-11 coverage review asked for, each closing a gap it
+/// MEASURED (see docs/testing-recipes.md, "Coverage knobs").
+///
+/// All off by default, and with all of them off a run is byte-identical to the
+/// run before they existed: nothing draws from the coverage stream, no new move
+/// kind is recorded, and the summary line gains nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct Knobs {
+    /// `FORMAT_CORRUPT=1`: after some saves, rewrite ONE persisted history row
+    /// before the reopen (`fuzz_corrupt_tests.rs`). The history then either
+    /// loads and every step lands exactly, or is dropped whole.
+    #[serde(default)]
+    pub(super) format_corrupt: bool,
+    /// `TRIM_CROSSINGS=1`: cross even when the save trims the history to its
+    /// persisted window, and model the window the reopen leaves.
+    #[serde(default)]
+    pub(super) trim_crossings: bool,
+    /// `SAVES=1`: a save-in-place move (no close, no reopen), and back-to-back
+    /// crossings with nothing in between.
+    #[serde(default)]
+    pub(super) saves: bool,
+    /// `EXTENDED=1`: a tenth of the mutations are actions no generator drew
+    /// before (`fuzz_extended_tests.rs`).
+    #[serde(default)]
+    pub(super) extended: bool,
+    /// `LARGE=1`: start from a project whose top-level lists pass the delta
+    /// engine's whole-list threshold (`fuzz_extended_tests.rs`).
+    #[serde(default)]
+    pub(super) large: bool,
+}
+
+impl Knobs {
+    pub(super) const OFF: Self = Self {
+        format_corrupt: false,
+        trim_crossings: false,
+        saves: false,
+        extended: false,
+        large: false,
+    };
+
+    /// The knobs the environment sets, `STALAGMIGHT_RUST_FUZZ_<NAME>`.
+    pub(super) fn from_env() -> Self {
+        let on = |name: &str| std::env::var(format!("STALAGMIGHT_RUST_FUZZ_{name}")).is_ok();
+        Self {
+            format_corrupt: on("FORMAT_CORRUPT"),
+            trim_crossings: on("TRIM_CROSSINGS"),
+            saves: on("SAVES"),
+            extended: on("EXTENDED"),
+            large: on("LARGE"),
+        }
+    }
+
+    /// Is any knob on? Gates every new draw and every new summary field.
+    pub(super) const fn any(self) -> bool {
+        self.format_corrupt || self.trim_crossings || self.saves || self.extended || self.large
+    }
+
+    /// The names of the knobs that are on, `+`-joined, for the run header.
+    pub(super) fn describe(self) -> String {
+        [
+            (self.format_corrupt, "format-corrupt"),
+            (self.trim_crossings, "trim-crossings"),
+            (self.saves, "saves"),
+            (self.extended, "extended"),
+            (self.large, "large"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join("+")
+    }
 }
 
 // ===========================================================================
@@ -6619,6 +6976,7 @@ fn start_run(seed: u32, plan: Plan) -> Fuzzer {
             .map_or(seed, |(prologue_seed, _)| prologue_seed),
         plan.closures || plan.closure_shapes,
         draw_config(seed, plan),
+        plan.knobs,
     );
     if let Some((_, moves)) = plan.prologue {
         for _ in 0..moves {
@@ -6716,6 +7074,14 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
             fuzzer.cross_boundary();
             fuzzer.recorder_seal(mark);
         }
+        // SAVES: a save with no reopen, drawn from the coverage stream BEFORE the
+        // primary roll, so a run without the knob draws nothing here.
+        if fuzzer.knobs.saves && fuzzer.aux.chance(SAVE_PERCENT) {
+            let mark = fuzzer.recorder_mark(MoveKind::Save);
+            fuzzer.save_in_place();
+            fuzzer.recorder_seal(mark);
+            continue;
+        }
         // 60 / 25 / 15 mutate / undo / redo, re-rolled when the stack a move
         // needs is empty. Same mix as the harness.
         let roll = fuzzer.rng.below(100);
@@ -6807,7 +7173,7 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
 pub(super) fn run_trace(trace: &Trace, moves: &[TraceMove]) -> (Outcome, Vec<String>) {
     let mut fuzzer = start_run(trace.seed, trace.plan);
     let mut refs = match Refs::replay(&trace.prelude, &fuzzer.inventory()) {
-        Ok(refs) => refs,
+        Ok(refs) => refs.checked(trace.plan.knobs.extended),
         Err(message) => panic!("cannot replay this trace: {message}"),
     };
     for mv in moves {
@@ -6818,6 +7184,9 @@ pub(super) fn run_trace(trace: &Trace, moves: &[TraceMove]) -> (Outcome, Vec<Str
         // replay draws except a crossing that builds finding 10's shape - see
         // `Rng::state`.
         fuzzer.rng.restore(mv.rng);
+        if let Some(aux) = mv.aux {
+            fuzzer.aux.restore(aux);
+        }
         let before = fuzzer.inventory();
         let alive = match &mv.kind {
             MoveKind::Mutate(op) => {
@@ -6828,6 +7197,10 @@ pub(super) fn run_trace(trace: &Trace, moves: &[TraceMove]) -> (Outcome, Vec<Str
             MoveKind::Redo(steps) => fuzzer.step_history(false, *steps),
             MoveKind::Cross => {
                 fuzzer.cross_boundary();
+                true
+            }
+            MoveKind::Save => {
+                fuzzer.save_in_place();
                 true
             }
         };
@@ -6984,7 +7357,7 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         "{label} seed={seed}: {} mutations, {} rejected, {} no-ops, {} undos, {} redos, \
          {} jumps, {} saves, {} reloads, depth<={}, float-noise={}, attributed={}, \
          integrity-compared={}, adjusted-compared={}, oracle-us=(snap {} integrity {} adjusted {}), \
-         trimmed={}, peak={:?}{}{}{}",
+         trimmed={}, peak={:?}{}{}{}{}",
         outcome.mutations,
         outcome.rejected,
         outcome.noops,
@@ -7015,7 +7388,33 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
             String::new()
         } else {
             format!("; classified hits: {hits}")
-        }
+        },
+        // Empty unless a coverage knob is on, for the same reason as the config.
+        describe_coverage(outcome),
+    )
+}
+
+/// The coverage knobs' part of the run header: which knobs, and what they did.
+fn describe_coverage(outcome: &Outcome) -> String {
+    if !outcome.knobs.any() {
+        return String::new();
+    }
+    let c = outcome.coverage;
+    format!(
+        "; knobs={} corrupted={} dropped={} kept-corrupted={} trimmed-crossings={} \
+         window-cut={} saves-in-place={} double-crossings={} refusals={} extended={} \
+         fit-checked={}",
+        outcome.knobs.describe(),
+        c.corrupted,
+        c.dropped,
+        c.kept_corrupted,
+        c.trimmed_crossings,
+        c.window_cut,
+        c.saves_in_place,
+        c.double_crossings,
+        c.refusals,
+        c.extended,
+        c.fit_checked,
     )
 }
 
@@ -7198,6 +7597,7 @@ fn undo_redo_fuzz_gate() {
                 horizon: false,
                 config_fuzz: false,
                 combined: false,
+                knobs: Knobs::OFF,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -7245,6 +7645,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 horizon: false,
                 config_fuzz: false,
                 combined: false,
+                knobs: Knobs::OFF,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -7301,6 +7702,7 @@ fn undo_redo_fuzz_gate_multi_crossing() {
                 horizon: false,
                 config_fuzz: false,
                 combined: false,
+                knobs: Knobs::OFF,
             },
         );
         println!("{}", summarize("multi-crossing", seed, &outcome));
@@ -7355,6 +7757,7 @@ const fn combined_plan(iterations: usize) -> Plan {
         horizon: true,
         config_fuzz: true,
         combined: true,
+        knobs: Knobs::OFF,
     }
 }
 
@@ -7496,6 +7899,7 @@ fn the_fuzzer_is_deterministic() {
         horizon: false,
         config_fuzz: false,
         combined: false,
+        knobs: Knobs::OFF,
     };
     let runs = GATE_SEEDS.iter().map(|&seed| (seed, plain)).chain(
         COMBINED_SEEDS
@@ -7723,6 +8127,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
             horizon: false,
             config_fuzz: false,
             combined: false,
+            knobs: Knobs::OFF,
         },
     );
     assert!(
@@ -7769,6 +8174,7 @@ fn bug_7_a_jump_is_n_single_steps() {
             horizon: false,
             config_fuzz: false,
             combined: false,
+            knobs: Knobs::OFF,
         },
     );
     assert_eq!(
@@ -7817,6 +8223,7 @@ fn fuzz_seed_survey() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(if combined { COMBINED_CROSSINGS } else { 1 });
+    let knobs = Knobs::from_env();
     let verbose = fuzz_verbose();
     // Seed-major, mode-minor: the same order the sweep used when it ran the
     // seeds one at a time, and the order every line below is merged in.
@@ -7838,6 +8245,7 @@ fn fuzz_seed_survey() {
                 horizon: horizon || combined,
                 config_fuzz,
                 combined,
+                knobs,
             },
         )
     });
@@ -7992,6 +8400,7 @@ fn fuzz_corpus_sweep() {
         horizon: false,
         config_fuzz: false,
         combined: false,
+        knobs: Knobs::OFF,
     };
 
     // ---- UNGUIDED: `budget` fresh seeds, nothing remembered. ----
@@ -8129,6 +8538,7 @@ fn undo_redo_fuzz_horizon() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(10_000);
     let persistence = std::env::var("STALAGMIGHT_RUST_FUZZ_PERSISTENCE").is_ok();
+    let knobs = Knobs::from_env();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut trimmed = 0;
     let mut failures = Vec::new();
@@ -8152,6 +8562,7 @@ fn undo_redo_fuzz_horizon() {
                 horizon: true,
                 config_fuzz: false,
                 combined: false,
+                knobs,
             },
         )
     });
@@ -8222,6 +8633,7 @@ fn undo_redo_fuzz_soak() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1000);
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let knobs = Knobs::from_env();
     let mut failures = Vec::new();
     // Seed-major, mode-minor: the order the soak ran in when it ran one seed at
     // a time, and the order the totals are merged in.
@@ -8249,6 +8661,7 @@ fn undo_redo_fuzz_soak() {
                 horizon: false,
                 config_fuzz: false,
                 combined: false,
+                knobs,
             },
         )
     });

@@ -951,10 +951,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // that the post-load effect has actually run, the assertion is satisfied by the
       // effect not having happened yet and can never fail.
       let mockHistoryDiscardedCalls = 0;
+      // Whether that history was an earlier version's (compact undo entries). Seeded by
+      // __MOCK_SET_HISTORY_DISCARDED__'s second argument.
+      let mockHistoryDiscardedEarlier = false;
       (window as unknown as Record<string, unknown>).__MOCK_SET_HISTORY_DISCARDED__ = (
-        discarded: boolean
+        discarded: boolean,
+        earlierVersion = false
       ) => {
         mockHistoryDiscarded = !!discarded;
+        mockHistoryDiscardedEarlier = !!discarded && !!earlierVersion;
         mockHistoryDiscardedCalls = 0;
       };
       (window as unknown as Record<string, unknown>).__MOCK_HISTORY_DISCARDED_CALLS__ = () =>
@@ -5359,6 +5364,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // mock must too or a re-render would clear the banner.
             mockHistoryDiscardedCalls += 1;
             return mockHistoryDiscarded;
+
+          case 'history_discarded_from_earlier_version':
+            // Whether the discarded history was written by an earlier version of the
+            // app (the format before compact undo entries) rather than unreadable.
+            return mockHistoryDiscardedEarlier;
 
           case 'repair_project_integrity': {
             const total = mockIntegrityIssues.length;

@@ -553,8 +553,7 @@ fn two_merged_lines(state: &AppState) -> (LineId, LineId) {
 ///
 /// FIXED, and kept as the regression guard: `UndoData::ClosureInfo` records the
 /// index the removal took it out of and the undo re-inserts there, with `push`
-/// kept for a legacy entry that has no recorded position - the same shape
-/// `restore_shot` already used.
+/// kept for a legacy entry that has no recorded position.
 #[test]
 fn undo_of_remove_loop_closure_restores_the_original_order() {
     let _config = isolated_config();
@@ -1117,12 +1116,13 @@ fn diverged_line(state: &AppState) -> LineId {
 // save/reload, undo of SetShotKind or UpdateShot writes to the WRONG SHOT
 // ===========================================================================
 
-/// `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })` names the
-/// shot by its IN-SESSION id (`undo_capture.rs`), and undo executes that command
-/// verbatim (`execute_without_undo`, core/state/undo.rs). The loader renumbers
-/// shots to `line_id * FEATURE_ID_STRIDE + sequence_order`
-/// (persistence/sqlite/read.rs) and nothing remaps the persisted entries, so
-/// after a reopen the id addresses whichever shot now occupies that slot.
+/// `SetShotKind` used to record `UndoData::InverseCommand(Command::SetShotKind
+/// { shot_id, .. })`, which names the shot by its IN-SESSION id, and undo
+/// executed that command verbatim (`execute_without_undo`, core/state/undo.rs).
+/// The loader renumbers shots to `line_id * FEATURE_ID_STRIDE +
+/// sequence_order` (persistence/sqlite/read.rs) and nothing remapped the
+/// persisted entries, so after a reopen the id addressed whichever shot then
+/// occupied that slot. It records `PreviousValues` with the shot's uuid now.
 ///
 /// Quieter than bug 8 and just as wrong: no shot is lost, no uuid changes and no
 /// count moves. One shot silently keeps an edit the undo was supposed to take
@@ -1884,7 +1884,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
     );
 
     let project_before = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     let base = adjusted_bits(&state);
     let mut differing = 0;
@@ -1903,7 +1903,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
         }
     }
     let project_after = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     assert_eq!(
         project_before, project_after,
@@ -2838,11 +2838,15 @@ fn the_zero_datum_undo_capture_covers_every_line() {
     let anchored = create_line(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let _one = create_line(&state, "One", vec![shot(70.0, 7.0)]);
     let _two = create_line(&state, "Two", vec![shot(300.0, 12.0)]);
+    let before = state
+        .get_project_state()
+        .expect("no project open")
+        .capture_all_line_offsets();
 
     assert!(
         state
             .execute(Command::SetZeroDatum {
-                station_ref: StationRef::new(anchored, 0),
+                station_ref: StationRef::new(anchored, 1),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
                 entrance: None,
@@ -2851,11 +2855,18 @@ fn the_zero_datum_undo_capture_covers_every_line() {
         "SetZeroDatum failed"
     );
 
-    let lines = state
+    let after = state
         .get_project_state()
         .expect("no project open")
-        .lines
-        .len();
+        .capture_all_line_offsets();
+    // The frame change reaches every line, not just the datum's merge group:
+    // the datum sits one shot in, so re-framing on it moves all three.
+    let moved: std::collections::BTreeSet<_> = after
+        .iter()
+        .filter(|(id, offset)| before.get(*id) != Some(*offset))
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(moved.len(), 3, "premise: the re-frame moves every line");
 
     let stack = state.undo_stack.lock().unwrap();
     let recorded = stack.peek_undo_data();
@@ -2871,12 +2882,12 @@ fn the_zero_datum_undo_capture_covers_every_line() {
         // Unreachable: the assertion above already named the variant.
         return;
     };
+    // The capture is cut to what the command moved - which here is everything,
+    // so the inverse of a frame change hands every offset back.
+    let captured: std::collections::BTreeSet<_> = previous_offsets.keys().copied().collect();
     assert_eq!(
-        previous_offsets.len(),
-        lines,
-        "the capture covers {} of {lines} lines: the datum's merge group is not the set an \
-         inverse that changes the frame has to hand back",
-        previous_offsets.len()
+        captured, moved,
+        "the capture holds every offset the re-frame moved, and no other"
     );
 }
 

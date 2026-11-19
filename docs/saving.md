@@ -91,9 +91,9 @@ reads the same in an older build and in SpeleoDB's reader:
   `CreatedSectionSnapshot`, ...) and enum tags (`create_line` <->
   `create_section`, `LineStart` <-> `SectionStart`, ...) and nothing else, never
   a user value, including inside the JSON documents nested as strings. The
-  shapes that go through it: the undo/redo rows (`command_json`,
-  `undo_data_json` and the whole-project snapshots and `values_json` they carry;
-  `core/undo/persistence.rs`), the `held_gauges` project setting
+  shapes that go through it: the undo/redo rows (`command_json`, and the whole
+  `{"v2": ...}` envelope of `undo_data_json` with the compact deltas, snapshots
+  and `values_json` it carries; `core/undo/persistence.rs`), the `held_gauges` project setting
   (`persistence/sqlite/read.rs` / `write.rs`) and the dive-plan sidecar snapshot
   (`core/state/dive_plan.rs`).
 - **Display settings.** The Line names toggle is `showLineNames` in the store,
@@ -489,7 +489,7 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 - Serialization uses gzip compression
 - A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
 - On project open, persisted stacks are restored from the database
-- A whole-project snapshot (`ProjectSnapshot`, `ProjectSnapshotPair`) mirrors the
+- A whole-project snapshot (`ProjectSnapshotPair`) mirrors the
   `zero_datum_extras` split (#741): its `zero_datums` holds the placement and
   dangling datums only, and each GPS fix rides beside it under
   `zero_datum_fixes` with its place in the whole list. An older build reads a

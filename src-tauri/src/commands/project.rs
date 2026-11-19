@@ -549,6 +549,14 @@ pub fn history_discarded(state: State<'_, AppState>) -> bool {
     state.history_discarded()
 }
 
+/// Whether the history [`history_discarded`] reports was written by an earlier
+/// version of the app (the format before compact undo entries) rather than found
+/// unreadable, so the banner can say so. A peek, like its sibling.
+#[tauri::command]
+pub fn history_discarded_from_earlier_version(state: State<'_, AppState>) -> bool {
+    state.history_discarded_from_earlier_version()
+}
+
 #[tauri::command]
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,

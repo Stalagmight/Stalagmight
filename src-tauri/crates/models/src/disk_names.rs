@@ -39,10 +39,26 @@ const KEYS: &[(&str, &str)] = &[
     ("line_values", "section_values"),
     ("prev_line_offset", "prev_section_offset"),
     ("CreatedLineSnapshot", "CreatedSectionSnapshot"),
+    // No longer an `UndoData` variant (the compact undo history keeps no
+    // payload only a pre-compact history held, and such a history is dropped
+    // on open before anything reads it). Kept so the pair stays a bijection
+    // over every name a file in the wild can hold.
     ("LineSnapshot", "SectionSnapshot"),
-    // Born after the rename (the Section commands, #327), so no older build
-    // wrote another name: they persist as they are.
+    // A compact undo entry's `BeforePreview::Line` (the facts a Delete Line
+    // preview reads), written in the old vocabulary like the rest of the row.
+    // Like every pair here it renames the KEY wherever it occurs in a
+    // translated document, not only in the preview. Safe as long as no other
+    // persisted shape uses `Line` or `Section` as an object key: no project
+    // map is keyed by a user string, and the other `Line`/`Section` enums are
+    // internally tagged (a `type` value, handled by TAGS) or never persisted
+    // through here. A new externally tagged `Line` or `Section` variant, or a
+    // map keyed by user text, must not go through this translation.
+    ("Line", "Section"),
+    // Born after the rename (the Section commands, #327; the compact entry's
+    // `BeforePreview::DeletedLines`), so no older build wrote another name:
+    // they persist as they are.
     ("line_ids", "line_ids"),
+    ("DeletedLines", "DeletedLines"),
 ];
 
 /// Enum tags written as string values: (key that holds the tag, name in code,

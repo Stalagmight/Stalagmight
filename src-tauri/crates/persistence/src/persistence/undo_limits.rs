@@ -2,34 +2,38 @@
 ///
 /// Full mode bypasses the entry-count window (`undo_history_limit` /
 /// `undo_persist_limit`) so the project keeps its whole edit history since the last
-/// commit - but "unbounded" is not safe here, because a single `Delete shot`,
-/// `Delete line`, `Reverse line` or `Batch` (every import) stores a
-/// `UndoData::ProjectSnapshotPair`: TWO whole-project JSON snapshots. Measured on a
-/// project-shaped payload, a 5,000-shot project is ~2.1 MB of JSON per snapshot, so
-/// one such entry is ~4.2 MB - and this history rides in every SpeleoDB commit, which
-/// is the storage cost the issue exists to REDUCE.
+/// commit - but "unbounded" is not safe here: this history rides in every SpeleoDB
+/// commit, which is the storage cost the issue exists to REDUCE, and an import or an
+/// Add `.stalx` records what it brought in (its entry IS the data it adds).
 ///
 /// So depth is bounded by total size instead of entry count. At the measured ~13x gzip
-/// ratio for this JSON shape, 32 MiB of JSON is roughly 2.5 MB per commit, and buys:
+/// ratio for this JSON shape, 32 MiB of JSON is roughly 2.5 MB per commit. A command
+/// whose effect cannot be inverted field by field (a delete, a reverse, a merge, a
+/// split, a batch) once recorded TWO whole-project snapshots - ~4.2 MB per entry on a
+/// 5,000-shot project, ~17 MB on a 20,000-shot one, two of which filled the budget.
+/// Such an entry is now a compact delta (`UndoData::Delta`) of what the command
+/// changed, held as its JSON text, which is what the budget counts; the undo size gate
+/// (`undo_size_gate_tests.rs`) holds every action's entry to 1% of the saved file:
 ///
 /// | entry kind | size each | entries that fit |
 /// |---|---|---|
-/// | ordinary edit (`PreviousValues`, `InverseCommand`) | ~1 KB | ~32,000 |
-/// | whole-project pair, 5,000-shot project | ~4.2 MB | ~8 |
-/// | whole-project pair, 20,000-shot project | ~17 MB | ~2 |
+/// | ordinary edit (`PreviousValues`, `InverseCommand`) | ~0.2-1 KB | ~32,000+ |
+/// | compact entry, a delete, a reverse or a split, 20,000-shot project | ~1-10 KB | ~3,000+ |
+/// | a 1,000-cell paste, 20,000-shot project | ~35 KB | ~900 |
+/// | an import or an Add `.stalx` | the data it brought | the budget's share of it |
 ///
 /// The number is a LATENCY budget as much as a storage one, because every save rewrites
 /// the whole persisted stack (see `UndoStack::rows_to_persist` for why it cannot be
 /// incremental): the worst-case save gzips this many bytes, ~0.3 s at the measured
 /// throughput, which an autosave every 30 s can absorb. Raising it deepens
-/// snapshot-heavy history and slows every save in proportion; that is the whole trade,
-/// and this constant is the only lever.
+/// history and slows every save in proportion; that is the whole trade, and this
+/// constant is the only lever.
 ///
 /// Note what it replaces: the old fixed window persisted `undo_persist_limit` (20)
 /// entries with NO size cap, which on a 20,000-shot project is ~336 MB of JSON per save.
 /// So this is a large improvement in worst-case cost and an enormous one in ordinary
-/// depth (100 entries -> ~32,000), at the price of shallower history for repeated
-/// whole-survey operations on very large projects.
+/// depth (100 entries -> ~32,000); only imports and Adds of large files still make the
+/// history shallow.
 ///
 /// Measured against `UndoStack::estimated_size`, NOT against a real serialization:
 /// the point is to bound growth, and serializing the whole stack to measure it would

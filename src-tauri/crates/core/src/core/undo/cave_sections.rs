@@ -127,8 +127,12 @@ impl CaveSectionChange {
             .filter(|now| then.get(&now.line_id).is_some_and(|was| *was != *now))
             .map(|now| now.line_id)
             .collect();
-        before.members.retain(|m| changed.contains(&m.line_id));
-        after.members.retain(|m| changed.contains(&m.line_id));
+        // Captured for every line, kept for the entry's life: give the
+        // lines it did not change their memory back.
+        for state in [&mut before, &mut after] {
+            state.members.retain(|m| changed.contains(&m.line_id));
+            state.members.shrink_to_fit();
+        }
         (before != after).then_some(Self { before, after })
     }
 }

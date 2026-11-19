@@ -71,7 +71,7 @@ impl AppState {
                     outcome.second
                 }
                 Err(e) => {
-                    let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                    let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
             }

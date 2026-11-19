@@ -352,8 +352,7 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///   back (#413, finding 11's re-creation residue).
 ///
 /// Neither subsumes the other, and this one is also on the path of every
-/// `ProjectSnapshot`, rollback and load-time restore, where there is no pair to
-/// refresh at all.
+/// rollback and load-time restore, where there is no pair to refresh at all.
 /// * `ensure_unique_shot_uuids` - NOT re-applied. It RE-MINTS an existing uuid,
 ///   which is not fill-in, and the pre-repair state of a `duplicate_shot_uuid`
 ///   Repair is a snapshot that intentionally holds duplicates: undoing that
@@ -375,24 +374,36 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 /// them is the edit's own (a combine that pins its kept line's gauge on the
 /// station it was on), not a save's capture, so it is not carried across: the
 /// restored half did not have it, and the step is an exact inverse.
+///
+/// Returns whether it changed `restored`.
 pub(super) fn reapply_heals_after_restore(
     restored: &mut Project,
     live: Option<&Project>,
     edited: Option<&RecordedGauges>,
-) {
+) -> bool {
+    let mut changed = restored
+        .lines
+        .iter()
+        .flat_map(|line| &line.shots)
+        .any(|shot| shot.uuid.as_deref().is_none_or(str::is_empty));
     restored.ensure_shot_uuids();
     let Some(live) = live else {
-        return;
+        return changed;
     };
     // The Section id counter only goes up within a timeline: a Section the
     // restored state predates keeps its id retired, so `hiddenSections` (a
     // view setting, keyed by id) never names a different Section later.
-    restored.next_section_id = restored.next_section_id.max(live.next_section_id);
-    adopt_station_identities(restored, live);
+    // Both are heals like the rest: reported, so a step through a compact
+    // entry records its way back from the project really installed.
+    let next_section_id = restored.next_section_id.max(live.next_section_id);
+    changed |= next_section_id != restored.next_section_id;
+    restored.next_section_id = next_section_id;
+    changed |= adopt_station_identities(restored, live);
     // `Line::loaded_created_at` is session-only (serde-skipped), so every line
     // of a restored snapshot comes back without the time its file held. Carry
     // the live line's by id, or the next save rewrites every line's
-    // `sections.created_at` with the fallback (`docs/saving.md`).
+    // `sections.created_at` with the fallback (`docs/saving.md`). Not a heal:
+    // the field is never serialized, so the installed text is unchanged.
     let stored_times: std::collections::HashMap<LineId, _> = live
         .lines
         .iter()
@@ -446,7 +457,9 @@ pub(super) fn reapply_heals_after_restore(
         }
         line.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
         line.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
+        changed = true;
     }
+    changed
 }
 
 /// A station told apart from every other by the shots on either side of it,
@@ -507,10 +520,13 @@ fn stations_by_sides(project: &Project) -> std::collections::HashMap<StationSide
 /// station in the two states, and adopting by key put ids and names on the
 /// wrong stations; a station whose sides changed (the new first station after
 /// a first-shot delete) is left for the epilogue instead.
-fn adopt_station_identities(restored: &mut Project, live: &Project) {
+///
+/// Returns whether it changed `restored`.
+fn adopt_station_identities(restored: &mut Project, live: &Project) -> bool {
     if !restored.station_ids.is_empty() || live.station_ids.is_empty() {
-        return;
+        return false;
     }
+    let mut changed = false;
     let live_stations = stations_by_sides(live);
     for (sides, at) in stations_by_sides(restored) {
         let Some(live_at) = live_stations.get(&sides) else {
@@ -521,14 +537,19 @@ fn adopt_station_identities(restored: &mut Project, live: &Project) {
         };
         if let Some(id) = live.station_id_at(*live_at) {
             restored.station_ids.insert(key.clone(), id);
+            changed = true;
         }
         if restored.station_name_at(at).is_none() {
             if let Some(name) = live.station_name_at(*live_at) {
                 restored.station_names.insert(key, name.to_string());
+                changed = true;
             }
         }
     }
-    restored.next_station_id = restored.next_station_id.max(live.next_station_id);
+    let next_station_id = restored.next_station_id.max(live.next_station_id);
+    changed |= next_station_id != restored.next_station_id;
+    restored.next_station_id = next_station_id;
+    changed
 }
 
 impl AppState {

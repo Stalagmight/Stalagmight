@@ -36,7 +36,7 @@ serde = { workspace = true, features = ["derive"] }
 # serialized `Project` deserialized by `AppState::restore_snapshot_into`
 # HERE, so without it an undo silently rewrites survey measurements in their
 # last bit (issue #413, finding 25).
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 anyhow = { workspace = true }

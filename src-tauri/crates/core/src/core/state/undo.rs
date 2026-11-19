@@ -1,6 +1,6 @@
-use crate::core::undo::history_names::{referenced_lines, NameBook};
+use crate::core::undo::history_names::{referenced_entry_lines, NameBook};
 use crate::core::{Command, CommandResult, ReversedLine, UndoData, UndoEntry};
-use crate::models::{LineId, LineIdentity, LineUpdates, Shot, ShotId, ShotUpdates};
+use crate::models::{LineId, LineUpdates, Shot, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -89,224 +89,263 @@ impl AppState {
         // IMPORTANT: No early returns after this point - all paths must flow
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
-        let mut result = match &entry.undo_data {
-            UndoData::InverseCommand(inverse_cmd) => {
-                // Execute the inverse command (without pushing to undo stack)
-                self.execute_without_undo(inverse_cmd.clone())
-            }
+        let mut result = if let UndoData::Delta(delta) = &mut entry.undo_data {
+            self.step_through_delta(delta)
+        } else {
+            match &entry.undo_data {
+                UndoData::InverseCommand(inverse_cmd) => {
+                    // Execute the inverse command (without pushing to undo stack)
+                    self.execute_without_undo(inverse_cmd.clone())
+                }
 
-            UndoData::PreviousValues {
-                line_id,
-                shot_id,
-                shot_uuid,
-                values_json,
-                previous_offsets,
-            } => {
-                // Restore previous values
-                if let Some(shot_id) = shot_id {
-                    // Restore shot values - onto the shot this entry was
-                    // recorded against, resolved by uuid (#413, finding 12).
-                    match self.resolve_undo_shot(*line_id, shot_uuid.as_deref(), *shot_id) {
-                        Ok(target_id) => {
-                            if let Ok(prev_updates) =
-                                serde_json::from_str::<ShotUpdates>(values_json.as_str())
-                            {
-                                // Guard-free (`restore_shot_values`): an inverse
-                                // consults no user-intent guard, and the frozen
-                                // check judges the state the FORWARD command
-                                // produced rather than the one it was permitted
-                                // from. See that function for the single-command
-                                // route that makes the two differ.
-                                let restored =
-                                    self.restore_shot_values(*line_id, target_id, prev_updates);
-                                if restored.success {
-                                    // The re-execution's `realign_after_shot_edit`
-                                    // just RE-DERIVED the group's offsets. An
-                                    // inverse restores rather than re-derives, and
-                                    // the two part company on a key that lands
-                                    // back on the origin: the adjusted write drops
-                                    // it, and the pre-edit state may legitimately
-                                    // have HELD it (#413, finding 27). Hand the
-                                    // recorded map back verbatim, exactly as
-                                    // `SegmentMoveInfo` and `ZeroDatumInfo` do.
-                                    self.restore_captured_line_offsets(previous_offsets);
+                UndoData::PreviousValues {
+                    line_id,
+                    shot_id,
+                    shot_uuid,
+                    values_json,
+                    previous_offsets,
+                } => {
+                    // Restore previous values
+                    if let Some(shot_id) = shot_id {
+                        // Restore shot values - onto the shot this entry was
+                        // recorded against, resolved by uuid (#413, finding 12).
+                        match self.resolve_undo_shot(*line_id, shot_uuid.as_deref(), *shot_id) {
+                            Ok(target_id) => {
+                                if let Ok(prev_updates) =
+                                    serde_json::from_str::<ShotUpdates>(values_json.as_str())
+                                {
+                                    // Guard-free (`restore_shot_values`): an inverse
+                                    // consults no user-intent guard, and the frozen
+                                    // check judges the state the FORWARD command
+                                    // produced rather than the one it was permitted
+                                    // from. See that function for the single-command
+                                    // route that makes the two differ.
+                                    let realigns = prev_updates.touches_geometry();
+                                    let pinned = self.live_line_offsets();
+                                    let restored =
+                                        self.restore_shot_values(*line_id, target_id, prev_updates);
+                                    if restored.success && realigns {
+                                        // The re-execution's `realign_after_shot_edit`
+                                        // just RE-DERIVED the group's offsets. An
+                                        // inverse restores rather than re-derives, and
+                                        // the two part company on a key that lands
+                                        // back on the origin: the adjusted write drops
+                                        // it, and the pre-edit state may legitimately
+                                        // have HELD it (#413, finding 27). The recorded
+                                        // map holds the keys the edit changed; every
+                                        // other key goes back to what the edit left,
+                                        // which is what it found.
+                                        self.restore_offsets_pinning_the_rest(
+                                            previous_offsets,
+                                            pinned,
+                                        );
+                                    }
+                                    restored
+                                } else {
+                                    CommandResult::failure("Failed to parse undo data".to_string())
                                 }
-                                restored
-                            } else {
-                                CommandResult::failure("Failed to parse undo data".to_string())
                             }
+                            Err(e) => CommandResult::failure(e),
+                        }
+                    } else {
+                        // Restore line values
+                        if let Ok(prev_updates) =
+                            serde_json::from_str::<LineUpdates>(values_json.as_str())
+                        {
+                            self.update_line(*line_id, prev_updates)
+                        } else {
+                            CommandResult::failure("Failed to parse undo data".to_string())
+                        }
+                    }
+                }
+
+                UndoData::ShotCredits {
+                    changes,
+                    line_values,
+                } => self.undo_shot_credits(changes, line_values.as_ref()),
+
+                UndoData::CreatedLineSnapshot { line_id, .. } => {
+                    // Undo a CreateLine by deleting the line
+                    self.delete_line(*line_id)
+                }
+
+                UndoData::CreatedShotSnapshot {
+                    line_id,
+                    shot_id,
+                    position,
+                    after_shot_id,
+                    before_shot_id,
+                    uuid,
+                    previous_offsets,
+                    consumed_legacy,
+                    ..
+                } => {
+                    // Undo a CreateShot by removing the shot it created - resolved
+                    // by uuid, because the in-session id it was recorded with
+                    // addresses a DIFFERENT shot after a save/reopen (#413,
+                    // finding 8) or none at all (finding 13).
+                    //
+                    // Through `remove_created_shot`, NOT the user-facing
+                    // `delete_shot`: an inverse must not consult the guards that
+                    // express what a user may do, or a permitted CreateShot becomes
+                    // an undo that fails and wedges the history (#413, finding 6).
+                    // The recorded anchors and position say WHICH insert is being
+                    // inverted; both anchors absent at position 0 is the append
+                    // into an empty line whose inverse is not the general
+                    // delete (finding 3).
+                    match self.resolve_undo_shot(*line_id, uuid.as_deref(), *shot_id) {
+                        Ok(target_id) => {
+                            let pinned = self.live_line_offsets();
+                            let removed = self.remove_created_shot(
+                                *line_id,
+                                target_id,
+                                after_shot_id.is_none()
+                                    && before_shot_id.is_none()
+                                    && *position == 0,
+                            );
+                            if removed.success {
+                                // The removal paid the line's offset back by the
+                                // segment it took out, through the adjusted write -
+                                // which DROPS a key that lands on the origin whether
+                                // or not the pre-insert state held one. Restore the
+                                // recorded map instead of trusting that re-derivation
+                                // (#413, finding 27's second arm). The map holds
+                                // only the keys the insert changed, so every other
+                                // key is pinned back to what the insert left.
+                                self.restore_offsets_pinning_the_rest(previous_offsets, pinned);
+                                // Shot-less again: the line keeps the legacy
+                                // pair its first shot took.
+                                if let Some(pair) = consumed_legacy {
+                                    self.restore_consumed_legacy(*line_id, pair);
+                                }
+                            }
+                            removed
                         }
                         Err(e) => CommandResult::failure(e),
                     }
-                } else {
-                    // Restore line values
-                    if let Ok(prev_updates) =
-                        serde_json::from_str::<LineUpdates>(values_json.as_str())
-                    {
-                        self.update_line(*line_id, prev_updates)
-                    } else {
-                        CommandResult::failure("Failed to parse undo data".to_string())
-                    }
                 }
-            }
 
-            UndoData::ShotCredits {
-                changes,
-                line_values,
-            } => self.undo_shot_credits(changes, line_values.as_ref()),
-
-            UndoData::LineSnapshot { line_id, line_data } => {
-                // Restore deleted line. LEGACY ONLY: a live `DeleteLine`
-                // captures a `ProjectSnapshotPair` (which restores the whole
-                // `Line`, identity included), so this arm serves persisted
-                // entries written before that change - and those carry no
-                // identity, so the shots come back with fresh uuids exactly as
-                // they always did.
-                self.restore_line(*line_id, line_data.clone(), &LineIdentity::default())
-            }
-
-            UndoData::CreatedLineSnapshot { line_id, .. } => {
-                // Undo a CreateLine by deleting the line
-                self.delete_line(*line_id)
-            }
-
-            UndoData::ShotSnapshot {
-                line_id,
-                shot_id,
-                shot_data,
-                position,
-                uuid,
-            } => {
-                // Restore deleted shot at its original position with original ID
-                // and original UUID. (Live DeleteShot now captures a full
-                // ProjectSnapshotPair; this path serves legacy persisted entries,
-                // where `uuid` is None and a fresh one is minted.)
-                self.restore_shot(
-                    *line_id,
-                    *shot_id,
-                    shot_data.clone(),
-                    *position,
-                    uuid.clone(),
-                )
-            }
-
-            UndoData::CreatedShotSnapshot {
-                line_id,
-                shot_id,
-                position,
-                after_shot_id,
-                before_shot_id,
-                uuid,
-                previous_offsets,
-                consumed_legacy,
-                ..
-            } => {
-                // Undo a CreateShot by removing the shot it created - resolved
-                // by uuid, because the in-session id it was recorded with
-                // addresses a DIFFERENT shot after a save/reopen (#413,
-                // finding 8) or none at all (finding 13).
-                //
-                // Through `remove_created_shot`, NOT the user-facing
-                // `delete_shot`: an inverse must not consult the guards that
-                // express what a user may do, or a permitted CreateShot becomes
-                // an undo that fails and wedges the history (#413, finding 6).
-                // The recorded anchors and position say WHICH insert is being
-                // inverted; both anchors absent at position 0 is the append
-                // into an empty line whose inverse is not the general
-                // delete (finding 3).
-                match self.resolve_undo_shot(*line_id, uuid.as_deref(), *shot_id) {
-                    Ok(target_id) => {
-                        let removed = self.remove_created_shot(
-                            *line_id,
-                            target_id,
-                            after_shot_id.is_none() && before_shot_id.is_none() && *position == 0,
-                        );
-                        if removed.success {
-                            // The removal paid the line's offset back by the
-                            // segment it took out, through the adjusted write -
-                            // which DROPS a key that lands on the origin whether
-                            // or not the pre-insert state held one. Restore the
-                            // recorded map instead of trusting that re-derivation
-                            // (#413, finding 27's second arm).
-                            self.restore_captured_line_offsets(previous_offsets);
-                            // Shot-less again: the line keeps the legacy
-                            // pair its first shot took.
-                            if let Some(pair) = consumed_legacy {
-                                self.restore_consumed_legacy(*line_id, pair);
-                            }
-                        }
-                        removed
-                    }
-                    Err(e) => CommandResult::failure(e),
-                }
-            }
-
-            UndoData::MergeInfo {
-                station_a,
-                station_b,
-                previous_offsets,
-                ..
-            } => {
-                // Undo a merge by restoring line offsets and unmerging the stations.
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            // Restore line offsets to pre-merge positions
-                            project.restore_line_offsets(previous_offsets);
-
-                            // Then unmerge the stations
-                            project.unmerge_stations(*station_a, *station_b);
-                            CommandResult::success()
-                        }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                }
-            }
-
-            UndoData::UnmergeInfo {
-                station_a,
-                station_b,
-                removed_closures,
-            } => {
-                // Re-merge the stations to undo the unmerge
-                let merge_result = self.merge_stations(*station_a, *station_b);
-                if merge_result.success {
-                    // Merge succeeded, now restore removed closures
-                    if !removed_closures.is_empty() {
-                        if let Ok(mut proj_guard) = self.project.lock() {
-                            if let Some(project) = proj_guard.as_mut() {
-                                for closure in removed_closures {
-                                    project.next_closure_id =
-                                        project.next_closure_id.max(closure.id + 1);
-                                    project.loop_closures.push(closure.clone());
+                UndoData::ClosureInfo { closure, position } => {
+                    match &entry.command {
+                        Command::CreateLoopClosure { .. } => {
+                            // Undo create by removing the same closure ID.
+                            match self.project.lock() {
+                                Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                    Some(project) => {
+                                        if let Some(pos) = project
+                                            .loop_closures
+                                            .iter()
+                                            .position(|lc| lc.id == closure.id)
+                                        {
+                                            project.loop_closures.remove(pos);
+                                        }
+                                        project.touch();
+                                        CommandResult::success()
+                                    }
+                                    None => CommandResult::failure("No project open".to_string()),
+                                },
+                                Err(_) => {
+                                    CommandResult::failure("Failed to lock project".to_string())
                                 }
-                                project.touch();
                             }
                         }
+                        Command::RemoveLoopClosure { .. } => {
+                            // Undo remove by restoring the captured closure AT ITS
+                            // ORIGINAL INDEX. The removal was a `Vec::remove`, which
+                            // keeps the rest in order, so appending here would
+                            // permute a list that is persisted into the `.stalx`,
+                            // indexed by the frontend and traversed by
+                            // `resolve_offsets` (#413, finding 4). A legacy entry
+                            // carries no position and still appends.
+                            match self.project.lock() {
+                                Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                    Some(project) => {
+                                        project.next_closure_id =
+                                            project.next_closure_id.max(closure.id + 1);
+                                        match position {
+                                            Some(index) => {
+                                                let at = (*index).min(project.loop_closures.len());
+                                                project.loop_closures.insert(at, closure.clone());
+                                            }
+                                            None => project.loop_closures.push(closure.clone()),
+                                        }
+                                        project.touch();
+                                        CommandResult::success()
+                                    }
+                                    None => CommandResult::failure("No project open".to_string()),
+                                },
+                                Err(_) => {
+                                    CommandResult::failure("Failed to lock project".to_string())
+                                }
+                            }
+                        }
+                        _ => CommandResult::failure("Unsupported closure undo command".to_string()),
                     }
-                    merge_result
-                } else {
-                    // If re-merge fails (e.g., stations now connected), try direct restoration
+                }
+
+                UndoData::ZeroDatumInfo {
+                    station_ref,
+                    previous_gps,
+                    previous_accuracy_m,
+                    previous_entrance,
+                    position,
+                    previous_offsets,
+                } => {
+                    // Restore previous datum state directly without recomputing offsets
+                    // This is critical because set_zero_datum would compute new offsets
+                    // instead of restoring the exact previous state
                     match self.project.lock() {
                         Ok(mut proj_guard) => match proj_guard.as_mut() {
                             Some(project) => {
-                                if let (Some(key_a), Some(key_b)) = (
-                                    project.key_for_ref(*station_a),
-                                    project.key_for_ref(*station_b),
-                                ) {
-                                    project.record_station_merge(crate::models::StationMerge {
-                                        station_a: key_a,
-                                        station_b: key_b,
-                                        merged_at: chrono::Utc::now(),
-                                    });
+                                // Restore line offsets directly
+                                project.restore_line_offsets(previous_offsets);
+
+                                // Stable stored identity for the datum's station.
+                                let datum_key = project.key_for_ref(*station_ref);
+                                // The undo history is persisted, so this value can
+                                // come from a crafted file: hold it to the rule every
+                                // write path uses, falling back to the default.
+                                let previous_accuracy_m = &previous_accuracy_m.filter(|a| {
+                                    crate::models::validate_gps_accuracy(Some(*a)).is_ok()
+                                });
+
+                                // Restore GPS datum state, AT ITS ORIGINAL INDEX when
+                                // the datum has to be put back: the removal was a
+                                // `Vec::remove`, so appending permutes a list that
+                                // is persisted, indexed by the frontend, and walked
+                                // by `resolve_offsets` to decide which datum anchors
+                                // a connected group (#413, finding 17). A legacy
+                                // entry carries no position and still appends.
+                                if let Some(gps) = previous_gps {
+                                    if let Some(existing) = project
+                                        .zero_datums
+                                        .iter_mut()
+                                        .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
+                                    {
+                                        existing.gps = *gps;
+                                        existing.accuracy_m = *previous_accuracy_m;
+                                        existing.entrance = *previous_entrance;
+                                    } else if let Some(key) = datum_key {
+                                        let datum = crate::models::ZeroDatum {
+                                            station_ref: key,
+                                            gps: *gps,
+                                            accuracy_m: *previous_accuracy_m,
+                                            entrance: *previous_entrance,
+                                        };
+                                        match position {
+                                            Some(index) => {
+                                                let at = (*index).min(project.zero_datums.len());
+                                                project.zero_datums.insert(at, datum);
+                                            }
+                                            None => project.zero_datums.push(datum),
+                                        }
+                                    }
+                                } else {
+                                    project
+                                        .zero_datums
+                                        .retain(|zd| Some(&zd.station_ref) != datum_key.as_ref());
                                 }
-                                // Restore removed closures and bump next_closure_id
-                                for closure in removed_closures {
-                                    project.next_closure_id =
-                                        project.next_closure_id.max(closure.id + 1);
-                                    project.loop_closures.push(closure.clone());
-                                }
+
                                 project.touch();
                                 CommandResult::success()
                             }
@@ -315,286 +354,77 @@ impl AppState {
                         Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                     }
                 }
-            }
 
-            UndoData::ClosureInfo { closure, position } => {
-                match &entry.command {
-                    Command::CreateLoopClosure { .. } => {
-                        // Undo create by removing the same closure ID.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                                Some(project) => {
-                                    if let Some(pos) = project
-                                        .loop_closures
-                                        .iter()
-                                        .position(|lc| lc.id == closure.id)
-                                    {
-                                        project.loop_closures.remove(pos);
-                                    }
-                                    project.touch();
-                                    CommandResult::success()
-                                }
-                                None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                        }
+                UndoData::SegmentMoveInfo {
+                    previous_offsets, ..
+                } => {
+                    // Restore previous offsets for each affected line
+                    match self.project.lock() {
+                        Ok(mut proj_guard) => match proj_guard.as_mut() {
+                            Some(project) => {
+                                project.restore_line_offsets(previous_offsets);
+                                project.touch();
+                                CommandResult::success()
+                            }
+                            None => CommandResult::failure("No project open".to_string()),
+                        },
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                     }
-                    Command::RemoveLoopClosure { .. } => {
-                        // Undo remove by restoring the captured closure AT ITS
-                        // ORIGINAL INDEX. The removal was a `Vec::remove`, which
-                        // keeps the rest in order, so appending here would
-                        // permute a list that is persisted into the `.stalx`,
-                        // indexed by the frontend and traversed by
-                        // `resolve_offsets` (#413, finding 4). A legacy entry
-                        // carries no position and still appends.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                                Some(project) => {
-                                    project.next_closure_id =
-                                        project.next_closure_id.max(closure.id + 1);
-                                    match position {
-                                        Some(index) => {
-                                            let at = (*index).min(project.loop_closures.len());
-                                            project.loop_closures.insert(at, closure.clone());
-                                        }
-                                        None => project.loop_closures.push(closure.clone()),
-                                    }
-                                    project.touch();
-                                    CommandResult::success()
-                                }
-                                None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                        }
-                    }
-                    _ => CommandResult::failure("Unsupported closure undo command".to_string()),
                 }
-            }
 
-            UndoData::ZeroDatumInfo {
-                station_ref,
-                previous_gps,
-                previous_accuracy_m,
-                previous_entrance,
-                position,
-                previous_offsets,
-            } => {
-                // Restore previous datum state directly without recomputing offsets
-                // This is critical because set_zero_datum would compute new offsets
-                // instead of restoring the exact previous state
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            // Restore line offsets directly
-                            project.restore_line_offsets(previous_offsets);
-
-                            // Stable stored identity for the datum's station.
-                            let datum_key = project.key_for_ref(*station_ref);
-                            // The undo history is persisted, so this value can
-                            // come from a crafted file: hold it to the rule every
-                            // write path uses, falling back to the default.
-                            let previous_accuracy_m = &previous_accuracy_m
-                                .filter(|a| crate::models::validate_gps_accuracy(Some(*a)).is_ok());
-
-                            // Restore GPS datum state, AT ITS ORIGINAL INDEX when
-                            // the datum has to be put back: the removal was a
-                            // `Vec::remove`, so appending permutes a list that
-                            // is persisted, indexed by the frontend, and walked
-                            // by `resolve_offsets` to decide which datum anchors
-                            // a connected group (#413, finding 17). A legacy
-                            // entry carries no position and still appends.
-                            if let Some(gps) = previous_gps {
-                                if let Some(existing) = project
-                                    .zero_datums
-                                    .iter_mut()
-                                    .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
-                                {
-                                    existing.gps = *gps;
-                                    existing.accuracy_m = *previous_accuracy_m;
-                                    existing.entrance = *previous_entrance;
-                                } else if let Some(key) = datum_key {
-                                    let datum = crate::models::ZeroDatum {
-                                        station_ref: key,
-                                        gps: *gps,
-                                        accuracy_m: *previous_accuracy_m,
-                                        entrance: *previous_entrance,
-                                    };
-                                    match position {
-                                        Some(index) => {
-                                            let at = (*index).min(project.zero_datums.len());
-                                            project.zero_datums.insert(at, datum);
-                                        }
-                                        None => project.zero_datums.push(datum),
-                                    }
-                                }
+                UndoData::ProjectSnapshotPair { before, after: _ } => {
+                    // Restore the "before" snapshot for undo.
+                    match self.project.lock() {
+                        Ok(mut proj) => {
+                            if Self::restore_snapshot_into_with(
+                                &mut proj,
+                                before.as_str(),
+                                edited.as_ref(),
+                            ) {
+                                CommandResult::success()
                             } else {
-                                project
-                                    .zero_datums
-                                    .retain(|zd| Some(&zd.station_ref) != datum_key.as_ref());
+                                CommandResult::failure(
+                                    "Failed to parse project snapshot".to_string(),
+                                )
                             }
-
-                            project.touch();
-                            CommandResult::success()
                         }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
-            }
 
-            UndoData::SegmentMoveInfo {
-                previous_offsets, ..
-            } => {
-                // Restore previous offsets for each affected line
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                UndoData::AddedProjectContent(content) => {
+                    // Remove exactly what the add brought, guard-free: an inverse
+                    // consults no user-intent guard. Its saved ignores stay on disk
+                    // (see `remove_pending_ignores`).
+                    let mut guard = self
+                        .project
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    match guard.as_mut() {
                         Some(project) => {
-                            project.restore_line_offsets(previous_offsets);
-                            project.touch();
+                            content.remove_from(project);
+                            self.remove_pending_ignores(&content.line_ids());
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                }
-            }
-
-            UndoData::StationMoveInfo {
-                station_ref,
-                prev_shot_before,
-                prev_shot_after,
-                prev_offset,
-                prev_line_offset,
-            } => {
-                // Restore adjacent shot data and station offset
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            let line = project
-                                .lines
-                                .iter_mut()
-                                .find(|s| s.id == station_ref.line_id);
-                            if let Some(line) = line {
-                                // Restore preceding shot
-                                if let Some((shot_id, shot_data)) = prev_shot_before {
-                                    if let Some(shot) =
-                                        line.shots.iter_mut().find(|s| s.id == *shot_id)
-                                    {
-                                        shot.azimuth_in = shot_data.azimuth_in;
-                                        shot.azimuth_out = shot_data.azimuth_out;
-                                        shot.length = shot_data.length;
-                                        shot.depth_in = shot_data.depth_in;
-                                        shot.depth_out = shot_data.depth_out;
-                                    }
-                                }
-                                // Restore following shot
-                                if let Some((shot_id, shot_data)) = prev_shot_after {
-                                    if let Some(shot) =
-                                        line.shots.iter_mut().find(|s| s.id == *shot_id)
-                                    {
-                                        shot.azimuth_in = shot_data.azimuth_in;
-                                        shot.azimuth_out = shot_data.azimuth_out;
-                                        shot.length = shot_data.length;
-                                        shot.depth_in = shot_data.depth_in;
-                                        shot.depth_out = shot_data.depth_out;
-                                    }
-                                }
-                            }
-                            // Restore station offset
-                            if let Some(key) = project.key_for_ref(*station_ref) {
-                                match prev_offset {
-                                    Some(offset) => {
-                                        project.station_offsets.insert(key, *offset);
-                                    }
-                                    None => {
-                                        project.station_offsets.remove(&key);
-                                    }
-                                }
-                            }
-                            // Restore line offset - through the one writer, so a
-                            // legacy entry carrying a dust-zero value restores as
-                            // ABSENT rather than installing a state the app cannot
-                            // otherwise hold (the invariant on
-                            // `Project::write_line_offset`). This arm serves
-                            // persisted entries only; a live `MoveStation` records
-                            // a `ProjectSnapshotPair`.
-                            match prev_line_offset {
-                                Some(offset) => {
-                                    crate::models::Project::write_line_offset(
-                                        &mut project.line_offsets,
-                                        station_ref.line_id,
-                                        *offset,
-                                    );
-                                }
-                                None => {
-                                    project.line_offsets.remove(&station_ref.line_id);
-                                }
-                            }
-                            project.touch();
-                            CommandResult::success()
-                        }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                }
-            }
-
-            UndoData::ProjectSnapshot(json) => {
-                // Restore entire project (caches rebuilt centrally; see
-                // AppState::restore_snapshot_into).
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        if Self::restore_snapshot_into(&mut proj, json.as_str()) {
-                            CommandResult::success()
-                        } else {
-                            CommandResult::failure("Failed to parse project snapshot".to_string())
-                        }
                     }
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+
+                // A Section command (#327): put the recorded Sections and
+                // memberships back, guard-free.
+                UndoData::CaveSections(change) => self.restore_cave_sections(&change.before),
+
+                UndoData::None => {
+                    CommandResult::failure("This command cannot be undone".to_string())
+                }
+                UndoData::Delta(_) => {
+                    CommandResult::failure("A compact entry steps above".to_string())
+                }
+                // A capture is compacted before it is pushed; it never reaches here.
+                UndoData::CapturedPair(_) => {
+                    CommandResult::failure("An uncompacted capture cannot be undone".to_string())
                 }
             }
-
-            UndoData::ProjectSnapshotPair { before, after: _ } => {
-                // Restore the "before" snapshot for undo.
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        if Self::restore_snapshot_into_with(
-                            &mut proj,
-                            before.as_str(),
-                            edited.as_ref(),
-                        ) {
-                            CommandResult::success()
-                        } else {
-                            CommandResult::failure("Failed to parse project snapshot".to_string())
-                        }
-                    }
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                }
-            }
-
-            UndoData::AddedProjectContent(content) => {
-                // Remove exactly what the add brought, guard-free: an inverse
-                // consults no user-intent guard. Its saved ignores stay on disk
-                // (see `remove_pending_ignores`).
-                let mut guard = self
-                    .project
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                match guard.as_mut() {
-                    Some(project) => {
-                        content.remove_from(project);
-                        self.remove_pending_ignores(&content.line_ids());
-                        CommandResult::success()
-                    }
-                    None => CommandResult::failure("No project open".to_string()),
-                }
-            }
-
-            // A Section command (#327): put the recorded Sections and
-            // memberships back, guard-free.
-            UndoData::CaveSections(change) => self.restore_cave_sections(&change.before),
-
-            UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
         };
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
@@ -669,386 +499,418 @@ impl AppState {
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
-        let mut result = match &entry.undo_data {
-            UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
-                Ok(mut proj) => {
-                    if Self::restore_snapshot_into_with(&mut proj, after.as_str(), edited.as_ref())
-                    {
-                        CommandResult::success()
-                    } else {
-                        CommandResult::failure("Failed to parse project snapshot".to_string())
+        let mut result = if let UndoData::Delta(delta) = &mut entry.undo_data {
+            // A compact entry restores the recorded state on its other side, as
+            // the snapshot pair it replaces did, rather than re-executing.
+            self.step_through_delta(delta)
+        } else {
+            match &entry.undo_data {
+                UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into_with(
+                            &mut proj,
+                            after.as_str(),
+                            edited.as_ref(),
+                        ) {
+                            CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
+                        }
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                },
+                // Reinstall the recorded content verbatim - same line, shot and
+                // closure ids - never re-reading the file, which a reloaded entry
+                // does not even name (#674).
+                UndoData::AddedProjectContent(content) => {
+                    let mut guard = self
+                        .project
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    match guard.as_mut() {
+                        Some(project) => match content.install_into(project) {
+                            Ok(()) => {
+                                self.add_pending_ignores(project, &content.ignores);
+                                CommandResult::success()
+                            }
+                            Err(e) => CommandResult::failure(e),
+                        },
+                        None => CommandResult::failure("No project open".to_string()),
                     }
                 }
-                Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-            },
-            // Reinstall the recorded content verbatim - same line, shot and
-            // closure ids - never re-reading the file, which a reloaded entry
-            // does not even name (#674).
-            UndoData::AddedProjectContent(content) => {
-                let mut guard = self
-                    .project
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                match guard.as_mut() {
-                    Some(project) => match content.install_into(project) {
-                        Ok(()) => {
-                            self.add_pending_ignores(project, &content.ignores);
-                            CommandResult::success()
-                        }
-                        Err(e) => CommandResult::failure(e),
-                    },
-                    None => CommandResult::failure("No project open".to_string()),
+                // A Section command (#327): the recorded after-state, never a
+                // re-execution (a re-run create would take a fresh id).
+                UndoData::CaveSections(change) => self.restore_cave_sections(&change.after),
+                UndoData::CreatedLineSnapshot {
+                    line_id,
+                    line_data,
+                    identity,
+                } => {
+                    // Redo CreateLine by restoring from the snapshot, which
+                    // preserves the original id AND the identity `LineData`
+                    // cannot carry: every shot uuid (a fresh one would dangle every
+                    // `StationKey::AfterShot` anchor onto this line, exactly as
+                    // in `CreatedShotSnapshot`), the reverse parity, and the
+                    // least-squares gauge pair (#413, finding 1).
+                    match line_data {
+                        Some(line_data) => self.restore_line(
+                            *line_id,
+                            line_data.clone(),
+                            &identity.clone().unwrap_or_default(),
+                        ),
+                        None => CommandResult::failure(
+                            "The created line was not recorded; nothing to restore".to_string(),
+                        ),
+                    }
                 }
-            }
-            // A Section command (#327): the recorded after-state, never a
-            // re-execution (a re-run create would take a fresh id).
-            UndoData::CaveSections(change) => self.restore_cave_sections(&change.after),
-            UndoData::CreatedLineSnapshot {
-                line_id,
-                line_data,
-                identity,
-            } => {
-                // Redo CreateLine by restoring from the snapshot, which
-                // preserves the original id AND the identity `LineData`
-                // cannot carry: every shot uuid (a fresh one would dangle every
-                // `StationKey::AfterShot` anchor onto this line, exactly as
-                // in `CreatedShotSnapshot`), the reverse parity, and the
-                // least-squares gauge pair (#413, finding 1).
-                self.restore_line(*line_id, line_data.clone(), identity)
-            }
-            UndoData::CreatedShotSnapshot {
-                line_id,
-                shot_id,
-                shot_data,
-                position,
-                after_shot_id,
-                before_shot_id,
-                after_shot_uuid,
-                before_shot_uuid,
-                uuid,
-                created_station,
-                ..
-            } => {
-                // Redo by re-running the SAME insert the forward command did, with
-                // the original uuid forced - so the ref-shift, offset and
-                // cascade are identical to the forward path and can't drift (this
-                // is the single-source-of-truth that prevents the redo-misalignment
-                // bug), and the shot keeps its persistent identity (a fresh uuid
-                // here would dangle every AfterShot anchor). `uuid` is None for
-                // shots created before this
-                // field existed (legacy persisted undo entries) - falls back to a
-                // fresh mint, matching the old behavior.
-                // Append (no anchor) does no geometry maintenance, so a plain
-                // restore is exact there.
-                //
-                // Every id on this entry is an IN-SESSION id and cannot be
-                // trusted after a reload (#413, finding 16): the anchor decides
-                // WHERE the shot goes back, and the forced id decides what the
-                // recreated shot is called. Both are resolved below - anchors by
-                // uuid, the forced id only when it is still free.
-                let mut guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                match guard.as_mut() {
-                    None => CommandResult::failure("No project open".to_string()),
-                    Some(project) => {
-                        // A shot with this uuid is ALREADY in the line, so the
-                        // insert would give it the same identity twice - the
-                        // identity every `StationKey::AfterShot` anchor and the
-                        // Ariane export resolve by, and one `ensure_unique_shot_uuids`
-                        // re-mints on the next save. That is a corrupt project, so
-                        // refuse loudly instead of writing it (#413, finding 16).
-                        let duplicate = uuid
-                            .as_deref()
-                            .and_then(|u| project.shot_id_by_uuid(*line_id, u));
-                        if let Some(existing_id) = duplicate {
-                            tracing::warn!(
-                                line_id,
-                                existing_id,
-                                uuid = uuid.as_deref().unwrap_or_default(),
-                                purpose = "refuse a redo that would duplicate a shot identity",
-                                "Line already holds the uuid of the shot the redo re-creates"
-                            );
-                            CommandResult::failure(
-                                "Refusing to redo the creation of this shot: its line already \
-                                 holds a shot with the same identity, so redoing would \
-                                 duplicate it"
-                                    .to_string(),
-                            )
-                        } else {
-                            let resolve_anchor = |project: &crate::models::Project,
-                                                  recorded_id: Option<ShotId>,
-                                                  anchor_uuid: Option<&str>|
-                             -> Option<ShotId> {
-                                let Some(anchor_uuid) = anchor_uuid else {
-                                    // Legacy entry: the recorded id is the
-                                    // only address it has.
-                                    return recorded_id;
-                                };
-                                let resolved = project.shot_id_by_uuid(*line_id, anchor_uuid);
-                                if resolved.is_none() {
-                                    tracing::warn!(
-                                        line_id = *line_id,
-                                        anchor_uuid,
-                                        purpose = "redo a shot insert",
-                                        "The shot this insert was anchored to is gone; \
+                UndoData::CreatedShotSnapshot {
+                    line_id,
+                    shot_id,
+                    shot_data,
+                    position,
+                    after_shot_id,
+                    before_shot_id,
+                    after_shot_uuid,
+                    before_shot_uuid,
+                    uuid,
+                    created_station,
+                    ..
+                } => {
+                    // Redo by re-running the SAME insert the forward command did, with
+                    // the original uuid forced - so the ref-shift, offset and
+                    // cascade are identical to the forward path and can't drift (this
+                    // is the single-source-of-truth that prevents the redo-misalignment
+                    // bug), and the shot keeps its persistent identity (a fresh uuid
+                    // here would dangle every AfterShot anchor). `uuid` is None for
+                    // shots created before this
+                    // field existed (legacy persisted undo entries) - falls back to a
+                    // fresh mint, matching the old behavior.
+                    // Append (no anchor) does no geometry maintenance, so a plain
+                    // restore is exact there.
+                    //
+                    // Every id on this entry is an IN-SESSION id and cannot be
+                    // trusted after a reload (#413, finding 16): the anchor decides
+                    // WHERE the shot goes back, and the forced id decides what the
+                    // recreated shot is called. Both are resolved below - anchors by
+                    // uuid, the forced id only when it is still free.
+                    let mut guard = match self.project.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    match guard.as_mut() {
+                        None => CommandResult::failure("No project open".to_string()),
+                        Some(project) => {
+                            // A shot with this uuid is ALREADY in the line, so the
+                            // insert would give it the same identity twice - the
+                            // identity every `StationKey::AfterShot` anchor and the
+                            // Ariane export resolve by, and one `ensure_unique_shot_uuids`
+                            // re-mints on the next save. That is a corrupt project, so
+                            // refuse loudly instead of writing it (#413, finding 16).
+                            let duplicate = uuid
+                                .as_deref()
+                                .and_then(|u| project.shot_id_by_uuid(*line_id, u));
+                            if let Some(existing_id) = duplicate {
+                                tracing::warn!(
+                                    line_id,
+                                    existing_id,
+                                    uuid = uuid.as_deref().unwrap_or_default(),
+                                    purpose = "refuse a redo that would duplicate a shot identity",
+                                    "Line already holds the uuid of the shot the redo re-creates"
+                                );
+                                CommandResult::failure(
+                                    "Refusing to redo the creation of this shot: its line already \
+                                     holds a shot with the same identity, so redoing would \
+                                     duplicate it"
+                                        .to_string(),
+                                )
+                            } else {
+                                let resolve_anchor =
+                                    |project: &crate::models::Project,
+                                     recorded_id: Option<ShotId>,
+                                     anchor_uuid: Option<&str>|
+                                     -> Option<ShotId> {
+                                        let Some(anchor_uuid) = anchor_uuid else {
+                                            // Legacy entry: the recorded id is the
+                                            // only address it has.
+                                            return recorded_id;
+                                        };
+                                        let resolved =
+                                            project.shot_id_by_uuid(*line_id, anchor_uuid);
+                                        if resolved.is_none() {
+                                            tracing::warn!(
+                                                line_id = *line_id,
+                                                anchor_uuid,
+                                                purpose = "redo a shot insert",
+                                                "The shot this insert was anchored to is gone; \
                                              falling back to the recorded position rather than \
                                              to its stale id"
+                                            );
+                                        }
+                                        resolved
+                                    };
+                                let before_anchor = resolve_anchor(
+                                    project,
+                                    *before_shot_id,
+                                    before_shot_uuid.as_deref(),
+                                );
+                                let after_anchor = resolve_anchor(
+                                    project,
+                                    *after_shot_id,
+                                    after_shot_uuid.as_deref(),
+                                );
+                                // Forcing an id the line already uses would give
+                                // two shots one id. The id is in-session only (the
+                                // loader renumbers it anyway), so minting a fresh one
+                                // costs nothing that a collision would not cost more.
+                                let id_taken = project.get_line(*line_id).is_some_and(|line| {
+                                    line.shots.iter().any(|s| s.id == *shot_id)
+                                });
+                                let forced_id = (!id_taken).then_some(*shot_id);
+                                let ok = if let Some(before_id) = before_anchor {
+                                    project
+                                        .insert_shot_before(
+                                            *line_id,
+                                            before_id,
+                                            shot_data.clone(),
+                                            forced_id,
+                                            uuid.clone(),
+                                        )
+                                        .is_some()
+                                } else if let Some(after_id) = after_anchor {
+                                    project
+                                        .insert_shot_after(
+                                            *line_id,
+                                            after_id,
+                                            shot_data.clone(),
+                                            forced_id,
+                                            uuid.clone(),
+                                        )
+                                        .is_some()
+                                } else {
+                                    // Both anchors absent. For a CURRENT entry this is an append to an
+                                    // empty line (exact via a raw insert). But a LEGACY persisted
+                                    // entry (written by a pre-anchor build, reloaded after upgrade) has
+                                    // both anchors None even for a prepend / mid-line insert, so route
+                                    // through the proper insert helper using the captured position - which
+                                    // re-anchors LineStart on a prepend and cascades offsets on a
+                                    // mid-insert - instead of a raw insert that would mis-place anchored
+                                    // tails or start-station refs. An anchor whose uuid no longer
+                                    // resolves lands here too, for the same reason: a recorded
+                                    // position is a better guess than an id that now names a
+                                    // different shot.
+                                    let line_len =
+                                        project.get_line(*line_id).map_or(0, |s| s.shots.len());
+                                    let pos = (*position).min(line_len);
+                                    if pos == 0 && line_len > 0 {
+                                        // Prepend before the current first shot.
+                                        let first_id = project
+                                            .get_line(*line_id)
+                                            .and_then(|s| s.shots.first().map(|sh| sh.id));
+                                        match first_id {
+                                            Some(fid) => project
+                                                .insert_shot_before(
+                                                    *line_id,
+                                                    fid,
+                                                    shot_data.clone(),
+                                                    forced_id,
+                                                    uuid.clone(),
+                                                )
+                                                .is_some(),
+                                            None => false,
+                                        }
+                                    } else if pos < line_len {
+                                        // Mid-line: insert after the shot currently at pos-1.
+                                        let prev_id = project
+                                            .get_line(*line_id)
+                                            .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
+                                        match prev_id {
+                                            Some(pid) => project
+                                                .insert_shot_after(
+                                                    *line_id,
+                                                    pid,
+                                                    shot_data.clone(),
+                                                    forced_id,
+                                                    uuid.clone(),
+                                                )
+                                                .is_some(),
+                                            None => false,
+                                        }
+                                    } else {
+                                        // True append (pos == len) or empty line: a raw insert is
+                                        // exact - no station shift or LineStart re-anchor is needed.
+                                        if let Some(line) = project.get_line_mut(*line_id) {
+                                            // SATURATING, because `shot_id` arrives
+                                            // verbatim from a persisted entry and
+                                            // nothing between the `.stalx` and here
+                                            // bounds it: `ShotId::MAX` panics a debug
+                                            // build on the `+ 1` and wraps a release
+                                            // one, after which `Line::take_shot_id`
+                                            // hands the wrapped value straight back
+                                            // out as a colliding id. Total for every
+                                            // value the type admits, exactly as
+                                            // `shot_display_position` is for the same
+                                            // reason (#413 finding 24).
+                                            //
+                                            // Monotonicity is preserved without a
+                                            // `max`: the assignment is guarded by
+                                            // `id >= next_shot_id`, so the saturated
+                                            // `ShotId::MAX` is still >= the counter it
+                                            // replaces.
+                                            let id = forced_id.unwrap_or_else(|| {
+                                                let next = line.next_shot_id;
+                                                line.next_shot_id = next.saturating_add(1);
+                                                next
+                                            });
+                                            if id >= line.next_shot_id {
+                                                line.next_shot_id = id.saturating_add(1);
+                                            }
+                                            line.shots.insert(
+                                                pos,
+                                                Shot::with_uuid(
+                                                    id,
+                                                    shot_data.clone(),
+                                                    Some(Shot::uuid_or_mint(uuid.clone())),
+                                                ),
+                                            );
+                                            project.touch();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                };
+                                if ok {
+                                    // The re-created first shot carries the pair as
+                                    // its credit again; the line lets it go.
+                                    if let Some(line) = project.get_line_mut(*line_id) {
+                                        line.legacy_surveyor = None;
+                                        line.legacy_date = None;
+                                    }
+                                    // The created station's Station ID and name, as
+                                    // the forward command left them.
+                                    if let (Some(station), Some(uuid)) =
+                                        (created_station, uuid.as_deref())
+                                    {
+                                        station.restore(project, *line_id, uuid);
+                                    }
+                                    CommandResult::success()
+                                } else {
+                                    CommandResult::failure(
+                                        "Failed to redo shot creation".to_string(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                UndoData::SegmentMoveInfo {
+                    affected_lines,
+                    offset,
+                    ..
+                } => {
+                    // Redo by reapplying the offset to the captured affected lines
+                    // Filter to lines that still exist (a line may have been deleted since capture)
+                    match self.project.lock() {
+                        Ok(mut proj_guard) => match proj_guard.as_mut() {
+                            Some(project) => {
+                                let existing: std::collections::HashSet<LineId> =
+                                    project.lines.iter().map(|s| s.id).collect();
+                                for sid in affected_lines {
+                                    if !existing.contains(sid) {
+                                        continue;
+                                    }
+                                    let current = project
+                                        .line_offsets
+                                        .get(sid)
+                                        .copied()
+                                        .unwrap_or((0.0, 0.0));
+                                    let new_offset = (current.0 + offset.0, current.1 + offset.1);
+                                    // Through the same writer the FORWARD move uses
+                                    // (`adjust_line_offset`): a redo that lands the
+                                    // offset back within dust of the origin must drop
+                                    // the key, not leave an inert entry the original
+                                    // execute did not have (#413 finding 2, and the
+                                    // invariant on `write_line_offset`).
+                                    crate::models::Project::write_line_offset(
+                                        &mut project.line_offsets,
+                                        *sid,
+                                        new_offset,
                                     );
                                 }
-                                resolved
-                            };
-                            let before_anchor = resolve_anchor(
-                                project,
-                                *before_shot_id,
-                                before_shot_uuid.as_deref(),
-                            );
-                            let after_anchor =
-                                resolve_anchor(project, *after_shot_id, after_shot_uuid.as_deref());
-                            // Forcing an id the line already uses would give
-                            // two shots one id. The id is in-session only (the
-                            // loader renumbers it anyway), so minting a fresh one
-                            // costs nothing that a collision would not cost more.
-                            let id_taken = project
-                                .get_line(*line_id)
-                                .is_some_and(|line| line.shots.iter().any(|s| s.id == *shot_id));
-                            let forced_id = (!id_taken).then_some(*shot_id);
-                            let ok = if let Some(before_id) = before_anchor {
-                                project
-                                    .insert_shot_before(
-                                        *line_id,
-                                        before_id,
-                                        shot_data.clone(),
-                                        forced_id,
-                                        uuid.clone(),
-                                    )
-                                    .is_some()
-                            } else if let Some(after_id) = after_anchor {
-                                project
-                                    .insert_shot_after(
-                                        *line_id,
-                                        after_id,
-                                        shot_data.clone(),
-                                        forced_id,
-                                        uuid.clone(),
-                                    )
-                                    .is_some()
-                            } else {
-                                // Both anchors absent. For a CURRENT entry this is an append to an
-                                // empty line (exact via a raw insert). But a LEGACY persisted
-                                // entry (written by a pre-anchor build, reloaded after upgrade) has
-                                // both anchors None even for a prepend / mid-line insert, so route
-                                // through the proper insert helper using the captured position - which
-                                // re-anchors LineStart on a prepend and cascades offsets on a
-                                // mid-insert - instead of a raw insert that would mis-place anchored
-                                // tails or start-station refs. An anchor whose uuid no longer
-                                // resolves lands here too, for the same reason: a recorded
-                                // position is a better guess than an id that now names a
-                                // different shot.
-                                let line_len =
-                                    project.get_line(*line_id).map_or(0, |s| s.shots.len());
-                                let pos = (*position).min(line_len);
-                                if pos == 0 && line_len > 0 {
-                                    // Prepend before the current first shot.
-                                    let first_id = project
-                                        .get_line(*line_id)
-                                        .and_then(|s| s.shots.first().map(|sh| sh.id));
-                                    match first_id {
-                                        Some(fid) => project
-                                            .insert_shot_before(
-                                                *line_id,
-                                                fid,
-                                                shot_data.clone(),
-                                                forced_id,
-                                                uuid.clone(),
-                                            )
-                                            .is_some(),
-                                        None => false,
-                                    }
-                                } else if pos < line_len {
-                                    // Mid-line: insert after the shot currently at pos-1.
-                                    let prev_id = project
-                                        .get_line(*line_id)
-                                        .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
-                                    match prev_id {
-                                        Some(pid) => project
-                                            .insert_shot_after(
-                                                *line_id,
-                                                pid,
-                                                shot_data.clone(),
-                                                forced_id,
-                                                uuid.clone(),
-                                            )
-                                            .is_some(),
-                                        None => false,
-                                    }
-                                } else {
-                                    // True append (pos == len) or empty line: a raw insert is
-                                    // exact - no station shift or LineStart re-anchor is needed.
-                                    if let Some(line) = project.get_line_mut(*line_id) {
-                                        // SATURATING, because `shot_id` arrives
-                                        // verbatim from a persisted entry and
-                                        // nothing between the `.stalx` and here
-                                        // bounds it: `ShotId::MAX` panics a debug
-                                        // build on the `+ 1` and wraps a release
-                                        // one, after which `Line::take_shot_id`
-                                        // hands the wrapped value straight back
-                                        // out as a colliding id. Total for every
-                                        // value the type admits, exactly as
-                                        // `shot_display_position` is for the same
-                                        // reason (#413 finding 24).
-                                        //
-                                        // Monotonicity is preserved without a
-                                        // `max`: the assignment is guarded by
-                                        // `id >= next_shot_id`, so the saturated
-                                        // `ShotId::MAX` is still >= the counter it
-                                        // replaces.
-                                        let id = forced_id.unwrap_or_else(|| {
-                                            let next = line.next_shot_id;
-                                            line.next_shot_id = next.saturating_add(1);
-                                            next
-                                        });
-                                        if id >= line.next_shot_id {
-                                            line.next_shot_id = id.saturating_add(1);
-                                        }
-                                        line.shots.insert(
-                                            pos,
-                                            Shot::with_uuid(
-                                                id,
-                                                shot_data.clone(),
-                                                Some(Shot::uuid_or_mint(uuid.clone())),
-                                            ),
-                                        );
-                                        project.touch();
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            };
-                            if ok {
-                                // The re-created first shot carries the pair as
-                                // its credit again; the line lets it go.
-                                if let Some(line) = project.get_line_mut(*line_id) {
-                                    line.legacy_surveyor = None;
-                                    line.legacy_date = None;
-                                }
-                                // The created station's Station ID and name, as
-                                // the forward command left them.
-                                if let (Some(station), Some(uuid)) =
-                                    (created_station, uuid.as_deref())
-                                {
-                                    station.restore(project, *line_id, uuid);
-                                }
+                                project.touch();
                                 CommandResult::success()
-                            } else {
-                                CommandResult::failure("Failed to redo shot creation".to_string())
                             }
-                        }
+                            None => CommandResult::failure("No project open".to_string()),
+                        },
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                     }
                 }
-            }
-            UndoData::SegmentMoveInfo {
-                affected_lines,
-                offset,
-                ..
-            } => {
-                // Redo by reapplying the offset to the captured affected lines
-                // Filter to lines that still exist (a line may have been deleted since capture)
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            let existing: std::collections::HashSet<LineId> =
-                                project.lines.iter().map(|s| s.id).collect();
-                            for sid in affected_lines {
-                                if !existing.contains(sid) {
-                                    continue;
-                                }
-                                let current =
-                                    project.line_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
-                                let new_offset = (current.0 + offset.0, current.1 + offset.1);
-                                // Through the same writer the FORWARD move uses
-                                // (`adjust_line_offset`): a redo that lands the
-                                // offset back within dust of the origin must drop
-                                // the key, not leave an inert entry the original
-                                // execute did not have (#413 finding 2, and the
-                                // invariant on `write_line_offset`).
-                                crate::models::Project::write_line_offset(
-                                    &mut project.line_offsets,
-                                    *sid,
-                                    new_offset,
-                                );
-                            }
-                            project.touch();
-                            CommandResult::success()
-                        }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                }
-            }
-            UndoData::ClosureInfo { closure, .. } => {
-                match &entry.command {
-                    Command::CreateLoopClosure { .. } => {
-                        // Redo create by restoring the captured closure to preserve its ID.
-                        // Appended, as the create itself appended - the recorded
-                        // `position` belongs to the REMOVE direction (#413,
-                        // finding 4) and says nothing about where a create put it.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                                Some(project) => {
-                                    project.next_closure_id =
-                                        project.next_closure_id.max(closure.id + 1);
-                                    project.loop_closures.push(closure.clone());
-                                    project.touch();
-                                    CommandResult::success()
-                                }
-                                None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                        }
-                    }
-                    Command::RemoveLoopClosure { .. } => {
-                        // Redo remove by removing the same closure ID again.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                                Some(project) => {
-                                    if let Some(pos) = project
-                                        .loop_closures
-                                        .iter()
-                                        .position(|lc| lc.id == closure.id)
-                                    {
-                                        project.loop_closures.remove(pos);
+                UndoData::ClosureInfo { closure, .. } => {
+                    match &entry.command {
+                        Command::CreateLoopClosure { .. } => {
+                            // Redo create by restoring the captured closure to preserve its ID.
+                            // Appended, as the create itself appended - the recorded
+                            // `position` belongs to the REMOVE direction (#413,
+                            // finding 4) and says nothing about where a create put it.
+                            match self.project.lock() {
+                                Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                    Some(project) => {
+                                        project.next_closure_id =
+                                            project.next_closure_id.max(closure.id + 1);
+                                        project.loop_closures.push(closure.clone());
+                                        project.touch();
+                                        CommandResult::success()
                                     }
-                                    project.touch();
-                                    CommandResult::success()
+                                    None => CommandResult::failure("No project open".to_string()),
+                                },
+                                Err(_) => {
+                                    CommandResult::failure("Failed to lock project".to_string())
                                 }
-                                None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                            }
                         }
+                        Command::RemoveLoopClosure { .. } => {
+                            // Redo remove by removing the same closure ID again.
+                            match self.project.lock() {
+                                Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                    Some(project) => {
+                                        if let Some(pos) = project
+                                            .loop_closures
+                                            .iter()
+                                            .position(|lc| lc.id == closure.id)
+                                        {
+                                            project.loop_closures.remove(pos);
+                                        }
+                                        project.touch();
+                                        CommandResult::success()
+                                    }
+                                    None => CommandResult::failure("No project open".to_string()),
+                                },
+                                Err(_) => {
+                                    CommandResult::failure("Failed to lock project".to_string())
+                                }
+                            }
+                        }
+                        _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                     }
-                    _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
-            }
-            // An `EditShotCredit` names explicit shots by in-session id, which a
-            // reload renumbers - so its redo writes the recorded `after` credits
-            // by uuid instead of re-executing. (A line-metadata edit re-executes
-            // below: it names its line by the id that survives a save.)
-            UndoData::ShotCredits { changes, .. }
-                if matches!(entry.command, Command::EditShotCredit { .. }) =>
-            {
-                self.write_recorded_credits(changes, true)
-            }
-            _ => {
-                // Re-execute the original command for other undo data types.
-                // The command names its shot by an in-session id, which a reload
-                // renumbers, so re-address it through the uuid the entry
-                // recorded first (#413, finding 12's redo half).
-                match self.command_with_resolved_shot(&entry.command, &entry.undo_data) {
-                    Ok(command) => self.execute_without_undo(command),
-                    Err(e) => CommandResult::failure(e),
+                // An `EditShotCredit` names explicit shots by in-session id, which a
+                // reload renumbers - so its redo writes the recorded `after` credits
+                // by uuid instead of re-executing. (A line-metadata edit re-executes
+                // below: it names its line by the id that survives a save.)
+                UndoData::ShotCredits { changes, .. }
+                    if matches!(entry.command, Command::EditShotCredit { .. }) =>
+                {
+                    self.write_recorded_credits(changes, true)
+                }
+                _ => {
+                    // Re-execute the original command for other undo data types.
+                    // The command names its shot by an in-session id, which a reload
+                    // renumbers, so re-address it through the uuid the entry
+                    // recorded first (#413, finding 12's redo half).
+                    match self.command_with_resolved_shot(&entry.command, &entry.undo_data) {
+                        Ok(command) => self.execute_without_undo(command),
+                        Err(e) => CommandResult::failure(e),
+                    }
                 }
             }
         };
@@ -1162,8 +1024,11 @@ impl AppState {
         else {
             return;
         };
-        *line_data = line.to_line_data();
-        *identity = live;
+        let data = line.to_line_data();
+        let mut live = live;
+        crate::core::without_carried_uuids(&mut live, &data);
+        *line_data = Some(data);
+        *identity = Some(live);
     }
 
     /// Re-record an add's content from the live project immediately before its
@@ -1189,24 +1054,33 @@ impl AppState {
         content.ignores = self.ignores_on_lines(&ids);
     }
 
-    /// Put a captured `line_offsets` slice back verbatim, `None` meaning "this
-    /// line had no key" (#413, finding 27).
+    /// The live `line_offsets` map, read before an inverse that re-derives
+    /// offsets runs (see [`Self::restore_offsets_pinning_the_rest`]).
+    fn live_line_offsets(&self) -> std::collections::HashMap<LineId, (f64, f64)> {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard
+            .as_ref()
+            .map(|p| p.line_offsets.clone())
+            .unwrap_or_default()
+    }
+
+    /// After an inverse that RE-DERIVED offsets: put every key `recorded`
+    /// holds back to its recorded value, and every other key back to `pinned`
+    /// (the map before the inverse ran), dropping any key neither holds.
     ///
-    /// The counterpart of `Project::capture_rigid_connected_line_offsets`, and
-    /// the same restore `MergeInfo` / `ZeroDatumInfo` / `SegmentMoveInfo` already
-    /// do - factored out here because the two arms that need it run their inverse
-    /// first and so cannot restore inside its project lock.
-    ///
-    /// `Project::restore_line_offsets` routes every value through the one
-    /// writer, so this cannot install a dust-zero key even from an entry recorded
-    /// by a build that predates that invariant.
-    fn restore_captured_line_offsets(
+    /// `recorded` is cut to the keys the forward command changed
+    /// (`UndoData::keep_changed_offsets`); a key it did not change has the same
+    /// value before and after the command, so the live value read before the
+    /// inverse IS the value to restore. The whole map comes back exactly,
+    /// however the re-derivation moved it.
+    fn restore_offsets_pinning_the_rest(
         &self,
-        offsets: &std::collections::HashMap<LineId, Option<(f64, f64)>>,
+        recorded: &std::collections::HashMap<LineId, Option<(f64, f64)>>,
+        pinned: std::collections::HashMap<LineId, (f64, f64)>,
     ) {
-        if offsets.is_empty() {
-            return;
-        }
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -1214,7 +1088,11 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
-        project.restore_line_offsets(offsets);
+        let mut desired: std::collections::HashMap<LineId, Option<(f64, f64)>> =
+            project.line_offsets.keys().map(|id| (*id, None)).collect();
+        desired.extend(pinned.into_iter().map(|(id, offset)| (id, Some(offset))));
+        desired.extend(recorded.iter().map(|(id, offset)| (*id, *offset)));
+        project.restore_line_offsets(&desired);
     }
 
     /// The gauge pairs the half of a snapshot pair this step LEAVES BEHIND
@@ -1420,7 +1298,7 @@ impl AppState {
                     Box::new(stack.undo_entries())
                 };
                 for entry in entries {
-                    referenced_lines(&entry.command, &mut lines);
+                    referenced_entry_lines(entry, &mut lines);
                 }
                 lines
             })

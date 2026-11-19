@@ -563,7 +563,10 @@ fn test_batch_command_structure() {
             shots: vec![],
             cave_section_id: None,
         },
-        undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+        undo_data: UndoData::ProjectSnapshotPair {
+            before: "{}".to_string(),
+            after: "{}".to_string(),
+        },
         timestamp: None,
     };
 
@@ -663,23 +666,6 @@ fn test_comprehensive_undo_types() {
             values_json: "{}".to_string(),
             previous_offsets: HashMap::new(),
         },
-        UndoData::LineSnapshot {
-            line_id: 0,
-            line_data: create_line_with_shots("Test", vec![]),
-        },
-        UndoData::ShotSnapshot {
-            line_id: 0,
-            shot_id: 0,
-            shot_data: create_shot_data(0.0, 10.0, 5.0, 5.0),
-            position: 0,
-            uuid: None,
-        },
-        UndoData::MergeInfo {
-            station_a: StationRef::new(0, 0),
-            station_b: StationRef::new(1, 0),
-            removed_closures: Vec::new(),
-            previous_offsets: HashMap::new(),
-        },
         UndoData::ZeroDatumInfo {
             station_ref: StationRef::new(0, 0),
             previous_gps: Some(GpsCoordinates {
@@ -692,7 +678,10 @@ fn test_comprehensive_undo_types() {
             previous_offsets: HashMap::new(),
             previous_entrance: None,
         },
-        UndoData::ProjectSnapshot("{}".to_string()),
+        UndoData::ProjectSnapshotPair {
+            before: "{}".to_string(),
+            after: "{}".to_string(),
+        },
     ];
 
     for variant in variants {

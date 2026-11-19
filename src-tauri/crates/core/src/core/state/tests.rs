@@ -2578,16 +2578,22 @@ fn test_undo_fails_with_invalid_previous_values_line() {
 }
 
 #[test]
-fn test_undo_fails_with_invalid_project_snapshot() {
+fn test_undo_fails_with_invalid_project_snapshot_pair() {
     let state = AppState::new().unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
-    stack.push_with_data(
-        Command::Batch {
+    let entry = UndoEntry {
+        command_bytes: None,
+        command: Command::Batch {
             commands: Vec::new(),
             label: None,
         },
-        UndoData::ProjectSnapshot("not-json".to_string()),
-    );
+        undo_data: UndoData::ProjectSnapshotPair {
+            before: "not-json".to_string(),
+            after: "{}".to_string(),
+        },
+        timestamp: None,
+    };
+    stack.push_undo(entry);
     drop(stack);
 
     let result = state.undo();
@@ -3133,7 +3139,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             .success
     );
 
-    let snapshot = match state.capture_project_snapshot() {
+    let snapshot = match state.capture_project_snapshot_text() {
         Ok(s) => s,
         Err(e) => panic!("snapshot failed: {e:?}"),
     };
@@ -3498,7 +3504,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
 #[test]
 fn undo_merge_restores_aligned_closure_line_outside_merge_groups() {
     // A merge re-anchors not just the two merge groups but any line reachable
-    // through an ALIGNED loop closure (cascade phase 2). The old lightweight MergeInfo
+    // through an ALIGNED loop closure (cascade phase 2). The old lightweight merge
     // undo captured only the two groups' offsets, so such an external line stayed
     // drifted on undo - and realign_merges() can't self-heal closure drift (it inspects
     // merges only). With the full-snapshot undo, undo must restore EVERY line the
@@ -3604,7 +3610,7 @@ fn undo_merge_restores_aligned_closure_line_outside_merge_groups() {
 #[test]
 fn undo_move_station_restores_pitch_and_adjacent_shots() {
     // MoveStation rewrites the two adjacent shots' raw geometry including pitch.
-    // The old lightweight StationMoveInfo undo restored azimuth/length/depth but
+    // The old lightweight station-move undo restored azimuth/length/depth but
     // NOT pitch_in/pitch_out, so undo left pitch corrupted. Full-snapshot undo must
     // restore every field.
     let state = AppState::new().unwrap();
@@ -6108,28 +6114,6 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
 }
 
 #[test]
-fn test_undo_project_snapshot_fails_when_project_lock_poisoned() {
-    let state = AppState::new().unwrap();
-    let snapshot = serde_json::to_string(&Project::new("Test".to_string(), None)).unwrap();
-
-    let mut stack = state.undo_stack.lock().unwrap();
-    stack.push_with_data(
-        Command::Batch {
-            commands: Vec::new(),
-            label: None,
-        },
-        UndoData::ProjectSnapshot(snapshot),
-    );
-    drop(stack);
-
-    poison_mutex(&state.project);
-
-    let result = state.undo();
-    assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
-}
-
-#[test]
 fn test_undo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     let state = AppState::new().unwrap();
     let before = serde_json::to_string(&Project::new("Before".to_string(), None)).unwrap();
@@ -6172,32 +6156,6 @@ fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     poison_mutex(&state.project);
 
     let result = state.redo();
-    assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
-}
-
-#[test]
-fn test_undo_merge_info_fails_when_project_lock_poisoned() {
-    let state = AppState::new().unwrap();
-
-    let mut stack = state.undo_stack.lock().unwrap();
-    stack.push_with_data(
-        Command::MergeStations {
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(1, 1),
-        },
-        UndoData::MergeInfo {
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(1, 1),
-            removed_closures: Vec::new(),
-            previous_offsets: HashMap::new(),
-        },
-    );
-    drop(stack);
-
-    poison_mutex(&state.project);
-
-    let result = state.undo();
     assert!(!result.success);
     assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
 }
@@ -6306,7 +6264,14 @@ fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
                 location: None,
             })
             .unwrap(),
-            serde_json::to_string(&UndoData::InverseCommand(Command::CloseProject)).unwrap(),
+            UndoStack::serialize_entry(&UndoEntry {
+                command_bytes: None,
+                command: Command::CloseProject,
+                undo_data: UndoData::InverseCommand(Command::CloseProject),
+                timestamp: None,
+            })
+            .unwrap()
+            .1,
             Some(stamp.to_rfc3339()),
         )
     };
@@ -9537,17 +9502,22 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
 
 #[test]
 fn test_undo_failure_with_project_snapshot_preserves_entry() {
-    // Verify that a ProjectSnapshot undo failure (invalid JSON) preserves the entry
+    // Verify that a ProjectSnapshotPair undo failure (invalid JSON) preserves the entry
     let state = AppState::new().unwrap();
 
     let mut stack = state.undo_stack.lock().unwrap();
-    stack.push_with_data(
-        Command::Batch {
+    stack.push_undo(UndoEntry {
+        command_bytes: None,
+        command: Command::Batch {
             commands: Vec::new(),
             label: None,
         },
-        UndoData::ProjectSnapshot("not-valid-json".to_string()),
-    );
+        undo_data: UndoData::ProjectSnapshotPair {
+            before: "not-valid-json".to_string(),
+            after: "{}".to_string(),
+        },
+        timestamp: None,
+    });
     assert_eq!(stack.len(), 1);
     drop(stack);
 
@@ -9570,14 +9540,15 @@ fn test_undo_failure_with_project_lock_preserves_entry() {
     // must still be pushed back to the undo stack.
     let state = AppState::new().unwrap();
 
-    let snapshot = serde_json::to_string(&Project::new("Test".to_string(), None)).unwrap();
+    let before = serde_json::to_string(&Project::new("Before".to_string(), None)).unwrap();
+    let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
             label: None,
         },
-        UndoData::ProjectSnapshot(snapshot),
+        UndoData::ProjectSnapshotPair { before, after },
     );
     assert_eq!(stack.len(), 1);
     drop(stack);
@@ -9723,17 +9694,36 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
                 "previous_gps longitude should be GPS-A's longitude (-80.0), got {}",
                 prev.longitude
             );
-            // Assert previous_offsets contains the datum line and matches the pre-update value
-            assert!(
-                previous_offsets.contains_key(&line_a),
-                "previous_offsets must contain the datum line ({line_a})"
-            );
-            let captured_offset = previous_offsets.get(&line_a).unwrap();
-            let expected_offset = offsets_before_update.get(&line_a).copied();
-            assert_eq!(
-                *captured_offset, expected_offset,
-                "previous_offsets for datum line should match pre-update offset"
-            );
+            // The entry keeps exactly the offsets the update CHANGED, each at
+            // its pre-update value (`UndoData::keep_changed_offsets`).
+            let offsets_after_update = state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .line_offsets
+                .clone();
+            for (id, captured) in previous_offsets {
+                assert_eq!(
+                    *captured,
+                    offsets_before_update.get(id).copied(),
+                    "previous_offsets for line {id} should match the pre-update offset"
+                );
+                assert_ne!(
+                    *captured,
+                    offsets_after_update.get(id).copied(),
+                    "line {id} did not move, so the entry need not hold it"
+                );
+            }
+            for (id, after) in &offsets_after_update {
+                if offsets_before_update.get(id) != Some(after) {
+                    assert!(
+                        previous_offsets.contains_key(id),
+                        "line {id} moved, so the entry must hold its previous offset"
+                    );
+                }
+            }
         }
         other => panic!(
             "Expected UndoData::ZeroDatumInfo, got {:?}",
@@ -10755,9 +10745,9 @@ fn test_create_line_undo_redo_then_delete() {
 }
 
 #[test]
-fn test_create_line_created_snapshot_distinct_from_line_snapshot() {
+fn test_create_line_created_snapshot_distinct_from_delete_line_delta() {
     // Verify that CreateLine uses CreatedLineSnapshot while
-    // DeleteLine still uses LineSnapshot
+    // DeleteLine records a compact delta
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -10789,8 +10779,8 @@ fn test_create_line_created_snapshot_distinct_from_line_snapshot() {
         );
     }
 
-    // Now delete the line and verify DeleteLine uses ProjectSnapshotPair
-    // (changed from LineSnapshot to support cleanup of orphaned merges/closures/offsets)
+    // Now delete the line and verify DeleteLine records a compact delta
+    // (captured as a snapshot pair, to support cleanup of orphaned merges/closures/offsets)
     state.execute(Command::DeleteLine { line_id });
 
     {
@@ -10798,8 +10788,8 @@ fn test_create_line_created_snapshot_distinct_from_line_snapshot() {
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
-            "ProjectSnapshotPair",
-            "DeleteLine should use ProjectSnapshotPair, got {}",
+            "Delta",
+            "DeleteLine should record a compact delta, got {}",
             undo_data.variant_name()
         );
     }
@@ -11171,8 +11161,8 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         );
     }
 
-    // Now delete the shot and verify DeleteShot uses ProjectSnapshotPair
-    // (changed from ShotSnapshot to handle station ref shifting correctly)
+    // Now delete the shot and verify DeleteShot records a compact delta
+    // (captured as a snapshot pair, to handle station ref shifting correctly)
     state.execute(Command::DeleteShot { line_id, shot_id });
 
     {
@@ -11180,8 +11170,8 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
-            "ProjectSnapshotPair",
-            "DeleteShot should use ProjectSnapshotPair, got {}",
+            "Delta",
+            "DeleteShot should record a compact delta, got {}",
             undo_data.variant_name()
         );
     }
@@ -17546,8 +17536,8 @@ fn setting_the_undo_mode_serializes_with_full_file_saves() {
 
 /// [#303] An undo snapshot must not carry this machine's filesystem paths.
 ///
-/// Full mode ships `undo_stack` to the server on purpose, and every `ProjectSnapshot` /
-/// `ProjectSnapshotPair` is a whole serialized `Project` - so an unscrubbed `file_path`
+/// Full mode ships `undo_stack` to the server on purpose, and every `ProjectSnapshotPair`
+/// half is a whole serialized `Project` - so an unscrubbed `file_path`
 /// writes `/home/<user>/…` or `C:\Users\<Real Name>\…` into the project's git history,
 /// permanently and readable by every collaborator. Snapshot pairs come from Delete shot,
 /// Delete line, Reverse line and every Batch import, so this is routine editing.
@@ -25575,7 +25565,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
     let (_anchored, partner) = two_merged_lines(&state);
     inject_drift(&state, partner);
     let drifted = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capturing the drifted project");
     state.reconcile_geometry();
     assert_eq!(
@@ -25584,7 +25574,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
         "setup: the reconcile should have healed the live drift"
     );
     let healed = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capturing the healed project");
 
     {
@@ -25761,60 +25751,7 @@ fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing()
     );
 }
 
-/// The same unbounded id, on the UNDO side: `AppState::restore_shot` takes the
-/// id verbatim out of a `ShotSnapshot` and bumps the line counter past it.
-///
-/// `ShotSnapshot` is the LEGACY delete-a-shot capture (a live `DeleteShot`
-/// records a `ProjectSnapshotPair`), so every entry of this shape reaching the
-/// restore came off disk, where nothing bounds `shot_id` - a `.stalx` can carry
-/// `4294967295` in that column. `id + 1` panics a debug build there and wraps a
-/// release one to 0, after which the line hands 0 out again as a fresh id.
-#[test]
-fn undo_of_a_shot_snapshot_with_the_maximum_id_saturates_instead_of_overflowing() {
-    let state = state_with_project();
-    let line = line_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
-
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.push_with_data(
-            Command::DeleteShot {
-                line_id: line,
-                shot_id: ShotId::MAX,
-            },
-            UndoData::ShotSnapshot {
-                line_id: line,
-                shot_id: ShotId::MAX,
-                shot_data: straight_shot(90.0, 3.0),
-                position: 1,
-                uuid: Some("33333333-3333-4333-8333-333333333333".to_string()),
-            },
-        );
-    }
-
-    // Panics with "attempt to add with overflow" before the fix.
-    let undone = state.undo();
-    assert!(undone.success, "undo failed: {:?}", undone.error);
-
-    let project = state.get_project_state().unwrap();
-    let restored = project.get_line(line).expect("line missing");
-    assert_eq!(
-        restored.shots.len(),
-        2,
-        "the undo should have restored the recorded shot"
-    );
-    assert_eq!(
-        restored.shots[1].id,
-        ShotId::MAX,
-        "the restored shot should keep the id the entry recorded"
-    );
-    assert_eq!(
-        restored.next_shot_id,
-        ShotId::MAX,
-        "the counter should saturate rather than wrap back onto ids the line already uses"
-    );
-}
-
-/// The third door the same id walks through: `Line::take_shot_id`'s FORCED
+/// The second door the same id walks through: `Line::take_shot_id`'s FORCED
 /// arm, reached when the redo of a create still has an anchor to insert against.
 ///
 /// The append branch (the test above it) does its own bump; an anchored redo

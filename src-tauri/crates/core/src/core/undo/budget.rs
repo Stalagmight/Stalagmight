@@ -1,16 +1,18 @@
 use std::collections::VecDeque;
 
-use super::{DepthLimit, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
+use super::{DepthLimit, ProjectText, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
 
 impl UndoStack {
     /// [#303] Estimated serialized size of one entry, in bytes.
     ///
     /// An ESTIMATE by design: it exists to bound growth, and measuring exactly would
     /// mean serializing the whole stack on every push - the cost the byte budget is
-    /// there to avoid. The dominant terms are exact (the snapshot variants hold their
-    /// JSON as `String` already, so their length is the real payload); the structured
-    /// variants are approximated from their element counts, and everything else is
-    /// small enough that the flat overhead covers it.
+    /// there to avoid. The dominant terms are exact: a snapshot pair holds its JSON as
+    /// `String` already, and a compact delta is serialized to measure it (one entry,
+    /// kept to a small fraction of the file by the size gate, so a few kilobytes -
+    /// not the whole stack). The structured variants are approximated from their
+    /// element counts, and everything else is small enough that the flat overhead
+    /// covers it.
     ///
     /// EVERY variant that owns a `previous_offsets` map charges `BYTES_PER_OFFSET`
     /// per entry on top of whatever else its arm counts. The map is the one field
@@ -29,9 +31,15 @@ impl UndoStack {
         const BYTES_PER_OFFSET: usize = 64;
 
         let payload = match &entry.undo_data {
-            // Exact: these hold the serialized project already.
-            UndoData::ProjectSnapshot(json) => json.len(),
+            // Exact: this holds the serialized project already.
             UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
+            // Never pushed (compacted first); counted as the pair it stands for.
+            UndoData::CapturedPair(pair) => {
+                pair.before.len() + pair.after.as_ref().map_or(0, ProjectText::len)
+            }
+            // Exact too: measured by serializing, which is cheap because the
+            // payload is only what the entry changed.
+            UndoData::Delta(delta) => delta.encoded_len(),
             UndoData::PreviousValues {
                 values_json,
                 previous_offsets,
@@ -39,22 +47,12 @@ impl UndoStack {
             } => values_json.len() + previous_offsets.len() * BYTES_PER_OFFSET,
             // Approximated from element counts - a line snapshot of a big line is
             // the only other variant that can reach megabytes.
-            UndoData::LineSnapshot { line_data, .. }
-            | UndoData::CreatedLineSnapshot { line_data, .. } => {
-                line_data.shots.len() * BYTES_PER_SHOT
+            UndoData::CreatedLineSnapshot { line_data, .. } => {
+                line_data.as_ref().map_or(0, |data| data.shots.len()) * BYTES_PER_SHOT
             }
-            UndoData::ShotSnapshot { .. } => BYTES_PER_SHOT,
             UndoData::CreatedShotSnapshot {
                 previous_offsets, ..
             } => BYTES_PER_SHOT + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::MergeInfo {
-                removed_closures,
-                previous_offsets,
-                ..
-            } => removed_closures.len() * 256 + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::UnmergeInfo {
-                removed_closures, ..
-            } => removed_closures.len() * 256,
             UndoData::ClosureInfo { .. } => 256,
             UndoData::ZeroDatumInfo {
                 previous_offsets, ..
@@ -64,7 +62,6 @@ impl UndoStack {
                 previous_offsets,
                 ..
             } => affected_lines.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
             // Sized by what the add brought (#674) - which is the point of the
             // variant: it grows with the added file, never with the open cave.
             UndoData::AddedProjectContent(content) => {
@@ -83,7 +80,8 @@ impl UndoStack {
                     + refs * 256
                     + (content.line_offsets.len() + content.moved_offsets.len()) * BYTES_PER_OFFSET
             }
-            // Two credits per touched shot, each a handful of names.
+            // Two credits per run of shots changed alike, each a handful of
+            // names, and the run's anchor uuid.
             UndoData::ShotCredits {
                 changes,
                 line_values,

@@ -163,7 +163,7 @@ fn record_history(state: &AppState) {
 /// every shot id dropped: the survey as the user sees it, independent of what
 /// the shots are called.
 fn survey_state(state: &AppState) -> String {
-    let raw = state.capture_project_snapshot().unwrap();
+    let raw = state.capture_project_snapshot_text().unwrap();
     let mut project: Project = serde_json::from_str(&raw).unwrap();
     project.rebuild_line_index();
     project.rebuild_shot_uuid_index();

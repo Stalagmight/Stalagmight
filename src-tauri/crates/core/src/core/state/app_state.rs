@@ -20,6 +20,15 @@ use crate::core::{CommandResult, UndoStack};
 
 use super::project_io::{reapply_heals_after_restore, RecordedGauges};
 
+/// What a snapshot restore asks of the snapshot besides the project it
+/// parses: whether it holds the two members an older build may lack, and the
+/// GPS fixes it keeps beside `zero_datums` ([`snapshot_fixes`]).
+struct SnapshotFacts {
+    has_validation: bool,
+    has_surface_elevation: bool,
+    fixes: serde_json::Result<Vec<snapshot_fixes::SnapshotFix>>,
+}
+
 /// Trait for types that can represent project lock errors.
 /// Enables `with_project_mut` and `with_project` to work with different return types.
 pub(super) trait FromProjectLockError {
@@ -198,6 +207,11 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// Whether the history [`Self::history_discarded`] reports was dropped because an
+    /// EARLIER version of the app wrote it (`UndoStack::load_from_persisted_with_timestamps`
+    /// returning `HistoryDropped::EarlierVersion`), not because it was unreadable. The
+    /// banner says which. Reset with the flag it qualifies.
+    pub(super) history_from_earlier_version: AtomicBool,
     /// Ignored warnings an "Add .stalx" carried in for lines the open file's
     /// database does not hold yet (#674; see `project_add.rs`). Written by the
     /// next save, cleared with every project-slot commit. Transient.
@@ -292,6 +306,7 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
+            history_from_earlier_version: AtomicBool::new(false),
             pending_ignores: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
@@ -766,24 +781,41 @@ impl AppState {
 
     // === Snapshot helpers for snapshot-based undo ===
 
-    /// Capture a JSON snapshot of the current project for undo.
-    /// Returns the serialized JSON, or a `CommandResult` failure if unavailable.
-    pub(super) fn capture_project_snapshot(&self) -> Result<String, CommandResult> {
-        let Ok(guard) = self.project.lock() else {
+    /// Capture a snapshot of the current project for undo, in its parts
+    /// ([`Self::serialize_project_parts`]).
+    /// Returns the snapshot, or a `CommandResult` failure if unavailable.
+    pub(super) fn capture_project_snapshot(
+        &self,
+    ) -> Result<crate::core::ProjectText, CommandResult> {
+        let Ok(mut guard) = self.project.lock() else {
             return Err(CommandResult::failure("Failed to lock project".to_string()));
         };
-        let Some(p) = guard.as_ref() else {
+        let Some(p) = guard.as_mut() else {
             return Err(CommandResult::failure("No project open".to_string()));
         };
-        Self::serialize_project_snapshot(p)
+        Self::serialize_project_parts(p)
             .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
+    }
+
+    /// [`Self::capture_project_snapshot`] as one JSON text, for a test that
+    /// reads or edits the snapshot.
+    #[cfg(test)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the failure `capture_project_snapshot` returns, which its tests match on"
+    )]
+    pub(super) fn capture_project_snapshot_text(&self) -> Result<String, CommandResult> {
+        self.capture_project_snapshot()?
+            .text()
+            .map_err(|e| CommandResult::failure(format!("Failed to write project: {e}")))
     }
 
     /// [#303] Serialize a project FOR AN UNDO SNAPSHOT, with machine-local fields cleared.
     ///
     /// Snapshot entries stopped being local-only when Full mode started shipping undo
     /// history: `sanitize_push_snapshot` deliberately keeps `undo_stack` in the upload, and
-    /// every `ProjectSnapshot` / `ProjectSnapshotPair` is a whole serialized `Project`.
+    /// every `ProjectSnapshotPair` half is a whole serialized `Project` - which the compact
+    /// delta made from it carries in part.
     /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
     /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
     /// layout into the project's git history, permanently, readable by every collaborator
@@ -804,9 +836,9 @@ impl AppState {
     /// are `#[serde(skip)]`, and `imported_file_hashes` is content hashes that are meant to
     /// proliferate. A new field of that kind must be added here too.
     ///
-    /// [#741] GPS fixes leave `zero_datums` here too, for an older build that reads the
-    /// persisted history: see [`snapshot_fixes`]. `restore_snapshot_into_with` merges them
-    /// back.
+    /// [#741] GPS fixes leave `zero_datums` here too (made for an older build reading the
+    /// persisted history, which none does any more): see [`snapshot_fixes`].
+    /// `restore_snapshot_into_with` merges them back.
     pub(super) fn serialize_project_snapshot(project: &Project) -> serde_json::Result<String> {
         let holds_fix = snapshot_fixes::holds_fix(project);
         if project.file_path.is_none() && !holds_fix {
@@ -819,6 +851,48 @@ impl AppState {
             return snapshot_fixes::serialize_split(&mut scrubbed);
         }
         serde_json::to_string(&scrubbed)
+    }
+
+    /// [`Self::serialize_project_snapshot`] in its parts ([`ProjectText`]): the
+    /// top-level members as one object and each line on its own, the split
+    /// [`Doc::parse`] makes of the whole text, made without it.
+    ///
+    /// What a compact step and a capture serialize the live project with. The
+    /// whole text costs a whole-project clone when `file_path` is set (to clear
+    /// it) and a scan of the whole text to split it again; here the lines are
+    /// serialized one by one, and the members with the lines and the path taken
+    /// out of the project for the moment it takes - which is why it needs the
+    /// project mutably, and gives everything back before it returns, on every
+    /// path. The GPS fixes split as the whole text splits them
+    /// ([`snapshot_fixes`]), their roles read while the lines are in place.
+    ///
+    /// The parts are the whole text's, byte for byte
+    /// (`a_project_serialized_in_parts_is_its_whole_snapshot_split`).
+    ///
+    /// [`Doc::parse`]: crate::core::Doc::parse
+    pub(super) fn serialize_project_parts(
+        project: &mut Project,
+    ) -> serde_json::Result<crate::core::ProjectText> {
+        let lines = project
+            .lines
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<String>>>()?;
+        let split = snapshot_fixes::holds_fix(project).then(|| snapshot_fixes::split(project));
+        let taken_lines = std::mem::take(&mut project.lines);
+        let taken_path = project.file_path.take();
+        let members = match split {
+            Some((kept, fixes)) => {
+                let datums = std::mem::replace(&mut project.zero_datums, kept);
+                let members = snapshot_fixes::serialize_with(project, fixes);
+                project.zero_datums = datums;
+                members
+            }
+            None => serde_json::to_string(&*project),
+        };
+        project.file_path = taken_path;
+        project.lines = taken_lines;
+        Ok(crate::core::ProjectText::new(members?, lines))
     }
 
     /// Deserialize a project snapshot and install it into `slot`, rebuilding the
@@ -845,6 +919,56 @@ impl AppState {
         snapshot: &str,
         edited: Option<&RecordedGauges>,
     ) -> bool {
+        Self::restore_snapshot_reporting(slot, snapshot, edited).is_some()
+    }
+
+    /// [`Self::restore_snapshot_into_with`], saying how it went: `None` when it
+    /// refused (the slot is untouched), else whether the installed project can
+    /// differ from `snapshot` because a heal or a carry-over changed it - what a
+    /// compact entry needs to know to record the way back from the state that
+    /// is really live (`step_through_delta`).
+    #[must_use]
+    pub(super) fn restore_snapshot_reporting(
+        slot: &mut Option<Project>,
+        snapshot: &str,
+        edited: Option<&RecordedGauges>,
+    ) -> Option<bool> {
+        let facts = SnapshotFacts {
+            has_validation: snapshot.contains("\"validation\":"),
+            has_surface_elevation: snapshot.contains("\"surface_elevation\":"),
+            fixes: snapshot_fixes::read_fixes(snapshot),
+        };
+        Self::restore_with_facts(slot, snapshot, facts, edited)
+    }
+
+    /// [`Self::restore_snapshot_reporting`] for a project held split
+    /// ([`Doc`]): the members it asks about are read off the split, not
+    /// searched for in the whole text, and the text is written once for the
+    /// parse.
+    ///
+    /// [`Doc`]: crate::core::Doc
+    #[must_use]
+    pub(super) fn restore_doc_reporting(
+        slot: &mut Option<Project>,
+        doc: &crate::core::Doc<'_>,
+        edited: Option<&RecordedGauges>,
+    ) -> Option<bool> {
+        let facts = SnapshotFacts {
+            has_validation: doc.member("validation").is_some(),
+            has_surface_elevation: doc.member("surface_elevation").is_some(),
+            fixes: doc
+                .member(snapshot_fixes::FIXES_KEY)
+                .map_or_else(|| Ok(Vec::new()), serde_json::from_str),
+        };
+        Self::restore_with_facts(slot, &doc.text(), facts, edited)
+    }
+
+    fn restore_with_facts(
+        slot: &mut Option<Project>,
+        snapshot: &str,
+        facts: SnapshotFacts,
+        edited: Option<&RecordedGauges>,
+    ) -> Option<bool> {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -852,7 +976,7 @@ impl AppState {
         // persisted entry is restored. Detect that legacy blob and carry the CURRENT
         // project's validation across instead. Undo of a real settings change always
         // serializes the key, so it still restores the intended thresholds (Codex).
-        let snapshot_has_validation = snapshot.contains("\"validation\":");
+        let snapshot_has_validation = facts.has_validation;
         let current_validation = slot.as_ref().map(|p| p.validation.clone());
         // Same idiom for `surface_elevation` (#431/#448): a snapshot persisted by a
         // build predating that field has no "surface_elevation" key, so serde's
@@ -860,7 +984,7 @@ impl AppState {
         // elevation on undo/redo of a legacy persisted entry. Carry the CURRENT
         // project's value across for those legacy blobs only; a real elevation
         // edit always serializes the key, so it still restores correctly.
-        let snapshot_has_surface_elevation = snapshot.contains("\"surface_elevation\":");
+        let snapshot_has_surface_elevation = facts.has_surface_elevation;
         let current_surface_elevation = slot.as_ref().and_then(|p| p.surface_elevation);
         // [#303] Where the file lives is a property of THIS machine, not of the survey, so
         // `serialize_project_snapshot` clears it rather than write a username into every
@@ -910,13 +1034,13 @@ impl AppState {
                         max = crate::models::MAX_LINE_ID,
                         "Refusing snapshot restore: line id or shot counter outside the shot-id encode bound"
                     );
-                    return false;
+                    return None;
                 }
                 // [#741] The GPS fixes ride beside `zero_datums`, not in it
                 // (`serialize_project_snapshot`); put them back in list order.
                 // Fixes that cannot be read refuse the restore, as the window
                 // check above does: without them it is not the state recorded.
-                match snapshot_fixes::read_fixes(snapshot) {
+                match facts.fixes {
                     Ok(fixes) => snapshot_fixes::merge_fixes(&mut restored.zero_datums, fixes),
                     Err(e) => {
                         tracing::error!(
@@ -924,17 +1048,20 @@ impl AppState {
                             reason = %e,
                             "Refusing snapshot restore: its GPS fixes cannot be read"
                         );
-                        return false;
+                        return None;
                     }
                 }
+                let mut healed = false;
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {
                         restored.validation = validation;
+                        healed = true;
                     }
                 }
                 if !snapshot_has_surface_elevation {
                     if let Some(surface_elevation) = current_surface_elevation {
                         restored.surface_elevation = Some(surface_elevation);
+                        healed = true;
                     }
                 }
                 restored.file_path = current_file_path;
@@ -942,7 +1069,7 @@ impl AppState {
                 // shots carries each line's surveyor/date at line level;
                 // give it to the shots that have none (a no-op for a current
                 // snapshot, which never serializes those keys).
-                restored.absorb_legacy_line_credit();
+                healed |= restored.absorb_legacy_line_credit() > 0;
                 restored.rebuild_line_index();
                 restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
@@ -976,6 +1103,7 @@ impl AppState {
                     found
                 };
                 if has_legacy_index {
+                    healed = true;
                     restored.ensure_shot_uuids();
                     restored.ensure_unique_shot_uuids();
                     restored.reanchor_station_refs();
@@ -988,7 +1116,7 @@ impl AppState {
                 // up to the standard the live one is already held to; the
                 // heal-by-heal reasoning for what that includes (and what it
                 // deliberately does not) is on the function.
-                reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
+                healed |= reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
                 // The `line_offsets` invariant (`Project::write_line_offset`)
                 // has to hold for a map this app did not write, and a snapshot
                 // payload is exactly that case: undo/redo history is persisted to
@@ -999,6 +1127,7 @@ impl AppState {
                 // above - it is an invariant, and a restore may not install a state
                 // the app cannot otherwise reach.
                 let dropped = restored.normalize_line_offsets();
+                healed |= dropped > 0;
                 if dropped > 0 {
                     tracing::info!(
                         dropped,
@@ -1007,13 +1136,32 @@ impl AppState {
                     );
                 }
                 *slot = Some(restored);
-                true
+                Some(healed)
             }
             Err(e) => {
                 tracing::error!(
                     purpose = "restore project snapshot",
                     reason = %e,
                     "Failed to deserialize project snapshot; slot left unchanged"
+                );
+                None
+            }
+        }
+    }
+
+    /// [`Self::restore_snapshot_into`] for a snapshot held in its parts.
+    #[must_use]
+    pub(super) fn restore_parts_into(
+        slot: &mut Option<Project>,
+        snapshot: &crate::core::ProjectText,
+    ) -> bool {
+        match snapshot.doc() {
+            Ok(doc) => Self::restore_doc_reporting(slot, &doc, None).is_some(),
+            Err(e) => {
+                tracing::error!(
+                    purpose = "restore project snapshot",
+                    reason = %e,
+                    "Failed to read project snapshot; slot left unchanged"
                 );
                 false
             }
@@ -1022,12 +1170,12 @@ impl AppState {
 
     /// Rollback the project to a previously captured snapshot.
     /// Handles poisoned mutex gracefully (recovery is more important than panic).
-    pub(super) fn rollback_project(&self, snapshot: &str) {
+    pub(super) fn rollback_project(&self, snapshot: &crate::core::ProjectText) {
         let mut proj = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if Self::restore_snapshot_into(&mut proj, snapshot) {
+        if Self::restore_parts_into(&mut proj, snapshot) {
             tracing::info!(
                 purpose = "restore project after failed command",
                 "Successfully rolled back to pre-mutation snapshot"
@@ -1039,8 +1187,8 @@ impl AppState {
     /// Returns the serialized JSON, or rolls back and returns a `CommandResult` failure.
     pub(super) fn capture_after_snapshot_or_rollback(
         &self,
-        before_snapshot: &str,
-    ) -> Result<String, CommandResult> {
+        before_snapshot: &crate::core::ProjectText,
+    ) -> Result<crate::core::ProjectText, CommandResult> {
         self.capture_after_snapshot_settled(before_snapshot, true)
     }
 
@@ -1049,9 +1197,9 @@ impl AppState {
     /// identity (`Command::can_change_station_identity`) skips it.
     pub(super) fn capture_after_snapshot_settled(
         &self,
-        before_snapshot: &str,
+        before_snapshot: &crate::core::ProjectText,
         settle: bool,
-    ) -> Result<String, CommandResult> {
+    ) -> Result<crate::core::ProjectText, CommandResult> {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -1067,7 +1215,7 @@ impl AppState {
                 purpose = "restore project after mutation error",
                 "Project became None after mutation; rolling back"
             );
-            let _ = Self::restore_snapshot_into(&mut proj_guard, before_snapshot);
+            let _ = Self::restore_parts_into(&mut proj_guard, before_snapshot);
             return Err(CommandResult::failure(
                 "No project for after snapshot".to_string(),
             ));
@@ -1079,7 +1227,7 @@ impl AppState {
         if settle {
             super::command_station_name::settle(p);
         }
-        match Self::serialize_project_snapshot(p) {
+        match Self::serialize_project_parts(p) {
             Ok(json) => Ok(json),
             Err(e) => {
                 tracing::error!(
@@ -1087,7 +1235,7 @@ impl AppState {
                     reason = %e,
                     "Failed to serialize after snapshot; rolling back"
                 );
-                if Self::restore_snapshot_into(&mut proj_guard, before_snapshot) {
+                if Self::restore_parts_into(&mut proj_guard, before_snapshot) {
                     tracing::info!(
                         purpose = "restore project after snapshot failure",
                         "Successfully rolled back after serialization failure"
@@ -1126,18 +1274,22 @@ impl AppState {
         })
     }
 
-    /// Push a snapshot-pair undo entry onto the undo stack.
+    /// Push the undo entry for a command captured as two snapshots: stored as
+    /// the compact delta between them ([`crate::core::UndoData::compact`]),
+    /// converted before the stack's lock is taken.
     pub(super) fn push_snapshot_undo(
         &self,
         cmd: crate::core::Command,
-        before: String,
-        after: String,
+        before: crate::core::ProjectText,
+        after: crate::core::ProjectText,
     ) {
+        let pair = crate::core::CapturedPair {
+            before,
+            after: Some(after),
+        };
+        let data = crate::core::UndoData::CapturedPair(Box::new(pair)).compact(&cmd);
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(
-                cmd,
-                crate::core::UndoData::ProjectSnapshotPair { before, after },
-            );
+            undo_stack.push_with_data(cmd, data);
         }
     }
 }
@@ -1191,6 +1343,32 @@ impl AppState {
     pub fn set_history_discarded(&self, discarded: bool) {
         self.history_discarded
             .store(discarded, std::sync::atomic::Ordering::SeqCst);
+        self.history_from_earlier_version
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Record what the history load of the just-committed project dropped, if
+    /// anything: either reason raises the discarded-history banner, and an earlier
+    /// version's history gets its own words there (it was not damaged, only written in
+    /// the format before compact undo entries).
+    pub fn note_history_dropped(&self, dropped: Option<crate::core::HistoryDropped>) {
+        let Some(reason) = dropped else {
+            return;
+        };
+        self.history_discarded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.history_from_earlier_version.store(
+            reason == crate::core::HistoryDropped::EarlierVersion,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Whether [`Self::history_discarded`]'s history was an earlier version's.
+    pub fn history_discarded_from_earlier_version(&self) -> bool {
+        self.history_discarded()
+            && self
+                .history_from_earlier_version
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// [#473] Whether the open project lost its edit history on load.

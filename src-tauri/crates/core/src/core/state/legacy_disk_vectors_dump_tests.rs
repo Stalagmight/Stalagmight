@@ -43,9 +43,9 @@ use crate::models::{
     AzimuthReference, ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates,
     CorrectionSource, CreditEdit, CreditTargets, DivePlanSnapshot, Diver, ExistingShotUpdate,
     GpsCoordinates, ImportClosure, ImportLineConfig, ImportPlacement, LineData, LineId,
-    LineUpdates, LoopClosure, MarkedPoint, Person, Project, ShotData, ShotId, ShotKind,
-    ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationAnchor, StationKey, StationMerge,
-    StationRef, SurveyCredit, SurveyDirection,
+    LineUpdates, MarkedPoint, Person, Project, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt,
+    SplitLineOptions, SplitSide, StationAnchor, StationKey, StationMerge, StationRef, SurveyCredit,
+    SurveyDirection,
 };
 use crate::persistence::Database;
 
@@ -231,39 +231,21 @@ fn write_add_source(dir: &Path) -> std::path::PathBuf {
     path
 }
 
-/// Undo entries no current command path produces any more, but that a file
-/// written by an older build still carries: the vectors must cover their
-/// serde shape too. Built from the live project so their payload is real.
+/// Undo entries no current command path produces any more, but whose serde
+/// shape a payload can still take: the vectors cover them too. Built from the
+/// live project so their payload is real.
+///
+/// The compact undo history deleted the payloads only a pre-compact history
+/// held (`SectionSnapshot`, `ShotSnapshot`, `MergeInfo`, `UnmergeInfo`,
+/// `StationMoveInfo`, `ProjectSnapshot`): this build drops such a history on
+/// open, so it has no shape for them to dump. The captured vectors still hold
+/// the rows the pre-rename build wrote for them
+/// (`pre_line_rename_disk_tests` checks this build refuses them).
 fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
     let live = project(state);
     let line = live.lines.first().expect("a line exists");
     let sid = line.id;
     let first_shot = line.shots.first().expect("a shot exists");
-    let line_data = LineData {
-        name: line.name.clone(),
-        surveyor: None,
-        date: None,
-        color: line.color.clone(),
-        direction: Some(line.direction),
-        quality: line.quality,
-        shots: line.shots.iter().cloned().map(ShotData::from).collect(),
-    };
-    let shot_data = ShotData::from(first_shot.clone());
-    let closure = LoopClosure {
-        id: 7,
-        station_a: StationRef::new(sid, 0).into(),
-        station_b: StationRef::new(sid, 1).into(),
-        path_length: 12.5,
-        misclosure_distance: 0.25,
-        error_percentage: 2.0,
-        horizontal_misclosure: 0.2,
-        vertical_misclosure: 0.15,
-        strategy: ClosureStrategy::Batch,
-        is_aligned: false,
-    };
-    let snapshot = AppState::serialize_project_snapshot(&live).expect("serialize project");
-    let a = StationRef::new(sid, 0);
-    let b = StationRef::new(sid, 1);
     let entry = |command: Command, undo_data: UndoData| UndoEntry {
         command,
         undo_data,
@@ -271,90 +253,6 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
         command_bytes: None,
     };
     vec![
-        (
-            "synthetic legacy LineSnapshot".to_string(),
-            entry(
-                Command::DeleteLine { line_id: sid },
-                UndoData::LineSnapshot {
-                    line_id: sid,
-                    line_data,
-                },
-            ),
-        ),
-        (
-            "synthetic legacy ShotSnapshot".to_string(),
-            entry(
-                Command::DeleteShot {
-                    line_id: sid,
-                    shot_id: first_shot.id,
-                },
-                UndoData::ShotSnapshot {
-                    line_id: sid,
-                    shot_id: first_shot.id,
-                    shot_data: shot_data.clone(),
-                    position: 0,
-                    uuid: first_shot.uuid.clone(),
-                },
-            ),
-        ),
-        (
-            "synthetic legacy MergeInfo".to_string(),
-            entry(
-                Command::MergeStations {
-                    station_a: a,
-                    station_b: b,
-                },
-                UndoData::MergeInfo {
-                    station_a: a,
-                    station_b: b,
-                    removed_closures: vec![closure.clone()],
-                    previous_offsets: [(sid, Some((1.0, 2.0)))].into_iter().collect(),
-                },
-            ),
-        ),
-        (
-            "synthetic legacy UnmergeInfo".to_string(),
-            entry(
-                Command::UnmergeStationPair {
-                    station_a: a,
-                    station_b: b,
-                },
-                UndoData::UnmergeInfo {
-                    station_a: a,
-                    station_b: b,
-                    removed_closures: vec![closure],
-                },
-            ),
-        ),
-        (
-            "synthetic legacy StationMoveInfo".to_string(),
-            entry(
-                Command::MoveStation {
-                    station_ref: b,
-                    offset: Coordinates::new(0.1, 0.2, 0.0),
-                },
-                UndoData::StationMoveInfo {
-                    station_ref: b,
-                    prev_shot_before: Some((first_shot.id, shot_data.clone())),
-                    prev_shot_after: Some((first_shot.id, shot_data)),
-                    prev_offset: Some((0.1, 0.2, 0.3)),
-                    prev_line_offset: Some((4.0, 5.0)),
-                },
-            ),
-        ),
-        (
-            "synthetic legacy ProjectSnapshot".to_string(),
-            entry(
-                Command::Batch {
-                    commands: vec![Command::MoveSegment {
-                        line_id: sid,
-                        offset: Coordinates::new(1.0, 1.0, 0.0),
-                    }],
-                    label: None,
-                },
-                UndoData::ProjectSnapshot(snapshot),
-            ),
-        ),
         (
             "synthetic legacy InverseCommand(SetShotKind)".to_string(),
             entry(

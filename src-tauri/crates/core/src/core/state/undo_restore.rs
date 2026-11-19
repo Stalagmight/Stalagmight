@@ -1,5 +1,5 @@
 use crate::core::{Command, CommandResult};
-use crate::models::{Line, LineData, LineId, LineIdentity, Shot, ShotData, ShotId};
+use crate::models::{Line, LineData, LineId, LineIdentity};
 
 use super::AppState;
 
@@ -250,92 +250,5 @@ impl AppState {
 
         tracing::info!(line_id = original_id, "Line restored");
         CommandResult::success().with_line_id(original_id)
-    }
-
-    /// Restore a deleted shot at its original position with its original ID
-    pub(super) fn restore_shot(
-        &self,
-        line_id: LineId,
-        original_shot_id: ShotId,
-        data: ShotData,
-        position: usize,
-        uuid: Option<String>,
-    ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        let Some(line) = project.get_line_mut(line_id) else {
-            return CommandResult::failure(crate::models::LINE_GONE.to_string());
-        };
-
-        // Recreate the shot with its original ID and UUID so the restored shot
-        // keeps the identity station cross-references anchor on
-        // (`StationKey::AfterShot`) and the Ariane export emits as `<UUID>`.
-        //
-        // Two places the identity can come from, and `Shot::with_uuid` prefers
-        // the first: the payload's own `ShotData::uuid` (every entry written
-        // since #423), or the `uuid` this entry recorded beside it (entries
-        // written between the UUID column landing and #423). An entry older than
-        // BOTH carries neither, and `with_uuid` does not mint - so this goes
-        // through `uuid_or_mint`, or the restored shot would come back with no
-        // identity at all: unindexed, and unnameable by any `AfterShot` anchor
-        // until some later save noticed.
-        let shot = Shot::with_uuid(original_shot_id, data, Some(Shot::uuid_or_mint(uuid)));
-
-        // The one insert path that takes a payload-borne identity, so it is also
-        // the one that could reintroduce a uuid the line acquired in the
-        // meantime. Not reachable today: the only door a FOREIGN id enters
-        // through is line creation (`Line::new`, which de-dupes), and
-        // every other mint is a fresh v4 - so nothing can be holding this shot's
-        // recorded uuid while the shot itself is deleted. Asserted rather than
-        // argued, because the cheap repairs are both wrong here: clearing or
-        // re-minting the restored shot would defeat the restore, whose entire
-        // purpose is to bring that anchor back.
-        let identity_already_present = line
-            .shots
-            .iter()
-            .any(|s| s.uuid.is_some() && s.uuid == shot.uuid);
-        debug_assert!(
-            !identity_already_present,
-            "restore_shot: line {line_id} already holds the identity being restored"
-        );
-        if identity_already_present {
-            tracing::warn!(
-                line_id,
-                shot_id = original_shot_id,
-                purpose = "shot identity uniqueness (#423)",
-                "Restoring a shot whose UUID is already present in the line; the \
-                 pre-save repair will re-mint one of them"
-            );
-        }
-
-        // Update next_shot_id if needed to avoid collisions. SATURATING: the id
-        // arrives verbatim from a persisted entry, so ShotId::MAX must park the
-        // counter rather than panic a debug build or wrap a release one into
-        // colliding ids (#413 finding 24's class, same as the redo append arm).
-        if original_shot_id >= line.next_shot_id {
-            line.next_shot_id = original_shot_id.saturating_add(1);
-        }
-
-        if position <= line.shots.len() {
-            line.shots.insert(position, shot);
-        } else {
-            line.shots.push(shot);
-        }
-
-        project.touch();
-
-        tracing::info!(
-            line_id,
-            shot_id = original_shot_id,
-            position,
-            "Shot restored"
-        );
-        CommandResult::success()
     }
 }

@@ -797,11 +797,10 @@ contiguous at the top - two defects fell out on the third iteration.
 
 Beyond the main fuzzer's three oracles it adds two of its own: COVERAGE (every
 variant a guaranteed plan step promises must be present on the RESTORED stack)
-and STACK SURVIVAL (both lengths must equal what they were at save time). Six
-`UndoData` variants are reported once per run as out of scope: `MergeInfo`,
-`UnmergeInfo`, `StationMoveInfo`, `ShotSnapshot`, `LineSnapshot` and
-`ProjectSnapshot` still have restore arms in `undo()` but have no live producer
-left, so a project whose history was stripped can never construct one.
+and STACK SURVIVAL (both lengths must equal what they were at save time).
+`ProjectSnapshotPair` is reported once per run as out of scope: it still has
+restore arms in `undo()`, but every pair is stored as a compact `Delta` before
+it is pushed, so no live entry holds one.
 
 | Env var | Effect |
 |---|---|

@@ -142,7 +142,8 @@ use std::path::PathBuf;
 
 use super::fuzz_undo_tests::{
     failure_signature, fuzz_threads, panic_message, recorder_arm, recorder_take, run_fuzz,
-    run_seed_jobs, run_trace, summarize, Fault, Outcome, Plan, Trace, TraceMove, GATE_ITERATIONS,
+    run_seed_jobs, run_trace, summarize, Fault, Knobs, Outcome, Plan, Trace, TraceMove,
+    GATE_ITERATIONS,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -555,6 +556,7 @@ fn plan_from_env() -> Plan {
         horizon: flag("HORIZON") || combined,
         config_fuzz: flag("CONFIG"),
         combined,
+        knobs: Knobs::from_env(),
     }
 }
 
@@ -840,6 +842,7 @@ fn a_recorded_run_matches_an_unrecorded_one() {
             horizon: false,
             config_fuzz: false,
             combined: false,
+            knobs: Knobs::OFF,
         };
         let plain = run_fuzz(3, plan);
         let recorded = record_run(3, plan);
@@ -882,6 +885,7 @@ fn a_full_trace_replays_to_the_same_run() {
             horizon: false,
             config_fuzz: false,
             combined: false,
+            knobs: Knobs::OFF,
         };
         let recorded = record_run(4, plan);
         let original = recorded
@@ -990,6 +994,7 @@ fn the_shrinker_minimizes_an_injected_failure() {
         horizon: false,
         config_fuzz: false,
         combined: false,
+        knobs: Knobs::OFF,
     };
     // Through the PROGRAMMATIC entry point, which is what a future observation
     // hunt would call: record, choose the target from what the run produced,

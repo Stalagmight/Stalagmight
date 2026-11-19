@@ -51,6 +51,7 @@ mod speleodb_sidecars;
 mod speleodb_write_guard;
 mod undo;
 mod undo_capture;
+mod undo_delta;
 mod undo_policy;
 mod undo_restore;
 mod warnings;
@@ -367,6 +368,10 @@ mod tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod undo_after_reopen_tests;
+#[cfg(test)]
+mod undo_disk_names_tests;
+#[cfg(test)]
+mod undo_size_gate_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay

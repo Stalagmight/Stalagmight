@@ -111,6 +111,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_tile_providers",
     "command.get_undo_stack",
     "command.history_discarded",
+    "command.history_discarded_from_earlier_version",
     "command.import_dmp",
     "command.import_lines",
     "command.add_project_file",
@@ -1205,7 +1206,10 @@ mod tests {
         //   + 10 Sections, named groupings of lines (#327): command.* and
         //       undo-after.* of {create,update,delete}_cave_section,
         //       move_lines_to_cave_section, apply_cave_section_color = 743.
-        assert_eq!(EVENT_NAMES.len(), 743);
+        //   + 1 the discarded-history banner asks whether the history it reports
+        //       was an earlier version's (compact undo entries):
+        //       command.history_discarded_from_earlier_version = 744.
+        assert_eq!(EVENT_NAMES.len(), 744);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

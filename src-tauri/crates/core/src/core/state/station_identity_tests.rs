@@ -617,6 +617,31 @@ fn metadata_commands_skip_the_identity_pass_and_structural_ones_run_it() {
     assert!(name_of_1(&state).is_some(), "the pass ran");
 }
 
+/// Put a snapshot pair of `before` / `after` on top of the undo stack in place
+/// of the entry the command pushed, as a build that predates Station IDs
+/// recorded it (see [`make_snapshot_pair_legacy`]).
+///
+/// Scaffolding: every live entry a snapshot capture records is stored as a
+/// compact delta, and a history written before compact entries is dropped on
+/// open, so no such pair reaches a stack through the app any more. The restore
+/// it drives - `adopt_station_identities`, inside the heal every restore runs -
+/// is the code under test, and a pair is the one payload that hands it a
+/// whole state without Station IDs.
+fn push_legacy_snapshot_pair(state: &AppState, before: String, after: String) {
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        let mut entry = stack.pop_undo().unwrap();
+        entry.undo_data = crate::core::UndoData::ProjectSnapshotPair { before, after };
+        stack.push_undo(entry);
+    }
+    make_snapshot_pair_legacy(state, false);
+}
+
+/// The live project as a snapshot pair half.
+fn snapshot(state: &AppState) -> String {
+    state.capture_project_snapshot_text().unwrap()
+}
+
 /// Turn the snapshot pair on top of the undo (or redo) stack into what a
 /// build that predates Station IDs recorded: no ids, no counter, no names.
 fn make_snapshot_pair_legacy(state: &AppState, redo: bool) {
@@ -684,6 +709,7 @@ fn a_legacy_reverse_undo_adopts_ids_by_physical_station() {
     let main = create_line(&state, "Main", 3);
     name_stations(&state, main, &["s0", "s1", "s2", "s3"]);
     let original = line_identities(&state, main);
+    let before = snapshot(&state);
     assert!(
         state
             .execute(Command::ReverseLine {
@@ -700,7 +726,7 @@ fn a_legacy_reverse_undo_adopts_ids_by_physical_station() {
         "a reverse keeps every station's identity"
     );
 
-    make_snapshot_pair_legacy(&state, false);
+    push_legacy_snapshot_pair(&state, before, snapshot(&state));
     assert!(state.undo().success);
     assert_eq!(
         line_identities(&state, main),
@@ -723,6 +749,7 @@ fn a_legacy_first_shot_delete_undo_never_moves_an_id_to_another_station() {
     name_stations(&state, main, &["s0", "s1", "s2", "s3", "s4"]);
     let original = line_identities(&state, main);
     let first = shot_id(&project(&state), main, 0);
+    let before = snapshot(&state);
     assert!(
         state
             .execute(Command::DeleteShot {
@@ -734,7 +761,7 @@ fn a_legacy_first_shot_delete_undo_never_moves_an_id_to_another_station() {
     let deleted = line_identities(&state, main);
     assert_eq!(deleted, original[1..].to_vec());
 
-    make_snapshot_pair_legacy(&state, false);
+    push_legacy_snapshot_pair(&state, before, snapshot(&state));
     assert!(state.undo().success);
     let undone = line_identities(&state, main);
     assert_eq!(undone[2..], original[2..], "unchanged sides keep their ids");

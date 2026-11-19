@@ -25,7 +25,8 @@ use crate::models::{
     LoopClosure, Project, ShotUuidRemap, StationAnchor, StationKey,
 };
 
-use super::{UndoData, UndoEntry, UndoStack};
+use super::history_walk::HolderWalk;
+use super::{HistoryDropped, UndoData, UndoEntry, UndoStack};
 
 impl UndoStack {
     /// Translate the loaded history through `renamed` (what this load's heal did
@@ -37,10 +38,50 @@ impl UndoStack {
         &mut self,
         project: &Project,
         renamed: &ShotUuidRemap,
-    ) -> usize {
+    ) -> (usize, Option<HistoryDropped>) {
+        if let Some(dropped) = self.drop_history_that_does_not_fit(project) {
+            return (0, Some(dropped));
+        }
         let translated = self.translate_shot_uuids(project, renamed);
         self.drop_entries_addressing_a_missing_shot(project);
-        translated
+        (translated, None)
+    }
+
+    /// Drop the whole history when a compact entry in it does not fit the
+    /// state the entries above it leave: its recorded line count, a line
+    /// it edits by id, a run past the end. Every row parsed and passed
+    /// `check_shape`, so the file's rows are well-formed - but such an entry
+    /// would refuse every step for good, and the entries under it with it. A
+    /// compact history is usable only whole, so it goes whole, with the banner
+    /// a damaged history gets (`HistoryDropped::Unreadable`).
+    ///
+    /// Judged by walking each stack from the loaded project, the walk the uuid
+    /// remap takes. A walk that loses track at a TYPED entry proves nothing
+    /// about the deltas under it, and keeps the history.
+    fn drop_history_that_does_not_fit(&mut self, project: &Project) -> Option<HistoryDropped> {
+        let mut unfit = 0;
+        for (stack, undoing) in [(&self.undo_stack, true), (&self.redo_stack, false)] {
+            let mut walk = HolderWalk::of(project);
+            for entry in stack.iter().rev() {
+                if !walk.known {
+                    break;
+                }
+                walk.step(entry, undoing);
+            }
+            unfit += usize::from(walk.unfit_delta);
+        }
+        if unfit == 0 {
+            return None;
+        }
+        let rows = self.undo_stack.len() + self.redo_stack.len();
+        tracing::warn!(
+            rows,
+            purpose = "load persisted undo history",
+            "A compact undo entry does not fit the project it would be applied to; the whole \
+             history is dropped rather than wedged at that entry"
+        );
+        self.clear();
+        Some(HistoryDropped::Unreadable)
     }
 
     /// Rewrite every entry's shot ids with [`history_remap`]. Returns how many
@@ -55,16 +96,30 @@ impl UndoStack {
         for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
             ids.collect(&mut entry.undo_data);
         }
-        ids.order_reinstalls(&self.undo_stack, &self.redo_stack);
+        ids.walk_recorded_states(project, &self.undo_stack, &self.redo_stack);
         let map = history_remap(project, renamed, &ids);
         if map.is_empty() {
             return 0;
         }
 
         let mut changed = 0;
-        for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
-            if remap_entry(entry, &map) {
-                changed += 1;
+        let rename = |line: LineId, old: &str| map.get(line, old).map(str::to_string);
+        // Walked from the live project outwards again, so a compact entry's
+        // copies can be renamed against the state it applies to (see
+        // `ProjectDelta::rename_copies`).
+        for (stack, undoing) in [(&mut self.undo_stack, true), (&mut self.redo_stack, false)] {
+            let mut walk = HolderWalk::of(project);
+            for entry in stack.iter_mut().rev() {
+                let mut touched = remap_entry(entry, &map);
+                if let UndoData::Delta(delta) = &mut entry.undo_data {
+                    if walk.known {
+                        touched |= delta.edit(|delta| delta.rename_copies(walk.view(), &rename));
+                    }
+                }
+                if touched {
+                    changed += 1;
+                }
+                walk.step(entry, undoing);
             }
         }
         self.undo_bytes = self.undo_stack.iter().map(Self::estimated_size).sum();
@@ -91,16 +146,15 @@ pub(super) struct HistoryIds {
     /// different times, and is no repeat.
     repeats: Vec<(String, BTreeSet<LineId>)>,
     /// Every shot an entry reinstalls whole (an Add's lines, a re-created
-    /// or deleted line), with the project it lands in when that entry is
-    /// replayed: `None` for the live project, or an index into `walls`.
-    reinstalled: Vec<(LineId, String, Option<usize>)>,
-    /// Who holds each id in a whole-project state an entry restores (an undo's
-    /// `before`, a redo's `after`): stepping through that entry replaces the
-    /// project, so it is what every entry beyond it replays into (#732).
-    walls: Vec<BTreeMap<String, BTreeSet<LineId>>>,
+    /// line) while ANOTHER line holds its id in the project that entry
+    /// replays into - the state the walk from the live project has reached by
+    /// then ([`HistoryIds::walk_recorded_states`], #732). Each must yield.
+    reinstall_yields: Vec<(LineId, String)>,
 }
 
-/// The (line, id) of every shot `data` reinstalls whole.
+/// The (line, id) of every shot `data` reinstalls whole. A compact
+/// [`UndoData::Delta`] is not here: the walk steps through it to the whole
+/// state it records ([`HistoryIds::walk_recorded_states`]).
 fn reinstalled_ids(data: &UndoData) -> Vec<(LineId, &str)> {
     match data {
         UndoData::AddedProjectContent(content) => content
@@ -112,33 +166,24 @@ fn reinstalled_ids(data: &UndoData) -> Vec<(LineId, &str)> {
                     .filter_map(move |s| Some((line.id, s.uuid.as_deref()?)))
             })
             .collect(),
-        UndoData::LineSnapshot { line_id, line_data } => line_data
-            .shots
-            .iter()
-            .filter_map(|s| Some((*line_id, s.uuid.as_deref()?)))
-            .collect(),
         UndoData::CreatedLineSnapshot {
             line_id,
             line_data,
             identity,
         } => line_data
-            .shots
             .iter()
+            .flat_map(|data| &data.shots)
             .filter_map(|s| s.uuid.as_deref())
-            .chain(identity.shot_uuids.iter().flatten().map(String::as_str))
+            .chain(
+                identity
+                    .iter()
+                    .flat_map(|identity| identity.shot_uuids.iter().flatten())
+                    .map(String::as_str),
+            )
             .map(|uuid| (*line_id, uuid))
             .collect(),
         _ => Vec::new(),
     }
-}
-
-/// Who holds each id in one serialized project.
-fn holders_in(json: &str) -> BTreeMap<String, BTreeSet<LineId>> {
-    let mut held: BTreeMap<String, BTreeSet<LineId>> = BTreeMap::new();
-    probe_snapshot(json, &mut |line, uuid| {
-        held.entry(uuid.to_string()).or_default().insert(line);
-    });
-    held
 }
 
 impl HistoryIds {
@@ -157,10 +202,6 @@ impl HistoryIds {
             state.entry(uuid.to_string()).or_default().insert(line);
         };
         match data {
-            UndoData::ProjectSnapshot(json) => {
-                probe_snapshot(json, &mut |line, uuid| note(&mut state, line, uuid));
-                self.close_state(&mut state);
-            }
             UndoData::ProjectSnapshotPair { before, after } => {
                 probe_snapshot(before, &mut |line, uuid| note(&mut state, line, uuid));
                 self.close_state(&mut state);
@@ -179,37 +220,51 @@ impl HistoryIds {
         }
     }
 
-    /// Record, for every shot an entry reinstalls, the project it lands in when
-    /// that entry is replayed. Each stack is walked from the live end outwards
-    /// (`back()` is the entry next to the live project): an entry replays into
-    /// the live project unless a whole-project snapshot lies between them, in
-    /// which case it replays into the nearest one's state - the `before` an
-    /// undo restores, or the `after` a redo restores. Comparing against the
-    /// live project instead mistakes a shot a later combine or split moved for
-    /// a repeat (#732).
-    fn order_reinstalls(&mut self, undo: &VecDeque<UndoEntry>, redo: &VecDeque<UndoEntry>) {
+    /// Walk each stack from the live project outwards, stepping a holder view
+    /// ([`HolderWalk`]) through every entry the way undo (or redo) steps the
+    /// project. Along the way:
+    ///
+    /// - every shot an entry reinstalls is judged against the state the walk
+    ///   has reached - the project that entry replays into - and must yield
+    ///   when another line holds its id there. Judging it against the live
+    ///   project instead mistakes a shot a later combine or split moved for a
+    ///   repeat (#732);
+    /// - every state a compact delta records (its other side) is folded in
+    ///   like a snapshot half: the ids it holds, and its repeats.
+    ///
+    /// A step the walk cannot follow leaves the rest of that stack judged
+    /// against the live project.
+    fn walk_recorded_states(
+        &mut self,
+        project: &Project,
+        undo: &VecDeque<UndoEntry>,
+        redo: &VecDeque<UndoEntry>,
+    ) {
+        let live = HolderWalk::of(project);
         for (stack, undoing) in [(undo, true), (redo, false)] {
-            if !stack
-                .iter()
-                .any(|entry| !reinstalled_ids(&entry.undo_data).is_empty())
-            {
-                continue;
-            }
-            let mut wall: Option<usize> = None;
+            let mut walk = HolderWalk::of(project);
             for entry in stack.iter().rev() {
+                let judge = if walk.known { &walk } else { &live };
                 for (line, uuid) in reinstalled_ids(&entry.undo_data) {
-                    self.reinstalled.push((line, uuid.to_string(), wall));
-                }
-                let restores = match &entry.undo_data {
-                    UndoData::ProjectSnapshot(json) if undoing => Some(json),
-                    UndoData::ProjectSnapshotPair { before, after } => {
-                        Some(if undoing { before } else { after })
+                    if judge.held_elsewhere(line, uuid) {
+                        self.reinstall_yields.push((line, uuid.to_string()));
                     }
-                    _ => None,
+                }
+                let Some(changed) = walk.step(entry, undoing) else {
+                    continue;
                 };
-                if let Some(json) = restores {
-                    self.walls.push(holders_in(json));
-                    wall = Some(self.walls.len() - 1);
+                for (line, shots) in &changed {
+                    for uuid in shots.iter().flatten().filter(|u| !u.is_empty()) {
+                        self.holders
+                            .entry(uuid.to_string())
+                            .or_default()
+                            .insert(*line);
+                        let held = walk.holders_of(uuid);
+                        if held.len() > 1 {
+                            self.repeats
+                                .push((uuid.to_string(), held.into_iter().collect()));
+                        }
+                    }
                 }
             }
         }
@@ -237,7 +292,7 @@ impl HistoryIds {
 /// 4. S must yield X: another line holds X in the same recorded state and
 ///    keeps it (the one holding X live, else the lowest), or S is a line an
 ///    entry reinstalls while another line holds X in the project that entry
-///    replays into (see [`HistoryIds::order_reinstalls`]) -> a derived
+///    replays into (see [`HistoryIds::walk_recorded_states`]) -> a derived
 ///    replacement, stepped past every id in use;
 /// 5. otherwise unchanged - including an id that only MOVED between lines,
 ///    such as a shot a combine or a split moved out of a line an older entry
@@ -265,18 +320,8 @@ pub(super) fn history_remap(
             yields.insert((line, uuid.as_str()));
         }
     }
-    for (line, uuid, wall) in &ids.reinstalled {
-        let elsewhere = match wall.and_then(|i| ids.walls.get(i)) {
-            Some(held) => held
-                .get(uuid)
-                .is_some_and(|lines| lines.iter().any(|s| s != line)),
-            None => live_holder
-                .get(uuid.as_str())
-                .is_some_and(|&holder| holder != *line),
-        };
-        if elsewhere {
-            yields.insert((*line, uuid.as_str()));
-        }
+    for (line, uuid) in &ids.reinstall_yields {
+        yields.insert((*line, uuid.as_str()));
     }
 
     let mut in_use: Option<HashSet<String>> = None;
@@ -324,10 +369,13 @@ fn remap_entry(entry: &mut UndoEntry, map: &ShotUuidRemap) -> bool {
         map.rewrite_uuid(line, uuid)
     });
     match &mut entry.undo_data {
-        UndoData::ProjectSnapshot(json) => changed |= remap_snapshot(json, map),
         UndoData::ProjectSnapshotPair { before, after } => {
             changed |= remap_snapshot(before, map);
             changed |= remap_snapshot(after, map);
+        }
+        UndoData::Delta(delta) => {
+            let rename = |line: LineId, old: &str| map.get(line, old).map(str::to_string);
+            changed |= delta.edit(|delta| delta.remap(&rename));
         }
         _ => {}
     }
@@ -421,37 +469,32 @@ fn visit_entry(
         UndoData::InverseCommand(_)
         | UndoData::ZeroDatumInfo { .. }
         | UndoData::SegmentMoveInfo { .. }
-        | UndoData::ProjectSnapshot(_)
         | UndoData::ProjectSnapshotPair { .. }
+        // Compacted before it is pushed, so never in a loaded history.
+        | UndoData::CapturedPair(_)
         // Section memberships and colours, keyed by line: no shot id.
         | UndoData::CaveSections(_)
+        // Rewritten as a whole by `remap_entry`, like a snapshot.
+        | UndoData::Delta(_)
         | UndoData::None => {}
         UndoData::PreviousValues {
             line_id, shot_uuid, ..
         } => changed |= f(*line_id, shot_uuid),
-        UndoData::LineSnapshot { line_id, line_data } => {
-            changed |= visit_line_data(*line_id, line_data, f);
-        }
         UndoData::CreatedLineSnapshot {
             line_id,
             line_data,
             identity,
         } => {
-            changed |= visit_line_data(*line_id, line_data, f);
-            for uuid in &mut identity.shot_uuids {
-                changed |= f(*line_id, uuid);
+            if let Some(line_data) = line_data {
+                changed |= visit_line_data(*line_id, line_data, f);
             }
-            changed |= f(*line_id, &mut identity.gauge_shot_uuid);
-            changed |= f(*line_id, &mut identity.gauge_neighbour_uuid);
-        }
-        UndoData::ShotSnapshot {
-            line_id,
-            shot_data,
-            uuid,
-            ..
-        } => {
-            changed |= f(*line_id, &mut shot_data.uuid);
-            changed |= f(*line_id, uuid);
+            if let Some(identity) = identity {
+                for uuid in &mut identity.shot_uuids {
+                    changed |= f(*line_id, uuid);
+                }
+                changed |= f(*line_id, &mut identity.gauge_shot_uuid);
+                changed |= f(*line_id, &mut identity.gauge_neighbour_uuid);
+            }
         }
         UndoData::CreatedShotSnapshot {
             line_id,
@@ -466,37 +509,14 @@ fn visit_entry(
             changed |= f(*line_id, before_shot_uuid);
             changed |= f(*line_id, uuid);
         }
-        UndoData::MergeInfo {
-            removed_closures, ..
-        }
-        | UndoData::UnmergeInfo {
-            removed_closures, ..
-        } => {
-            for closure in removed_closures {
-                changed |= visit_closure(closure, f);
-            }
-        }
         UndoData::ClosureInfo { closure, .. } => changed |= visit_closure(closure, f),
-        UndoData::StationMoveInfo {
-            station_ref,
-            prev_shot_before,
-            prev_shot_after,
-            ..
-        } => {
-            // Inert (the restore copies geometry by shot id), translated anyway
-            // so no copy of an old id outlives the heal.
-            for (_, shot_data) in prev_shot_before
-                .iter_mut()
-                .chain(prev_shot_after.iter_mut())
-            {
-                changed |= f(station_ref.line_id, &mut shot_data.uuid);
-            }
-        }
+        // A run names its shots by position; only its first shot's uuid,
+        // the anchor checked on apply, is an id to translate.
         UndoData::ShotCredits { changes, .. } => {
-            for change in changes {
-                let mut uuid = Some(std::mem::take(&mut change.shot_uuid));
-                changed |= f(change.line_id, &mut uuid);
-                change.shot_uuid = uuid.unwrap_or_default();
+            for run in changes {
+                let mut uuid = Some(std::mem::take(&mut run.anchor));
+                changed |= f(run.line_id, &mut uuid);
+                run.anchor = uuid.unwrap_or_default();
             }
         }
         UndoData::AddedProjectContent(content) => {

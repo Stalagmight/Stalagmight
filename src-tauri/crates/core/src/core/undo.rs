@@ -5,19 +5,21 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LineData, LineId, LineIdentity, LoopClosure, ShotData, ShotId, StationRef,
-    SurveyCredit,
+    CreditTargets, GpsCoordinates, LineData, LineId, LineIdentity, LoopClosure, ShotData, ShotId,
+    StationRef, SurveyCredit,
 };
 
 mod added_content;
 mod budget;
 mod cave_sections;
 mod created_station;
+pub mod delta;
 pub(crate) mod history_batch;
 mod history_cave_section;
 mod history_credit;
 pub mod history_names;
 pub mod history_view;
+mod history_walk;
 mod persistence;
 pub(crate) mod snapshot_fixes;
 mod uuid_remap;
@@ -25,6 +27,8 @@ mod uuid_remap;
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 pub use cave_sections::{CaveSectionChange, CaveSectionMember, CaveSectionsState};
 pub use created_station::CreatedStation;
+pub use delta::{BeforePreview, Doc, LineIds, ProjectDelta, ProjectText, SnapshotDelta};
+pub use persistence::HistoryDropped;
 
 /// Serialize a line-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -47,6 +51,113 @@ where
     map.iter()
         .collect::<std::collections::BTreeMap<_, _>>()
         .serialize(serializer)
+}
+
+/// `command` as an entry stores it: what the history shows and what a step
+/// needs, without a second copy of data the payload already holds.
+///
+/// A `CreateLine` carrying shots records the line it created whole in
+/// its `CreatedLineSnapshot` (and refreshes it from the live line before
+/// an undo), and that record is what its redo restores; the command's own
+/// shots are read by nothing after the push (the history shows the name). Kept
+/// they would double the entry of every line created with data.
+///
+/// A `Batch` stored with a compact payload ([`UndoData::Delta`]) is cut down
+/// the same way ([`trimmed_batch`]): a step never reads the command, so all
+/// that is left of it is what the history shows and what a step settles.
+fn stored_command(command: Command, data: &mut UndoData) -> Command {
+    match (command, data) {
+        (command @ Command::CreateLine { .. }, UndoData::CreatedLineSnapshot { .. }) => {
+            without_line_shots(command)
+        }
+        // An `EditShotCredit` that names its shots keeps none of them: they
+        // are in-session ids, which a reload renumbers, and the entry's runs
+        // hold what it changed by position. Its redo writes those runs, and
+        // the history counts its shots from them (`history_credit`). Kept, a
+        // thousand shots were 15 KB of command.
+        (
+            Command::EditShotCredit {
+                targets: CreditTargets::Shots { .. },
+                edit,
+            },
+            UndoData::ShotCredits { .. },
+        ) => Command::EditShotCredit {
+            targets: CreditTargets::Shots { shots: Vec::new() },
+            edit,
+        },
+        (Command::Batch { commands, label }, UndoData::Delta(delta)) => {
+            let total = commands.len();
+            let (commands, omitted) = trimmed_batch(commands);
+            // The fallback label counts every sub-command, so it is worded
+            // before any is left out.
+            let label = match label {
+                None if omitted > 0 => Some(format!("Batch of {total} commands")),
+                label => label,
+            };
+            delta.omitted_commands += omitted;
+            Command::Batch { commands, label }
+        }
+        (command, _) => command,
+    }
+}
+
+/// `command` without a `CreateLine`'s shots, which an entry that records the
+/// line elsewhere never reads; every other command as it is.
+fn without_line_shots(command: Command) -> Command {
+    match command {
+        Command::CreateLine {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots: _,
+            cave_section_id,
+        } => Command::CreateLine {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots: Vec::new(),
+            cave_section_id,
+        },
+        command => command,
+    }
+}
+
+/// How many sub-commands of a batch a compact entry keeps for the history: its
+/// preview lists the first [`history_view::BATCH_PREVIEW_ROWS`] and counts the
+/// rest ([`SnapshotDelta::omitted_commands`] holds the ones left out). A
+/// margin over that, not every one: a 1,000-cell paste is 1,000 `UpdateShot`s,
+/// three times the payload that actually undoes it.
+const KEPT_BATCH_COMMANDS: usize = 20;
+
+const _: () = assert!(KEPT_BATCH_COMMANDS >= history_view::BATCH_PREVIEW_ROWS);
+
+/// A compact entry's batch as it is stored, and how many sub-commands it left
+/// out. A step through a [`UndoData::Delta`] never reads the command: the
+/// delta holds the state on the other side. What still reads it is the
+/// history (the label, recorded when the batch ran; the preview, its first
+/// rows), the log line, and the reverse settle after a step
+/// (`AppState::settle_reversed_lines`, through
+/// [`Command::reversed_line_ids`]). So the first [`KEPT_BATCH_COMMANDS`] are
+/// kept, and after them every sub-command that reverses a line, in order:
+/// the settle reads the batch's net reverses, and a sub-command that reverses
+/// nothing adds nothing to them, so leaving it out keeps them exactly.
+///
+/// A `CreateLine` sub-command loses its shots: the delta carries the line it
+/// made, and the history shows only its name.
+fn trimmed_batch(commands: Vec<Command>) -> (Vec<Command>, usize) {
+    let total = commands.len();
+    let kept: Vec<Command> = commands
+        .into_iter()
+        .enumerate()
+        .filter(|(i, cmd)| *i < KEPT_BATCH_COMMANDS || !cmd.reversed_line_ids().is_empty())
+        .map(|(_, cmd)| without_line_shots(cmd))
+        .collect();
+    let omitted = total - kept.len();
+    (kept, omitted)
 }
 
 /// Default maximum number of undo entries to keep in memory
@@ -145,27 +256,260 @@ pub struct UndoEntry {
     pub command_bytes: Option<usize>,
 }
 
-/// One shot's survey credit across a credit edit, addressed by the uuid that
-/// survives a save (see [`UndoData::ShotCredits`]).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ShotCreditChange {
+/// Consecutive shots of one line whose survey credit one edit changed from
+/// the same `before` to the same `after` (see [`UndoData::ShotCredits`]).
+///
+/// Addressed by POSITION, which a save persists (the shots' order; their
+/// in-session ids are renumbered by every load), and checked against the uuid
+/// of the run's first shot. A credit edit over a whole line or a thousand-shot
+/// selection is then a run per line and per previous credit, not a uuid per
+/// shot: about 54 bytes a shot, most of it uuids, was what made such an edit
+/// pass 1% of a 20,000-shot file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShotCreditRun {
     pub line_id: LineId,
-    /// The shot's persistent uuid; the executor mints one for a shot that had
-    /// none, so every recorded change is addressable after a reload.
-    pub shot_uuid: String,
+    /// The run's first shot, by its position in the line. `None` for a run
+    /// read from a row written before positions were recorded: one shot,
+    /// found by [`Self::anchor`] alone.
+    pub start: Option<usize>,
+    /// How many consecutive shots the run covers, from `start`.
+    pub len: usize,
+    /// The uuid of the run's first shot when the edit ran. A step writes the
+    /// run only where the shot at `start` still holds it.
+    pub anchor: String,
     pub before: SurveyCredit,
     pub after: SurveyCredit,
-    /// The IN-SESSION id, only meaningful between `generate_undo_data` and
-    /// `finalize_undo_data` of the one `execute()` that recorded it. Never
-    /// persisted: the loader renumbers ids.
-    #[serde(skip)]
-    pub shot_id: ShotId,
+}
+
+impl ShotCreditRun {
+    /// The one shot at `position` of `line_id`, as a capture records it
+    /// before the runs are joined ([`join_credit_runs`]).
+    pub fn shot(line_id: LineId, position: usize, uuid: String, credit: SurveyCredit) -> Self {
+        Self {
+            line_id,
+            start: Some(position),
+            len: 1,
+            anchor: uuid,
+            before: credit.clone(),
+            after: credit,
+        }
+    }
+
+    /// Whether `next` is the shot after this run, in the same line, changed
+    /// the same way.
+    fn continued_by(&self, next: &Self) -> bool {
+        self.line_id == next.line_id
+            && self
+                .start
+                .zip(next.start)
+                .is_some_and(|(start, next)| start.checked_add(self.len) == Some(next))
+            && self.before == next.before
+            && self.after == next.after
+    }
+}
+
+/// `changes` (single shots or runs, in any order) as the fewest runs: sorted
+/// by line and position, each run extended while the next shot follows it
+/// with the same credits. A run read from an older row (no position) stays
+/// as it is.
+#[must_use]
+pub fn join_credit_runs(mut changes: Vec<ShotCreditRun>) -> Vec<ShotCreditRun> {
+    changes.sort_by_key(|run| (run.line_id, run.start));
+    let mut out: Vec<ShotCreditRun> = Vec::with_capacity(changes.len());
+    for run in changes {
+        match out.last_mut() {
+            Some(last) if last.continued_by(&run) => last.len += run.len,
+            _ => out.push(run),
+        }
+    }
+    out.shrink_to_fit();
+    out
+}
+
+/// `ShotCredits::changes` as the history stores it: every distinct
+/// (`before`, `after`) pair once (`c`), and the runs as `[line, start, len,
+/// anchor uuid, pair]` (`r`). A credit edit over a whole line usually gives
+/// every shot the same credit from the same one, so this is one credit pair
+/// and one short row per line. Read back to the same runs in order.
+///
+/// A row written before positions were recorded (a list of `{s, b, a, u}`
+/// groups, a uuid per shot) still reads: each uuid is a one-shot run found by
+/// its uuid.
+mod credit_runs {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ShotCreditRun;
+    use crate::models::{LineId, SurveyCredit};
+
+    #[derive(Serialize)]
+    struct Out<'a> {
+        c: Vec<(&'a SurveyCredit, &'a SurveyCredit)>,
+        r: Vec<(LineId, usize, usize, &'a str, usize)>,
+    }
+
+    #[derive(Deserialize)]
+    struct LegacyGroup {
+        s: LineId,
+        b: SurveyCredit,
+        a: SurveyCredit,
+        u: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum In {
+        Runs {
+            c: Vec<(SurveyCredit, SurveyCredit)>,
+            r: Vec<(LineId, usize, usize, String, usize)>,
+        },
+        Legacy(Vec<LegacyGroup>),
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        runs: &[ShotCreditRun],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut pairs: Vec<(&SurveyCredit, &SurveyCredit)> = Vec::new();
+        let mut rows = Vec::with_capacity(runs.len());
+        for run in runs {
+            let pair = (&run.before, &run.after);
+            let index = if let Some(index) = pairs.iter().position(|p| *p == pair) {
+                index
+            } else {
+                pairs.push(pair);
+                pairs.len() - 1
+            };
+            // A run without a position (an older row's) is written as one at
+            // the position no line reaches, which reads back as one found by
+            // its anchor.
+            let start = run.start.unwrap_or(usize::MAX);
+            rows.push((run.line_id, start, run.len, run.anchor.as_str(), index));
+        }
+        Out { c: pairs, r: rows }.serialize(serializer)
+    }
+
+    /// What one stored credit edit may expand to once each run has its copy
+    /// of its pair: far past any real edit (a pair is a few hundred bytes, an
+    /// edit a run per line it touches), far short of what a crafted row could
+    /// otherwise ask for.
+    const MAX_EXPANDED_CREDIT_BYTES: usize = 64 << 20;
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<ShotCreditRun>, D::Error> {
+        // Each run carries its own copy of its credit pair, so a row of a few
+        // bytes per run could otherwise name one large pair a million times:
+        // what the runs expand to is held to a budget, each pair weighed once.
+        let weigh = |before: &SurveyCredit, after: &SurveyCredit| {
+            serde_json::to_string(&(before, after)).map_or(usize::MAX, |text| text.len())
+        };
+        let over_budget = |expanded: usize| {
+            (expanded > MAX_EXPANDED_CREDIT_BYTES).then(|| {
+                serde::de::Error::custom("a credit row expands past what one edit can hold")
+            })
+        };
+        match In::deserialize(deserializer)? {
+            In::Runs { c, r } => {
+                let weights: Vec<usize> = c.iter().map(|(b, a)| weigh(b, a)).collect();
+                let expanded = r.iter().fold(0usize, |total, run| {
+                    total.saturating_add(weights.get(run.4).copied().unwrap_or(0))
+                });
+                if let Some(error) = over_budget(expanded) {
+                    return Err(error);
+                }
+                r.into_iter()
+                    .map(|(line_id, start, len, anchor, pair)| {
+                        let (before, after) = c.get(pair).cloned().ok_or_else(|| {
+                            serde::de::Error::custom(
+                                "a credit run names a credit pair past the list",
+                            )
+                        })?;
+                        Ok(ShotCreditRun {
+                            line_id,
+                            start: (start != usize::MAX).then_some(start),
+                            len,
+                            anchor,
+                            before,
+                            after,
+                        })
+                    })
+                    .collect()
+            }
+            In::Legacy(groups) => {
+                let expanded = groups.iter().fold(0usize, |total, group| {
+                    total.saturating_add(weigh(&group.b, &group.a).saturating_mul(group.u.len()))
+                });
+                if let Some(error) = over_budget(expanded) {
+                    return Err(error);
+                }
+                Ok(groups
+                    .into_iter()
+                    .flat_map(|group| {
+                        let LegacyGroup { s, b, a, u } = group;
+                        u.into_iter().map(move |anchor| ShotCreditRun {
+                            line_id: s,
+                            start: None,
+                            len: 1,
+                            anchor,
+                            before: b.clone(),
+                            after: a.clone(),
+                        })
+                    })
+                    .collect())
+            }
+        }
+    }
+}
+
+/// `identity` without the shot uuids `data`'s shots already carry. The
+/// redo rebuilds the line through `Line::new`, which keeps each shot's own
+/// uuid unless the line repeats one, and then lets `identity.shot_uuids` win
+/// (`Line::restore_with_identity`): where every shot carries its uuid, all of
+/// them different, and the identity lists exactly those, the list repeats the
+/// line and is dropped. Kept otherwise, a repeat or a uuid-less shot included.
+pub fn without_carried_uuids(identity: &mut LineIdentity, data: &LineData) {
+    let carried = identity.shot_uuids.len() == data.shots.len()
+        && identity
+            .shot_uuids
+            .iter()
+            .zip(&data.shots)
+            .all(|(kept, shot)| kept.is_some() && *kept == shot.uuid);
+    let distinct = {
+        let mut seen = std::collections::HashSet::new();
+        data.shots
+            .iter()
+            .all(|shot| shot.uuid.as_deref().is_some_and(|uuid| seen.insert(uuid)))
+    };
+    if carried && distinct {
+        identity.shot_uuids = Vec::new();
+    }
+}
+
+/// The two states of a snapshot capture in their parts
+/// ([`UndoData::CapturedPair`]).
+#[derive(Debug, Clone)]
+pub struct CapturedPair {
+    pub before: ProjectText,
+    pub after: Option<ProjectText>,
+}
+
+/// The compact entry for a capture's two states: the delta from `after` (the
+/// live project when the entry is pushed) to `before`, with the facts the
+/// preview reads off `before` while it is still at hand.
+fn encode_pair(
+    command: &Command,
+    before: &Doc<'_>,
+    after: &Doc<'_>,
+) -> Result<SnapshotDelta, delta::DeltaError> {
+    let preview = history_view::before_preview(command, before);
+    SnapshotDelta::new(&ProjectDelta::between_docs(after, before)?, preview)
 }
 
 /// Data needed to undo a command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UndoData {
-    /// Simple inverse command (e.g., SetShotKind -> SetShotKind(prev kind), MergeStations -> UnmergeStations)
+    /// Simple inverse command (SetStationComment -> SetStationComment with the
+    /// previous comment)
     InverseCommand(Command),
 
     /// Previous values for an update operation (JSON serialized)
@@ -220,19 +564,21 @@ pub enum UndoData {
         previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
     },
 
-    /// Full line snapshot for restoring deleted lines
-    LineSnapshot {
-        line_id: LineId,
-        /// Full line data including all shots
-        line_data: LineData,
-    },
-
     /// Snapshot of a newly created line (for CreateLine undo/redo ID preservation)
-    /// Distinct from LineSnapshot (used by DeleteLine) to avoid ambiguity in redo logic.
+    ///
+    /// Holds only what its side needs. On the undo stack the undo deletes the
+    /// line by id and re-reads it from the live project just before
+    /// (`AppState::refresh_created_line_identity`), so the entry holds the id
+    /// alone ([`UndoData::for_undo_stack`]); on the redo stack it holds the
+    /// line the undo removed, which the redo puts back.
     CreatedLineSnapshot {
         line_id: LineId,
-        /// Full line data including all shots
-        line_data: LineData,
+        /// The line, whole: what the redo restores. `None` on the undo stack.
+        ///
+        /// FORMAT EVOLUTION (additive): always present in rows written before
+        /// the undo side dropped it, which read as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_data: Option<LineData>,
         /// What `line_data` cannot carry: the shots' persistent uuids, the
         /// reverse parity and the least-squares gauge pair. Without it the redo
         /// rebuilds through `Line::new` and mints a fresh uuid per shot -
@@ -250,27 +596,16 @@ pub enum UndoData {
         /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
         /// written before this field existed, where the default (no uuids,
         /// parity false, no anchors) reproduces the pre-fix mint.
-        #[serde(default)]
-        identity: LineIdentity,
-    },
-
-    /// Shot snapshot for restoring deleted shots
-    ShotSnapshot {
-        line_id: LineId,
-        shot_id: ShotId,
-        shot_data: ShotData,
-        /// Position in the line's shot list (for re-insertion)
-        position: usize,
-        /// The deleted shot's persistent UUID, so undo restores the same
-        /// identity (station cross-references anchor on it via
-        /// `StationKey::AfterShot`) rather than minting a fresh one. `None` for
-        /// legacy persisted entries.
-        #[serde(default)]
-        uuid: Option<String>,
+        ///
+        /// Its `shot_uuids` are left empty when `line_data`'s shots carry the
+        /// same uuids, which `Line::new` keeps ([`without_carried_uuids`]),
+        /// and the whole identity is left out (`None`) on the undo stack. A
+        /// row that has none reads as the default identity, as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<LineIdentity>,
     },
 
     /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
-    /// Distinct from ShotSnapshot (used by DeleteShot) to avoid ambiguity in redo logic.
     CreatedShotSnapshot {
         line_id: LineId,
         shot_id: ShotId,
@@ -354,28 +689,6 @@ pub enum UndoData {
         created_station: Option<CreatedStation>,
     },
 
-    /// Merge info for unmerging stations
-    MergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        #[serde(default)]
-        removed_closures: Vec<LoopClosure>,
-        /// Line offsets before the merge (for restoring positions on undo)
-        #[serde(default)]
-        #[serde(serialize_with = "ordered_line_offsets")]
-        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
-    },
-
-    /// Unmerge info for re-merging stations on undo (opposite of MergeInfo)
-    UnmergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        #[serde(default)]
-        removed_closures: Vec<LoopClosure>,
-    },
-
     /// Loop closure info for undoing CreateLoopClosure
     ClosureInfo {
         /// The full loop closure data to remove on undo
@@ -390,8 +703,7 @@ pub enum UndoData {
         /// FORMAT EVOLUTION (additive, no schema bump): `None` for a legacy
         /// persisted entry and for a `CreateLoopClosure` entry, whose undo
         /// REMOVES the closure and whose redo appends the one it first
-        /// appended; both keep the push, exactly as `restore_shot`'s
-        /// out-of-range `position` falls back to one.
+        /// appended; both keep the push.
         #[serde(default)]
         position: Option<usize>,
     },
@@ -445,42 +757,47 @@ pub enum UndoData {
         offset: (f64, f64),
     },
 
-    /// Previous shot data and station offset for station moves.
-    /// MoveStation modifies adjacent shots' geometry (length/azimuth/depth) directly,
-    /// so undo needs to restore the original shot data and station offset.
-    StationMoveInfo {
-        station_ref: StationRef,
-        /// Shot data for the preceding shot (shot at station_index - 1), if any
-        prev_shot_before: Option<(ShotId, ShotData)>,
-        /// Shot data for the following shot (shot at station_index), if any
-        prev_shot_after: Option<(ShotId, ShotData)>,
-        /// Previous station offset (None = no offset existed)
-        prev_offset: Option<(f64, f64, f64)>,
-        /// Previous line offset (None = no offset existed)
-        #[serde(default)]
-        prev_line_offset: Option<(f64, f64)>,
-    },
-
-    /// Full project snapshot for batch operations (JSON serialized)
-    ProjectSnapshot(String),
-
     /// Before and after project snapshots for operations that can't be re-executed
     /// (e.g., batch operations that create lines with dynamic IDs)
     /// - before: Snapshot before the operation (used for undo)
     /// - after: Snapshot after the operation (used for redo)
+    ///
+    /// A CAPTURE shape only: [`UndoData::compact`] turns every pair into a
+    /// [`UndoData::Delta`] before it is pushed, so a live stack holds one only
+    /// if the conversion failed (it never has).
     ProjectSnapshotPair { before: String, after: String },
 
-    /// Per-shot survey credit before and after an `EditShotCredit`, or an
-    /// `UpdateLineMetadata` that set the legacy surveyor/date on every shot.
+    /// A snapshot pair as a capture takes it, before it is pushed: the two
+    /// states in their parts ([`ProjectText`]: the members, each line on its
+    /// own), which [`UndoData::compact`] encodes as a [`UndoData::Delta`]
+    /// without writing or splitting either whole text. `after` is filled once
+    /// the command has run. Never on a stack and never persisted:
+    /// `push_with_data` compacts before it pushes.
+    #[serde(skip)]
+    CapturedPair(Box<CapturedPair>),
+
+    /// A snapshot pair as an entry holds it: only what differs between the
+    /// two states, as the edit that turns the LIVE project into the state on
+    /// the other side of this entry - the `before` while the entry is on the
+    /// undo stack, the `after` while it is on the redo stack. Each step
+    /// re-encodes the way back from the two states it has in hand. See
+    /// [`SnapshotDelta`] and `docs/undo-redo.md`.
+    Delta(Box<SnapshotDelta>),
+
+    /// Survey credit before and after an `EditShotCredit`, or an
+    /// `UpdateLineMetadata` that set the legacy surveyor/date on every shot,
+    /// as runs of consecutive shots changed the same way ([`ShotCreditRun`]).
     ///
-    /// Undo writes `before` back onto each shot, resolved by uuid; redo writes
-    /// `after` (an `EditShotCredit`) or re-executes the command (an
-    /// `UpdateLineMetadata`, which addresses its line by its stable id).
-    /// A shot that no longer resolves is skipped with a warning rather than
-    /// failing the step: a credit edit is metadata, and a failed undo would wedge
-    /// every entry beneath it.
+    /// Undo writes `before` back onto each run's shots, found by position and
+    /// checked by the uuid of the run's first shot; redo writes `after` (an
+    /// `EditShotCredit`) or re-executes the command (an `UpdateLineMetadata`,
+    /// which addresses its line by its stable id). A run that no longer
+    /// resolves is skipped with a warning rather than failing the step: a
+    /// credit edit is metadata, and a failed undo would wedge every entry
+    /// beneath it.
     ShotCredits {
-        changes: Vec<ShotCreditChange>,
+        #[serde(with = "credit_runs")]
+        changes: Vec<ShotCreditRun>,
         /// `UpdateLineMetadata` only: the line and its OTHER previous
         /// values (a `LineUpdates` JSON with no surveyor/date), put back by
         /// the undo exactly as `PreviousValues` does.
@@ -509,9 +826,7 @@ impl UndoData {
     ///
     /// The uuid is the address to use; the id is only the legacy fallback for
     /// entries written before the uuid fields existed (issue #413, findings 8,
-    /// 12, 13 and 16). `ShotSnapshot` is deliberately not here: its restore
-    /// re-creates a shot that must be ABSENT, so "does the target resolve" is
-    /// not a question about it.
+    /// 12, 13 and 16).
     pub fn shot_target(&self) -> Option<(LineId, Option<&str>, ShotId)> {
         match self {
             UndoData::CreatedShotSnapshot {
@@ -526,11 +841,6 @@ impl UndoData {
                 shot_uuid,
                 ..
             } => Some((*line_id, shot_uuid.as_deref(), *shot_id)),
-            // Legacy only - `SetShotKind` now records `PreviousValues`, which
-            // can carry a uuid. A persisted one has nothing but the id.
-            UndoData::InverseCommand(Command::SetShotKind {
-                line_id, shot_id, ..
-            }) => Some((*line_id, None, *shot_id)),
             _ => None,
         }
     }
@@ -560,18 +870,132 @@ impl UndoData {
     /// Does undoing this entry restore recorded state WHOLESALE?
     ///
     /// Such an entry is a wall for any reasoning about which shots exist: it
-    /// puts back a whole project, line or shot recorded in a different id
-    /// space, so nothing below it can be judged against the project as loaded
-    /// (issue #413, finding 12's write-up calls a `ProjectSnapshotPair` "a
-    /// wall" for exactly this reason).
+    /// puts back a whole project recorded in a different id space, so nothing
+    /// below it can be judged against the project as loaded (issue #413,
+    /// finding 12's write-up calls a `ProjectSnapshotPair` "a wall" for exactly
+    /// this reason).
     pub fn restores_recorded_state(&self) -> bool {
         matches!(
             self,
-            UndoData::ProjectSnapshot(_)
-                | UndoData::ProjectSnapshotPair { .. }
-                | UndoData::LineSnapshot { .. }
-                | UndoData::ShotSnapshot { .. }
+            UndoData::ProjectSnapshotPair { .. } | UndoData::Delta(_)
         )
+    }
+
+    /// Drop every `previous_offsets` key whose recorded value is the one
+    /// `live` (the project the command left) holds, bit for bit: a key the
+    /// command did not change.
+    ///
+    /// The capture records the map before the command - the whole map, because
+    /// a re-frame or a cascade can reach any key - and this cuts it down to
+    /// what the command moved, which is all an undo has to put back. For the
+    /// two inverses that RE-DERIVE offsets before restoring them (a shot
+    /// edit's realign, a shot removal's cascade), the undo pins every key it
+    /// does not hold to its live value (`restore_offsets_pinning_the_rest`):
+    /// that value is the one the command left, so it is the one it found.
+    pub fn keep_changed_offsets(&mut self, live: &HashMap<LineId, (f64, f64)>) {
+        let unchanged = |id: &LineId, before: &Option<(f64, f64)>| {
+            let bits = |o: Option<(f64, f64)>| o.map(|(x, y)| (x.to_bits(), y.to_bits()));
+            bits(*before) == bits(live.get(id).copied())
+        };
+        match self {
+            UndoData::PreviousValues {
+                previous_offsets, ..
+            }
+            | UndoData::CreatedShotSnapshot {
+                previous_offsets, ..
+            }
+            | UndoData::ZeroDatumInfo {
+                previous_offsets, ..
+            }
+            | UndoData::SegmentMoveInfo {
+                previous_offsets, ..
+            } => {
+                previous_offsets.retain(|id, before| !unchanged(id, before));
+                // The map was captured whole and is kept for the entry's
+                // life: without this it keeps the whole map's table (17 KB
+                // for an insert's two keys on a 20,000-shot survey).
+                previous_offsets.shrink_to_fit();
+            }
+            _ => {}
+        }
+    }
+
+    /// This payload as an entry holds it: a [`UndoData::ProjectSnapshotPair`]
+    /// becomes the [`UndoData::Delta`] towards its `before`, and every other
+    /// payload is returned as it is.
+    ///
+    /// Called where a capture is pushed, outside the stack's lock: the
+    /// conversion parses and diffs two whole projects. A pair that cannot be
+    /// converted (its halves are not serialized projects, which a capture never
+    /// produces) is kept as a pair, which still steps correctly.
+    #[must_use]
+    pub fn compact(self, command: &Command) -> Self {
+        let encoded = match &self {
+            UndoData::ProjectSnapshotPair { before, after } => {
+                Doc::parse(before).and_then(|b| encode_pair(command, &b, &Doc::parse(after)?))
+            }
+            UndoData::CapturedPair(pair) => match &pair.after {
+                Some(after) => pair
+                    .before
+                    .doc()
+                    .and_then(|b| encode_pair(command, &b, &after.doc()?)),
+                None => Err("the capture has no after state".to_string()),
+            },
+            _ => return self,
+        };
+        match encoded {
+            Ok(delta) => UndoData::Delta(Box::new(delta)),
+            Err(e) => {
+                tracing::error!(
+                    command = ?command.description(),
+                    reason = %e,
+                    purpose = "store an undo entry compactly",
+                    "Could not encode a snapshot pair as a delta; keeping the pair"
+                );
+                self.into_snapshot_pair()
+            }
+        }
+    }
+
+    /// This payload as the undo stack holds it: a created line keeps only its
+    /// id there (its undo deletes the line by id and re-reads it first);
+    /// every other payload is kept whole.
+    pub fn for_undo_stack(&mut self) {
+        if let UndoData::CreatedLineSnapshot {
+            line_data,
+            identity,
+            ..
+        } = self
+        {
+            *line_data = None;
+            *identity = None;
+        }
+    }
+
+    /// The `before` state a snapshot capture holds, when this is one.
+    pub fn captured_before(&self) -> Option<&ProjectText> {
+        match self {
+            UndoData::CapturedPair(pair) => Some(&pair.before),
+            _ => None,
+        }
+    }
+
+    /// A captured pair as the whole-text pair it stands for; every other
+    /// payload as it is.
+    fn into_snapshot_pair(self) -> Self {
+        let UndoData::CapturedPair(pair) = self else {
+            return self;
+        };
+        // A half that cannot be written leaves nothing to restore: no entry,
+        // rather than one whose empty half refuses every step and seals off
+        // the entries under it.
+        let (Ok(before), Some(Ok(after))) = (
+            pair.before.text(),
+            pair.after.as_ref().map(ProjectText::text),
+        ) else {
+            return UndoData::None;
+        };
+        UndoData::ProjectSnapshotPair { before, after }
     }
 
     /// Return a short, safe variant name for logging (no payload data)
@@ -579,18 +1003,14 @@ impl UndoData {
         match self {
             UndoData::InverseCommand(_) => "InverseCommand",
             UndoData::PreviousValues { .. } => "PreviousValues",
-            UndoData::LineSnapshot { .. } => "LineSnapshot",
             UndoData::CreatedLineSnapshot { .. } => "CreatedLineSnapshot",
-            UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::CreatedShotSnapshot { .. } => "CreatedShotSnapshot",
-            UndoData::MergeInfo { .. } => "MergeInfo",
-            UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
-            UndoData::StationMoveInfo { .. } => "StationMoveInfo",
-            UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
+            UndoData::CapturedPair(_) => "CapturedPair",
+            UndoData::Delta(_) => "Delta",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
             UndoData::ShotCredits { .. } => "ShotCredits",
             UndoData::CaveSections(_) => "CaveSections",
@@ -747,6 +1167,10 @@ impl UndoStack {
 
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
+        // Production callers compact before taking the lock; this catches the
+        // rest, so no snapshot pair is ever held.
+        let mut undo_data = undo_data.compact(&command);
+        let command = stored_command(command, &mut undo_data);
         let entry = UndoEntry {
             // Measured once, HERE, and never again: this runs per edit, while
             // `estimated_size` runs on every trim after every edit. See the field's doc.
@@ -811,7 +1235,8 @@ impl UndoStack {
     /// NOT bound the stack - each caller applies `enforce_depth_limit` itself, because
     /// they differ in what else the append implies (a new edit also clears redo; a replay
     /// must not).
-    fn push_undo_tracked(&mut self, entry: UndoEntry) {
+    fn push_undo_tracked(&mut self, mut entry: UndoEntry) {
+        entry.undo_data.for_undo_stack();
         self.undo_bytes = self.undo_bytes.saturating_add(Self::estimated_size(&entry));
         self.undo_stack.push_back(entry);
     }
@@ -1309,112 +1734,6 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_data_line_snapshot() {
-        let mut stack = UndoStack::new();
-
-        let line_data = test_line_data("Snapshot Test");
-        stack.push_with_data(
-            test_delete_line_command(5),
-            UndoData::LineSnapshot {
-                line_id: 5,
-                line_data,
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::LineSnapshot {
-            line_id,
-            line_data: stored_data,
-        } = data
-        {
-            assert_eq!(*line_id, 5);
-            assert_eq!(stored_data.name, Some("Snapshot Test".to_string()));
-        } else {
-            panic!("Expected LineSnapshot");
-        }
-    }
-
-    #[test]
-    fn test_undo_data_shot_snapshot() {
-        let mut stack = UndoStack::new();
-
-        let shot_data = ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 10.0,
-            depth_in: 5.0,
-            depth_out: 6.0,
-            ..Default::default()
-        };
-
-        stack.push_with_data(
-            Command::DeleteShot {
-                line_id: 1,
-                shot_id: 100,
-            },
-            UndoData::ShotSnapshot {
-                line_id: 1,
-                shot_id: 100,
-                shot_data,
-                position: 2,
-                uuid: None,
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::ShotSnapshot {
-            line_id,
-            shot_id,
-            shot_data: stored_data,
-            position,
-            ..
-        } = data
-        {
-            assert_eq!(*line_id, 1);
-            assert_eq!(*shot_id, 100);
-            assert_eq!(stored_data.length, 10.0);
-            assert_eq!(*position, 2);
-        } else {
-            panic!("Expected ShotSnapshot");
-        }
-    }
-
-    #[test]
-    fn test_undo_data_merge_info() {
-        let mut stack = UndoStack::new();
-
-        stack.push_with_data(
-            Command::MergeStations {
-                station_a: StationRef::new(1, 0),
-                station_b: StationRef::new(2, 3),
-            },
-            UndoData::MergeInfo {
-                station_a: StationRef::new(1, 0),
-                station_b: StationRef::new(2, 3),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::MergeInfo {
-            station_a,
-            station_b,
-            removed_closures,
-            ..
-        } = data
-        {
-            assert_eq!(station_a.line_id, 1);
-            assert_eq!(station_a.station_index, 0);
-            assert_eq!(station_b.line_id, 2);
-            assert_eq!(station_b.station_index, 3);
-            assert!(removed_closures.is_empty());
-        } else {
-            panic!("Expected MergeInfo");
-        }
-    }
-
-    #[test]
     fn test_undo_data_zero_datum_info() {
         let mut stack = UndoStack::new();
 
@@ -1514,10 +1833,11 @@ mod tests {
     fn test_serialize_entry_with_line_snapshot() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_delete_line_command(5),
-            undo_data: UndoData::LineSnapshot {
+            command: test_create_line_command("Snapshot"),
+            undo_data: UndoData::CreatedLineSnapshot {
                 line_id: 5,
-                line_data: test_line_data("Snapshot"),
+                line_data: Some(test_line_data("Snapshot")),
+                identity: Some(LineIdentity::default()),
             },
             timestamp: None,
         };
@@ -1528,11 +1848,14 @@ mod tests {
         let (cmd_json, undo_json) = result.unwrap();
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
 
-        if let UndoData::LineSnapshot { line_id, line_data } = restored.undo_data {
+        if let UndoData::CreatedLineSnapshot {
+            line_id, line_data, ..
+        } = restored.undo_data
+        {
             assert_eq!(line_id, 5);
-            assert_eq!(line_data.name, Some("Snapshot".to_string()));
+            assert_eq!(line_data.unwrap().name, Some("Snapshot".to_string()));
         } else {
-            panic!("Expected LineSnapshot");
+            panic!("Expected CreatedLineSnapshot");
         }
     }
 
@@ -1629,12 +1952,93 @@ mod tests {
         assert_eq!(stack.redo_len(), 0);
     }
 
+    /// A row that cannot be read and does not read as an earlier build's
+    /// payload either (truncated or garbage text) is damaged, so the banner
+    /// says the history could not be read, not that it was an earlier one.
     #[test]
-    fn test_load_from_persisted_skips_invalid() {
+    fn a_garbage_row_is_reported_unreadable_not_earlier() {
+        let mut stack = UndoStack::new();
+        let valid = UndoStack::serialize_entry(&UndoEntry {
+            command_bytes: None,
+            command: test_create_line_command("Valid"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
+            timestamp: None,
+        })
+        .unwrap();
+        for garbage in ["{\"Proj", "", "null", "[1,2]", "{\"a\":1,\"b\":2}"] {
+            let dropped = stack
+                .load_from_persisted(vec![valid.clone(), (valid.0.clone(), garbage.to_string())]);
+            assert_eq!(dropped, Some(HistoryDropped::Unreadable), "{garbage:?}");
+        }
+        let earlier = stack.load_from_persisted(vec![(valid.0, "\"None\"".to_string())]);
+        assert_eq!(earlier, Some(HistoryDropped::EarlierVersion));
+    }
+
+    /// An entry that cannot be written ends what the file carries there: the
+    /// entries nearer the live project are saved, the ones beyond are not,
+    /// so the file never holds a history with a hole in it.
+    #[test]
+    fn a_history_is_saved_up_to_an_entry_that_cannot_be_written() {
+        let mut stack = UndoStack::new();
+        let entry = |data: UndoData| UndoEntry {
+            command_bytes: None,
+            command: test_create_line_command("Line"),
+            undo_data: data,
+            timestamp: None,
+        };
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(1))));
+        // A capture is never written (it is compacted before it is pushed);
+        // pushed raw here, it stands for any entry whose payload fails.
+        stack.push_undo(entry(UndoData::CapturedPair(Box::new(CapturedPair {
+            before: ProjectText::default(),
+            after: None,
+        }))));
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(2))));
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(3))));
+        let rows = stack.rows_to_persist(PersistStack::Undo, None);
+        assert_eq!(rows.len(), 2, "the two entries above the unwritable one");
+    }
+
+    /// A capture whose half cannot be written records no entry, rather than a
+    /// pair with an empty half that would refuse every step.
+    #[test]
+    fn a_capture_without_its_after_half_records_no_entry() {
+        let capture = UndoData::CapturedPair(Box::new(CapturedPair {
+            before: ProjectText::default(),
+            after: None,
+        }));
+        let stored = capture.compact(&test_create_line_command("Line"));
+        assert!(
+            matches!(stored, UndoData::None),
+            "{}",
+            stored.variant_name()
+        );
+    }
+
+    /// Each credit run carries its own copy of its pair, so a stored edit
+    /// that names one large pair from very many runs is refused.
+    #[test]
+    fn a_credit_row_that_would_expand_past_its_budget_is_refused() {
+        let big = format!(r#"{{"surveyors":[{{"name":"{}"}}]}}"#, "x".repeat(1 << 20));
+        let row = |runs: usize| {
+            let r: Vec<String> = (0..runs)
+                .map(|i| format!(r#"[1,{i},1,"u{i}",0]"#))
+                .collect();
+            format!(
+                r#"{{"ShotCredits":{{"changes":{{"c":[[{big},{{}}]],"r":[{}]}}}}}}"#,
+                r.join(",")
+            )
+        };
+        assert!(serde_json::from_str::<UndoData>(&row(8)).is_ok());
+        assert!(serde_json::from_str::<UndoData>(&row(100)).is_err());
+    }
+
+    #[test]
+    fn test_load_from_persisted_drops_a_history_with_an_unreadable_row() {
         let mut stack = UndoStack::new();
 
         // Real undo data, so the only thing that can drop this entry is the
-        // malformed-JSON skip this test is about.
+        // unreadable rows this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
             command_bytes: None,
             command: test_create_line_command("Valid"),
@@ -1643,16 +2047,55 @@ mod tests {
         })
         .unwrap();
 
-        let entries = vec![
-            ("invalid json".to_string(), "{}".to_string()),
-            valid_entry,
-            ("{}".to_string(), "also invalid".to_string()),
-        ];
+        assert_eq!(stack.load_from_persisted(vec![valid_entry.clone()]), None);
+        assert_eq!(stack.len(), 1, "a readable history loads");
 
-        stack.load_from_persisted(entries);
+        // A compact entry is a delta against the entry above it, so a history
+        // with a hole would undo onto the wrong project: all of it goes.
+        let damaged = stack.load_from_persisted(vec![
+            ("invalid json".to_string(), "{\"v2\":7}".to_string()),
+            valid_entry.clone(),
+        ]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(damaged, Some(HistoryDropped::Unreadable));
 
-        // Only the valid entry should be loaded
-        assert_eq!(stack.len(), 1);
+        // So does a history written by an older build (a bare payload), and the
+        // banner is told it was an earlier version's rather than damaged.
+        let legacy =
+            serde_json::to_string(&UndoData::InverseCommand(test_delete_line_command(1))).unwrap();
+        let earlier =
+            stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(earlier, Some(HistoryDropped::EarlierVersion));
+
+        // A later build's envelope is not "an earlier version".
+        let later = stack.load_from_persisted(vec![
+            valid_entry.clone(),
+            (
+                valid_entry.0.clone(),
+                "{\"v3\":{\"None\":null}}".to_string(),
+            ),
+        ]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(later, Some(HistoryDropped::Unreadable));
+
+        // A compact entry that breaks the delta rules is untrusted input, not a
+        // history: one that keeps its single line twice would double the
+        // project on every step. It is unreadable, and the history goes.
+        let hostile = r#"{"v2":{"Delta":{"d":{"s":[1,[{"k":[0,1]},{"k":[0,1]}]]}}}}"#;
+        let refused = stack.load_from_persisted(vec![
+            valid_entry.clone(),
+            (valid_entry.0.clone(), hostile.to_string()),
+        ]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(refused, Some(HistoryDropped::Unreadable));
+        // The same entry without the repeat is read.
+        let fine = r#"{"v2":{"Delta":{"d":{"s":[1,[{"k":[0,1]}]]}}}}"#;
+        assert_eq!(
+            stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0, fine.to_string())]),
+            None
+        );
+        assert_eq!(stack.len(), 2);
     }
 
     /// A stack persisted before the forward guard existed can carry an entry with
@@ -2199,38 +2642,11 @@ mod tests {
             },
             UndoEntry {
                 command_bytes: None,
-                command: test_delete_line_command(2),
-                undo_data: UndoData::LineSnapshot {
-                    line_id: 2,
-                    line_data: test_line_data("Snapshot"),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
                 command: test_create_line_command("Created Snapshot"),
                 undo_data: UndoData::CreatedLineSnapshot {
                     line_id: 3,
-                    line_data: test_line_data("Created"),
-                    identity: LineIdentity::default(),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
-                command: Command::DeleteShot {
-                    line_id: 1,
-                    shot_id: 100,
-                },
-                undo_data: UndoData::ShotSnapshot {
-                    line_id: 1,
-                    shot_id: 100,
-                    shot_data: ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    },
-                    position: 0,
-                    uuid: None,
+                    line_data: Some(test_line_data("Created")),
+                    identity: Some(LineIdentity::default()),
                 },
                 timestamp: None,
             },
@@ -2285,25 +2701,14 @@ mod tests {
             },
             UndoEntry {
                 command_bytes: None,
-                command: Command::MergeStations {
-                    station_a: StationRef::new(1, 0),
-                    station_b: StationRef::new(2, 1),
-                },
-                undo_data: UndoData::MergeInfo {
-                    station_a: StationRef::new(1, 0),
-                    station_b: StationRef::new(2, 1),
-                    removed_closures: Vec::new(),
-                    previous_offsets: HashMap::new(),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
                 command: Command::Batch {
                     commands: vec![],
                     label: None,
                 },
-                undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+                undo_data: UndoData::ProjectSnapshotPair {
+                    before: "{}".to_string(),
+                    after: "{}".to_string(),
+                },
                 timestamp: None,
             },
             UndoEntry {
@@ -2342,12 +2747,21 @@ mod tests {
 
     // === [#303] Byte budget (spec items 7, 8, 9) ===
 
-    /// An entry whose estimated size is `payload` bytes plus the flat overhead.
+    /// An entry whose estimated size is `payload` bytes plus the flat overhead:
+    /// a line-values edit, which the estimate charges its recorded JSON.
+    fn sized_payload(payload: usize) -> UndoData {
+        UndoData::PreviousValues {
+            line_id: 0,
+            shot_id: None,
+            shot_uuid: None,
+            values_json: "x".repeat(payload),
+            previous_offsets: HashMap::new(),
+        }
+    }
+
+    /// [`sized_payload`] under a command named `name`.
     fn sized_entry(payload: usize, name: &str) -> (Command, UndoData) {
-        (
-            test_create_line_command(name),
-            UndoData::ProjectSnapshot("x".repeat(payload)),
-        )
+        (test_create_line_command(name), sized_payload(payload))
     }
 
     /// [#303] The measured size of one `sized_entry`, so a budget can be expressed in
@@ -2410,7 +2824,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: test_create_line_command("persisted"),
-            undo_data: UndoData::ProjectSnapshot("x".repeat(256)),
+            undo_data: sized_payload(256),
             timestamp: None,
         };
         let persisted = UndoStack::serialize_entry(&entry).expect("serialize entry");
@@ -2792,7 +3206,10 @@ mod tests {
         assert_eq!(UndoStack::estimated_size(&small), 512);
 
         let payload = UndoEntry {
-            undo_data: UndoData::ProjectSnapshot("x".repeat(2_048)),
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "x".repeat(2_048),
+                after: String::new(),
+            },
             ..small
         };
         assert_eq!(UndoStack::estimated_size(&payload), 2_048 + 512);
@@ -2830,7 +3247,7 @@ mod tests {
         assert_eq!(
             UndoStack::estimated_size(&previous_values(offsets.clone())),
             64 + 512 + 4 * 64,
-            "a shot edit's recorded offsets are 64 bytes apiece, as on MergeInfo"
+            "a shot edit's recorded offsets are 64 bytes apiece, as on ZeroDatumInfo"
         );
 
         let created_shot = |previous_offsets: HashMap<LineId, Option<(f64, f64)>>| {
@@ -3275,7 +3692,7 @@ mod tests {
         // charged the overhead whatever its command was.
         let restored = UndoStack::deserialize_entry_with_timestamp(
             r#"{"type":"close_project"}"#,
-            r#""None""#,
+            r#"{"v2":"None"}"#,
             None,
         )
         .unwrap();

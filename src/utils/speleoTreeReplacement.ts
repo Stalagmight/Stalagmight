@@ -7,6 +7,7 @@ import {
 } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { runTreeReplacement } from './projectTransition';
+import { HISTORY_BANNER_CLEARED } from '../store/projectHistoryBannerActions';
 
 /**
  * Reconcile every frontend store after the backend replaces the open survey tree in place.
@@ -64,7 +65,7 @@ export async function applySpeleoTreeReplacement(
     // project - the reply then corrects it, but the flash is the same wrong claim the
     // banner exists to avoid making.
     if (treeReplaced) {
-      useProjectStore.setState({ historyDiscarded: false, historyDiscardedDismissed: false });
+      useProjectStore.setState({ ...HISTORY_BANNER_CLEARED });
       void useProjectStore.getState().checkHistoryDiscarded();
     }
     await useSpeleoStore.getState().refreshLinkStatus();

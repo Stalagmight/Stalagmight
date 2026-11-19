@@ -429,11 +429,19 @@ struct Chain {
     cursor: usize,
     /// Timeline entries below this index predate the last reopen.
     reopened_at: usize,
+    /// Timeline entries below this index are out of reach: a save persists only
+    /// the newest `undo_persist_limit` entries of each stack, so after a reopen
+    /// nothing deeper than that comes back. Zero until a reopen trims.
+    floor: usize,
     gps_seen: Vec<GpsCoordinates>,
     eps: f64,
     reframes: u32,
     verbose: bool,
 }
+
+/// The persisted window: `undo_persist_limit`'s default, the entries of each
+/// stack a save keeps (`UndoStack::rows_to_persist`).
+const PERSIST_WINDOW: usize = 20;
 
 fn project(state: &AppState) -> Project {
     state.get_project_state().unwrap()
@@ -480,6 +488,7 @@ impl Chain {
             timeline: Vec::new(),
             cursor: 0,
             reopened_at: 0,
+            floor: 0,
             gps_seen: Vec::new(),
             eps: 0.0,
             reframes: 0,
@@ -1060,6 +1069,28 @@ impl Chain {
 
     /// A random undo or redo, against the state recorded at that depth.
     fn history(&mut self, undo: bool, stats: &mut Stats) -> Result<(), Failure> {
+        // Past the persisted window (a replayed script can ask): the app has
+        // nothing to undo there, so the step must be refused and change nothing.
+        if undo && self.cursor <= self.floor {
+            if self.floor == 0 {
+                return Ok(());
+            }
+            let prev = snap(&project(&self.state));
+            let r = self.state.undo();
+            if r.success {
+                return Err(fail(
+                    "undo-across-reopen",
+                    format!(
+                        "an undo below the persisted window (floor {}) succeeded",
+                        self.floor
+                    ),
+                ));
+            }
+            if let Some(d) = diff(&prev, &snap(&project(&self.state))) {
+                return Err(fail("refusal-mutated", format!("a refused undo: {d}")));
+            }
+            return Ok(());
+        }
         let (target, class) = if undo {
             (self.cursor - 1, "undo-inexact")
         } else {
@@ -1147,6 +1178,11 @@ impl Chain {
             }
         }
         self.reopened_at = self.timeline.len();
+        // The save kept the persisted window of each stack and nothing more:
+        // the newest PERSIST_WINDOW entries below the cursor and above it.
+        self.floor = self.floor.max(self.cursor.saturating_sub(PERSIST_WINDOW));
+        let top = (self.cursor + PERSIST_WINDOW).min(self.timeline.len() - 1);
+        self.timeline.truncate(top + 1);
         stats.reopens += 1;
         self.note(&s0, &p1, stats);
         self.check_state(&p1, None, stats)
@@ -1221,7 +1257,13 @@ fn run_chain(
             op.clone()
         } else {
             let p = project(&chain.state);
-            let (can_undo, can_redo) = (chain.cursor > 0, chain.cursor + 1 < chain.timeline.len());
+            // `floor`, not 0: after a reopen that trimmed, the entries below
+            // the persisted window are gone, and asking for one would report
+            // the app's correct refusal as an undo failure.
+            let (can_undo, can_redo) = (
+                chain.cursor > chain.floor,
+                chain.cursor + 1 < chain.timeline.len(),
+            );
             match (0..8).find_map(|_| next_op(&mut rng, &p, &chain.state, can_undo, can_redo)) {
                 Some(op) => op,
                 None => continue,
@@ -1385,6 +1427,30 @@ fn pinned_datum_chains_keep_every_invariant() {
             panic!("pinned chain {seed}: {e}");
         }
     }
+}
+
+/// A reopen keeps only the persisted window of each stack, and the chain's
+/// undo guard has to know it. Twenty-four accuracy edits, a reopen, then
+/// twenty-four undos: the first twenty land on recorded states, and the rest
+/// ask for entries the save did not keep - which the app refuses, correctly.
+/// The guard used to allow an undo whenever the cursor was above 0, so a
+/// replayed (or a long random) chain reported that refusal as
+/// `undo-across-reopen`.
+#[test]
+fn a_trimmed_reopen_bounds_the_undo_guard() {
+    let mut ops: Vec<Op> = (0..24)
+        .map(|i| Op::Accuracy {
+            k: 0,
+            acc: Some(if i % 2 == 0 { 0.5 } else { 5.0 }),
+        })
+        .collect();
+    ops.push(Op::Reopen);
+    ops.extend((0..24).map(|_| Op::Undo));
+    let mut stats = Stats::default();
+    if let Err(e) = chain_outcome(1, 0, Some(&ops), false, &[], &mut stats) {
+        panic!("{e}");
+    }
+    assert_eq!(stats.reopens, 1, "the chain reopened once");
 }
 
 /// Replay one chain from its trail, printing each step and the datums after

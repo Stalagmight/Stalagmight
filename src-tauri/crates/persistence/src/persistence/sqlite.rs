@@ -124,11 +124,13 @@ pub const SCHEMA_VERSION: i32 = 18;
 /// - **v14→v15** removed the `ApplyCollabChanges` `Command` variant with Ariane
 ///   collaboration mode. `Command` is internally tagged (`tag = "type"`) with no
 ///   catch-all, so a stored `apply_collab_changes` entry stops deserializing
-///   outright - and `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad
-///   entry rather than truncating, keeping the entries on BOTH sides. The stack
-///   loads with a HOLE, and undoing past it replays surviving older entries
-///   (position-keyed `ShotSnapshot`s, the apply's own `ProjectSnapshotPair`)
-///   against a tree they no longer describe.
+///   outright - and the loader of that time SKIPPED a bad entry rather than
+///   truncating, keeping the entries on BOTH sides. The stack loaded with a
+///   HOLE, and undoing past it replayed surviving older entries
+///   (position-keyed shot snapshots, the apply's own `ProjectSnapshotPair`)
+///   against a tree they no longer described. (Today's loader drops a history
+///   with any unreadable row whole, so a removal costs the history, not its
+///   meaning; the migration still drops it explicitly.)
 ///
 /// v11→v12 drops the stacks as well, but conditionally - only when the pitch
 /// flip actually moved a line (see `invalidate_pre_pitch_flip_state`).
