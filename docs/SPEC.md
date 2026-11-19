@@ -2902,8 +2902,9 @@ code:
 `station_comments`. It was added at v18 WITHOUT a schema version bump, on
 purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
 Python package `stalagmight_lib` (pytool_stalagmight_lib, through
-`openspeleo_lib`; not the app's Rust lib crate of the same name). It refuses any
-file not at exactly v18 and reads only the tables it knows, so a new table is
+`openspeleo_lib`; not the app's Rust lib crate of the same name). Before its
+0.0.2 it refuses any file not at exactly v18 (0.0.2 also takes 19, and a server
+may still run 0.0.1), and it reads only the tables it knows, so a new table is
 invisible to it while a bump would lock it out (verified version and details in
 `persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
 the names on its next save. A v18 file from before the table takes the version

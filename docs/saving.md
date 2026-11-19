@@ -118,8 +118,8 @@ serialize back to the same JSON.
 Every station has a name (unique within its line) and a project-unique
 Station ID ([SPEC 4.2](SPEC.md#42-station-identification)). Both are stored
 positionally, keyed `(section_id, station_index)` like `station_comments`, in
-side tables that carry no schema bump (SpeleoDB's reader accepts exactly v18
-and ignores tables it does not know):
+side tables that carry no schema bump (SpeleoDB's reader pins the schema
+version, exactly 18 before its 0.0.2, and ignores tables it does not know):
 
 - `station_names (section_id, station_index, name)` - written for every
   station (`persistence/sqlite/station_texts.rs`);
@@ -149,8 +149,8 @@ existed adopts the live project's ids for the stations it shares
 ## Per-shot survey credit
 
 Surveyors, explorers and the survey date are stored per shot, in two side
-tables that carry no schema bump (SpeleoDB's reader accepts exactly v18 and
-ignores tables it does not know): `credit_people (id, name, email)` and
+tables that carry no schema bump (SpeleoDB's reader pins the schema version,
+exactly 18 before its 0.0.2, and ignores tables it does not know): `credit_people (id, name, email)` and
 `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
 `(section_id, shot_uuid)`, the people columns
 comma-joined `credit_people` ids (`section_id` is the SQL name of the line
@@ -196,8 +196,9 @@ tables are project data and ride in SpeleoDB pushes. See
 ## Sections (groupings of lines)
 
 Sections - named, coloured groupings of lines (#327) - live in two side tables
-with no schema bump, like `station_names` (SpeleoDB's Python reader accepts
-exactly v18 and reads only its seven tables, by explicit column lists):
+with no schema bump, like `station_names` (SpeleoDB's Python reader pins the
+schema version, exactly 18 before its 0.0.2, and reads only the tables it
+knows, by explicit column lists):
 
 - `cave_sections (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT
   NULL, position INTEGER NOT NULL)`: one row per Section, `position` its place
@@ -230,7 +231,7 @@ A merge-connected survey can hold several zero datums (#741). Their roles are
 derived from list order, never stored: the first datum of a component places
 it, every later one is a GPS fix. `zero_datums` keeps exactly what an older
 build expects, the placement datums (at most one per merge component) in list
-order, so SpeleoDB's reader (exactly v18, explicit column lists) and older
+order, so SpeleoDB's reader (a pinned schema version, explicit column lists) and older
 builds see nothing new. GPS fixes and accuracies live in a side table with no
 schema bump, `zero_datum_extras (position, section_id, station_index,
 shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m,
@@ -292,6 +293,42 @@ back into a loop closure before the offset re-solve (see
 ```
 
 Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo stacks while the file is still staged, so a partial rewrite is never renamed into place.
+
+### An unchanged project saves to the same bytes
+
+Saving, opening and saving again with no edit writes the survey data byte for
+byte the same. SpeleoDB keeps every push in git, so a page that changes for no
+reason is a page every push uploads and stores. What keeps it:
+
+- The station side tables (`station_ids`, `station_names`, `station_comments`,
+  `station_offsets`) and `section_offsets` are written in station order (line
+  id, then station index), not in the order of the in-memory `HashMap`s, which
+  changes on every open. The insert order decides a table's rowids and how its
+  pages and its key index split, so map order rewrote most of those pages on
+  every save. The app's save writes `display_settings` in key order for the
+  same reason.
+- `sections.created_at` is written back as the file held it
+  (`Line::loaded_created_at`); builds before this one stamped it with the time
+  of each save. A line with no usable stored time gets the project's
+  `created_at`: a line new this session, a line an undo re-creates after a
+  delete, or a stored value that is not RFC 3339 text or not a time every
+  reader parses (below). Restoring a whole-project snapshot (undo or redo)
+  carries each live line's time across by line id.
+- Every time the file stores (the project's `created_at` and `modified_at`,
+  each line's `created_at`, station merge and resolved-warning times) is read
+  and written through `persistence/sqlite/stored_times.rs`, which keeps it in
+  years 0001-9999 in UTC with no leap second, the range SpeleoDB's Python
+  reader parses. `to_rfc3339` would write a time past that range (only a
+  crafted file or undo entry holds one) as `-0001-...` or `+10000-...`, and a
+  file saved with that never opened again. Normalizing on the read as well
+  keeps the value in memory equal to the one on disk, which matters because a
+  `.plnx` matches its project by the `created_at` string.
+
+`a_resave_with_no_edit_writes_the_same_bytes` (`station_ids_tests.rs`) pins
+this for `Database::save_project` on a project without undo history. The undo
+rows are written by their own path and are not covered. An edit still rewrites
+what it moves: inserting or deleting a shot mid-line shifts every later row of
+the `shots` table.
 
 ### `section_offsets` rows are never all-zero
 

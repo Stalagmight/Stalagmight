@@ -399,6 +399,21 @@ pub(super) fn reapply_heals_after_restore(
     changed |= next_section_id != restored.next_section_id;
     restored.next_section_id = next_section_id;
     changed |= adopt_station_identities(restored, live);
+    // `Line::loaded_created_at` is session-only (serde-skipped), so every line
+    // of a restored snapshot comes back without the time its file held. Carry
+    // the live line's by id, or the next save rewrites every line's
+    // `sections.created_at` with the fallback (`docs/saving.md`). Not a heal:
+    // the field is never serialized, so the installed text is unchanged.
+    let stored_times: std::collections::HashMap<LineId, _> = live
+        .lines
+        .iter()
+        .filter_map(|line| Some((line.id, line.loaded_created_at?)))
+        .collect();
+    for line in &mut restored.lines {
+        if line.loaded_created_at.is_none() {
+            line.loaded_created_at = stored_times.get(&line.id).copied();
+        }
+    }
     for line in &mut restored.lines {
         if line.gauge_shot_uuid.is_some() {
             continue;
@@ -1061,8 +1076,12 @@ impl AppState {
             return save_failure("Failed to save project", &save_path, &e);
         }
 
-        // Copy display settings to the new database
-        for (key, value) in &display_settings {
+        // Copy display settings to the new database, in key order: the map's
+        // order changes on every open, and the insert order decides where the
+        // rows land in the file (`docs/saving.md`).
+        let mut display_settings: Vec<_> = display_settings.iter().collect();
+        display_settings.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        for (key, value) in display_settings {
             if let Err(e) = db.save_display_setting(key, value) {
                 tracing::warn!(
                     key = %key,

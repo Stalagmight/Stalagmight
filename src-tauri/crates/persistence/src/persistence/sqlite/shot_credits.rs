@@ -6,10 +6,11 @@
 //!   comma-joined `credit_people` ids.
 //!
 //! Like `station_names`, the tables arrived WITHOUT a schema bump: SpeleoDB's
-//! Python reader (see `station_texts`) accepts exactly v18, ignores tables it
-//! does not know, and validates `sections.surveyor` as one string and
-//! `lines.date` as one ISO date. Those two legacy columns are still written,
-//! as the line aggregate: `lines.date` is the earliest shot date, and
+//! Python reader (see `station_texts`) pins the schema version (exactly 18
+//! before its 0.0.2), ignores tables it does not know, and validates
+//! `sections.surveyor` as one string and `sections.date` as one ISO date.
+//! Those two legacy columns are still written, as the line aggregate:
+//! `sections.date` is the earliest shot date, and
 //! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
 //! surveyor names joined with `", "` (the text it always held; `"; "` for two
 //! one-word names, which free text would read as one `Last, First` person),

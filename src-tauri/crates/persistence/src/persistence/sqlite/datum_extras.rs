@@ -4,7 +4,8 @@
 //! derived from list order (`Project::datum_roles`): the first resolvable datum
 //! of a component PLACES it, every later one is a GPS FIX. The v18
 //! `zero_datums` table cannot carry that, and must not change: SpeleoDB's
-//! Python reader (see `station_texts`) accepts exactly v18 and reads
+//! Python reader (see `station_texts`) pins the schema version (exactly 18
+//! before its 0.0.2) and reads
 //! `zero_datums` by an explicit column list, and an older build assumes at
 //! most one datum per component there. So, like `station_names` and the credit
 //! tables, the extra data lives in a NEW table with no schema bump:

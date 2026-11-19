@@ -286,13 +286,14 @@ fn page_owners(db: &Database, bytes: &[u8], page_size: usize) -> BTreeMap<u32, S
     owners
 }
 
-/// The station side tables are filled from `HashMap`s, whose order changes on
-/// every open, and so were their rows, rowids and page splits: an unchanged
-/// project saved, opened and saved again gave a different file. Only
-/// `sections` may differ now (it stamps each line's `created_at` with the
-/// time of the save); every other page of the two files is the same.
+/// An unchanged project saved, opened and saved again gives the same file
+/// (`Database::save_project`; the app's save adds display settings and undo
+/// rows). It did not: the station side tables were filled in `HashMap` order,
+/// which changes on every open, and so were their rows, rowids and page
+/// splits; and every save stamped each line's `sections.created_at` with the
+/// time.
 #[test]
-fn a_resave_with_no_edit_writes_the_same_pages() {
+fn a_resave_with_no_edit_writes_the_same_bytes() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Order".to_string(), None);
     for line in 0..12_u32 {
@@ -328,10 +329,32 @@ fn a_resave_with_no_edit_writes_the_same_pages() {
         }
     }
 
+    // A file whose lines hold times of their own, as an older build's do
+    // (each line's last save time), so the re-save goes through the read
+    // side rather than writing the fallback twice.
+    let written = dir.path().join("written.stalx");
+    Database::open(&written)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    Database::open_existing(&written)
+        .unwrap()
+        .conn
+        .execute(
+            "UPDATE sections SET created_at = \
+             '2024-03-05T10:20:30.' || printf('%09d', id) || '+00:00'",
+            [],
+        )
+        .unwrap();
+    let opened = Database::open_existing(&written)
+        .unwrap()
+        .load_project()
+        .unwrap();
+
     let first = dir.path().join("first.stalx");
     Database::open(&first)
         .unwrap()
-        .save_project(&project)
+        .save_project(&opened)
         .unwrap();
     let reopened = Database::open_existing(&first)
         .unwrap()
@@ -346,6 +369,18 @@ fn a_resave_with_no_edit_writes_the_same_pages() {
     let (a, b) = (
         Database::open_readonly(&first).unwrap(),
         Database::open_readonly(&second).unwrap(),
+    );
+    let distinct_times: i64 = a
+        .conn
+        .query_row(
+            "SELECT count(DISTINCT created_at) FROM sections",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        distinct_times, 12,
+        "every line keeps the time it was read with"
     );
     // `(table, rows, key columns)`: the station tables are keyed by line and
     // station index, `section_offsets` by line alone.
@@ -389,14 +424,12 @@ fn a_resave_with_no_edit_writes_the_same_pages() {
         page_owners(&b, &bytes_b, page_size),
         "the two files lay out differently"
     );
-    let changed: Vec<String> = bytes_a
+    let changed: Vec<&str> = bytes_a
         .chunks(page_size)
         .zip(bytes_b.chunks(page_size))
         .zip(1_u32..)
         .filter(|((page_a, page_b), _)| page_a != page_b)
         .map(|(_, number)| owners.get(&number).map_or("unowned", String::as_str))
-        .filter(|owner| *owner != "sections")
-        .map(str::to_string)
         .collect();
     assert!(
         changed.is_empty(),
