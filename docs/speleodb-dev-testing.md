@@ -158,7 +158,8 @@ UI regression coverage must include:
   continuations before further side effects. Cancelled or superseded remote opens
   restore the owning prompt's controls without resetting replacement prompts.
 - Manual SpeleoDB Save collects a commit message. Creating a project uses
-  `Project Creation` automatically. Autosave remains local; failures keep the
+  `Project Creation` automatically and accepts an empty project description.
+  Autosave remains local; failures keep the
   message and local edits available for retry.
 - Switching projects, closing a project, or quitting releases the editing lock
   automatically; a release that fails or is uncertain asks "Couldn't hand back the
