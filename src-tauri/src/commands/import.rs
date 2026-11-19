@@ -252,9 +252,10 @@ pub fn import_sections(
         purpose = "batch import with overlap updates",
         "import_sections called",
     );
-    let mut result = state.execute_import_sections(
+    // The DMP wizard's route: still the whole import or nothing (#814), see
+    // `execute_import_sections_all_or_nothing`.
+    let mut result = state.execute_import_sections_all_or_nothing(
         sections,
-        Vec::new(),
         file_hash,
         section_hashes.unwrap_or_default(),
         updates,

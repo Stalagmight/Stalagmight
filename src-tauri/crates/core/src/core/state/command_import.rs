@@ -27,6 +27,15 @@ pub enum VirtualShotMode {
 }
 use std::sync::Mutex;
 
+/// What an import does when one section cannot be created or placed (#814).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefusedSection {
+    /// Leave it out (or unconnected), name it in the receipt, import the rest.
+    SkipAndReport,
+    /// Roll the whole import back, as every import did before #814.
+    FailImport,
+}
+
 /// Which per-station text map an import config entry lands in.
 #[derive(Clone, Copy)]
 enum StationText {
@@ -34,18 +43,6 @@ enum StationText {
     Name,
 }
 
-/// Tally closure-creation results from a `create_loop_closures_batch` call,
-/// counting successes (and failures) directly from `results` rather than
-/// deriving `created` by subtracting `failed` from the requested count.
-///
-/// That distinction matters for one specific case: when the project lock is
-/// unavailable at the point `create_loop_closures_batch` would run, the
-/// caller passes an empty `results` (it never ran the batch), so
-/// `closure_pairs.iter().zip(results)` yields nothing at all - not one
-/// success, not one failure. A subtraction-based count (`requested - skipped
-/// - failed`) would then silently report every one of those pairs as
-/// created, when in fact none were. Counting `Ok` arms directly reports the
-/// correct zero.
 /// How a section the file names reads in an import receipt (#814): its name
 /// from the file, sanitised like every file-controlled receipt string, or its
 /// position when it has none.
@@ -88,6 +85,18 @@ fn nothing_imported_message(skipped: &[String]) -> String {
     message
 }
 
+/// Tally closure-creation results from a `create_loop_closures_batch` call,
+/// counting successes (and failures) directly from `results` rather than
+/// deriving `created` by subtracting `failed` from the requested count.
+///
+/// That distinction matters for one specific case: when the project lock is
+/// unavailable at the point `create_loop_closures_batch` would run, the
+/// caller passes an empty `results` (it never ran the batch), so
+/// `closure_pairs.iter().zip(results)` yields nothing at all - not one
+/// success, not one failure. A subtraction-based count (`requested - skipped
+/// - failed`) would then silently report every one of those pairs as
+/// created, when in fact none were. Counting `Ok` arms directly reports the
+/// correct zero.
 fn tally_closure_results(
     closure_pairs: &[(StationRef, StationRef)],
     results: Vec<Result<crate::models::LoopClosure, String>>,
@@ -349,6 +358,33 @@ impl AppState {
             existing_shot_updates,
             mode,
             None,
+            RefusedSection::SkipAndReport,
+        )
+    }
+
+    /// [`Self::execute_import_sections`] for the DMP import wizard, which
+    /// still needs the whole import or nothing: it maps the returned
+    /// `section_ids` onto its configs by position, records a content hash per
+    /// selected section, and sends overlap edits to existing shots that belong
+    /// to particular incoming sections. A skipped or unconnected section would
+    /// break all three, so here any one rolls the import back (#814).
+    pub fn execute_import_sections_all_or_nothing(
+        &self,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+    ) -> CommandResult {
+        self.execute_import_sections_inner(
+            sections,
+            Vec::new(),
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            None,
+            RefusedSection::FailImport,
         )
     }
 
@@ -374,6 +410,7 @@ impl AppState {
             existing_shot_updates,
             mode,
             surface_elevation,
+            RefusedSection::SkipAndReport,
         )
     }
 
@@ -386,6 +423,7 @@ impl AppState {
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
+        on_refused: RefusedSection,
     ) -> CommandResult {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
@@ -1080,8 +1118,9 @@ impl AppState {
                         all_warnings.extend(result.warnings);
                         zero_datum_count += 1;
                         if zero_datum_created.is_none() {
-                            // Sanitized HERE, where the raw file-controlled name is
-                            // born, not only in `decorate_receipt`: the DMP
+                            // Sanitized where the raw file-controlled name is
+                            // born (`receipt_section_name`), not only in
+                            // `decorate_receipt`: the DMP
                             // wizard's `import_sections` IPC command never calls
                             // `decorate_receipt` (it overwrites source_format/
                             // file_name/sections_found directly), so that route's
@@ -1238,6 +1277,15 @@ impl AppState {
             "execute_import_sections per-section loop done"
         );
 
+        // A caller that needs the whole import or nothing gets it: the first
+        // thing that went wrong becomes the error, and nothing is kept.
+        if on_refused == RefusedSection::FailImport {
+            if let Some(first) = skipped_sections.iter().chain(&unconnected_sections).next() {
+                self.rollback_project(&before_snapshot);
+                return CommandResult::failure(format!("Nothing was imported: {first}"));
+            }
+        }
+
         // Every section refused: there is no partial import to keep, so this is
         // the one per-section outcome that still fails the import, naming why
         // (#814). The rollback also undoes the overlap updates applied above.
@@ -1342,8 +1390,11 @@ impl AppState {
             }
         }
 
-        // Track section content hashes (before after-snapshot so undo reverts them)
-        if !section_hashes.is_empty() {
+        // Track section content hashes (before after-snapshot so undo reverts them).
+        // Not when a section was skipped: the list is per selected section, not
+        // per landed one, and recording a refused section as imported would
+        // hide it from the next import of the same file (#814).
+        if !section_hashes.is_empty() && skipped_sections.is_empty() {
             let track_result = self.track_section_hashes(section_hashes);
             if !track_result.success {
                 tracing::warn!(

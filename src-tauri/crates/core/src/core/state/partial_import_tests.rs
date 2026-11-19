@@ -245,3 +245,117 @@ fn one_undo_removes_a_partial_import_and_redo_restores_it() {
     assert!(state.redo().success);
     assert_eq!(names(&state.get_project_state().unwrap()), ["Good"]);
 }
+
+#[test]
+fn a_refused_section_names_its_shot_by_position_only() {
+    // The refused section never gets the id `create_section` would have given
+    // it, so "Shot <id>:2" pointed at whichever section landed next.
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            section(0, "Good", 5.0, ImportPlacement::Origin),
+            section(1, "Bad", 0.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert_eq!(
+        receipt(&result).warnings[0],
+        "Section \"Bad\" was not imported: Shot 2 has zero length"
+    );
+}
+
+#[test]
+fn a_move_that_cannot_be_made_keeps_the_section_where_it_was_created() {
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![section(
+            0,
+            "Unmoved",
+            3.0,
+            ImportPlacement::Manual {
+                align_station_index: 0,
+                offset: Some(crate::models::Coordinates {
+                    x: f64::NAN,
+                    y: 0.0,
+                    z: 0.0,
+                }),
+            },
+        )],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(names(&state.get_project_state().unwrap()), ["Unmoved"]);
+    let warnings = &receipt(&result).warnings;
+    assert!(
+        warnings.iter().any(|w| w
+            .starts_with("Section \"Unmoved\" was imported but not moved to where it was placed")),
+        "{warnings:?}"
+    );
+}
+
+/// The dedup hashes are one per SELECTED section, not per landed one, so a
+/// partial import records none: marking a refused section "already imported"
+/// would deselect it on the next import of the same file.
+#[test]
+fn a_partial_import_records_no_section_hashes() {
+    let state = new_state();
+    let result = state.execute_import_sections(
+        vec![
+            section(0, "Good", 5.0, ImportPlacement::Origin),
+            section(1, "Bad", 0.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+        None,
+        vec!["h0".to_string(), "h1".to_string()],
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "{:?}", result.error);
+    let tracked = state
+        .check_section_hashes(&["h0".to_string(), "h1".to_string()])
+        .unwrap();
+    assert_eq!(tracked, [false, false]);
+}
+
+/// The DMP wizard's route keeps the whole import or nothing: it maps the
+/// returned ids onto its configs by position and sends overlap edits tied to
+/// particular sections, so a skipped or unconnected section must roll back.
+#[test]
+fn the_all_or_nothing_route_rolls_back_on_a_refused_or_unconnected_section() {
+    for bad in [
+        section(1, "Bad", 0.0, ImportPlacement::Origin),
+        section(
+            1,
+            "Bad",
+            3.0,
+            ImportPlacement::FromExisting {
+                import_station: 0,
+                existing_station: StationRef::new(9999, 0),
+            },
+        ),
+    ] {
+        let state = new_state();
+        let result = state.execute_import_sections_all_or_nothing(
+            vec![section(0, "Good", 5.0, ImportPlacement::Origin), bad],
+            None,
+            vec!["h0".to_string(), "h1".to_string()],
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        assert!(!result.success);
+        let error = result.error.unwrap_or_default();
+        assert!(
+            error.starts_with("Nothing was imported: Section \"Bad\""),
+            "{error}"
+        );
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+        assert_eq!(
+            state
+                .check_section_hashes(&["h0".to_string(), "h1".to_string()])
+                .unwrap(),
+            [false, false]
+        );
+    }
+}
