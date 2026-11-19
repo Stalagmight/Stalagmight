@@ -2029,8 +2029,6 @@ dependencies = [
 [[package]]
 name = "igrf"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeb750ac62b7b81c05b0090d0fc42cdab0ec685835ee6a83a51aad21a15fc79a"
 dependencies = [
  "thiserror 1.0.69",
  "time",
