@@ -86,7 +86,7 @@ export function importReceiptSummaryParts(
  * Gated on `sections_imported` alone, NOT `shot_count`: `sections_imported`
  * is the count of what landed, which is the fact this case is about. Since
  * #814 `shot_count` also counts only the sections that landed (a refused
- * section is skipped and named in the warnings), but the gate stays on the
+ * section is skipped and named in `section_problems`), but the gate stays on the
  * section count so it never depends on that sum being right; a
  * `shot_count`-inclusive check would let a zero-sections receipt through as a
  * toast.

@@ -60,9 +60,9 @@ fn receipt_section_name(config: &crate::models::ImportSectionConfig, idx: usize)
 fn unplaced_line(section_name: &str, what: &str, error: Option<String>) -> String {
     match error {
         Some(reason) if !reason.is_empty() => {
-            format!("Section \"{section_name}\" was imported but {what}: {reason}")
+            format!("Section \"{section_name}\" was imported, but {what}: {reason}")
         }
-        _ => format!("Section \"{section_name}\" was imported but {what}"),
+        _ => format!("Section \"{section_name}\" was imported, but {what}"),
     }
 }
 
@@ -953,7 +953,7 @@ impl AppState {
                 // refuses before it adds anything, so there is nothing to undo:
                 // skip it, say so in the receipt, and import the others.
                 let reason = create_result.error.unwrap_or_default();
-                tracing::warn!(
+                tracing::debug!(
                     section = idx,
                     %reason,
                     purpose = "import every section that can be imported (#814)",
@@ -962,6 +962,11 @@ impl AppState {
                 skipped_sections.push(format!(
                     "Section \"{section_name}\" was not imported: {reason}"
                 ));
+                // All-or-nothing gives up on the first problem; the rest of
+                // the file would only be built to be rolled back.
+                if on_refused == RefusedSection::FailImport {
+                    break;
+                }
                 continue;
             }
 
@@ -1108,7 +1113,7 @@ impl AppState {
                         if !result.success {
                             unconnected_sections.push(unplaced_line(
                                 &section_name,
-                                "not placed at its zero datum",
+                                "its zero datum could not be set",
                                 result.error,
                             ));
                             break 'placement;
@@ -1147,7 +1152,7 @@ impl AppState {
                         if !result.success {
                             unconnected_sections.push(unplaced_line(
                                 &section_name,
-                                "not connected to the existing survey",
+                                "its connection to the existing survey could not be made",
                                 result.error,
                             ));
                             break 'placement;
@@ -1168,8 +1173,8 @@ impl AppState {
                         // later in the list): this one still imports, on its own.
                         let Some(&target_section_id) = created_ids.get(target_section_index) else {
                             unconnected_sections.push(format!(
-                                "Section \"{section_name}\" was imported but not connected: the \
-                             section it joins was not imported"
+                                "Section \"{section_name}\" was imported on its own: the section \
+                             it joins was not imported"
                             ));
                             break 'placement;
                         };
@@ -1179,7 +1184,7 @@ impl AppState {
                         if !result.success {
                             unconnected_sections.push(unplaced_line(
                                 &section_name,
-                                "not connected to the section it joins",
+                                "its connection to the section it joins could not be made",
                                 result.error,
                             ));
                             break 'placement;
@@ -1200,7 +1205,7 @@ impl AppState {
                             if !result.success {
                                 unconnected_sections.push(unplaced_line(
                                     &section_name,
-                                    "not moved to where it was placed",
+                                    "it could not be moved to where it was placed",
                                     result.error,
                                 ));
                                 break 'placement;
@@ -1223,7 +1228,7 @@ impl AppState {
                         if !result.success {
                             unconnected_sections.push(unplaced_line(
                                 &section_name,
-                                "not snapped to its station",
+                                "it could not be snapped to its station",
                                 result.error,
                             ));
                             break 'placement;
@@ -1237,6 +1242,9 @@ impl AppState {
                 }
             }
             placement_total += t_placement_start.elapsed();
+            if on_refused == RefusedSection::FailImport && !unconnected_sections.is_empty() {
+                break;
+            }
             let _ = t_section_start;
 
             // [perf-debug] Periodic log: emit every `report_every` sections.
@@ -1275,12 +1283,26 @@ impl AppState {
             "execute_import_sections per-section loop done"
         );
 
+        // One log line per import, not per refused section: a hostile file
+        // controls how many sections it refuses.
+        if !skipped_sections.is_empty() || !unconnected_sections.is_empty() {
+            tracing::warn!(
+                refused = skipped_sections.len(),
+                unconnected = unconnected_sections.len(),
+                purpose = "import every section that can be imported (#814)",
+                "Some sections were left out or imported unconnected"
+            );
+        }
+
         // A caller that needs the whole import or nothing gets it: the first
         // thing that went wrong becomes the error, and nothing is kept.
         if on_refused == RefusedSection::FailImport {
             if let Some(first) = skipped_sections.iter().chain(&unconnected_sections).next() {
                 self.rollback_project(&before_snapshot);
-                return CommandResult::failure(format!("Nothing was imported: {first}"));
+                return CommandResult::failure(format!(
+                    "The import was undone and nothing was kept, because one section \
+                     could not be imported whole. {first}"
+                ));
             }
         }
 
@@ -1375,7 +1397,10 @@ impl AppState {
             closures_failed += failed;
         }
 
-        // Track file hash if provided (before after-snapshot so it's part of the undo)
+        // Track file hash if provided (before after-snapshot so it's part of the undo).
+        // Kept on a partial import, unlike the section hashes: part of the
+        // file did land, so re-importing the same unchanged file should be
+        // flagged; a file fixed to bring the lost section in hashes differently.
         if let Some(ref hash) = file_hash {
             let track_result = self.track_imported_file(hash.clone());
             if !track_result.success {

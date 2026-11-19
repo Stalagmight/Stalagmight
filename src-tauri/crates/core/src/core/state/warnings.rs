@@ -377,10 +377,12 @@ impl AppState {
     }
 
     /// One advisory warning per piece of the survey that nothing places: no
-    /// zero datum, and no merge to a piece that has one, in a project where
-    /// some piece does (#814, [`SECTION_NOT_CONNECTED`]). An import whose
-    /// connection could not be made leaves such a piece, and this is where the
-    /// user finds it again once the import receipt is closed. Attached to the
+    /// zero datum, and no merge or aligned loop closure to a piece that has
+    /// one, in a project where some piece does (#814,
+    /// [`SECTION_NOT_CONNECTED`]). An import whose connection could not be
+    /// made leaves such a piece, and while the project holds a zero datum this
+    /// is where the user finds it again once the import receipt is closed (in
+    /// a project with none, the receipt is the only record). Attached to the
     /// first shot of the piece's first section, so an Ignore keys on that shot.
     fn unconnected_section_warnings(project: &Project) -> Vec<ProjectWarning> {
         project
@@ -392,10 +394,15 @@ impl AppState {
                     .filter_map(|id| project.get_section(*id))
                     .find(|s| !s.shots.is_empty())?;
                 let shot = section.shots.first()?;
-                let name = section
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Section {}", section.id));
+                // File-controlled text, so the same bound and filter as every
+                // receipt string: no bidi overrides, no unbounded length.
+                let name = crate::models::sanitize_display_text(
+                    section
+                        .name
+                        .as_deref()
+                        .unwrap_or(&format!("Section {}", section.id)),
+                    crate::core::command::MAX_FILE_NAME_LEN,
+                );
                 let others = group.len() - 1;
                 let piece = match others {
                     0 => format!("Section \"{name}\" is"),

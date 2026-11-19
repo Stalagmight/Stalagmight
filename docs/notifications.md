@@ -116,12 +116,13 @@ regions). Read the comment blocks in those two files plus
   - It carries even one `section_problems` line (#814): a section the import
     left out or could not connect. The dialog shows every such line above the
     warnings and never folds them behind Details, since they are what the user
-    most needs; a section left unconnected is also listed afterwards in the
-    Warnings tab (`SECTION_NOT_CONNECTED`).
+    most needs. A section left unconnected is also listed afterwards in the
+    Warnings tab (`SECTION_NOT_CONNECTED`) while the project holds a zero
+    datum; in a project with none, the receipt is its only record.
   - `sections_imported` is zero (#442) - nothing landing is itself the fact
     the user needs to see. Since #814 both it and `shot_count` count only the
     sections that landed: a section the project refuses is skipped and named
-    in the receipt's warnings, which keep the modal anyway.
+    in the receipt's `section_problems`, which keep the modal anyway.
   - `unit_conversion` is set - a length-unit conversion silently changes every
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather

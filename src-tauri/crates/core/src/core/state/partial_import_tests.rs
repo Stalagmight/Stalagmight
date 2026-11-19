@@ -155,7 +155,7 @@ fn a_section_joining_a_refused_one_imports_on_its_own() {
         problems(&result),
         [
             "Section \"Bad\" was not imported: Shot 2 has zero length",
-            "Section \"Branch\" was imported but not connected: the section it joins was not imported",
+            "Section \"Branch\" was imported on its own: the section it joins was not imported",
         ]
     );
     let warnings = &receipt(&result).warnings;
@@ -208,15 +208,13 @@ fn a_failed_placement_keeps_the_section_unconnected() {
     let warnings = problems(&result);
     assert!(
         warnings.iter().any(|w| w.starts_with(
-            "Section \"Unmerged\" was imported but not connected to the existing survey"
+            "Section \"Unmerged\" was imported, but its connection to the existing survey could not be made"
         )),
         "{warnings:?}"
     );
     assert!(
-        warnings
-            .iter()
-            .any(|w| w
-                .starts_with("Section \"Unplaced\" was imported but not placed at its zero datum")),
+        warnings.iter().any(|w| w
+            .starts_with("Section \"Unplaced\" was imported, but its zero datum could not be set")),
         "{warnings:?}"
     );
 }
@@ -301,11 +299,19 @@ fn a_move_that_cannot_be_made_keeps_the_section_where_it_was_created() {
         Vec::new(),
     );
     assert!(result.success, "{:?}", result.error);
-    assert_eq!(names(&state.get_project_state().unwrap()), ["Unmoved"]);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(names(&project), ["Unmoved"]);
+    assert!(
+        !project
+            .section_offsets
+            .contains_key(&project.sections[0].id),
+        "a refused move leaves the section where it was created"
+    );
     let warnings = problems(&result);
     assert!(
-        warnings.iter().any(|w| w
-            .starts_with("Section \"Unmoved\" was imported but not moved to where it was placed")),
+        warnings.iter().any(|w| w.starts_with(
+            "Section \"Unmoved\" was imported, but it could not be moved to where it was placed"
+        )),
         "{warnings:?}"
     );
 }
@@ -362,7 +368,8 @@ fn the_all_or_nothing_route_rolls_back_on_a_refused_or_unconnected_section() {
         assert!(!result.success);
         let error = result.error.unwrap_or_default();
         assert!(
-            error.starts_with("Nothing was imported: Section \"Bad\""),
+            error.starts_with("The import was undone and nothing was kept")
+                && error.contains("Section \"Bad\""),
             "{error}"
         );
         assert!(state.get_project_state().unwrap().sections.is_empty());
@@ -493,5 +500,31 @@ fn a_merged_floating_piece_is_listed_once() {
             .starts_with("Section \"Loose\" and 1 section merged with it are not connected"),
         "{}",
         warnings[0].message
+    );
+}
+
+/// The section name in the warning is file-controlled text: filtered and
+/// bounded like every receipt string.
+#[test]
+fn the_unconnected_warning_sanitises_the_section_name() {
+    let state = new_state();
+    let hostile = format!("Bidi\u{202e}name{}", "x".repeat(10_000));
+    let result = import(
+        &state,
+        vec![
+            section(0, "Placed", 5.0, datum_at_origin()),
+            section(1, &hostile, 3.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let warnings = not_connected(&state);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let message = &warnings[0].message;
+    assert!(!message.contains('\u{202e}'), "bidi override survived");
+    assert!(
+        message.chars().count() < 1_000,
+        "{} chars",
+        message.chars().count()
     );
 }
