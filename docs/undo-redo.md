@@ -1327,7 +1327,7 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`), the rules every delta keeps (`shape.rs`), station-keyed pairs as positions (`stations.rs`) |
+| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`), the rules every delta keeps (`shape.rs`), station-keyed pairs as positions (`stations.rs`), the unordered members diffed and edited as text (`bags.rs`), the project held in parts (`ProjectText`, `doc.rs`) |
 | `src-tauri/crates/core/src/core/state/undo_delta.rs` | `step_through_delta`: one step through a compact entry |
 | `src-tauri/crates/core/src/core/undo/history_walk.rs` | `HolderWalk`: shot ownership in every recorded state, for the load's uuid remap |
 | `src-tauri/crates/core/src/core/state/undo_size_gate_tests.rs` | The 1% size gate on 5k- and 20k-shot surveys |
@@ -1337,7 +1337,8 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
 | `src-tauri/crates/core/src/core/state/undo_policy.rs` | Persisted policy loading and effective undo limits |
 | `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
-| `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
+| `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()`; a snapshot capture in parts (`UndoData::CapturedPair`) |
+| `src-tauri/crates/core/src/core/state/command_credit.rs` | `EditShotCredit` and its undo record, `ShotCreditRun`s written back by position |
 | `src-tauri/crates/core/src/core/undo/added_content.rs` | `AddedContent`: what an `AddProjectFile` brought, its removal and reinstall |
 | `src-tauri/crates/core/src/core/state/project_add.rs` | The add's forward step, the pending-ignore set |
 | `src-tauri/crates/core/src/core/state/project_append.rs` | `append_project`, shared by merge and add (copy, datum placement) |
