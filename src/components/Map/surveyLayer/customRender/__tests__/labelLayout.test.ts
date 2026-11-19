@@ -323,7 +323,7 @@ describe('ShapeCache', () => {
     expect(cache.get(LABEL_KIND.LINE_NAME, 'a', atlas)).toBe(a); // 'a' survived
   });
 
-  it('fit grows the cap to a build, so a second pass over more labels than the default cap all hits', () => {
+  it('fit sizes the cap to a build, so a second pass over more labels than the default cap all hits', () => {
     const atlas = makeAtlas();
     const cache = new ShapeCache(2);
     const texts = ['a', 'b', 'c', 'd'];
@@ -335,17 +335,20 @@ describe('ShapeCache', () => {
     const built = texts.map((t) => cache.get(LABEL_KIND.LINE_NAME, t, atlas));
     expect(cache.size).toBe(texts.length);
     texts.forEach((t, i) => expect(cache.get(LABEL_KIND.LINE_NAME, t, atlas)).toBe(built[i]));
-    // It only grows: a smaller build keeps the larger cap.
+    // A smaller build lowers the cap to the starting one and drops the oldest
+    // past it, so a large survey's labels do not outlive it.
     cache.fit(1);
-    expect(texts.every((t, i) => cache.get(LABEL_KIND.LINE_NAME, t, atlas) === built[i])).toBe(true);
+    expect(cache.size).toBe(2);
+    expect(cache.get(LABEL_KIND.LINE_NAME, 'c', atlas)).toBe(built[2]);
+    expect(cache.get(LABEL_KIND.LINE_NAME, 'd', atlas)).toBe(built[3]);
   });
 
-  it('fit stops at the ceiling, so one huge build cannot grow the cache without bound', () => {
+  it('fit stops at the ceiling and never drops below the starting cap', () => {
     const cache = new ShapeCache();
     const cap = () => (cache as unknown as { max: number }).max;
     cache.fit(SHAPE_CACHE_CEILING * 3);
     expect(cap()).toBe(SHAPE_CACHE_CEILING);
-    cache.fit(SHAPE_CACHE_CEILING - 1);
-    expect(cap()).toBe(SHAPE_CACHE_CEILING);
+    cache.fit(5);
+    expect(cap()).toBe(20000);
   });
 });

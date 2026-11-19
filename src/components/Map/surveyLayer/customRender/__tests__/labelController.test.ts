@@ -464,13 +464,17 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     expect(layer.updateCalls).toBe(updatesBefore);
   });
 
-  it('a build sizes the shape cache to its labels, so a survey past the default cap still hits', () => {
+  it('a build sizes the shape cache to its labels before shaping them', () => {
     const fit = vi.spyOn(ShapeCache.prototype, 'fit');
+    const get = vi.spyOn(ShapeCache.prototype, 'get');
     const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
-    expect(fit).toHaveBeenCalled();
-    expect(fit.mock.calls.every(([count]) => count > 0)).toBe(true);
+    expect(get).toHaveBeenCalled();
+    expect(fit.mock.invocationCallOrder[0]).toBeLessThan(get.mock.invocationCallOrder[0]!);
+    // Room for every label the build shaped, so the next build hits them all.
+    const keys = new Set(get.mock.calls.map(([kind, text]) => `${kind}\0${text}`));
+    expect(fit.mock.calls[0]![0]).toBeGreaterThanOrEqual(keys.size);
   });
 
   it('a commentTint sync builds without error (palette-tint parity locked in labelTessellate)', () => {
