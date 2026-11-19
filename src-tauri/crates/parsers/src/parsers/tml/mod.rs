@@ -1565,7 +1565,8 @@ pub fn convert_tml_with_options(
         warnings.push(format!(
             "{coincident_ties} shot{} in the file had no usable length (zero, negative or \
              unreadable) and {} given a negligible {COINCIDENT_TIE_EPSILON_M} m length, so the \
-             stations on either end sit at one point",
+             stations on either end share one position on the map; any depth \
+             difference recorded between them is kept",
             plural_s(coincident_ties),
             was_were(coincident_ties)
         ));

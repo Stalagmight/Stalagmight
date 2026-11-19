@@ -78,8 +78,12 @@ a section holds once, so it is the section's **trip** for sectioning - see
 - Length. A REAL or VIRTUAL row with no usable length (zero, negative, or
   unreadable, which the parser reads as 0) imports as a coincident-station tie of
   0.001 m, the same nudge the Walls importer gives a zero-length leg, because the
-  project model has no zero-length shot. The import receipt counts these rows in
-  one line. Before #812 one such row failed the whole import.
+  project model has no zero-length shot. Only the horizontal offset collapses:
+  the depth each end records is kept, so the two stations share a map position
+  but not necessarily a depth. The import receipt counts these rows in one line,
+  and each one also gets the usual short-shot warning in the Warnings tab. A
+  negative length is treated the same way, so its magnitude is not kept. Before
+  #812 one such row failed the whole import.
 - Depth in / depth out
 - Inclination
 - LRUD (left, right, up, down)

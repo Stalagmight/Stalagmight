@@ -1197,14 +1197,27 @@ fn a_bounded_virtual_shot_imports_as_a_jump_and_a_dangling_one_as_a_reference() 
     );
 }
 
-/// One Ariane row for the #812 tests. `length` is the raw `<Length>` text, so a
-/// test can write `NaN`; `excluded` is the `<Excluded>` flag.
+/// One Ariane row for the #812 tests, at a depth of 5 m. `length` is the raw
+/// `<Length>` text, so a test can write `NaN`; `excluded` is the `<Excluded>` flag.
 fn tml_row(id: i64, from: i64, ty: &str, section: &str, length: &str, excluded: bool) -> String {
+    tml_row_at(id, from, ty, section, length, excluded, 5.0)
+}
+
+/// [`tml_row`] with the row's `<Depth>` given.
+fn tml_row_at(
+    id: i64,
+    from: i64,
+    ty: &str,
+    section: &str,
+    length: &str,
+    excluded: bool,
+    depth: f64,
+) -> String {
     format!(
         r"<SurveyData>
     <ID>{id}</ID><FromID>{from}</FromID><ClosureToID>-1</ClosureToID>
     <Type>{ty}</Type><Section>{section}</Section>
-    <Azimut>90.0</Azimut><Length>{length}</Length><Depth>5.0</Depth><DepthIn>-1.0</DepthIn>
+    <Azimut>90.0</Azimut><Length>{length}</Length><Depth>{depth}</Depth><DepthIn>-1.0</DepthIn>
     <Inclination>0.0</Inclination><Left>0.0</Left><Right>0.0</Right><Up>0.0</Up><Down>0.0</Down>
     <Comment></Comment><Explorer>Tester</Explorer><Date>2024-06-15</Date>
     <Color>0x8f6112ff</Color><Excluded>{excluded}</Excluded>
@@ -1279,11 +1292,16 @@ fn a_zero_length_first_row_of_a_branch_imports_as_a_coincident_tie() {
     ]);
     let shots: usize = project.sections.iter().map(|s| s.shots.len()).sum();
     assert_eq!(shots, 4, "every REAL row must land as a shot");
-    assert!(project
+    let lengths: Vec<f64> = project
         .sections
         .iter()
         .flat_map(|s| &s.shots)
-        .any(|s| s.length == crate::parsers::geo::COINCIDENT_TIE_EPSILON_M));
+        .map(|s| s.length)
+        .collect();
+    assert!(
+        lengths.contains(&crate::parsers::geo::COINCIDENT_TIE_EPSILON_M),
+        "{lengths:?}"
+    );
     assert!(tie_warning(&warnings).is_some(), "{warnings:?}");
 }
 
@@ -1312,4 +1330,30 @@ fn a_clean_file_has_no_tie_warning() {
         tml_row(1, 0, "REAL", "Main", "10.0", false),
     ]);
     assert!(tie_warning(&warnings).is_none(), "{warnings:?}");
+}
+
+/// #812: a NEGATIVE length takes the tie path too (`create_section` rejects a
+/// negative shot just as it rejects a zero one), and a tie keeps the depth step
+/// its two ends record: only the horizontal offset collapses.
+#[test]
+fn a_negative_length_with_a_depth_step_is_a_tie_that_keeps_its_depth() {
+    let (project, warnings) = import_tml_rows(&[
+        tml_row_at(0, -1, "START", "Main", "0.0", false, 5.0),
+        tml_row_at(1, 0, "REAL", "Main", "10.0", false, 5.0),
+        tml_row_at(2, 1, "REAL", "Main", "-3.0", false, 8.0),
+        tml_row_at(3, 2, "REAL", "Main", "10.0", false, 8.0),
+    ]);
+    let shots = &project.sections[0].shots;
+    let lengths: Vec<f64> = shots.iter().map(|s| s.length).collect();
+    assert_eq!(
+        lengths,
+        vec![10.0, crate::parsers::geo::COINCIDENT_TIE_EPSILON_M, 10.0]
+    );
+    let step = shots[1].depth_out - shots[1].depth_in;
+    assert!(
+        (step - 3.0).abs() < 1e-9,
+        "the tie must keep its 3 m depth step, got {step}"
+    );
+    let note = tie_warning(&warnings).expect("the negative row must be reported");
+    assert!(note.starts_with("1 shot in the file "), "{note}");
 }
