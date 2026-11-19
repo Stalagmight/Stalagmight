@@ -271,12 +271,24 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
  */
 export class ShapeCache {
   private readonly entries = new Map<string, ShapedLabel>();
-  private readonly max: number;
+  private max: number;
 
   /** @param max Cap on cached labels; the survey label charset is tiny so a few
    *  thousand distinct `(kind, text)` pairs covers a large survey's viewport. */
   constructor(max = 20000) {
     this.max = Math.max(1, max);
+  }
+
+  /**
+   * Raise the cap to hold `count` labels, the size of the build about to shape.
+   * A build walks its labels in the same order every time, so a cap below its
+   * label count evicts each entry just before the next build asks for it: every
+   * lookup misses and every label is re-shaped (a 20k-shot survey has ~21.7k
+   * labels against the default 20k). Grows only - the cache never holds more
+   * than the largest build asked for.
+   */
+  fit(count: number): void {
+    this.max = Math.max(this.max, count);
   }
 
   /** Shaped label for `(kind, text)` - cached across builds, shaping on a miss. */

@@ -321,4 +321,21 @@ describe('ShapeCache', () => {
     cache.get(LABEL_KIND.LINE_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
     expect(cache.get(LABEL_KIND.LINE_NAME, 'a', atlas)).toBe(a); // 'a' survived
   });
+
+  it('fit grows the cap to a build, so a second pass over more labels than the default cap all hits', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache(2);
+    const texts = ['a', 'b', 'c', 'd'];
+    // Without fit, walking four labels in order through a cap of two evicts each
+    // one before the next pass asks for it: every lookup misses.
+    const thrash = texts.map((t) => cache.get(LABEL_KIND.LINE_NAME, t, atlas));
+    expect(texts.every((t, i) => cache.get(LABEL_KIND.LINE_NAME, t, atlas) !== thrash[i])).toBe(true);
+    cache.fit(texts.length);
+    const built = texts.map((t) => cache.get(LABEL_KIND.LINE_NAME, t, atlas));
+    expect(cache.size).toBe(texts.length);
+    texts.forEach((t, i) => expect(cache.get(LABEL_KIND.LINE_NAME, t, atlas)).toBe(built[i]));
+    // It only grows: a smaller build keeps the larger cap.
+    cache.fit(1);
+    expect(texts.every((t, i) => cache.get(LABEL_KIND.LINE_NAME, t, atlas) === built[i])).toBe(true);
+  });
 });

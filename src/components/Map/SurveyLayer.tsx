@@ -1696,6 +1696,11 @@ export default class SurveyLayer {
    * Re-rooting just calls this again - no feature rebuild.
    */
   setDistanceGradient(enabled: boolean, state: DistanceFeatureState | null): void {
+    // Off and staying off changes nothing. MapCanvas calls this on every survey
+    // refresh (its effect depends on the survey data), and the resync below
+    // rebuilds every label - a second full label build per undo, redo or edit
+    // on a large survey for an overlay that is not shown.
+    if (!enabled && state === null && !this.distanceMode && this.distanceState === null) return;
     this.distanceMode = enabled;
     this.distanceState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
@@ -1785,6 +1790,8 @@ export default class SurveyLayer {
    * Re-running on an input change just calls this again - no feature rebuild.
    */
   setGasReach(enabled: boolean, state: GasReachFeatureState | null): void {
+    // Off and staying off changes nothing (see setDistanceGradient).
+    if (!enabled && state === null && !this.gasReachMode && this.gasReachState === null) return;
     this.gasReachMode = enabled;
     this.gasReachState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;

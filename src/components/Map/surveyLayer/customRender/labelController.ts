@@ -622,6 +622,7 @@ export class SurveyLabelController {
     };
     let descriptors = buildLabelDescriptors(surveyData, gpsOrigin, anchorX, anchorY, buildCtx, kinds, vpCtx?.viewport);
     const tShape0 = performance.now();
+    this.shapeCache.fit(descriptors.length);
     let shaped = shapeDescriptors(descriptors, this.atlas!, this.shapeCache);
     let extents = shaped.map(shapedExtent);
     // Line-only build: the labels a full build would draw around a jump /
