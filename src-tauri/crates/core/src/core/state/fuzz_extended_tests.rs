@@ -902,21 +902,14 @@ fn untrack_import_alone_is_undoable() {
     );
 }
 
-/// OPEN FINDING (LARGE, seed 1 x60, persistence half): Merge Stations joining
-/// two components that each hold a gauge leaves BOTH entries in
-/// `held_gauges`, and nothing in the session prunes them; the load keeps at
-/// most one per connected component (`normalize_held_gauges`, run by the
-/// load, Add and Merge Projects only). So a save and a reopen change the
-/// project - an undo-less change the history was recorded across - and the
-/// project at that depth depends on whether it went through the file.
-///
-/// The anchor lookup reads only the first entry per component, so no
-/// geometry moves. What it breaks is the delta engine's assumption for a
-/// list past 64 entries: a positional edit records its source length, and a
-/// load that drops an element from a long `held_gauges` makes every recorded
-/// edit of it refuse.
+/// Found by LARGE (seed 1 x60, persistence half), fixed: Merge Stations
+/// joining two components that each hold a gauge used to leave BOTH entries
+/// in `held_gauges`, while the load keeps at most one per connected component
+/// (`normalize_held_gauges`). A save and a reopen then changed the project with
+/// no undo entry, and for a list past 64 entries every positional edit of it
+/// recorded before the reopen refused. An edit whose entry captures the whole
+/// state now normalizes in its forward epilogue, so its entry records the drop.
 #[test]
-#[ignore = "open finding: an in-session merge leaves two held gauges in one component - see the doc comment"]
 fn a_merge_of_two_held_components_survives_a_reopen() {
     let _config = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
@@ -970,17 +963,13 @@ fn a_merge_of_two_held_components_survives_a_reopen() {
     );
 }
 
-/// OPEN FINDING (LARGE + EXTENDED + SAVES, seed 6 x80, both halves; found on
-/// the merge of release/0.6.0): the in-session twin of the finding above.
-/// After a merge joins two components that each hold a gauge, an Add .stalx
-/// runs `normalize_held_gauges` over the WHOLE project (`project_append.rs`),
-/// which keeps one entry per component and so drops one of the target's own.
-/// `AddedProjectContent` records nothing of `held_gauges`, so the undo of the
-/// add removes what the add brought and leaves the dropped entry dropped: the
-/// state before the add does not come back. Present on both sides of the
-/// merge (the normalize and the record both predate it).
+/// Found by LARGE + EXTENDED + SAVES (seed 6 x80, on the merge of
+/// release/0.6.0), fixed with the test above: an Add .stalx normalizes the
+/// whole project's `held_gauges` (`project_append.rs`), and after a merge had
+/// left two entries in one component it dropped one of the project's own,
+/// which `AddedProjectContent` does not record. The merge now leaves one, so
+/// the Add finds nothing to drop, and its undo is exact.
 #[test]
-#[ignore = "open finding: an add after an in-session merge of two held components drops a held gauge its undo does not restore - see the doc comment"]
 fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
     let _config = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
@@ -1023,7 +1012,11 @@ fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
             .success
     );
     let before_add = state.get_project_state().unwrap().held_gauges;
-    assert_eq!(before_add.len(), 2, "the merge keeps both entries");
+    assert_eq!(
+        before_add.len(),
+        1,
+        "the merge keeps one entry per component, as a load does"
+    );
     let added = dir.path().join("added.stalx");
     Database::open(&added)
         .unwrap()
@@ -1035,5 +1028,11 @@ fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
         state.get_project_state().unwrap().held_gauges,
         before_add,
         "the undo of the add did not put back the held gauges it found"
+    );
+    assert!(state.undo().success);
+    assert_eq!(
+        state.get_project_state().unwrap().held_gauges.len(),
+        2,
+        "the undo of the merge puts back the entry it dropped"
     );
 }

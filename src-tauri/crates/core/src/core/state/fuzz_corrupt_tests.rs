@@ -561,24 +561,16 @@ fn walk_edit(edit: &mut Value, visit: &mut dyn FnMut(&mut Value)) {
 // What FORMAT_CORRUPT found
 // ===========================================================================
 
-/// OPEN FINDING (FORMAT_CORRUPT, 15 of 210 corrupted runs over the knob
-/// matrix; shrunk from COMBINED seed 13 x300 to 11 moves): a row whose gzip
-/// member is damaged drops only ITS stack. `decompress_history_rows_within`
-/// fails the whole table, the load substitutes an empty stack for it and
-/// raises the discarded-history banner - and then loads the OTHER table
-/// as usual, so the project opens with its redo branch (or its undo history)
-/// intact under a banner saying the history could not be read.
-///
-/// Every other damaged row - bad JSON, an unknown envelope, a delta that
-/// breaks `check_shape` or does not fit - drops BOTH stacks
-/// (`drop_history_with_a_hole`, `drop_history_that_does_not_fit`), which is
-/// what docs/undo-redo.md promises: "this build drops a history it cannot read
-/// whole". The stack that survives is self-consistent (each stack is a chain
-/// of deltas from the live project outwards), so nothing restores the wrong
-/// state; what breaks is the contract, the banner's meaning, and the one rule
-/// the corrupt-row oracle holds every other path to.
+/// Found by FORMAT_CORRUPT (15 of 210 corrupted runs over the knob matrix;
+/// shrunk from COMBINED seed 13 x300 to 11 moves), fixed: a row whose gzip
+/// member is damaged fails its whole table in `decompress_history_rows_within`,
+/// and the load used to substitute an empty stack for that table only - so
+/// the project opened with the other table intact under a banner saying the
+/// history could not be read. Every other damaged row drops BOTH stacks
+/// (`drop_history_with_a_hole`, `drop_history_that_does_not_fit`), as
+/// docs/undo-redo.md promises; a table that cannot be read now does too
+/// (`project_load.rs`).
 #[test]
-#[ignore = "open finding: a damaged gzip row drops only its own stack - see the doc comment"]
 fn a_damaged_gzip_row_drops_the_whole_history() {
     use crate::core::Command;
     let _config = crate::test_helpers::isolated_config();

@@ -283,6 +283,15 @@ impl AppState {
                     Vec::new()
                 }
             };
+        // A compact history is usable only whole: a stack that could not be read takes
+        // the other with it, as an unreadable row inside a stack does
+        // (`drop_history_with_a_hole`), so the banner's "could not be read" means the
+        // same thing whichever table held the damage.
+        let (undo_entries, redo_entries) = if history_discarded {
+            (Vec::new(), Vec::new())
+        } else {
+            (undo_entries, redo_entries)
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -994,6 +1003,15 @@ impl AppState {
                     Vec::new()
                 }
             };
+        // A compact history is usable only whole: a stack that could not be read takes
+        // the other with it, as an unreadable row inside a stack does
+        // (`drop_history_with_a_hole`), so the banner's "could not be read" means the
+        // same thing whichever table held the damage.
+        let (undo_entries, redo_entries) = if history_discarded {
+            (Vec::new(), Vec::new())
+        } else {
+            (undo_entries, redo_entries)
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push

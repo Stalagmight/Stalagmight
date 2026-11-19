@@ -456,6 +456,29 @@ impl AppState {
         project.prune_dangling_shot_records();
     }
 
+    /// Bring `held_gauges` to one entry per connected component, as a load
+    /// does (`Project::normalize_held_gauges`), for an edit that may have
+    /// joined two components that each held one - a Merge Stations, or a
+    /// batch or repair holding one. Left to the load, a save and a reopen
+    /// would change the project with no undo entry to say so, and an Add
+    /// (which normalizes the whole project) would drop one of the project's
+    /// own with an undo that cannot put it back.
+    ///
+    /// Only for edits whose entry captures the whole state (a snapshot pair,
+    /// stored as a compact delta), so the entry records the entry it drops and
+    /// the undo restores it. A typed entry records nothing of `held_gauges`:
+    /// a loop closure that joins two held components is left as the load
+    /// leaves it (see #809).
+    fn normalize_held_gauges_in_open_project(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(project) = guard.as_mut() {
+            project.normalize_held_gauges();
+        }
+    }
+
     /// True iff the open project currently holds a Critical integrity violation.
     pub(super) fn project_has_critical(&self) -> bool {
         self.project
@@ -655,6 +678,7 @@ impl AppState {
             // before the solve that lands on it.
             project.settle_datum_layout(&datums_before);
             project.prune_dangling_shot_records();
+            project.normalize_held_gauges();
             project.resolve_offsets();
             // Repair does not go through `reconcile_geometry`, so it carries the
             // closure re-measure itself, last and off the geometry the re-solve
@@ -1019,6 +1043,9 @@ impl AppState {
         // snapshot pair holds the result; settling twice is not idempotent.
         if result.success && cmd.affects_geometry() && !matches!(cmd, Command::Batch { .. }) {
             self.settle_datum_layout(&datums_before);
+            if undo_data.captured_before().is_some() {
+                self.normalize_held_gauges_in_open_project();
+            }
         }
 
         // Treat line offsets as derived: after any structural command,
@@ -1387,6 +1414,7 @@ impl AppState {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
             // first, then reconcile the geometry that lands on it (#469, item 1).
             self.settle_datum_layout(&datums_before);
+            self.normalize_held_gauges_in_open_project();
             self.reconcile_geometry();
         }
 
