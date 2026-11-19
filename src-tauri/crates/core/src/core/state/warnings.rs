@@ -5,7 +5,7 @@ use crate::core::{Validator, WarningSeverity};
 use crate::models::{
     datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, Project, ProjectWarning,
     SectionId, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START, SECTION_NOT_CONNECTED,
 };
 use crate::persistence::Database;
 
@@ -317,6 +317,14 @@ impl AppState {
                 }),
         );
 
+        // Advisory too: a separate piece may be kept on purpose (#814).
+        all_warnings.extend(Self::unconnected_section_warnings(project).into_iter().map(
+            |mut w| {
+                w.is_resolved = is_resolved_for(&w.shot_uuid, w.section_id, w.shot_id, &w.code);
+                w
+            },
+        ));
+
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
         all_warnings.sort_by(|a, b| {
             let resolved_order = |r: bool| i32::from(r);
@@ -363,6 +371,55 @@ impl AppState {
                     datum_station_index: None,
                     datum_refs: None,
                     closure_id: Some(skipped.closure_id),
+                })
+            })
+            .collect()
+    }
+
+    /// One advisory warning per piece of the survey that nothing places: no
+    /// zero datum, and no merge to a piece that has one, in a project where
+    /// some piece does (#814, [`SECTION_NOT_CONNECTED`]). An import whose
+    /// connection could not be made leaves such a piece, and this is where the
+    /// user finds it again once the import receipt is closed. Attached to the
+    /// first shot of the piece's first section, so an Ignore keys on that shot.
+    fn unconnected_section_warnings(project: &Project) -> Vec<ProjectWarning> {
+        project
+            .unanchored_section_groups()
+            .into_iter()
+            .filter_map(|group| {
+                let section = group
+                    .iter()
+                    .filter_map(|id| project.get_section(*id))
+                    .find(|s| !s.shots.is_empty())?;
+                let shot = section.shots.first()?;
+                let name = section
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Section {}", section.id));
+                let others = group.len() - 1;
+                let piece = match others {
+                    0 => format!("Section \"{name}\" is"),
+                    1 => format!("Section \"{name}\" and 1 section merged with it are"),
+                    n => format!("Section \"{name}\" and {n} sections merged with it are"),
+                };
+                Some(ProjectWarning {
+                    section_id: section.id,
+                    shot_id: shot.id,
+                    shot_index: 0,
+                    code: SECTION_NOT_CONNECTED.to_string(),
+                    message: format!(
+                        "{piece} not connected to the rest of the survey and {} no zero \
+                         datum, so nothing places {}: merge a station onto the survey or \
+                         give it a zero datum",
+                        if others == 0 { "has" } else { "have" },
+                        if others == 0 { "it" } else { "them" },
+                    ),
+                    severity: severity_for_code(SECTION_NOT_CONNECTED),
+                    is_resolved: false,
+                    shot_uuid: shot.uuid.clone(),
+                    datum_station_index: None,
+                    datum_refs: None,
+                    closure_id: None,
                 })
             })
             .collect()

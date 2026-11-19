@@ -1154,6 +1154,41 @@ impl Project {
         components
     }
 
+    /// The pieces of the survey (merge-connected section groups) that have no
+    /// zero datum, in a project where at least one piece has one (#814): the
+    /// pieces nothing places. Each group lists its sections in project order;
+    /// the groups come in the order of their first section. Empty when no
+    /// piece has a datum, since then every piece floats and none is the odd
+    /// one out. Same anchoring rule as [`Self::count_unanchored_sections`].
+    pub fn unanchored_section_groups(&self) -> Vec<Vec<SectionId>> {
+        let components = self.connected_components();
+        let anchored = |comp: &HashSet<SectionId>| {
+            comp.iter()
+                .next()
+                .is_some_and(|&member| self.rigid_group_has_datum(member))
+        };
+        if !components.iter().any(anchored) {
+            return Vec::new();
+        }
+        let order: HashMap<SectionId, usize> = self
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.id, i))
+            .collect();
+        let mut groups: Vec<Vec<SectionId>> = components
+            .iter()
+            .filter(|comp| !anchored(comp))
+            .map(|comp| {
+                let mut ids: Vec<SectionId> = comp.iter().copied().collect();
+                ids.sort_by_key(|id| order.get(id).copied().unwrap_or(usize::MAX));
+                ids
+            })
+            .collect();
+        groups.sort_by_key(|ids| ids.first().and_then(|id| order.get(id).copied()));
+        groups
+    }
+
     /// Count sections not connected to a zero datum (directly or through
     /// merges), restricted to components that contain at least one of
     /// `newly_imported_section_ids`. Used to add an info line to the import

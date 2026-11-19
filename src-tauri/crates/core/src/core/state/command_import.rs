@@ -1513,9 +1513,11 @@ impl AppState {
 
         let shot_count = imported_shot_count;
         let closures_requested = closures.len() as u32;
-        // What the file lost goes first: it is the line the user most needs.
-        let mut receipt_warnings = skipped_sections;
-        receipt_warnings.extend(unconnected_sections);
+        // What the file lost has its own receipt field, which the dialog shows
+        // in full above the warnings: it is the line the user most needs.
+        let mut section_problems = skipped_sections;
+        section_problems.extend(unconnected_sections);
+        let mut receipt_warnings = Vec::new();
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
         }
@@ -1556,6 +1558,7 @@ impl AppState {
             warnings: receipt_warnings,
             info: Vec::new(),
             zero_datum_created,
+            section_problems: (!section_problems.is_empty()).then_some(section_problems),
         };
         receipt.cap_warnings();
 

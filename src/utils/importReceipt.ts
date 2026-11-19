@@ -34,6 +34,10 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
       info: [...(acc.info ?? []), ...(r.info ?? [])],
       // First batch that created one wins, same rule as `unit_conversion`.
       zero_datum_created: acc.zero_datum_created ?? r.zero_datum_created,
+      // #814: optional on the wire; kept absent when no batch had any.
+      ...(acc.section_problems || r.section_problems
+        ? { section_problems: [...(acc.section_problems ?? []), ...(r.section_problems ?? [])] }
+        : {}),
     }),
     first,
   );

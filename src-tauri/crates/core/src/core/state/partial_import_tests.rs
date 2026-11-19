@@ -78,6 +78,14 @@ fn receipt(result: &CommandResult) -> &ImportReceipt {
     result.import_receipt.as_ref().expect("a receipt")
 }
 
+/// The receipt's per-section lines: what the import lost or could not connect.
+fn problems(result: &CommandResult) -> &[String] {
+    receipt(result)
+        .section_problems
+        .as_deref()
+        .unwrap_or_default()
+}
+
 #[test]
 fn a_refused_section_costs_only_itself() {
     let state = new_state();
@@ -100,10 +108,15 @@ fn a_refused_section_costs_only_itself() {
     assert_eq!(receipt.sections_imported, 2);
     // Two shots per section: the refused section's shots never landed.
     assert_eq!(receipt.shot_count, 4);
-    let line = &receipt.warnings[0];
+    assert_eq!(
+        problems(&result),
+        ["Section \"Bad\" was not imported: Shot 2 has zero length"],
+        "the refused section gets its own receipt line, apart from the warnings"
+    );
     assert!(
-        line.starts_with("Section \"Bad\" was not imported: ") && line.contains("zero length"),
-        "the receipt must lead with the refused section and why: {line}"
+        !receipt.warnings.iter().any(|w| w.contains("\"Bad\"")),
+        "{:?}",
+        receipt.warnings
     );
 }
 
@@ -138,12 +151,14 @@ fn a_section_joining_a_refused_one_imports_on_its_own() {
     assert_eq!(names(&project), ["Branch"]);
     assert!(project.station_merges.is_empty(), "nothing to merge onto");
 
-    let warnings = &receipt(&result).warnings;
-    assert!(
-        warnings.iter().any(|w| w
-            == "Section \"Branch\" was imported but not connected: the section it joins was not imported"),
-        "{warnings:?}"
+    assert_eq!(
+        problems(&result),
+        [
+            "Section \"Bad\" was not imported: Shot 2 has zero length",
+            "Section \"Branch\" was imported but not connected: the section it joins was not imported",
+        ]
     );
+    let warnings = &receipt(&result).warnings;
     assert!(
         warnings
             .iter()
@@ -190,7 +205,7 @@ fn a_failed_placement_keeps_the_section_unconnected() {
     assert!(project.station_merges.is_empty());
     assert!(project.zero_datums.is_empty());
 
-    let warnings = &receipt(&result).warnings;
+    let warnings = problems(&result);
     assert!(
         warnings.iter().any(|w| w.starts_with(
             "Section \"Unmerged\" was imported but not connected to the existing survey"
@@ -260,7 +275,7 @@ fn a_refused_section_names_its_shot_by_position_only() {
         Vec::new(),
     );
     assert_eq!(
-        receipt(&result).warnings[0],
+        problems(&result)[0],
         "Section \"Bad\" was not imported: Shot 2 has zero length"
     );
 }
@@ -287,7 +302,7 @@ fn a_move_that_cannot_be_made_keeps_the_section_where_it_was_created() {
     );
     assert!(result.success, "{:?}", result.error);
     assert_eq!(names(&state.get_project_state().unwrap()), ["Unmoved"]);
-    let warnings = &receipt(&result).warnings;
+    let warnings = problems(&result);
     assert!(
         warnings.iter().any(|w| w
             .starts_with("Section \"Unmoved\" was imported but not moved to where it was placed")),
@@ -358,4 +373,125 @@ fn the_all_or_nothing_route_rolls_back_on_a_refused_or_unconnected_section() {
             [false, false]
         );
     }
+}
+
+fn not_connected(state: &AppState) -> Vec<crate::models::ProjectWarning> {
+    let project = state.get_project_state().unwrap();
+    state
+        .compute_project_warnings(&project, None)
+        .into_iter()
+        .filter(|w| w.code == crate::models::SECTION_NOT_CONNECTED)
+        .collect()
+}
+
+fn datum_at_origin() -> ImportPlacement {
+    ImportPlacement::ZeroDatum {
+        coordinates: crate::models::GpsCoordinates {
+            latitude: 20.5,
+            longitude: -87.3,
+            depth_reference: 0.0,
+        },
+        station_index: 0,
+    }
+}
+
+/// A section whose import connection failed stays findable after the receipt
+/// is closed: the Warnings tab lists it, on its first shot, as advisory.
+#[test]
+fn an_unconnected_section_is_listed_in_the_warnings() {
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            section(0, "Placed", 5.0, datum_at_origin()),
+            section(
+                1,
+                "Unmerged",
+                3.0,
+                ImportPlacement::FromExisting {
+                    import_station: 0,
+                    existing_station: StationRef::new(9999, 0),
+                },
+            ),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    let unmerged = project.sections[1].id;
+
+    let warnings = not_connected(&state);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let w = &warnings[0];
+    assert_eq!((w.section_id, w.shot_index), (unmerged, 0));
+    assert_eq!(
+        w.severity,
+        crate::core::WarningSeverity::Warning,
+        "it can be ignored"
+    );
+    assert!(
+        w.message
+            .starts_with("Section \"Unmerged\" is not connected to the rest of the survey"),
+        "{}",
+        w.message
+    );
+
+    // Merging it onto the survey is the fix, and the warning goes with it.
+    let merged = state.merge_stations(
+        StationRef::new(unmerged, 0),
+        StationRef::new(project.sections[0].id, 2),
+    );
+    assert!(merged.success, "{:?}", merged.error);
+    assert!(not_connected(&state).is_empty());
+}
+
+/// Only an odd one out is flagged: in a project with no zero datum anywhere,
+/// every piece floats and there is nothing to connect them to.
+#[test]
+fn no_unconnected_warning_without_any_zero_datum() {
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            section(0, "One", 5.0, ImportPlacement::Origin),
+            section(1, "Two", 3.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert!(not_connected(&state).is_empty());
+}
+
+/// A piece of several merged sections is listed once, on its first section.
+#[test]
+fn a_merged_floating_piece_is_listed_once() {
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            section(0, "Placed", 5.0, datum_at_origin()),
+            section(1, "Loose", 3.0, ImportPlacement::Origin),
+            section(
+                2,
+                "Loose branch",
+                3.0,
+                ImportPlacement::FromImporting {
+                    import_station: 0,
+                    target_section_index: 1,
+                    target_station_index: 2,
+                },
+            ),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let warnings = not_connected(&state);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0]
+            .message
+            .starts_with("Section \"Loose\" and 1 section merged with it are not connected"),
+        "{}",
+        warnings[0].message
+    );
 }

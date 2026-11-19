@@ -1716,6 +1716,7 @@ mod tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            section_problems: None,
         }
     }
 
@@ -1789,6 +1790,18 @@ mod tests {
 
         assert_eq!(receipt.warnings.len(), 1);
         assert_eq!(receipt.warnings[0].chars().count(), 300);
+    }
+
+    /// #814: the per-section lines are bounded like the warnings - a hostile
+    /// file can refuse one section per entry just as easily.
+    #[test]
+    fn cap_warnings_also_caps_section_problems() {
+        let mut receipt = blank_receipt();
+        receipt.section_problems = Some((0..60).map(|i| format!("section {i}")).collect());
+        receipt.cap_warnings();
+        let problems = receipt.section_problems.unwrap();
+        assert_eq!(problems.len(), 51);
+        assert_eq!(problems[50], "... and 10 more sections");
     }
 
     #[test]

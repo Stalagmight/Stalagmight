@@ -37,6 +37,15 @@ pub struct ImportReceipt {
     /// for the same replay/cache back-compat reason as `info`.
     #[serde(default)]
     pub zero_datum_created: Option<String>,
+    /// One line per section this import lost or could not connect (#814):
+    /// sections the project refused and left out, and sections imported
+    /// without their placement. Apart from `warnings` because they are the
+    /// lines the user most needs: the receipt shows every one, above the
+    /// warnings, and never folds them behind Details. `None` when there are
+    /// none; optional on the wire so every existing receipt stays valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub section_problems: Option<Vec<String>>,
 }
 
 /// Make a file-controlled string fit to cross IPC and be rendered as UI text: drop
@@ -80,6 +89,7 @@ impl ImportReceipt {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            section_problems: None,
         }
     }
 
@@ -108,6 +118,23 @@ impl ImportReceipt {
         for warning in &mut self.warnings {
             if let Some((cut, _)) = warning.char_indices().nth(Self::MAX_WARNING_LEN) {
                 warning.truncate(cut);
+            }
+        }
+        // The same bounds for the per-section lines, which a hostile file can
+        // multiply just as easily (one per section).
+        if let Some(problems) = self.section_problems.as_mut() {
+            if problems.len() > Self::MAX_WARNINGS {
+                let overflow = problems.len() - Self::MAX_WARNINGS;
+                problems.truncate(Self::MAX_WARNINGS);
+                problems.push(format!(
+                    "... and {overflow} more section{}",
+                    if overflow == 1 { "" } else { "s" }
+                ));
+            }
+            for line in problems.iter_mut() {
+                if let Some((cut, _)) = line.char_indices().nth(Self::MAX_WARNING_LEN) {
+                    line.truncate(cut);
+                }
             }
         }
     }

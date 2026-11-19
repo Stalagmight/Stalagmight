@@ -945,6 +945,7 @@ mod receipt_tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            section_problems: None,
         })
     }
 
