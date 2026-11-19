@@ -1124,8 +1124,8 @@ fn survey_declination(
                     ),
                     Err(reason) => {
                         warnings.push(format!(
-                            "Survey '{}': auto declination failed ({reason}); using entered value",
-                            survey.name
+                            "Survey '{}' ({}): auto declination failed ({reason}); using entered value",
+                            survey.name, survey.date
                         ));
                         (
                             survey.parameters.declination,
@@ -2968,8 +2968,8 @@ mod tests {
         )
     }
 
-    /// #811: Auto declination for a 2026 survey used to fail (IGRF-13 ended with
-    /// 2025), fall back to the entered value and put the model error's debug
+    /// #811: Auto declination for a 2025-or-later survey used to fail (the
+    /// bundled IGRF-13 stopped short of 2025), fall back to the entered value and put the model error's debug
     /// dump in the warning. With IGRF-14 it is the model's value, recorded with
     /// its epoch. The expected value is the BGS IGRF-14 calculator's at this
     /// synthetic point and date (see `geo.rs`).

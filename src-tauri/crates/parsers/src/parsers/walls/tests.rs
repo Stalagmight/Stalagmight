@@ -1932,8 +1932,8 @@ fn out_of_range_date_warns_on_declination_derive() {
     );
 }
 
-/// #811: a 2026 derive date used to fall past the bundled model (IGRF-13 ended
-/// with 2025) and import with 0° and a warning. With IGRF-14 it derives a real
+/// #811: a 2026 derive date used to fall past the bundled model (IGRF-13
+/// stopped short of 2025) and import with 0° and a warning. With IGRF-14 it derives a real
 /// declination, recorded with its epoch, and warns about nothing.
 #[test]
 fn a_2026_derive_date_gets_an_igrf_declination() {
@@ -1959,8 +1959,10 @@ fn a_2026_derive_date_gets_an_igrf_declination() {
         "{:?}",
         reference.source
     );
+    // About +13.9 degrees east at (60, -150) in mid-2026 (the BGS IGRF-14
+    // calculator gives 13.848 on 2027-01-01): a sign flip or the fallback fails.
     assert!(
-        reference.applied_correction().abs() > 1.0,
+        (13.0..15.0).contains(&reference.applied_correction()),
         "{}",
         reference.applied_correction()
     );

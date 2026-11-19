@@ -56,8 +56,8 @@ pub(super) fn tml_azimuth_reference(tml: &TmlFile, warnings: &mut Vec<String>) -
     // and the one the declination should be evaluated at.
     //
     // An undated file gets no model call at all. Substituting today's date made
-    // the import wall-clock-dependent - the bundled model stops at the end of 2029,
-    // so from 2026 on every undated file took the failure branch and printed
+    // the import wall-clock-dependent: once today passed the bundled model's end
+    // (IGRF-13 stopped short of 2025), every undated file took the failure branch and printed
     // whatever today happened to be into its receipt. The same file has to
     // import to the same project on any two days.
     let Some(epoch_date) = tml.sections.iter().filter_map(|section| section.date).min() else {
@@ -153,8 +153,8 @@ mod tests {
     /// #438: the same file has to import to the same project on any two days.
     ///
     /// Substituting `Utc::now()` for a missing survey date made this
-    /// wall-clock-dependent: the bundled IGRF model stops at 2025-12-31, so from
-    /// 2026 the call deterministically FAILED and printed whatever today
+    /// wall-clock-dependent: the bundled IGRF-13 model stopped short of 2025, so
+    /// from then on the call deterministically FAILED and printed whatever today
     /// happened to be into the receipt - a different receipt every day, and a
     /// different one again if the model is ever extended. There is no epoch, so
     /// there is no model call.
@@ -241,29 +241,36 @@ mod tests {
         );
     }
 
-    /// #811: a survey dated 2026 used to fall past the bundled model (IGRF-13
-    /// ended with 2025) and import with no correction. With IGRF-14 it gets a
-    /// real declination, recorded with its epoch, and nothing in the receipt.
+    /// #811: a survey dated 2025 or later used to fall past the bundled model
+    /// (IGRF-13 stopped short of 2025) and import with no correction. With
+    /// IGRF-14 it gets a real declination, recorded with its epoch, and nothing
+    /// in the receipt - through the last day the model covers.
     #[test]
-    fn a_2026_survey_gets_an_igrf_declination_and_no_receipt_line() {
-        let xml =
-            undated_georeferenced_magnetic().replace("<Date></Date>", "<Date>2026-11-03</Date>");
-        let tml = parse_synthetic_tmlu(&xml);
+    fn a_2025_to_2029_survey_gets_an_igrf_declination_and_no_receipt_line() {
+        for (date, year) in [
+            ("2025-06-01", 2025),
+            ("2026-11-03", 2026),
+            ("2029-12-31", 2029),
+        ] {
+            let xml = undated_georeferenced_magnetic()
+                .replace("<Date></Date>", &format!("<Date>{date}</Date>"));
+            let tml = parse_synthetic_tmlu(&xml);
 
-        let mut warnings = Vec::new();
-        let reference = tml_azimuth_reference(&tml, &mut warnings);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(
-            reference.source,
-            CorrectionSource::IgrfAuto { epoch_year: 2026 },
-            "{reference:?}"
-        );
-        // The fixture's georeference (20.25, -87.5) sits a couple of degrees
-        // west of true north in 2026; zero would mean the fallback ran.
-        assert!(
-            reference.applied_correction() < -1.0,
-            "{}",
-            reference.applied_correction()
-        );
+            let mut warnings = Vec::new();
+            let reference = tml_azimuth_reference(&tml, &mut warnings);
+            assert!(warnings.is_empty(), "{date}: {warnings:?}");
+            assert_eq!(
+                reference.source,
+                CorrectionSource::IgrfAuto { epoch_year: year },
+                "{date}: {reference:?}"
+            );
+            // The fixture's georeference (20.25, -87.5) sits a couple of
+            // degrees west of true north; zero would mean the fallback ran.
+            assert!(
+                reference.applied_correction() < -1.0,
+                "{date}: {}",
+                reference.applied_correction()
+            );
+        }
     }
 }

@@ -49,12 +49,15 @@ pub fn igrf_declination(lat: f64, lng: f64, date: NaiveDate) -> Result<f64, Stri
     igrf::declination(lat, lng, 0, d)
         .map(|field| field.d)
         .map_err(|e| match e {
+            // The callers already name the date; the coordinates stay out of
+            // the text, since warnings are logged and a cave's position is
+            // often private.
             igrf::Error::DateOutOfRange(_) => format!(
-                "{date} is outside the dates the IGRF-14 geomagnetic model covers \
+                "the date is outside the dates the IGRF-14 geomagnetic model covers \
                  ({IGRF_MODEL_SPAN})"
             ),
-            igrf::Error::LatitudeOutOfBounds => format!("latitude {lat} is out of range"),
-            igrf::Error::LongitudeOutOfBounds => format!("longitude {lng} is out of range"),
+            igrf::Error::LatitudeOutOfBounds => "the latitude is out of range".to_string(),
+            igrf::Error::LongitudeOutOfBounds => "the longitude is out of range".to_string(),
         })
 }
 
@@ -104,8 +107,32 @@ mod tests {
         // date and the model's span, and carries none of the model's internals.
         assert_eq!(
             reason,
-            "2030-01-01 is outside the dates the IGRF-14 geomagnetic model covers \
+            "the date is outside the dates the IGRF-14 geomagnetic model covers \
              (1900-01-01 to 2029-12-31)"
+        );
+    }
+
+    /// Both ends of [`IGRF_MODEL_SPAN`] are inside the model, the day after its
+    /// end is not: the span the user is told is the span the model serves.
+    #[test]
+    fn igrf_declination_serves_exactly_the_span_it_names() {
+        for (y, m, d) in [(1900, 1, 1), (2029, 12, 31)] {
+            let date = NaiveDate::from_ymd_opt(y, m, d).unwrap();
+            assert!(igrf_declination(10.0, 10.0, date).is_ok(), "{date}");
+        }
+        let after = NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
+        assert!(igrf_declination(10.0, 10.0, after).is_err());
+    }
+
+    /// Coordinates never appear in the reason (it is logged with the import).
+    #[test]
+    fn an_out_of_range_coordinate_is_not_echoed() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let lat = igrf_declination(123.456, 0.0, date).unwrap_err();
+        let lng = igrf_declination(0.0, 654.321, date).unwrap_err();
+        assert!(
+            !lat.contains("123") && !lng.contains("654"),
+            "{lat} / {lng}"
         );
     }
 
@@ -139,16 +166,18 @@ mod tests {
         }
     }
 
-    /// Tripwire for the next expiry (#811): the bundled model must still cover
-    /// a survey dated a year from today. This goes red during 2029, a year
-    /// before IGRF-14 ends; IAGA's next generation (IGRF-15) is expected
-    /// late in 2029. Update `vendor/igrf/data` then, as MODIFICATIONS.md describes.
+    /// Tripwire for the next expiry (#811): the bundled model must cover a
+    /// survey dated today. It reads the wall clock on purpose and goes red on
+    /// 2030-01-01, the first day a user's survey falls outside IGRF-14 - not
+    /// earlier, when the next generation (IGRF-15, expected late 2029) may not
+    /// exist yet and nothing could turn it green. Update `vendor/igrf/data` as
+    /// MODIFICATIONS.md describes.
     #[test]
-    fn the_bundled_model_covers_a_survey_a_year_from_today() {
-        let next_year = chrono::Utc::now().date_naive() + chrono::Days::new(366);
+    fn the_bundled_model_covers_today() {
+        let today = chrono::Utc::now().date_naive();
         assert!(
-            igrf_declination(0.0, 0.0, next_year).is_ok(),
-            "the bundled IGRF model ends before {next_year}; update vendor/igrf \
+            igrf_declination(0.0, 0.0, today).is_ok(),
+            "the bundled IGRF model does not cover today ({today}); update vendor/igrf \
              to the next IGRF generation (see vendor/igrf/MODIFICATIONS.md)"
         );
     }

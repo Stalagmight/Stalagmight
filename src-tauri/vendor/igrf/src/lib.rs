@@ -229,7 +229,11 @@ fn decimal_day_of_year(date: time::Date) -> f64 {
     } else {
         0
     };
-    let mut day_in_year = DAYS[(month - 1) as usize] + day;
+    // Stalagmight fork: days elapsed before this date, so 1 January is
+    // `year.0` (the usual decimal-year convention). Upstream counted from 1,
+    // which put 31 December at `year + 1.0` - past a model that ends there -
+    // and every date one day late.
+    let mut day_in_year = DAYS[(month - 1) as usize] + day - 1;
     if month > 2 {
         day_in_year += leap_year;
     }
@@ -628,16 +632,21 @@ mod tests {
             time::Date::from_ordinal_date(1999, 1).unwrap(),
         )
         .unwrap();
+        // Stalagmight fork: 1999-01-01 is now 1999.0 rather than one day later
+        // (see decimal_day_of_year), which moves the intensities by under 0.1 nT
+        // (upstream expected h 24423.68, f 48476.78, x 24327.52, y 2165.15,
+        // z 41874.6). The BGS IGRF-14 calculator gives d 5.086, h 24424,
+        // f 48477, x 24328, y 2165, z 41875 here (it reports whole nT).
         assert_eq!(
             field.rounded(),
             Field {
                 d: 5.09,
                 i: 59.75,
-                h: 24423.68,
-                f: 48476.78,
-                x: 24327.52,
-                y: 2165.15,
-                z: 41874.6,
+                h: 24423.7,
+                f: 48476.75,
+                x: 24327.55,
+                y: 2165.08,
+                z: 41874.55,
                 ddot: 3.53,
                 fdot: 11.65,
                 hdot: -7.77,
@@ -660,6 +669,16 @@ mod tests {
             time::Date::from_ordinal_date(2026, 1).unwrap(),
         );
         assert!(inside.is_ok(), "{:?}", inside);
+
+        // The last day the model covers is inside it (it was not, before the
+        // decimal-year fix: 31 December counted as the next year's 1 January).
+        let last_day = declination(
+            41.60911536877931,
+            41.6009718546448,
+            100,
+            time::Date::from_ordinal_date(2029, 365).unwrap(),
+        );
+        assert!(last_day.is_ok(), "{:?}", last_day);
 
         let past = declination(
             41.60911536877931,

@@ -94,7 +94,17 @@ fn main() {
         match parts.first().copied() {
             None | Some("#") => {}
             Some(first) if first.starts_with('#') => {}
-            Some("c/s") => kinds = parts[3..].iter().map(|s| s.to_string()).collect(),
+            Some("c/s") => {
+                // The kinds are written into generated Rust as string
+                // literals, so only the two the table defines are accepted.
+                kinds = parts[3..].iter().map(|s| s.to_string()).collect();
+                let (models, sv) = kinds.split_at(kinds.len() - 1);
+                assert!(
+                    models.iter().all(|k| k == "IGRF" || k == "DGRF") && sv == ["SV"],
+                    "unexpected model kinds in the coefficient table: {:?}",
+                    kinds
+                );
+            }
             Some("g/h") => {
                 // Every column but the last is a model epoch; the last is the
                 // secular-variation span ("2025-30"), which is not a number.
@@ -117,6 +127,10 @@ fn main() {
 
     assert!(!epochs.is_empty(), "no g/h header row");
     assert_eq!(kinds.len(), epochs.len() + 1, "c/s and g/h rows disagree");
+    assert!(
+        rows.iter().all(|row| row.values.len() == kinds.len()),
+        "a coefficient row does not have one value per model plus the secular variation"
+    );
     let sv_column = epochs.len();
 
     let mut models: Vec<FieldModel> = Vec::new();

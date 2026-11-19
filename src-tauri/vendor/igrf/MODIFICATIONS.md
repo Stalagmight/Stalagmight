@@ -30,16 +30,30 @@ survey Stalagmight imported got no declination correction (#811).
   the one upstream's COF parser writes from `IGRF13.COF`. That was checked on
   2026-11-19 against upstream's generated output.
 - **`lib.rs`**:
+  - **decimal years count from 0.** `decimal_day_of_year` counted days from 1,
+    so 1 January was `year + 1/365` and 31 December `year + 1.0`. That put every
+    date one day late, and the last day of a model's span outside it: under
+    IGRF-13 every 2025 date was rejected, though the message said 2025-12-31.
+    It now counts the days before the date, so 1 January is `year.0`. Values
+    move by one day of secular variation (typically under 0.001 degree of
+    declination);
   - the `DateOutOfRange` message names the new end date (2029-12-31);
   - `#[allow(dead_code)]` on `FieldModel`, whose unread fields warned on every
     build once this became a path dependency (cargo hides warnings from
     crates.io dependencies);
   - the tests follow the data. `test_gh2_max2_gt_zero` checks IGRF-14's
     secular variation, and `test_declination_year_out_of_range` checks that
-    2026 is in range and 2030 is not. `test_interpsh` and `test_declination`
-    (1999) are unchanged and still pass, since those models did not change.
+    2026 and 2029-12-31 are in range and 2030-01-01 is not. `test_interpsh`
+    (1999) is unchanged and passes, since those models did not change.
+    `test_declination` (1999-01-01) keeps its declination; its intensities
+    moved by under 0.1 nT with the decimal-year fix, and its comment gives the
+    old values and the BGS calculator's.
 - **`Cargo.toml`** gains a `repository` link and a fork note; `Cargo.lock` is
   committed and pinned to the versions the app's own lock resolves.
+
+- **`build.rs` hardening:** the model kinds it writes into generated Rust are
+  checked to be `IGRF`/`DGRF`, and every coefficient row must have one value
+  per model plus the secular variation.
 
 Everything else (the field evaluation itself) is upstream's code, unchanged.
 
@@ -56,5 +70,5 @@ Everything else (the field evaluation itself) is upstream's code, unchanged.
 4. Update the provenance here and in `third_party/igrf/`, then run
    `pnpm gen:third-party`.
 
-`geo.rs`'s `the_bundled_model_covers_a_survey_a_year_from_today` goes red a
-year before the bundled model ends, which is the reminder.
+`geo.rs`'s `the_bundled_model_covers_today` goes red on the first day the
+bundled model no longer covers (2030-01-01 for IGRF-14), which is the reminder.
