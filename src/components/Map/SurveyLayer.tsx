@@ -360,6 +360,9 @@ export default class SurveyLayer {
   // the shots/stations color paint), enforced upstream in uiStore.
   private gasReachMode: boolean = false;
   private gasReachState: GasReachFeatureState | null = null;
+  // An overlay changed while the style was gone, so the survey still shows the
+  // old overlay colours: the style restore redraws it.
+  private overlayMissedStyle = false;
   // Plan-mode idle tint (#395 revision): true while Plan is active but no gas
   // origin has been chosen yet - the whole survey renders the gas ramp's dim far
   // color instead of leaking line colors under the gas scheme. Driven by
@@ -488,10 +491,15 @@ export default class SurveyLayer {
     update?.();
     // Overlay changes made while the style was gone never reached the rebuilt
     // one (the snapshot predates them); redraw the ones derived from live state.
-    // The interact paint too: an overlay switched off during the gap would keep
-    // its gradient on the hover and selection layers, and switching it off again
-    // is a no-op (setDistanceGradient, setGasReach).
+    // An overlay switched on or off in the gap redraws the survey too: switching
+    // it off again is a no-op (setDistanceGradient, setGasReach), so nothing else
+    // would until the next survey refresh.
     this.applyInteractPaint();
+    if (this.overlayMissedStyle) {
+      this.overlayMissedStyle = false;
+      this.resyncCustomRenderFromStore();
+      this.syncCustomDimming();
+    }
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
     this.syncCustomMeasurePath();
@@ -1707,7 +1715,10 @@ export default class SurveyLayer {
     if (!enabled && state === null && !this.distanceMode && this.distanceState === null) return;
     this.distanceMode = enabled;
     this.distanceState = state;
-    if (!this.map || !hasLiveStyle(this.map)) return;
+    if (!this.map || !hasLiveStyle(this.map)) {
+      this.overlayMissedStyle = true; // reattachCustomLayers redraws it
+      return;
+    }
     // Interact overlay follows the mode swap; the custom renderer (no feature-state)
     // rebuilds the survey geometry with the new overlay colors.
     this.applyOverlayPaint();
@@ -1798,7 +1809,10 @@ export default class SurveyLayer {
     if (!enabled && state === null && !this.gasReachMode && this.gasReachState === null) return;
     this.gasReachMode = enabled;
     this.gasReachState = state;
-    if (!this.map || !hasLiveStyle(this.map)) return;
+    if (!this.map || !hasLiveStyle(this.map)) {
+      this.overlayMissedStyle = true; // reattachCustomLayers redraws it
+      return;
+    }
     // Interact overlay follows the mode swap; the custom renderer rebuilds the
     // survey geometry with the new overlay colors.
     this.applyOverlayPaint();

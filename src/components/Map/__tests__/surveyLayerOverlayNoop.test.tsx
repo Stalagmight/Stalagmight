@@ -65,10 +65,12 @@ describe('SurveyLayer overlays switched off while off', () => {
     expect(resync).toHaveBeenCalledTimes(2);
     layer.setGasReach(false, null);
     expect(resync).toHaveBeenCalledTimes(2);
+    layer.setGasReach(false, { reach: new Map() }); // off, but a new state: applies
+    expect(resync).toHaveBeenCalledTimes(3);
   });
 
-  it('a style restore re-applies the interact paint of an overlay switched off while the style was gone', () => {
-    const { layer } = makeLayer();
+  it('a style restore redraws an overlay switched off while the style was gone', () => {
+    const { layer, resync } = makeLayer();
     const interactPaint = vi.fn();
     const map: { style?: object | undefined } = { style: undefined };
     Object.assign(layer, {
@@ -82,14 +84,20 @@ describe('SurveyLayer overlays switched off while off', () => {
       customLabels: null,
       dragGhost: { reattach: vi.fn() },
     });
-    // On, then off, both while the style is gone: neither reaches the paint.
+    const reattach = () => (layer as unknown as { reattachCustomLayers: () => void }).reattachCustomLayers();
+    // On, then off, both while the style is gone: neither reaches the map.
     layer.setDistanceGradient(true, { dist: new Map() });
     layer.setDistanceGradient(false, null);
     expect(interactPaint).not.toHaveBeenCalled();
-    // The next survey refresh switches it off again, which is now a no-op, so
-    // the restore is what puts the plain colours back on hover and selection.
+    expect(resync).not.toHaveBeenCalled();
+    // Switching it off again is a no-op, so the restore redraws the survey and
+    // the hover and selection paint in the plain colours.
     map.style = {};
-    (layer as unknown as { reattachCustomLayers: () => void }).reattachCustomLayers();
+    reattach();
     expect(interactPaint).toHaveBeenCalledTimes(1);
+    expect(resync).toHaveBeenCalledTimes(1);
+    // A later restore with no overlay change in between rebuilds nothing.
+    reattach();
+    expect(resync).toHaveBeenCalledTimes(1);
   });
 });
