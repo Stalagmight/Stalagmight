@@ -199,6 +199,13 @@ mod open_undo_bugs_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod partial_import_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
     clippy::float_cmp,

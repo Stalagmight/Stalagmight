@@ -46,6 +46,48 @@ enum StationText {
 /// - failed`) would then silently report every one of those pairs as
 /// created, when in fact none were. Counting `Ok` arms directly reports the
 /// correct zero.
+/// How a section the file names reads in an import receipt (#814): its name
+/// from the file, sanitised like every file-controlled receipt string, or its
+/// position when it has none.
+fn receipt_section_name(config: &crate::models::ImportSectionConfig, idx: usize) -> String {
+    crate::models::sanitize_display_text(
+        &config
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Section {}", idx + 1)),
+        crate::core::command::MAX_FILE_NAME_LEN,
+    )
+}
+
+/// The receipt line for a section that imported but whose placement failed.
+fn unplaced_line(section_name: &str, what: &str, error: Option<String>) -> String {
+    match error {
+        Some(reason) if !reason.is_empty() => {
+            format!("Section \"{section_name}\" was imported but {what}: {reason}")
+        }
+        _ => format!("Section \"{section_name}\" was imported but {what}"),
+    }
+}
+
+/// The failure message when no section of the file could be imported, naming
+/// the first few reasons (#814).
+fn nothing_imported_message(skipped: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut message = "Nothing was imported: no section in the file could be imported.".to_string();
+    for line in skipped.iter().take(SHOWN) {
+        message.push(' ');
+        message.push_str(line);
+        message.push('.');
+    }
+    if skipped.len() > SHOWN {
+        message.push_str(&format!(
+            " ({} more sections were not imported.)",
+            skipped.len() - SHOWN
+        ));
+    }
+    message
+}
+
 fn tally_closure_results(
     closure_pairs: &[(StationRef, StationRef)],
     results: Vec<Result<crate::models::LoopClosure, String>>,
@@ -734,6 +776,11 @@ impl AppState {
         // claim of completeness the receipt doesn't back up.
         let mut zero_datum_created: Option<String> = None;
         let mut zero_datum_count: u32 = 0;
+        // Receipt lines for what one bad section cost (#814): sections the
+        // project refused and skipped, and sections imported but left
+        // unconnected because their placement could not be made.
+        let mut skipped_sections: Vec<String> = Vec::new();
+        let mut unconnected_sections: Vec<String> = Vec::new();
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -856,17 +903,26 @@ impl AppState {
             };
 
             // Step 1: Create the section
+            let section_name = receipt_section_name(config, idx);
             let t_create_start = std::time::Instant::now();
             let create_result = self.create_section(section_data.clone());
             create_total += t_create_start.elapsed();
             if !create_result.success {
-                // Rollback to before-snapshot
-                self.rollback_project(&before_snapshot);
-                return CommandResult::failure(format!(
-                    "Failed to create section \"{}\": {}",
-                    config.name.as_deref().unwrap_or("unnamed"),
-                    create_result.error.unwrap_or_default()
+                // One section the project cannot hold costs the user that
+                // section, never the rest of the file (#814). `create_section`
+                // refuses before it adds anything, so there is nothing to undo:
+                // skip it, say so in the receipt, and import the others.
+                let reason = create_result.error.unwrap_or_default();
+                tracing::warn!(
+                    section = idx,
+                    %reason,
+                    purpose = "import every section that can be imported (#814)",
+                    "Section refused; skipping it and importing the rest"
+                );
+                skipped_sections.push(format!(
+                    "Section \"{section_name}\" was not imported: {reason}"
                 ));
+                continue;
             }
 
             let Some(section_id) = create_result.section_id else {
@@ -991,149 +1047,151 @@ impl AppState {
 
             // Step 2: Apply placement
             let t_placement_start = std::time::Instant::now();
-            match &config.placement {
-                ImportPlacement::Origin => {
-                    // No-op - section starts at origin
-                }
-
-                ImportPlacement::ZeroDatum {
-                    coordinates,
-                    station_index,
-                } => {
-                    let station_ref = StationRef::new(section_id, *station_index);
-                    let result = self.set_zero_datum(station_ref, *coordinates, None, None);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to set zero datum for section \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
+            // A placement that cannot be made leaves the section imported where
+            // `create_section` put it, unconnected, with a receipt line (#814):
+            // each command below refuses before it changes anything, so breaking
+            // out here leaves nothing half-done. The failed command is not
+            // recorded in `batch_commands`.
+            'placement: {
+                match &config.placement {
+                    ImportPlacement::Origin => {
+                        // No-op - section starts at origin
                     }
-                    all_warnings.extend(result.warnings);
-                    zero_datum_count += 1;
-                    if zero_datum_created.is_none() {
-                        // Sanitized HERE, where the raw file-controlled name is
-                        // born, not only in `decorate_receipt`: the DMP
-                        // wizard's `import_sections` IPC command never calls
-                        // `decorate_receipt` (it overwrites source_format/
-                        // file_name/sections_found directly), so that route's
-                        // receipt would otherwise carry a raw
-                        // `ImportSectionConfig::name` straight from the parsed
-                        // file end to end. `sanitize_display_text` is
-                        // idempotent (filter then clamp), so decorate_receipt
-                        // sanitizing this value again for the routes that DO
-                        // call it is a harmless no-op, not a second transform.
-                        zero_datum_created = Some(crate::models::sanitize_display_text(
-                            &config
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| format!("Section {}", idx + 1)),
-                            crate::core::command::MAX_FILE_NAME_LEN,
-                        ));
-                    }
-                    batch_commands.push(Command::SetZeroDatum {
-                        station_ref,
-                        coordinates: *coordinates,
-                        accuracy_m: None,
-                        entrance: None,
-                    });
-                }
 
-                ImportPlacement::FromExisting {
-                    import_station,
-                    existing_station,
-                } => {
-                    let import_ref = StationRef::new(section_id, *import_station);
-                    let result = self.merge_stations(import_ref, *existing_station);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to merge section \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
-                    }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: *existing_station,
-                    });
-                }
-
-                ImportPlacement::FromImporting {
-                    import_station,
-                    target_section_index,
-                    target_station_index,
-                } => {
-                    let Some(&target_section_id) = created_ids.get(target_section_index) else {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Section \"{}\" references import section index {} which has not been created yet",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            target_section_index
-                        ));
-                    };
-                    let import_ref = StationRef::new(section_id, *import_station);
-                    let target_ref = StationRef::new(target_section_id, *target_station_index);
-                    let result = self.merge_stations(import_ref, target_ref);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to merge section \"{}\" with imported section: {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
-                    }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: target_ref,
-                    });
-                }
-
-                ImportPlacement::Manual {
-                    align_station_index: _,
-                    offset,
-                } => {
-                    if let Some(offset) = offset {
-                        let result = self.move_section(section_id, *offset);
+                    ImportPlacement::ZeroDatum {
+                        coordinates,
+                        station_index,
+                    } => {
+                        let station_ref = StationRef::new(section_id, *station_index);
+                        let result = self.set_zero_datum(station_ref, *coordinates, None, None);
                         if !result.success {
-                            self.rollback_project(&before_snapshot);
-                            return CommandResult::failure(format!(
-                                "Failed to move section \"{}\": {}",
-                                config.name.as_deref().unwrap_or("unnamed"),
-                                result.error.unwrap_or_default()
+                            unconnected_sections.push(unplaced_line(
+                                &section_name,
+                                "not placed at its zero datum",
+                                result.error,
                             ));
+                            break 'placement;
                         }
                         all_warnings.extend(result.warnings);
-                        batch_commands.push(Command::MoveSection {
-                            section_id,
-                            offset: *offset,
+                        zero_datum_count += 1;
+                        if zero_datum_created.is_none() {
+                            // Sanitized HERE, where the raw file-controlled name is
+                            // born, not only in `decorate_receipt`: the DMP
+                            // wizard's `import_sections` IPC command never calls
+                            // `decorate_receipt` (it overwrites source_format/
+                            // file_name/sections_found directly), so that route's
+                            // receipt would otherwise carry a raw
+                            // `ImportSectionConfig::name` straight from the parsed
+                            // file end to end. `sanitize_display_text` is
+                            // idempotent (filter then clamp), so decorate_receipt
+                            // sanitizing this value again for the routes that DO
+                            // call it is a harmless no-op, not a second transform.
+                            zero_datum_created = Some(section_name.clone());
+                        }
+                        batch_commands.push(Command::SetZeroDatum {
+                            station_ref,
+                            coordinates: *coordinates,
+                            accuracy_m: None,
+                            entrance: None,
                         });
                     }
-                }
 
-                ImportPlacement::ManualSnap {
-                    align_station_index,
-                    snapped_to_station,
-                } => {
-                    let snap_index = (*align_station_index).min(config.shots.len() as u32);
-                    let import_ref = StationRef::new(section_id, snap_index);
-                    let result = self.merge_stations(import_ref, *snapped_to_station);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to snap section \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
+                    ImportPlacement::FromExisting {
+                        import_station,
+                        existing_station,
+                    } => {
+                        let import_ref = StationRef::new(section_id, *import_station);
+                        let result = self.merge_stations(import_ref, *existing_station);
+                        if !result.success {
+                            unconnected_sections.push(unplaced_line(
+                                &section_name,
+                                "not connected to the existing survey",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: *existing_station,
+                        });
                     }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: *snapped_to_station,
-                    });
+
+                    ImportPlacement::FromImporting {
+                        import_station,
+                        target_section_index,
+                        target_station_index,
+                    } => {
+                        // The section it joins may have been refused above (or come
+                        // later in the list): this one still imports, on its own.
+                        let Some(&target_section_id) = created_ids.get(target_section_index) else {
+                            unconnected_sections.push(format!(
+                                "Section \"{section_name}\" was imported but not connected: the \
+                             section it joins was not imported"
+                            ));
+                            break 'placement;
+                        };
+                        let import_ref = StationRef::new(section_id, *import_station);
+                        let target_ref = StationRef::new(target_section_id, *target_station_index);
+                        let result = self.merge_stations(import_ref, target_ref);
+                        if !result.success {
+                            unconnected_sections.push(unplaced_line(
+                                &section_name,
+                                "not connected to the section it joins",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: target_ref,
+                        });
+                    }
+
+                    ImportPlacement::Manual {
+                        align_station_index: _,
+                        offset,
+                    } => {
+                        if let Some(offset) = offset {
+                            let result = self.move_section(section_id, *offset);
+                            if !result.success {
+                                unconnected_sections.push(unplaced_line(
+                                    &section_name,
+                                    "not moved to where it was placed",
+                                    result.error,
+                                ));
+                                break 'placement;
+                            }
+                            all_warnings.extend(result.warnings);
+                            batch_commands.push(Command::MoveSection {
+                                section_id,
+                                offset: *offset,
+                            });
+                        }
+                    }
+
+                    ImportPlacement::ManualSnap {
+                        align_station_index,
+                        snapped_to_station,
+                    } => {
+                        let snap_index = (*align_station_index).min(config.shots.len() as u32);
+                        let import_ref = StationRef::new(section_id, snap_index);
+                        let result = self.merge_stations(import_ref, *snapped_to_station);
+                        if !result.success {
+                            unconnected_sections.push(unplaced_line(
+                                &section_name,
+                                "not snapped to its station",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: *snapped_to_station,
+                        });
+                    }
                 }
             }
             placement_total += t_placement_start.elapsed();
@@ -1174,6 +1232,14 @@ impl AppState {
             purpose = "TML import loop summary",
             "execute_import_sections per-section loop done"
         );
+
+        // Every section refused: there is no partial import to keep, so this is
+        // the one per-section outcome that still fails the import, naming why
+        // (#814). The rollback also undoes the overlap updates applied above.
+        if all_section_ids.is_empty() {
+            self.rollback_project(&before_snapshot);
+            return CommandResult::failure(nothing_imported_message(&skipped_sections));
+        }
 
         // Lift the deferral (clears the flag now so `cascade_connection_offsets`
         // is allowed to run) and execute ONE cascade across every newly
@@ -1393,7 +1459,9 @@ impl AppState {
 
         let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
         let closures_requested = closures.len() as u32;
-        let mut receipt_warnings = Vec::new();
+        // What the file lost goes first: it is the line the user most needs.
+        let mut receipt_warnings = skipped_sections;
+        receipt_warnings.extend(unconnected_sections);
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
         }
