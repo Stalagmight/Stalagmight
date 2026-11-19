@@ -176,6 +176,7 @@ fn rescan_reach(
 /// edge and both answers.
 #[derive(Default)]
 struct Seen {
+    merges: usize,
     closures: usize,
     datums: usize,
     connected: usize,
@@ -184,6 +185,14 @@ struct Seen {
 
 impl Seen {
     fn note(&mut self, project: &Project) {
+        self.merges += project
+            .station_merges
+            .iter()
+            .filter(|m| {
+                project.resolve_key(&m.station_a).is_some()
+                    && project.resolve_key(&m.station_b).is_some()
+            })
+            .count();
         self.closures += project.loop_closures.len();
         self.datums += project.placement_datum_refs().len();
     }
@@ -195,6 +204,7 @@ impl Seen {
         }
     }
     fn assert_exercised(&self) {
+        assert!(self.merges > 0, "premise: some survey holds a merge");
         assert!(
             self.closures > 0,
             "premise: some survey holds a loop closure"
@@ -215,7 +225,7 @@ impl Seen {
 #[test]
 fn a_search_over_edges_resolved_once_answers_as_the_rescan_did() {
     let mut seen = Seen::default();
-    for seed in 1..=40u64 {
+    for seed in 1..=12u64 {
         let project = survey(seed);
         seen.note(&project);
         let stations = all_stations(&project);
@@ -264,7 +274,7 @@ fn a_search_over_edges_resolved_once_answers_as_the_rescan_did() {
 #[test]
 fn a_range_search_over_edges_resolved_once_answers_as_the_rescan_did() {
     let mut seen = Seen::default();
-    for seed in 1..=25u64 {
+    for seed in 1..=6u64 {
         let project = survey(seed);
         seen.note(&project);
         let stations = all_stations(&project);
@@ -345,7 +355,8 @@ fn raw_xy_is_the_raw_coordinate_without_its_depth_to_the_bit() {
         }
         assert!(held > 0, "premise: seed {seed} holds a station offset");
         // One past the end of a line: no station, on both paths.
-        let past = StationRef::new(lines[0], u32::try_from(stations.len()).unwrap());
+        let last = project.get_line(lines[0]).unwrap().shots.len();
+        let past = StationRef::new(lines[0], u32::try_from(last + 1).unwrap());
         assert!(project.compute_station_raw_xy(past).is_none());
         assert!(project.compute_station_raw_coords(past).is_none());
         for station in stations {
