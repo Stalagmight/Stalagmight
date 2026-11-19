@@ -40,7 +40,7 @@ fn survey(seed: u64) -> Project {
     let mut project = Project::new("Graph".to_string(), None);
     let lines = 4 + rng.below(6);
     for line in 0..lines {
-        let shots = (0..1 + rng.below(5))
+        let shots = (0..=rng.below(5))
             .map(|i| ShotData {
                 length: 2.0 + i as f64,
                 azimuth_in: (line * 40 + i * 7) as f64 % 360.0,
@@ -334,7 +334,21 @@ fn raw_xy_is_the_raw_coordinate_without_its_depth_to_the_bit() {
         for (k, id) in lines.iter().enumerate() {
             project.adjust_line_offset(*id, 0.1 + k as f64 * 3.7, -2.3 + k as f64);
         }
-        for station in all_stations(&project) {
+        let stations = all_stations(&project);
+        let mut held = 0;
+        for (k, station) in stations.iter().enumerate().filter(|(k, _)| k % 3 == 0) {
+            if let Some(key) = project.key_for_ref(*station) {
+                let hand = (0.3 + k as f64 * 0.11, -0.7 + k as f64 * 0.05, 0.4);
+                project.station_offsets.insert(key, hand);
+                held += 1;
+            }
+        }
+        assert!(held > 0, "premise: seed {seed} holds a station offset");
+        // One past the end of a line: no station, on both paths.
+        let past = StationRef::new(lines[0], u32::try_from(stations.len()).unwrap());
+        assert!(project.compute_station_raw_xy(past).is_none());
+        assert!(project.compute_station_raw_coords(past).is_none());
+        for station in stations {
             let full = project.compute_station_raw_coords(station);
             let xy = project.compute_station_raw_xy(station);
             assert_eq!(
