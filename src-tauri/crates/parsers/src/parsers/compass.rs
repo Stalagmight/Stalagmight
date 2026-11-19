@@ -1454,7 +1454,7 @@ pub fn convert_compass_to_import_configs(
             // A station tied to itself carries no connection and would put a
             // station twice into one chain. It used to be dropped with the
             // other zero-length shots; it still is, and says so (#275).
-            if shot.from == shot.to && !(length_m > 0.0) {
+            if shot.from == shot.to && (!length_m.is_finite() || length_m <= 0.0) {
                 warnings.push(format!(
                     "Shot {} -> {}: skipped (a station tied to itself).",
                     shot.from, shot.to
@@ -1466,7 +1466,7 @@ pub fn convert_compass_to_import_configs(
             // correction that takes it to zero or below) was a real leg, so
             // name it: the import ties it to 1 mm and moves what follows (#275).
             // A non-finite length already has its own warning above.
-            if !(length_m > 0.0) && shot.length.is_finite() && shot.length != 0.0 {
+            if length_m <= 0.0 && shot.length.is_finite() && shot.length != 0.0 {
                 warnings.push(format!(
                     "Shot {} -> {}: no usable length, imported as a 1 mm tie.",
                     shot.from, shot.to

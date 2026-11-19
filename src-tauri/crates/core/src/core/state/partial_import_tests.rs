@@ -297,10 +297,8 @@ fn a_shot_with_no_length_imports_as_a_coincident_tie() {
     let project = state.get_project_state().unwrap();
     assert_eq!(names(&project), ["Zero", "Negative"]);
     for s in &project.sections {
-        assert_eq!(
-            s.shots[1].length,
-            crate::parsers::geo::COINCIDENT_TIE_EPSILON_M
-        );
+        let tie = s.shots[1].length - crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
+        assert!(tie.abs() < 1e-12, "{}", s.shots[1].length);
     }
     let receipt = receipt(&result);
     assert!(problems(&result).is_empty(), "{:?}", problems(&result));
