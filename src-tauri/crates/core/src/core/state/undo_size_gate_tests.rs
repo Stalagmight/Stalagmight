@@ -644,7 +644,7 @@ fn large_credit_actions() -> Vec<(&'static str, Action)> {
         }),
         ("edit credit (1,000 shots, 40 lines)", |g| {
             let mut shots = Vec::new();
-            for line in &g.lines[220..260] {
+            for line in &g.lines[40..80] {
                 shots.extend(g.shot_ids(*line)[10..35].iter().map(|id| (*line, *id)));
             }
             credit_edit(g, CreditTargets::Shots { shots })
@@ -668,14 +668,26 @@ const ALLOCATORS: [&str; 4] = [
     "next_cave_section_id",
 ];
 
-/// The live project member by member, every number to the bit: the
-/// snapshot's top-level members as written, each line on its own with its
-/// shot-id allocator apart. Left out is the edit time, which every step
-/// stamps afresh.
-fn bitwise_state(state: &AppState) -> std::collections::BTreeMap<String, String> {
+/// The live project's snapshot text, its edit time blanked: equal texts are
+/// equal states to the bit, and most steps compare equal without a parse.
+fn raw_state(state: &AppState) -> String {
     let project = state.get_project_state().unwrap();
-    let text = AppState::serialize_project_snapshot(&project).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut text = AppState::serialize_project_snapshot(&project).unwrap();
+    let key = "\"modified_at\":\"";
+    if let Some(at) = text.find(key) {
+        let start = at + key.len();
+        if let Some(len) = text[start..].find('"') {
+            text.replace_range(start..start + len, "");
+        }
+    }
+    text
+}
+
+/// The snapshot text member by member, every number to the bit: its top-level
+/// members as written, each line on its own with its shot-id allocator apart.
+/// Left out is the edit time, which every step stamps afresh.
+fn bitwise_members(text: &str) -> std::collections::BTreeMap<String, String> {
+    let value: serde_json::Value = serde_json::from_str(text).unwrap();
     let mut out = std::collections::BTreeMap::new();
     for (key, member) in value.as_object().unwrap() {
         match key.as_str() {
@@ -729,10 +741,11 @@ fn bitwise_differences(
 /// Every action's row, and every action that could not be measured - or, when
 /// `exact`, whose undo or redo did not land exactly on the state it records,
 /// since a small entry that restores the wrong project is no saving at all.
-/// Exact twice over: as the fuzzer compares (`canonical_snapshot`, numbers to
-/// 12 significant digits), and to the bit ([`bitwise_state`]). (The
-/// comparisons cost most of the run on the larger survey, whose entries take
-/// the same paths, so only the smaller one asks for them.)
+/// Exact to the bit ([`raw_state`], [`bitwise_members`]), which is stricter than the fuzzer's
+/// comparison (numbers to 12 significant digits). (The comparisons cost most
+/// of the run on the larger survey, whose entries take the same paths, so
+/// only the smaller one asks for them; without them an action is measured
+/// from its step and one undo, and redone only for a report's timings.)
 fn measure(
     gate: &Gate,
     exact: bool,
@@ -742,16 +755,19 @@ fn measure(
     let mut failed = Vec::new();
     for (action, run) in actions {
         let depth = gate.state.undo_stack.lock().unwrap().len();
-        let state = |gate: &Gate| exact.then(|| state_text(&gate.state));
-        let bits = |gate: &Gate| exact.then(|| bitwise_state(&gate.state));
-        let off_by_bits = |recorded: &Option<std::collections::BTreeMap<String, String>>,
-                           gate: &Gate| {
-            recorded
-                .as_ref()
-                .map(|recorded| bitwise_differences(recorded, &bitwise_state(&gate.state)))
-                .filter(|differences| !differences.is_empty())
+        let bits = |gate: &Gate| exact.then(|| raw_state(&gate.state));
+        let off_by_bits = |recorded: &Option<String>, gate: &Gate| {
+            let recorded = recorded.as_ref()?;
+            let now = raw_state(&gate.state);
+            if now == *recorded {
+                return None;
+            }
+            Some(bitwise_differences(
+                &bitwise_members(recorded),
+                &bitwise_members(&now),
+            ))
+            .filter(|differences| !differences.is_empty())
         };
-        let before = state(gate);
         let before_bits = bits(gate);
         let started = std::time::Instant::now();
         let result = run(gate);
@@ -764,7 +780,6 @@ fn measure(
             failed.push(format!("{action}: pushed no entry"));
             continue;
         }
-        let after = state(gate);
         let after_bits = bits(gate);
         let (variant, undo_bytes) = newest(&gate.state, false);
         let started = std::time::Instant::now();
@@ -774,12 +789,6 @@ fn measure(
             failed.push(format!("{action}: undo: {:?}", undone.error));
             continue;
         }
-        if state(gate) != before {
-            failed.push(format!(
-                "{action}: the undo did not restore the state before it"
-            ));
-            continue;
-        }
         if let Some(differences) = off_by_bits(&before_bits, gate) {
             failed.push(format!(
                 "{action}: the undo did not restore the state before it to the bit: {differences:?}"
@@ -787,6 +796,16 @@ fn measure(
             continue;
         }
         let (_, redo_bytes) = newest(&gate.state, true);
+        if !exact && !reporting() {
+            rows.push(Row {
+                action,
+                variant,
+                undo_bytes,
+                redo_bytes,
+                millis: [forward_ms, undo_ms, 0],
+            });
+            continue;
+        }
         // Redo and undo again, so the next action starts from the same state
         // and the redo is timed too.
         let started = std::time::Instant::now();
@@ -796,22 +815,14 @@ fn measure(
             failed.push(format!("{action}: redo: {:?}", redone.error));
             continue;
         }
-        if state(gate) != after {
-            failed.push(format!(
-                "{action}: the redo did not restore the state after it"
-            ));
-            continue;
-        }
         if let Some(differences) = off_by_bits(&after_bits, gate) {
             failed.push(format!(
                 "{action}: the redo did not restore the state after it to the bit: {differences:?}"
             ));
             continue;
         }
-        if !gate.state.undo().success || state(gate) != before {
-            failed.push(format!(
-                "{action}: the second undo did not restore the state before it"
-            ));
+        if !gate.state.undo().success {
+            failed.push(format!("{action}: the second undo failed"));
             continue;
         }
         if let Some(differences) = off_by_bits(&before_bits, gate) {
@@ -857,6 +868,11 @@ fn table(label: &str, gate: &Gate, rows: &[Row]) -> String {
         );
     }
     out
+}
+
+/// Whether the run writes the size report (and so wants every timing).
+fn reporting() -> bool {
+    std::env::var_os("STALAGMIGHT_UNDO_SIZE_REPORT").is_some()
 }
 
 fn report(text: &str) {
@@ -905,11 +921,13 @@ fn every_undo_entry_is_a_small_fraction_of_a_20k_shot_file() {
     gate(400, "20k shots", false, true);
 }
 
+/// On the 5k survey: a credit entry grows with the runs it covers, not with
+/// the survey, so the smaller one (and its stricter cap) is the harder test.
 #[test]
-fn a_large_credit_edit_is_a_small_fraction_of_a_20k_shot_file() {
+fn a_large_credit_edit_is_a_small_fraction_of_the_file() {
     gate_actions(
-        &open_with(400, Some(2_000)),
-        "20k shots and a 2,000-shot line, credit edits",
+        &open_with(100, Some(2_000)),
+        "5k shots and a 2,000-shot line, credit edits",
         true,
         large_credit_actions(),
     );
@@ -992,33 +1010,30 @@ fn a_project_serialized_in_parts_is_its_whole_snapshot_split() {
             "{what}: the parts restore the project the whole text restores"
         );
     }
-    for lines in [100, 400] {
-        let gate = open(lines);
-        check(&gate.state, &format!("{lines} lines"));
-        if lines == 100 {
-            // A second datum in the tree's component is a GPS fix there.
-            assert!(
-                gate.state
-                    .execute(Command::SetZeroDatum {
-                        station_ref: StationRef::new(gate.mid(), 20),
-                        coordinates: GpsCoordinates {
-                            latitude: 20.501,
-                            longitude: -87.249,
-                            depth_reference: 0.0,
-                        },
-                        accuracy_m: Some(5.0),
-                        entrance: None,
-                    })
-                    .success
-            );
-            {
-                let guard = gate.state.project.lock().unwrap();
-                assert!(
-                    crate::core::undo::snapshot_fixes::holds_fix(guard.as_ref().unwrap()),
-                    "premise: the project holds a GPS fix"
-                );
-            }
-            check(&gate.state, "100 lines and a GPS fix");
-        }
+    // The 5k survey only: the 20k one takes no other path.
+    let gate = open(100);
+    check(&gate.state, "100 lines");
+    // A second datum in the tree's component is a GPS fix there.
+    assert!(
+        gate.state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(gate.mid(), 20),
+                coordinates: GpsCoordinates {
+                    latitude: 20.501,
+                    longitude: -87.249,
+                    depth_reference: 0.0,
+                },
+                accuracy_m: Some(5.0),
+                entrance: None,
+            })
+            .success
+    );
+    {
+        let guard = gate.state.project.lock().unwrap();
+        assert!(
+            crate::core::undo::snapshot_fixes::holds_fix(guard.as_ref().unwrap()),
+            "premise: the project holds a GPS fix"
+        );
     }
+    check(&gate.state, "100 lines and a GPS fix");
 }
