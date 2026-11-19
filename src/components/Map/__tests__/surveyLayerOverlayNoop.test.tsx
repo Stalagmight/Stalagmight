@@ -51,6 +51,8 @@ describe('SurveyLayer overlays switched off while off', () => {
     expect(resync).toHaveBeenCalledTimes(3);
     layer.setDistanceGradient(false, null); // off -> off: nothing
     expect(resync).toHaveBeenCalledTimes(3);
+    layer.setDistanceGradient(false, { dist: new Map() }); // off, but a new state: applies
+    expect(resync).toHaveBeenCalledTimes(4);
   });
 
   it('the gas reach rebuilds nothing, but every real change still applies', () => {
@@ -63,5 +65,31 @@ describe('SurveyLayer overlays switched off while off', () => {
     expect(resync).toHaveBeenCalledTimes(2);
     layer.setGasReach(false, null);
     expect(resync).toHaveBeenCalledTimes(2);
+  });
+
+  it('a style restore re-applies the interact paint of an overlay switched off while the style was gone', () => {
+    const { layer } = makeLayer();
+    const interactPaint = vi.fn();
+    const map: { style?: object | undefined } = { style: undefined };
+    Object.assign(layer, {
+      map,
+      applyInteractPaint: interactPaint,
+      refreshInteractOverlay: vi.fn(),
+      syncCustomMeasurePath: vi.fn(),
+      deferredUpdate: null,
+      customRender: null,
+      measurePath: null,
+      customLabels: null,
+      dragGhost: { reattach: vi.fn() },
+    });
+    // On, then off, both while the style is gone: neither reaches the paint.
+    layer.setDistanceGradient(true, { dist: new Map() });
+    layer.setDistanceGradient(false, null);
+    expect(interactPaint).not.toHaveBeenCalled();
+    // The next survey refresh switches it off again, which is now a no-op, so
+    // the restore is what puts the plain colours back on hover and selection.
+    map.style = {};
+    (layer as unknown as { reattachCustomLayers: () => void }).reattachCustomLayers();
+    expect(interactPaint).toHaveBeenCalledTimes(1);
   });
 });

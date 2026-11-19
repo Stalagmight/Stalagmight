@@ -488,6 +488,10 @@ export default class SurveyLayer {
     update?.();
     // Overlay changes made while the style was gone never reached the rebuilt
     // one (the snapshot predates them); redraw the ones derived from live state.
+    // The interact paint too: an overlay switched off during the gap would keep
+    // its gradient on the hover and selection layers, and switching it off again
+    // is a no-op (setDistanceGradient, setGasReach).
+    this.applyInteractPaint();
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
     this.syncCustomMeasurePath();
