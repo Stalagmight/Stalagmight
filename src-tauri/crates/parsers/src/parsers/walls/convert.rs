@@ -440,7 +440,7 @@ pub fn convert_walls_to_import_configs(
     // The model has no zero-length shot (it can't place two stations at one
     // point as a leg), so a Walls zero-length coincident-station tie is nudged to
     // a negligible length and counted here for a single aggregated warning.
-    const COINCIDENT_TIE_EPSILON_M: f64 = 0.001;
+    use crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
     let mut coincident_ties = 0usize;
     let mut chains: Vec<PendingChain> = Vec::new();
     for survey in &kept {
