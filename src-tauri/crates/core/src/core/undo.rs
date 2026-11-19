@@ -426,6 +426,30 @@ mod credit_runs {
     }
 }
 
+/// `identity` without the shot uuids `data`'s shots already carry. The
+/// redo rebuilds the line through `Line::new`, which keeps each shot's own
+/// uuid unless the line repeats one, and then lets `identity.shot_uuids` win
+/// (`Line::restore_with_identity`): where every shot carries its uuid, all of
+/// them different, and the identity lists exactly those, the list repeats the
+/// line and is dropped. Kept otherwise, a repeat or a uuid-less shot included.
+pub fn without_carried_uuids(identity: &mut LineIdentity, data: &LineData) {
+    let carried = identity.shot_uuids.len() == data.shots.len()
+        && identity
+            .shot_uuids
+            .iter()
+            .zip(&data.shots)
+            .all(|(kept, shot)| kept.is_some() && *kept == shot.uuid);
+    let distinct = {
+        let mut seen = std::collections::HashSet::new();
+        data.shots
+            .iter()
+            .all(|shot| shot.uuid.as_deref().is_some_and(|uuid| seen.insert(uuid)))
+    };
+    if carried && distinct {
+        identity.shot_uuids = Vec::new();
+    }
+}
+
 /// The two states of a snapshot capture in their parts
 /// ([`UndoData::CapturedPair`]).
 #[derive(Debug, Clone)]
@@ -506,10 +530,20 @@ pub enum UndoData {
     },
 
     /// Snapshot of a newly created line (for CreateLine undo/redo ID preservation)
+    ///
+    /// Holds only what its side needs. On the undo stack the undo deletes the
+    /// line by id and re-reads it from the live project just before
+    /// (`AppState::refresh_created_line_identity`), so the entry holds the id
+    /// alone ([`UndoData::for_undo_stack`]); on the redo stack it holds the
+    /// line the undo removed, which the redo puts back.
     CreatedLineSnapshot {
         line_id: LineId,
-        /// Full line data including all shots
-        line_data: LineData,
+        /// The line, whole: what the redo restores. `None` on the undo stack.
+        ///
+        /// FORMAT EVOLUTION (additive): always present in rows written before
+        /// the undo side dropped it, which read as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_data: Option<LineData>,
         /// What `line_data` cannot carry: the shots' persistent uuids, the
         /// reverse parity and the least-squares gauge pair. Without it the redo
         /// rebuilds through `Line::new` and mints a fresh uuid per shot -
@@ -527,8 +561,13 @@ pub enum UndoData {
         /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
         /// written before this field existed, where the default (no uuids,
         /// parity false, no anchors) reproduces the pre-fix mint.
-        #[serde(default)]
-        identity: LineIdentity,
+        ///
+        /// Its `shot_uuids` are left empty when `line_data`'s shots carry the
+        /// same uuids, which `Line::new` keeps ([`without_carried_uuids`]),
+        /// and the whole identity is left out (`None`) on the undo stack. A
+        /// row that has none reads as the default identity, as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<LineIdentity>,
     },
 
     /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
@@ -883,6 +922,21 @@ impl UndoData {
         }
     }
 
+    /// This payload as the undo stack holds it: a created line keeps only its
+    /// id there (its undo deletes the line by id and re-reads it first);
+    /// every other payload is kept whole.
+    pub fn for_undo_stack(&mut self) {
+        if let UndoData::CreatedLineSnapshot {
+            line_data,
+            identity,
+            ..
+        } = self
+        {
+            *line_data = None;
+            *identity = None;
+        }
+    }
+
     /// The `before` state a snapshot capture holds, when this is one.
     pub fn captured_before(&self) -> Option<&ProjectText> {
         match self {
@@ -1141,7 +1195,8 @@ impl UndoStack {
     /// NOT bound the stack - each caller applies `enforce_depth_limit` itself, because
     /// they differ in what else the append implies (a new edit also clears redo; a replay
     /// must not).
-    fn push_undo_tracked(&mut self, entry: UndoEntry) {
+    fn push_undo_tracked(&mut self, mut entry: UndoEntry) {
+        entry.undo_data.for_undo_stack();
         self.undo_bytes = self.undo_bytes.saturating_add(Self::estimated_size(&entry));
         self.undo_stack.push_back(entry);
     }
@@ -1741,8 +1796,8 @@ mod tests {
             command: test_create_line_command("Snapshot"),
             undo_data: UndoData::CreatedLineSnapshot {
                 line_id: 5,
-                line_data: test_line_data("Snapshot"),
-                identity: LineIdentity::default(),
+                line_data: Some(test_line_data("Snapshot")),
+                identity: Some(LineIdentity::default()),
             },
             timestamp: None,
         };
@@ -1758,7 +1813,7 @@ mod tests {
         } = restored.undo_data
         {
             assert_eq!(line_id, 5);
-            assert_eq!(line_data.name, Some("Snapshot".to_string()));
+            assert_eq!(line_data.unwrap().name, Some("Snapshot".to_string()));
         } else {
             panic!("Expected CreatedLineSnapshot");
         }
@@ -2472,8 +2527,8 @@ mod tests {
                 command: test_create_line_command("Created Snapshot"),
                 undo_data: UndoData::CreatedLineSnapshot {
                     line_id: 3,
-                    line_data: test_line_data("Created"),
-                    identity: LineIdentity::default(),
+                    line_data: Some(test_line_data("Created")),
+                    identity: Some(LineIdentity::default()),
                 },
                 timestamp: None,
             },

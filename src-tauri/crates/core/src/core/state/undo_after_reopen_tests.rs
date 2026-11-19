@@ -304,3 +304,88 @@ fn a_split_of_an_added_line_undone_after_a_reopen_keeps_every_shot_uuid() {
         assert!(result.success, "{:?}", result.error);
     });
 }
+
+/// A created line's entry holds only what its side needs: on the undo stack
+/// the line's id (its undo re-reads the live line), on the redo stack the
+/// line it removed, without an identity list of the uuids its shots already
+/// carry. Saved on either side and reopened, the undo and the redo land
+/// exactly.
+#[test]
+fn a_created_line_entry_holds_its_line_only_on_the_redo_stack() {
+    use crate::core::UndoData;
+    let _config = crate::test_helpers::isolated_config();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path: PathBuf = dir.path().join("created.stalx");
+    let state = new_project("Created", &path);
+    // The id allocators only grow: no history move restores them.
+    let snapshot = |state: &AppState| {
+        let mut value = snapshot(state);
+        if let Some(object) = value.as_object_mut() {
+            for allocator in ["next_line_id", "next_station_id", "next_closure_id"] {
+                object.remove(allocator);
+            }
+        }
+        value
+    };
+    let before = snapshot(&state);
+    let line = create(
+        &state,
+        "New",
+        (0..12).map(|i| shot(f64::from(i) * 7.0, 3.5)).collect(),
+    );
+    let side = |state: &AppState, redo: bool| -> (bool, Option<usize>, Option<usize>) {
+        let stack = state.undo_stack.lock().unwrap();
+        let entry = if redo {
+            stack.redo_entries().next()
+        } else {
+            stack.undo_entries().next()
+        };
+        match &entry.unwrap().undo_data {
+            UndoData::CreatedLineSnapshot {
+                line_id,
+                line_data,
+                identity,
+            } => {
+                assert_eq!(*line_id, line);
+                (
+                    true,
+                    line_data.as_ref().map(|data| data.shots.len()),
+                    identity.as_ref().map(|identity| identity.shot_uuids.len()),
+                )
+            }
+            _ => (false, None, None),
+        }
+    };
+    assert_eq!(side(&state, false), (true, None, None), "the undo side");
+    save_close_reopen(&state, &path);
+    assert_eq!(
+        side(&state, false),
+        (true, None, None),
+        "the undo side, reloaded"
+    );
+    // Read after the save, which captured the line's gauge pair: the undo
+    // re-reads the live line, so the redo puts back the line it removed.
+    let after = snapshot(&state);
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before);
+    assert_eq!(
+        side(&state, true),
+        (true, Some(12), Some(0)),
+        "the redo side holds the line, its uuids once"
+    );
+    save_close_reopen(&state, &path);
+    assert_eq!(
+        side(&state, true),
+        (true, Some(12), Some(0)),
+        "the redo side, reloaded"
+    );
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+    assert_eq!(
+        side(&state, false),
+        (true, None, None),
+        "back on the undo side"
+    );
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before);
+}

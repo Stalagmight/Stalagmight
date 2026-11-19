@@ -145,16 +145,17 @@ impl HolderWalk {
                 if undoing {
                     self.remove_lines(&[*line_id]);
                 } else {
-                    let shots = if identity.shot_uuids.is_empty() {
+                    let recorded = identity.as_ref().map(|identity| &identity.shot_uuids);
+                    let shots = if recorded.is_none_or(Vec::is_empty) {
                         line_data
-                            .shots
                             .iter()
+                            .flat_map(|data| &data.shots)
                             .map(|s| s.uuid.as_deref().map(Rc::from))
                             .collect()
                     } else {
-                        identity
-                            .shot_uuids
-                            .iter()
+                        recorded
+                            .into_iter()
+                            .flatten()
                             .map(|u| u.as_deref().map(Rc::from))
                             .collect()
                     };

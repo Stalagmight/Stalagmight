@@ -48,7 +48,7 @@ impl UndoStack {
             // Approximated from element counts - a line snapshot of a big line is
             // the only other variant that can reach megabytes.
             UndoData::CreatedLineSnapshot { line_data, .. } => {
-                line_data.shots.len() * BYTES_PER_SHOT
+                line_data.as_ref().map_or(0, |data| data.shots.len()) * BYTES_PER_SHOT
             }
             UndoData::CreatedShotSnapshot {
                 previous_offsets, ..

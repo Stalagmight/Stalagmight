@@ -171,10 +171,15 @@ fn reinstalled_ids(data: &UndoData) -> Vec<(LineId, &str)> {
             line_data,
             identity,
         } => line_data
-            .shots
             .iter()
+            .flat_map(|data| &data.shots)
             .filter_map(|s| s.uuid.as_deref())
-            .chain(identity.shot_uuids.iter().flatten().map(String::as_str))
+            .chain(
+                identity
+                    .iter()
+                    .flat_map(|identity| identity.shot_uuids.iter().flatten())
+                    .map(String::as_str),
+            )
             .map(|uuid| (*line_id, uuid))
             .collect(),
         _ => Vec::new(),
@@ -480,12 +485,16 @@ fn visit_entry(
             line_data,
             identity,
         } => {
-            changed |= visit_line_data(*line_id, line_data, f);
-            for uuid in &mut identity.shot_uuids {
-                changed |= f(*line_id, uuid);
+            if let Some(line_data) = line_data {
+                changed |= visit_line_data(*line_id, line_data, f);
             }
-            changed |= f(*line_id, &mut identity.gauge_shot_uuid);
-            changed |= f(*line_id, &mut identity.gauge_neighbour_uuid);
+            if let Some(identity) = identity {
+                for uuid in &mut identity.shot_uuids {
+                    changed |= f(*line_id, uuid);
+                }
+                changed |= f(*line_id, &mut identity.gauge_shot_uuid);
+                changed |= f(*line_id, &mut identity.gauge_neighbour_uuid);
+            }
         }
         UndoData::CreatedShotSnapshot {
             line_id,

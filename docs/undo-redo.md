@@ -37,7 +37,7 @@ Commands go through a two-phase capture during execution:
 |---------|---------|------|------|
 | `InverseCommand` | SetStationComment, SetStationName (the inverse renames back to the name the station had) | Execute the inverse command | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateLineMetadata | Parse JSON, apply old values, then put the recorded `line_offsets` back (see below) | Execute the original command |
-| `CreatedLineSnapshot` | CreateLine | Delete the line | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
+| `CreatedLineSnapshot` | CreateLine | Re-read the live line into the entry, then delete the line (on the undo stack the entry holds only the line's id) | Restore from snapshot (preserves the original ID **and** the recorded identity - see below; the identity lists no shot uuid the line's shots already carry) |
 | `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `line_offsets` back (see below) | Restore from snapshot (preserves original ID, and the created station's Station ID and name from `created_station`) |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |

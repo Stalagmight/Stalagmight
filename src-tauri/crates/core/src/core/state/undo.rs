@@ -552,7 +552,16 @@ impl AppState {
                     // `StationKey::AfterShot` anchor onto this line, exactly as
                     // in `CreatedShotSnapshot`), the reverse parity, and the
                     // least-squares gauge pair (#413, finding 1).
-                    self.restore_line(*line_id, line_data.clone(), identity)
+                    match line_data {
+                        Some(line_data) => self.restore_line(
+                            *line_id,
+                            line_data.clone(),
+                            &identity.clone().unwrap_or_default(),
+                        ),
+                        None => CommandResult::failure(
+                            "The created line was not recorded; nothing to restore".to_string(),
+                        ),
+                    }
                 }
                 UndoData::CreatedShotSnapshot {
                     line_id,
@@ -1015,8 +1024,11 @@ impl AppState {
         else {
             return;
         };
-        *line_data = line.to_line_data();
-        *identity = live;
+        let data = line.to_line_data();
+        let mut live = live;
+        crate::core::without_carried_uuids(&mut live, &data);
+        *line_data = Some(data);
+        *identity = Some(live);
     }
 
     /// Re-record an add's content from the live project immediately before its

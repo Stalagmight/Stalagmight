@@ -120,8 +120,8 @@ fn redo_stack_of(entries: Vec<UndoData>) -> UndoStack {
 fn recreate(line_id: LineId) -> UndoData {
     UndoData::CreatedLineSnapshot {
         line_id,
-        line_data: copy_data(),
-        identity: LineIdentity::default(),
+        line_data: Some(copy_data()),
+        identity: Some(LineIdentity::default()),
     }
 }
 
@@ -196,18 +196,20 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
     assert_eq!(shot_uuid.as_deref(), Some(new_id(X[0]).as_str()));
 }
 
+/// On the redo stack, where a created line's entry holds the line (on the
+/// undo stack it holds only the id, and its undo re-reads the live line).
 #[test]
 fn a_created_line_entry_follows_in_its_data_and_its_identity() {
     let (project, renamed) = healed();
-    let mut stack = stack_of(vec![UndoData::CreatedLineSnapshot {
+    let mut stack = redo_stack_of(vec![UndoData::CreatedLineSnapshot {
         line_id: 1,
-        line_data: copy_data(),
-        identity: LineIdentity {
+        line_data: Some(copy_data()),
+        identity: Some(LineIdentity {
             shot_uuids: X.iter().map(|u| Some((*u).to_string())).collect(),
             gauge_shot_uuid: Some(X[0].to_string()),
             gauge_neighbour_uuid: Some(X[1].to_string()),
             ..Default::default()
-        },
+        }),
     }]);
     assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
 
@@ -216,12 +218,19 @@ fn a_created_line_entry_follows_in_its_data_and_its_identity() {
         line_data,
         identity,
         ..
-    } = only_entry(&stack)
+    } = &stack.redo_entries().next().unwrap().undo_data
     else {
         panic!("created line entry");
     };
-    let ids: Vec<_> = line_data.shots.iter().map(|s| s.uuid.clone()).collect();
+    let ids: Vec<_> = line_data
+        .as_ref()
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone())
+        .collect();
     assert_eq!(ids, expected);
+    let identity = identity.as_ref().unwrap();
     assert_eq!(identity.shot_uuids, expected);
     assert_eq!(identity.gauge_shot_uuid, expected[0]);
     assert_eq!(identity.gauge_neighbour_uuid, expected[1]);
@@ -637,9 +646,14 @@ fn recreated_ids(stack: &UndoStack) -> Vec<Option<String>> {
     stack
         .redo_entries()
         .find_map(|entry| match &entry.undo_data {
-            UndoData::CreatedLineSnapshot { line_data, .. } => {
-                Some(line_data.shots.iter().map(|s| s.uuid.clone()).collect())
-            }
+            UndoData::CreatedLineSnapshot { line_data, .. } => Some(
+                line_data
+                    .as_ref()?
+                    .shots
+                    .iter()
+                    .map(|s| s.uuid.clone())
+                    .collect(),
+            ),
             _ => None,
         })
         .unwrap()
@@ -657,8 +671,8 @@ fn shots_moved_out_of_a_created_line_keep_their_ids() {
     let mut stack = stack_of(vec![
         UndoData::CreatedLineSnapshot {
             line_id: 0,
-            line_data: copy_data(),
-            identity: LineIdentity::default(),
+            line_data: Some(copy_data()),
+            identity: Some(LineIdentity::default()),
         },
         UndoData::ProjectSnapshotPair {
             before: json(&lines_holding(&[&X])),

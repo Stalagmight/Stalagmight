@@ -557,16 +557,18 @@ impl AppState {
                 if let Some(line) = project.lines.last() {
                     UndoData::CreatedLineSnapshot {
                         line_id: line.id,
-                        line_data: line.to_line_data(),
+                        line_data: Some(line.to_line_data()),
                         // `LineData` carries no uuid, no reverse parity and
                         // no gauge pair, so redo would rebuild the line with
                         // a fresh identity (#413, finding 1). The undo refreshes
                         // this immediately before it deletes the line, which
                         // is what carries a gauge pair captured by a save that
                         // happened after this push.
-                        identity: project
-                            .line_identity(line.id)
-                            .unwrap_or_else(|| crate::models::LineIdentity::of(line)),
+                        identity: Some(
+                            project
+                                .line_identity(line.id)
+                                .unwrap_or_else(|| crate::models::LineIdentity::of(line)),
+                        ),
                     }
                 } else {
                     undo_data
