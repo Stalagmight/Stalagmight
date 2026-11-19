@@ -114,9 +114,9 @@ regions). Read the comment blocks in those two files plus
   - It carries even one warning: a warning means something was lost or needs
     a look, and #411 exists precisely so that never rides a dismissible toast.
   - `sections_imported` is zero (#442) - nothing landing is itself the fact
-    the user needs to see, never inferred from `shot_count` (which is summed
-    from the sections the import *attempted*, not what landed - the two only
-    agree while the import path is all-or-nothing).
+    the user needs to see. Since #814 both it and `shot_count` count only the
+    sections that landed: a section the project refuses is skipped and named
+    in the receipt's warnings, which keep the modal anyway.
   - `unit_conversion` is set - a length-unit conversion silently changes every
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather

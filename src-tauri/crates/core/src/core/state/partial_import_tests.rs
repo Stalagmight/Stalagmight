@@ -98,6 +98,8 @@ fn a_refused_section_costs_only_itself() {
 
     let receipt = receipt(&result);
     assert_eq!(receipt.sections_imported, 2);
+    // Two shots per section: the refused section's shots never landed.
+    assert_eq!(receipt.shot_count, 4);
     let line = &receipt.warnings[0];
     assert!(
         line.starts_with("Section \"Bad\" was not imported: ") && line.contains("zero length"),

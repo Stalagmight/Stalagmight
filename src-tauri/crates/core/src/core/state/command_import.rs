@@ -781,6 +781,10 @@ impl AppState {
         // unconnected because their placement could not be made.
         let mut skipped_sections: Vec<String> = Vec::new();
         let mut unconnected_sections: Vec<String> = Vec::new();
+        // Shots in the sections that landed, for the receipt: a skipped
+        // section's shots were never imported, so summing the configs would
+        // overstate a partial import.
+        let mut imported_shot_count: u32 = 0;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -958,6 +962,7 @@ impl AppState {
 
             created_ids.insert(config.section_index, section_id);
             all_section_ids.push(section_id);
+            imported_shot_count += config.shots.len() as u32;
             all_warnings.extend(create_result.warnings);
 
             // Keep a reversed section where the un-reversed import would have put
@@ -1457,7 +1462,7 @@ impl AppState {
         // project. Set-only; no-op for local-only.
         self.mark_remote_forward_edit();
 
-        let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
+        let shot_count = imported_shot_count;
         let closures_requested = closures.len() as u32;
         // What the file lost goes first: it is the line the user most needs.
         let mut receipt_warnings = skipped_sections;
