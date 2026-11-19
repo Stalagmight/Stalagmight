@@ -132,15 +132,19 @@ impl Project {
             purpose = "merge stations",
             "Computed merge offset for moving sections"
         );
+        // Resolved BEFORE anything moves, so every `Err` this function returns
+        // leaves the project as it found it. An import that cannot make one of
+        // its merges keeps the section unconnected and goes on (#814); an error
+        // after the offset shift would have left that section's group moved.
+        let (Some(key_a), Some(key_b)) = (self.key_for_ref(station_a), self.key_for_ref(station_b))
+        else {
+            return Err("Cannot merge: station has no stable anchor".to_string());
+        };
         self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
 
         // Record the merge through the named entry point (it forwards to
         // MergeTopology::push, which carries the adjacency memo forward with an
         // O(1) delta instead of dropping it).
-        let (Some(key_a), Some(key_b)) = (self.key_for_ref(station_a), self.key_for_ref(station_b))
-        else {
-            return Err("Cannot merge: station has no stable anchor".to_string());
-        };
         self.record_station_merge(StationMerge {
             station_a: key_a,
             station_b: key_b,

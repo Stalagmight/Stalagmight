@@ -2450,6 +2450,15 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
   once the computed view, Plan or Export has solved the current version and goes
   with the next edit, so it must not gate like an error; it resolves with "Go to
   station" or Ignore
+- A piece of the survey nothing places (`SECTION_NOT_CONNECTED`, #814): a section,
+  or sections joined by merges or aligned loop closures, with no zero datum and no
+  such link to a piece that has one, in a project where some piece does. One
+  warning per piece, on the first shot of its first section. An import whose
+  connection could not be made leaves such a piece. Advisory (a separate piece may
+  be kept on purpose); it resolves with "Go to station" or Ignore. The Ignore is
+  kept on that shot, so if the piece later gains an earlier section the warning
+  moves to that section's first shot and shows again. A project with no zero
+  datum at all gets none
 
 ---
 

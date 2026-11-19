@@ -1154,6 +1154,77 @@ impl Project {
         components
     }
 
+    /// The pieces of the survey nothing places, in a project where something
+    /// is placed (#814): rigid groups (sections joined by merges or aligned
+    /// loop closures, the edges the offset cascade follows) holding no
+    /// placement datum. Each group lists its sections in project order; the
+    /// groups come in the order of their first section. Empty when no group
+    /// holds a datum, since then every piece floats and none is the odd one
+    /// out.
+    ///
+    /// Linear in sections plus connections: one adjacency map, one walk, and
+    /// the placed set built once. The warnings pass calls it on every refresh,
+    /// so a per-group `get_rigid_connected_section_ids` (which rescans every
+    /// merge and closure per section) or a per-group datum lookup would make a
+    /// large file with many floating pieces quadratic.
+    pub fn unanchored_section_groups(&self) -> Vec<Vec<SectionId>> {
+        let placed = self.placement_datum_sections();
+        if placed.is_empty() {
+            return Vec::new();
+        }
+        let mut adjacent: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        let mut link = |a: SectionId, b: SectionId| {
+            adjacent.entry(a).or_default().push(b);
+            adjacent.entry(b).or_default().push(a);
+        };
+        for merge in &self.station_merges {
+            link(merge.station_a.section_id, merge.station_b.section_id);
+        }
+        for closure in self.loop_closures.iter().filter(|c| c.is_aligned) {
+            link(closure.station_a.section_id, closure.station_b.section_id);
+        }
+
+        let mut seen: HashSet<SectionId> = HashSet::new();
+        let mut groups: Vec<Vec<SectionId>> = Vec::new();
+        for section in &self.sections {
+            if !seen.insert(section.id) {
+                continue;
+            }
+            let mut members = vec![section.id];
+            let mut queue = vec![section.id];
+            while let Some(current) = queue.pop() {
+                for &next in adjacent
+                    .get(&current)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    if seen.insert(next) {
+                        members.push(next);
+                        queue.push(next);
+                    }
+                }
+            }
+            if !members.iter().any(|id| placed.contains(id)) {
+                groups.push(members);
+            }
+        }
+        // `self.sections` order: the walk starts each group at its first
+        // section, but reaches the others in edge order.
+        let order: HashMap<SectionId, usize> = self
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.id, i))
+            .collect();
+        for group in &mut groups {
+            group.sort_by_key(|id| order.get(id).copied().unwrap_or(usize::MAX));
+            // A connection can name a section the project no longer holds
+            // (dangling); it is not a piece of the survey.
+            group.retain(|id| order.contains_key(id));
+        }
+        groups
+    }
+
     /// Count sections not connected to a zero datum (directly or through
     /// merges), restricted to components that contain at least one of
     /// `newly_imported_section_ids`. Used to add an info line to the import
