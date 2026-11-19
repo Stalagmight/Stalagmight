@@ -7,6 +7,7 @@ import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
+import { ShapeCache } from '../labelLayout';
 import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
 import { REVEAL_CEILING } from '../labelReveal';
 import { computeMercatorAnchor } from '../mercator';
@@ -461,6 +462,15 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(true);
     // Uniform flips, never a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
+  });
+
+  it('a build sizes the shape cache to its labels, so a survey past the default cap still hits', () => {
+    const fit = vi.spyOn(ShapeCache.prototype, 'fit');
+    const { map } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    expect(fit).toHaveBeenCalled();
+    expect(fit.mock.calls.every(([count]) => count > 0)).toBe(true);
   });
 
   it('a commentTint sync builds without error (palette-tint parity locked in labelTessellate)', () => {

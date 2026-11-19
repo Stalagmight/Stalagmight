@@ -5,6 +5,7 @@ import {
   lineWidthEm,
   wrapIntoLines,
   ShapeCache,
+  SHAPE_CACHE_CEILING,
   LABEL_KIND_LAYOUT,
   LINE_HEIGHT_EM,
   ASCENT_EM,
@@ -337,5 +338,14 @@ describe('ShapeCache', () => {
     // It only grows: a smaller build keeps the larger cap.
     cache.fit(1);
     expect(texts.every((t, i) => cache.get(LABEL_KIND.LINE_NAME, t, atlas) === built[i])).toBe(true);
+  });
+
+  it('fit stops at the ceiling, so one huge build cannot grow the cache without bound', () => {
+    const cache = new ShapeCache();
+    const cap = () => (cache as unknown as { max: number }).max;
+    cache.fit(SHAPE_CACHE_CEILING * 3);
+    expect(cap()).toBe(SHAPE_CACHE_CEILING);
+    cache.fit(SHAPE_CACHE_CEILING - 1);
+    expect(cap()).toBe(SHAPE_CACHE_CEILING);
   });
 });

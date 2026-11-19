@@ -259,8 +259,13 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
   return { glyphCount: glyphs.length, glyphs };
 }
 
+/** The most labels {@link ShapeCache.fit} lets the cache hold: about a
+ *  200,000-shot survey, far past any real one. Past it a build re-shapes as it
+ *  did before `fit`, rather than the cache growing without bound. */
+export const SHAPE_CACHE_CEILING = 200_000;
+
 /**
- * Bounded LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
+ * LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
  * camera-driven rebuilds so a pan / zoom-out re-scope only RE-PROJECTS + RE-COLLIDES
  * unchanged labels, never re-shapes them (shaping = wrap + per-glyph pen advance,
  * the dominant CPU cost of a build on a large survey). Safe to share a
@@ -273,8 +278,8 @@ export class ShapeCache {
   private readonly entries = new Map<string, ShapedLabel>();
   private max: number;
 
-  /** @param max Cap on cached labels; the survey label charset is tiny so a few
-   *  thousand distinct `(kind, text)` pairs covers a large survey's viewport. */
+  /** @param max Starting cap on cached labels; {@link fit} raises it to the
+   *  largest build, up to {@link SHAPE_CACHE_CEILING}. */
   constructor(max = 20000) {
     this.max = Math.max(1, max);
   }
@@ -284,11 +289,11 @@ export class ShapeCache {
    * A build walks its labels in the same order every time, so a cap below its
    * label count evicts each entry just before the next build asks for it: every
    * lookup misses and every label is re-shaped (a 20k-shot survey has ~21.7k
-   * labels against the default 20k). Grows only - the cache never holds more
-   * than the largest build asked for.
+   * labels against the default 20k). Grows only, so the cache holds at most the
+   * largest build shown this session, and never more than the ceiling.
    */
   fit(count: number): void {
-    this.max = Math.max(this.max, count);
+    this.max = Math.max(this.max, Math.min(count, SHAPE_CACHE_CEILING));
   }
 
   /** Shaped label for `(kind, text)` - cached across builds, shaping on a miss. */
