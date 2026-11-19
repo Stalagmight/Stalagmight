@@ -941,3 +941,133 @@ fn the_text_bag_engine_agrees_with_the_value_engine() {
         }
     }
 }
+
+/// Number `shots` by position from `base`, as Reverse Line, Split Line and
+/// Combine Lines number the shots they move.
+fn renumber(shots: &mut [Value], base: u64) {
+    for (k, shot) in shots.iter_mut().enumerate() {
+        shot["id"] = json!(base + k as u64);
+    }
+}
+
+/// How many copies of `delta` carry an edit of their own id.
+fn id_edits(delta: &ProjectDelta) -> usize {
+    serde_json::to_string(delta)
+        .unwrap()
+        .matches("{\"id\":{\"s\":")
+        .count()
+}
+
+/// A run of copies the target renumbers by position - a reverse (turned
+/// round or not, left and right swapped or not), a split's moved tail, a
+/// combine's appended line - records the ids as one run, not an edit per
+/// copy, rebuilds exactly both ways, and costs a few numbers whatever the
+/// run's length.
+#[test]
+fn renumbered_copy_runs_record_their_ids_as_a_run() {
+    let mut world = World::new(31);
+    let mut before = world.project(2);
+    let long = world.line(120);
+    let long_id = long["id"].as_u64().unwrap();
+    World::lines(&mut before).push(long);
+    before["next_line_id"] = json!(world.next_line);
+    let small = encoded_len(&round_trip(&before, &before.clone()));
+
+    // A reverse, plain and turned round with and without the swap.
+    for flip in [None, Some(false), Some(true)] {
+        let mut reversed = before.clone();
+        let shots = World::lines(&mut reversed)[2]["shots"]
+            .as_array_mut()
+            .unwrap();
+        shots.reverse();
+        if let Some(swap_lr) = flip {
+            for shot in shots.iter_mut() {
+                *shot = super::shots::flip_shot(shot, swap_lr);
+            }
+        }
+        renumber(shots, long_id * STRIDE);
+        for (from, to) in [(&before, &reversed), (&reversed, &before)] {
+            let delta = round_trip(from, to);
+            assert_eq!(
+                id_edits(&delta),
+                0,
+                "{flip:?}: {}",
+                serde_json::to_string(&delta).unwrap()
+            );
+            // Turned round twice a random bearing is not always the bits it
+            // was (the residuals are the copies' edits); a plain reverse is
+            // the one run alone.
+            assert!(
+                flip.is_some() || encoded_len(&delta) < small + 200,
+                "a renumbered reverse costs one run: {}",
+                serde_json::to_string(&delta).unwrap()
+            );
+        }
+    }
+
+    // A split: the tail moves into a new line and is numbered there.
+    let mut split = before.clone();
+    let tail: Vec<Value> = World::lines(&mut split)[2]["shots"]
+        .as_array_mut()
+        .unwrap()
+        .drain(60..)
+        .collect();
+    let mut fresh = world.line(0);
+    let fresh_id = fresh["id"].as_u64().unwrap();
+    fresh["shots"] = Value::Array(tail);
+    renumber(fresh["shots"].as_array_mut().unwrap(), fresh_id * STRIDE);
+    fresh["next_shot_id"] = json!(fresh_id * STRIDE + 60);
+    World::lines(&mut split).push(fresh);
+    split["next_line_id"] = json!(world.next_line);
+    for (from, to) in [(&before, &split), (&split, &before)] {
+        let delta = round_trip(from, to);
+        assert_eq!(
+            id_edits(&delta),
+            0,
+            "{}",
+            serde_json::to_string(&delta).unwrap()
+        );
+        assert!(
+            encoded_len(&delta) < small + 400,
+            "a renumbered split costs runs: {}",
+            serde_json::to_string(&delta).unwrap()
+        );
+    }
+
+    // A combine: the split's second line appended to the first, renumbered on.
+    let mut combined = split.clone();
+    let moved = World::lines(&mut combined).pop().unwrap();
+    let line = &mut World::lines(&mut combined)[2];
+    let shots = line["shots"].as_array_mut().unwrap();
+    shots.extend(moved["shots"].as_array().unwrap().iter().cloned());
+    renumber(shots, long_id * STRIDE);
+    let count = shots.len() as u64;
+    line["next_shot_id"] = json!(long_id * STRIDE + count);
+    for (from, to) in [(&split, &combined), (&combined, &split)] {
+        let delta = round_trip(from, to);
+        assert_eq!(
+            id_edits(&delta),
+            0,
+            "{}",
+            serde_json::to_string(&delta).unwrap()
+        );
+    }
+}
+
+/// A copy run whose renumbering would leave the id range is refused, not
+/// wrapped.
+#[test]
+fn a_copy_run_numbered_past_the_id_range_is_refused() {
+    refused_for(
+        &hostile(
+            r#"{"s":[1,[{"e":{"at":0,"id":0,"s":[{"c":{"sec":0,"at":0,"n":3,"i":[1,-1]}}]}}]]}"#,
+        ),
+        "past any id",
+    );
+    refused_for(
+        &hostile(
+            r#"{"s":[1,[{"e":{"at":0,"id":0,"s":[{"c":{"sec":0,"at":0,"n":2,"i":[5,2]}}]}}]]}"#,
+        ),
+        "past any id",
+    );
+}

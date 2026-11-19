@@ -84,8 +84,11 @@ in the project's own JSON shape:
   move or reorder shots without changing them - costs a few numbers per run. A
   reversed run may replay Reverse Line's own per-shot transform
   (`models::reversed_azimuths`, shared with `reverse_shots`), leaving only the
-  residuals. Shots the delta carries literally (a deleted shot on the undo side) are
-  written as key-once tables.
+  residuals, and a run the target renumbers by position (a reverse, a split's
+  moved tail, a combine's appended line) records its ids as `(start, step)` -
+  copy `k` takes `start + k * step` - rather than an id edit per copy. Shots the
+  delta carries literally (a deleted shot on the undo side) are written as key-once
+  tables.
 
 Equality is bitwise on floats: `-0.0` is not `0.0`, and a restore puts back the bits.
 

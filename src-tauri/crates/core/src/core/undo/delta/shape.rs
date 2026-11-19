@@ -112,7 +112,13 @@ fn collect_copies(
 ) -> Result<(), DeltaError> {
     for run in shots {
         let ShotRun::Copy {
-            sec, at, n, rev, m, ..
+            sec,
+            at,
+            n,
+            rev,
+            ids,
+            m,
+            ..
         } = run
         else {
             continue;
@@ -121,6 +127,15 @@ fn collect_copies(
             return Err(format!(
                 "a shot run copies from line {sec}, past the source's {count}"
             ));
+        }
+        if let Some(ids) = ids {
+            let last = n.saturating_sub(1);
+            if super::shots::run_id(*ids, last).is_none() {
+                return Err(format!(
+                    "a shot run numbers {n} copies from {} by {}, past any id",
+                    ids.0, ids.1
+                ));
+            }
         }
         for (_, edit) in m {
             check_edit(edit)?;

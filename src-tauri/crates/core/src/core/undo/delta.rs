@@ -188,8 +188,10 @@ pub enum ShotRun {
     /// `n` shots of the source line at position `sec`, from index `at`:
     /// upwards, or downwards when `rev` (a reversed line). `flip` turns
     /// each copy around first, as Reverse Line turns a shot around
-    /// (`shots::flip_shot`; the flag is its swap-left-right option). `m` edits the
-    /// copies, by offset into the run, ascending.
+    /// (`shots::flip_shot`; the flag is its swap-left-right option). `ids`,
+    /// when set, renumbers the copies: copy `k` takes id `start + k * step`,
+    /// `step` 1 or -1. `m` edits the copies, by offset into the run,
+    /// ascending, after both.
     #[serde(rename = "c")]
     Copy {
         sec: usize,
@@ -199,6 +201,15 @@ pub enum ShotRun {
         rev: bool,
         #[serde(rename = "f", default, skip_serializing_if = "Option::is_none")]
         flip: Option<bool>,
+        /// The copies' ids as a run of their own, `(start, step)`. A reverse
+        /// renumbers the shots it turns round and a split or a combine the
+        /// shots it moves, each by position; spelled out as an id edit per
+        /// copy, that was most of such an entry.
+        ///
+        /// FORMAT EVOLUTION (additive): absent in rows written before it, whose
+        /// id edits are in `m`.
+        #[serde(rename = "i", default, skip_serializing_if = "Option::is_none")]
+        ids: Option<(u64, i8)>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         m: Vec<(usize, Edit)>,
     },

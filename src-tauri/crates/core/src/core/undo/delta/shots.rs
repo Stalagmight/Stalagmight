@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde_json::{Map, Number, Value};
 
 use super::json::{apply_edit, diff};
-use super::{shots_array, DeltaError, Edit, ShotRun, SHOTS, UUID};
+use super::{shots_array, DeltaError, Edit, ShotRun, ID, SHOTS, UUID};
 
 /// `ShotRun::Put` as the history stores it: consecutive objects with the same
 /// keys become one table - the keys once, then a row of values per shot - and
@@ -316,10 +316,11 @@ impl OpenCopy {
     /// The finished run over `source` (the copied line's shots) towards
     /// `target`. A run copied in reverse is a reversed line, so its copies
     /// are also tried turned around ([`flip_shot`], with and without the
-    /// left-right swap): whichever leaves the fewest edits is kept.
+    /// left-right swap), and a run whose target ids step by one is also tried
+    /// renumbered ([`id_run`]): whichever leaves the fewest bytes is kept.
     fn finish(self, source: &[Value], target: &[Value]) -> ShotRun {
         let rev = self.rev == Some(true);
-        let mods_for = |flip: Option<bool>| -> Vec<(usize, Edit)> {
+        let mods_for = |flip: Option<bool>, ids: Option<(u64, i8)>| -> Vec<(usize, Edit)> {
             (0..self.n)
                 .filter_map(|k| {
                     let index = if rev {
@@ -329,35 +330,87 @@ impl OpenCopy {
                     };
                     let from = source.get(index)?;
                     let to = target.get(self.t0 + k)?;
-                    let edit = match flip {
-                        Some(swap_lr) => diff(&flip_shot(from, swap_lr), to),
-                        None => diff(from, to),
-                    };
-                    Some((k, edit?))
+                    let base = copy_base(from, flip, ids.and_then(|ids| run_id(ids, k)));
+                    Some((k, diff(&base, to)?))
                 })
                 .collect()
         };
-        let candidates: &[Option<bool>] = if rev {
+        let flips: &[Option<bool>] = if rev {
             &[None, Some(false), Some(true)]
         } else {
             &[None]
         };
-        let (flip, m) = candidates
+        let renumbered = id_run(target.get(self.t0..self.t0 + self.n).unwrap_or(&[]));
+        let ids_options: Vec<Option<(u64, i8)>> =
+            std::iter::once(None).chain(renumbered.map(Some)).collect();
+        let cost = |ids: Option<(u64, i8)>, mods: &Vec<(usize, Edit)>| {
+            let ids = ids.map_or(0, |ids| {
+                serde_json::to_string(&ids).map_or(usize::MAX, |json| json.len() + 5)
+            });
+            serde_json::to_string(mods).map_or(usize::MAX, |json| json.len().saturating_add(ids))
+        };
+        let (flip, ids, m) = flips
             .iter()
-            .map(|flip| (*flip, mods_for(*flip)))
-            .min_by_key(|(_, mods)| {
-                serde_json::to_string(mods).map_or(usize::MAX, |json| json.len())
-            })
-            .unwrap_or((None, Vec::new()));
+            .flat_map(|flip| ids_options.iter().map(move |ids| (*flip, *ids)))
+            .map(|(flip, ids)| (flip, ids, mods_for(flip, ids)))
+            .min_by_key(|(_, ids, mods)| cost(*ids, mods))
+            .unwrap_or((None, None, Vec::new()));
         ShotRun::Copy {
             sec: self.sec,
             at: self.at,
             n: self.n,
             rev,
             flip,
+            ids,
             m,
         }
     }
+}
+
+/// The ids of `shots` as a run, `(start, step)`, when each is a number one
+/// on from the one before (`step` 1) or one back (`step` -1); a single shot's
+/// id is a run of one.
+fn id_run(shots: &[Value]) -> Option<(u64, i8)> {
+    let ids: Vec<u64> = shots
+        .iter()
+        .map(|shot| shot.get(ID).and_then(Value::as_u64))
+        .collect::<Option<_>>()?;
+    let (&first, rest) = ids.split_first()?;
+    let step: i8 = match rest.first() {
+        None => return Some((first, 1)),
+        Some(&next) if Some(next) == first.checked_add(1) => 1,
+        Some(&next) if Some(next) == first.checked_sub(1) => -1,
+        Some(_) => return None,
+    };
+    let fits = ids
+        .iter()
+        .enumerate()
+        .all(|(k, id)| run_id((first, step), k) == Some(*id));
+    fits.then_some((first, step))
+}
+
+/// The id copy `k` of a run renumbered by `ids` takes, unless it would
+/// leave the `u64` range.
+pub(super) fn run_id((start, step): (u64, i8), k: usize) -> Option<u64> {
+    let k = u64::try_from(k).ok()?;
+    match step {
+        1 => start.checked_add(k),
+        -1 => start.checked_sub(k),
+        _ => None,
+    }
+}
+
+/// What a copy starts from before its edits: the source shot, turned around
+/// when `flip` is set, with id `id` when the run is renumbered.
+fn copy_base(shot: &Value, flip: Option<bool>, id: Option<u64>) -> Value {
+    let mut base = match flip {
+        Some(swap_lr) => flip_shot(shot, swap_lr),
+        None => shot.clone(),
+    };
+    if let (Some(id), Value::Object(members)) = (id, &mut base) {
+        members.insert(ID.to_string(), Value::from(id));
+    }
+    base
 }
 
 pub(super) fn build_shots(
@@ -373,6 +426,7 @@ pub(super) fn build_shots(
                 n,
                 rev,
                 flip,
+                ids,
                 m,
             } => {
                 let shots = source
@@ -392,17 +446,17 @@ pub(super) fn build_shots(
                             shots.len()
                         ));
                     };
-                    let flipped;
-                    let base = match flip {
-                        Some(swap_lr) => {
-                            flipped = flip_shot(shot, *swap_lr);
-                            &flipped
-                        }
-                        None => shot,
-                    };
+                    let id =
+                        match ids {
+                            Some(ids) => Some(run_id(*ids, k).ok_or_else(|| {
+                                "a shot run numbers a copy past any id".to_string()
+                            })?),
+                            None => None,
+                        };
+                    let base = copy_base(shot, *flip, id);
                     match mods.next_if(|(offset, _)| *offset == k) {
-                        Some((_, edit)) => out.push(apply_edit(base, edit)?),
-                        None => out.push(base.clone()),
+                        Some((_, edit)) => out.push(apply_edit(&base, edit)?),
+                        None => out.push(base),
                     }
                 }
                 if mods.next().is_some() {
