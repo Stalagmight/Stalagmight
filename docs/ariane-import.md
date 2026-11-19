@@ -75,7 +75,11 @@ a section holds once, so it is the section's **trip** for sectioning - see
 
 ### Per-shot
 - Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
-- Length
+- Length. A REAL or VIRTUAL row with no usable length (zero, negative, or
+  unreadable, which the parser reads as 0) imports as a coincident-station tie of
+  0.001 m, the same nudge the Walls importer gives a zero-length leg, because the
+  project model has no zero-length shot. The import receipt counts these rows in
+  one line. Before #812 one such row failed the whole import.
 - Depth in / depth out
 - Inclination
 - LRUD (left, right, up, down)
