@@ -26,7 +26,8 @@ use super::TmlFile;
 /// `warnings` is the IMPORT RECEIPT, which the user reads. Only a shortfall
 /// they can act on goes there: a file that IS georeferenced and IS dated and
 /// still got no declination, because that is surprising and the cause (a date
-/// outside the model's 1900-2025 span) is worth naming. The ordinary outcomes -
+/// outside the model's span, [`crate::parsers::geo::IGRF_MODEL_SPAN`]) is worth
+/// naming. The ordinary outcomes -
 /// a declination computed, a true-north declaration honoured, a file that
 /// simply does not say where or when it was surveyed - are `tracing::info`:
 /// nothing was degraded and there is nothing to do, and a receipt line on every
@@ -55,7 +56,7 @@ pub(super) fn tml_azimuth_reference(tml: &TmlFile, warnings: &mut Vec<String>) -
     // and the one the declination should be evaluated at.
     //
     // An undated file gets no model call at all. Substituting today's date made
-    // the import wall-clock-dependent - the bundled model stops at 2025-12-31,
+    // the import wall-clock-dependent - the bundled model stops at the end of 2029,
     // so from 2026 on every undated file took the failure branch and printed
     // whatever today happened to be into its receipt. The same file has to
     // import to the same project on any two days.
@@ -206,7 +207,7 @@ mod tests {
 
     /// The one case that IS receipt-worthy: everything the model needs is
     /// present and it still could not answer, because the date is outside the
-    /// bundled model's 1900-2025 span.
+    /// bundled model's span (IGRF-14 ends with 2029).
     #[test]
     fn a_dated_georeferenced_file_the_model_cannot_serve_says_so_in_the_receipt() {
         let xml =
@@ -227,6 +228,42 @@ mod tests {
         assert!(
             warnings[0].contains("2030-04-01"),
             "the receipt must name the date it could not serve: {warnings:?}"
+        );
+        // #811: the reason is written for the user - the model's span, never
+        // the model error's debug dump of the extrapolated field.
+        assert!(
+            warnings[0].contains("1900-01-01 to 2029-12-31"),
+            "the receipt must name the span the model covers: {warnings:?}"
+        );
+        assert!(
+            !warnings[0].contains("DateOutOfRange") && !warnings[0].contains("Field {"),
+            "the receipt must not carry the model's internals: {warnings:?}"
+        );
+    }
+
+    /// #811: a survey dated 2026 used to fall past the bundled model (IGRF-13
+    /// ended with 2025) and import with no correction. With IGRF-14 it gets a
+    /// real declination, recorded with its epoch, and nothing in the receipt.
+    #[test]
+    fn a_2026_survey_gets_an_igrf_declination_and_no_receipt_line() {
+        let xml =
+            undated_georeferenced_magnetic().replace("<Date></Date>", "<Date>2026-11-03</Date>");
+        let tml = parse_synthetic_tmlu(&xml);
+
+        let mut warnings = Vec::new();
+        let reference = tml_azimuth_reference(&tml, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            reference.source,
+            CorrectionSource::IgrfAuto { epoch_year: 2026 },
+            "{reference:?}"
+        );
+        // The fixture's georeference (20.25, -87.5) sits a couple of degrees
+        // west of true north in 2026; zero would mean the fallback ran.
+        assert!(
+            reference.applied_correction() < -1.0,
+            "{}",
+            reference.applied_correction()
         );
     }
 }

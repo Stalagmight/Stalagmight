@@ -2968,6 +2968,31 @@ mod tests {
         )
     }
 
+    /// #811: Auto declination for a 2026 survey used to fail (IGRF-13 ended with
+    /// 2025), fall back to the entered value and put the model error's debug
+    /// dump in the warning. With IGRF-14 it is the model's value, recorded with
+    /// its epoch. The expected value is the BGS IGRF-14 calculator's at this
+    /// synthetic point and date (see `geo.rs`).
+    #[test]
+    fn auto_declination_serves_a_2026_survey_from_the_model() {
+        let text = synthetic_dat_with_declination(5.0)
+            .replace("SURVEY DATE: 7 10 1979", "SURVEY DATE: 6 15 2026");
+        let (surveys, _rest) = Survey::parse_dat_file_with_remainder(&text).unwrap();
+        let mut warnings = Vec::new();
+        let (declination, source) = survey_declination(
+            DeclinationMode::Auto,
+            &surveys[0],
+            Some((20.5, -87.3)),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(source, CorrectionSource::IgrfAuto { epoch_year: 2026 });
+        assert!(
+            (declination - -2.419).abs() < 0.01,
+            "got {declination}, not the model value"
+        );
+    }
+
     /// #438: Compass used to fold `declination - convergence` into every shot at
     /// import (`azimuth + ctx.declination - ctx.convergence_angle`), destroying
     /// the measured reading. It now keeps the reading and declares the
