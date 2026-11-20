@@ -92,6 +92,27 @@ mod positions_tests;
 )]
 mod validate_tests;
 
+// Stream M2 tests.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod ops_detach_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod ops_merge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    reason = "test helpers: a refused setup step is a broken test"
+)]
+mod ops_test_helpers;
+
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use naming::NameConflict;
