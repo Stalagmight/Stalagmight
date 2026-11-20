@@ -60,7 +60,11 @@ mod undo;
 mod undo_policy;
 mod warnings;
 
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "a fuzzer's summary IS its output, and `--nocapture` is a test's only channel"
+)]
 mod adversarial_tests;
 #[cfg(test)]
 #[expect(
@@ -111,9 +115,20 @@ mod closure_promotion_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_lines_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "a fuzzer's summary IS its output, and a failed setup step is the point"
+)]
 mod concurrency_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "a property sweep's summary IS its output, and a failed setup step is the point"
+)]
 mod crash_property_tests;
 #[cfg(test)]
 #[expect(
@@ -143,7 +158,11 @@ mod datum_ui_tests;
     reason = "live check: fails loudly, and reports each step it proved"
 )]
 mod exit_prompt_live_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "a property sweep's summary IS its output, and `--nocapture` is a test's only channel"
+)]
 mod format_property_tests;
 #[cfg(test)]
 mod fuzz_rarity_tests;
@@ -223,14 +242,6 @@ mod issue_738_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_756_tests;
-#[cfg(sg_unported)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::print_stdout,
-    reason = "on-demand vector dump: fails loudly, and says where it wrote"
-)]
-mod legacy_disk_vectors_dump_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -256,7 +267,7 @@ mod meta_moves_tests;
 mod metamorphic_undo_tests;
 #[cfg(test)]
 mod misc_state_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -265,7 +276,7 @@ mod misc_state_tests;
               covered and the replay prints each step"
 )]
 mod multi_datum_fuzz_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -318,7 +329,7 @@ mod project_restore_tests;
 mod project_salvage_tests;
 #[cfg(test)]
 mod project_save_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -338,6 +349,12 @@ mod recents_tests;
 mod reverse_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    reason = "test kit: a setup step that fails is a broken fixture"
+)]
+mod robustness_kit;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
@@ -352,12 +369,9 @@ mod shot_commands_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    clippy::float_cmp,
-    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod snapshot_fixes_tests;

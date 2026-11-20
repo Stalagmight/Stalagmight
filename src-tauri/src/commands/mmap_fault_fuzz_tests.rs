@@ -1,40 +1,44 @@
-//! [#706] Fuzz the ways the open project's file can change on disk while SQLite
-//! still maps it.
+//! [#706] Fuzz the ways the open project's file can change on disk under the
+//! app, and the restores of #720, on `.stalx` v2.
 //!
-//! A load maps the open `.stalx` (`Database::open_existing` sets a 256 MB
-//! `mmap_size`). If something truncates or rewrites that inode in place without
-//! going through SQLite, the next read through the mapping faults with SIGBUS.
-//! On macOS a fault like that can end in the endless spin #706 reports. An
-//! atomic replace (temp file + rename) or an unlink is safe, because the mapping
-//! keeps the old inode.
+//! The SQLite build memory-mapped the open file (`mmap_size` 256 MB): a file
+//! truncated or rewritten in place under the live connection crashed the next
+//! read with SIGBUS, which on macOS could end in the endless spin #706
+//! reports. The v2 app holds no handle on the open file at all: an open reads
+//! the bytes once and closes it, a save writes a temp and renames it over the
+//! file. So the hazard is gone, and what this fuzzer checks is what took its
+//! place: the app's survey in memory is never changed by another program's
+//! move, and the app never writes over a file another program changed (the
+//! guard refuses the save with `EXTERNALLY_MODIFIED`).
 //!
-//! Each seed builds synthetic projects in a temp dir and opens one through the
-//! real load path. It then runs random steps: app commands aimed at a pool of
+//! Each seed writes synthetic v2 projects in a temp dir and opens one through
+//! the full load. It then runs random steps: app commands aimed at a pool of
 //! paths that includes the open file, and moves another process could make on
-//! those files. After every step a probe reads every page through the live
-//! connection.
+//! those files. After every step:
 //!
-//! The oracle is the process surviving. An in-place rewrite of a mapped file
-//! kills the test binary with SIGBUS, and the last `FZ706-STEP` line printed
-//! names the seed and the step. Ordinary `Err` results from commands are
-//! expected and only traced. A probe that fails, or that sees a corrupt live
-//! view right after an APP step, is a finding: `FZ706-FINDING kind=torn`.
+//! - the survey in memory (its canonical text) is what it was before the step
+//!   unless the step was the app's own edit, open, create, close or merge
+//!   (finding `new-drift`);
+//! - a plain save or a Save As that reports success left the survey's bytes
+//!   in its target; one refused as `EXTERNALLY_MODIFIED` left the file exactly
+//!   as the other program had left it (finding `new-overwrite`);
+//! - every restore is checked against the files as they were just before it:
+//!   one that reports success leaves the backup's bytes in the target and the
+//!   target's old bytes in `<target>.stalx.pre-restore`; one that is refused
+//!   leaves the target, the backup and the safety copy exactly as they were;
+//! - the recovery list never offers a project as its own backup.
 //!
-//! Every restore is checked against the files as they were just before it:
-//! - one that reports success must leave the backup's bytes in the target and
-//!   the target's old bytes in `<target>.stalx.pre-restore`;
-//! - one that is refused must leave the target, the backup and the safety copy
-//!   exactly as they were.
+//! A panic fails the run; the last `FZ706-STEP` line printed names the seed
+//! and the step.
 //!
-//! Knobs:
+//! Knobs (unchanged from the SQLite build):
 //! - `FZ706_FIRST`: first seed, default 0.
 //! - `FZ706_SEEDS`: number of seeds, default 64.
 //! - `FZ706_STEPS`: steps per seed, default 40.
 //! - `FZ706_HAZARD=1`: also lets an "external process" truncate the open file
-//!   to 0 bytes in place, as a sync client rewriting it would for a moment. That
-//!   is the design hazard and is EXPECTED to SIGBUS (SQLite reads the header
-//!   through the mapping; a shorter but non-empty file only reads as malformed).
-//!   It exists to prove the probe really reads through the mapping.
+//!   to 0 bytes in place, as a sync client rewriting it would for a moment.
+//!   On the SQLite build that was EXPECTED to SIGBUS; on v2 it is one more
+//!   external change the guard must catch, and it is expected to pass.
 //! - `FZ706_FOCUS=restore`: make half of all steps restores, aimed at the open
 //!   file, backups, safety copies and the project itself.
 //! - `FZ706_MUTE=<id>,...`: skip the step shapes of the ids below (counted as
@@ -43,23 +47,21 @@
 //!
 //! Finding ids, for restores that used to break (#720):
 //! - `F1-restore-over-open`: `restore_from_backup` aimed at the OPEN project's
-//!   file. It used to copy onto it in place, so the live mapping read a torn
-//!   file, or SIGBUS when the copy shrank it. "Open" means the inode the live
-//!   connection holds, so it also covers the open file after another process
-//!   renamed it, which a guard that compares paths would miss.
-//! - `F2-restore-self-empties`: the project restored from itself. It used to
-//!   come out as 0 bytes (`std::fs::copy` opens the destination with O_TRUNC
-//!   before it reads the source).
+//!   file, also after another process renamed it.
+//! - `F2-restore-self-empties`: the project restored from itself.
 //! - `F3-backup-lists-itself`: `list_backups` offering a project whose name
 //!   contains `.backup` as a backup of itself.
-//! - `F4-pre-restore-over-open`: the safety copy (`<project>.stalx.pre-restore`)
-//!   aimed at the open project. It used to be written in place too.
+//! - `F4-pre-restore-over-open`: the safety copy aimed at the open project.
 //! - `F5-restore-destroys-its-backup`: restoring from `<project>.stalx.pre-restore`.
-//!   It used to overwrite that backup with the project before reading it.
 //!
 //! Every `FZ706-STEP` line carries a `shape=` token (paths classified as open /
 //! self / backup / other / fresh / missing), so a failure can be grouped by
-//! shape even when a SIGBUS leaves only the last step line behind.
+//! shape.
+//!
+//! Retired with the SQLite engine: the live-connection probe (`quick_check`
+//! through the mapping after every step, `FZ706-PROBE-BAD`, the `tainted`
+//! bookkeeping and the `new-torn` finding): there is no mapping and no live
+//! connection to probe.
 //!
 //! All data is synthetic. No fixture is read or written.
 
@@ -72,9 +74,10 @@ use tempfile::TempDir;
 
 use super::{export, project, recovery};
 use crate::core::events::EventSink;
-use crate::core::{AppState, Command};
-use crate::models::{LineData, Project, ShotData};
-use crate::persistence::Database;
+use crate::core::{AppState, Command, EXTERNALLY_MODIFIED_CODE};
+use crate::models::survey::{LineMeta, Project, StartAt};
+use crate::models::ShotData;
+use crate::persistence::stalx_v2::{self, DecodeOptions, Extras, Mode};
 
 /// The load needs a sink for its progress events; nothing listens here.
 struct NullSink;
@@ -128,7 +131,7 @@ fn trace(line: &str) {
 }
 
 fn synthetic_project(rng: &mut Rng, name: &str) -> Project {
-    let mut project = Project::new(name.to_string(), None);
+    let mut project = Project::new(name, None);
     let lines = 1 + rng.below(4);
     for s in 0..lines {
         let count = 5 + rng.below(80);
@@ -148,12 +151,18 @@ fn synthetic_project(rng: &mut Rng, name: &str) -> Project {
                 shot
             })
             .collect();
-        project.add_line(LineData {
-            name: Some(format!("S{s}")),
-            color: "#336699".to_string(),
-            shots,
-            ..Default::default()
-        });
+        project
+            .create_line(
+                LineMeta {
+                    name: Some(format!("S{s}")),
+                    color: "#336699".to_string(),
+                    ..LineMeta::default()
+                },
+                StartAt::New,
+                shots,
+                Some([10.0 * s as f64, 0.0]),
+            )
+            .expect("a synthetic line");
     }
     project
 }
@@ -178,9 +187,38 @@ fn safety_copy_of(project: &Path) -> PathBuf {
 }
 
 fn write_project(path: &Path, project: &Project) {
-    let mut db = Database::open(path).expect("create a synthetic project file");
-    db.save_project(project)
-        .expect("save the synthetic project");
+    let bytes = stalx_v2::encode(project, &Extras::default(), Mode::Normal)
+        .expect("encode a synthetic project");
+    std::fs::write(path, bytes).expect("write a synthetic project file");
+}
+
+/// The survey as the file writes it, less `modified_at` and the path.
+fn canonical(project: &Project) -> String {
+    let mut p = project.clone();
+    p.modified_at = p.created_at;
+    p.file_path = None;
+    stalx_v2::encode(&p, &Extras::default(), Mode::Normal).map_or_else(
+        |e| format!("<unencodable: {e}>"),
+        |b| String::from_utf8_lossy(&b).into_owned(),
+    )
+}
+
+/// The survey in memory, or `None` with no project open.
+fn memory(state: &AppState) -> Option<String> {
+    state.get_project_state().map(|p| canonical(&p))
+}
+
+/// A short digest of [`memory`] for the trace.
+fn digest(text: Option<&String>) -> String {
+    use std::hash::{Hash as _, Hasher as _};
+    text.map_or_else(
+        || "none".to_string(),
+        |t| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut h);
+            format!("{:016x}", h.finish())
+        },
+    )
 }
 
 /// Whether the step was the app's own doing or another process's.
@@ -201,17 +239,13 @@ struct World {
     mutes: Vec<String>,
     muted: BTreeMap<&'static str, u32>,
     fresh: u32,
-    /// Probes that ran with a mapped live connection.
-    mapped_probes: u32,
-    /// The live view was broken by another process, so a bad probe after a
-    /// later app step says nothing about that step. Cleared once a probe reads
-    /// clean again (a reopen or close replaced the live connection).
-    tainted: bool,
-    /// The inode the live connection was opened on. Another process may have
+    /// The inode the open project was read from. Another process may have
     /// renamed it since, so the open project's path no longer names it.
     open_ino: Option<(u64, u64)>,
     /// `FZ706_FOCUS=restore` (set by `run_seed`): half of all steps are restores.
     focus_restore: bool,
+    /// Steps that ran, by verb.
+    ran: BTreeMap<String, u32>,
 }
 
 /// What one step was, and which known finding (if any) its shape belongs to.
@@ -222,6 +256,10 @@ struct Step {
     known: Option<&'static str>,
     /// For a restore: the files it may touch, as they were just before it ran.
     restore_expect: Option<RestoreExpect>,
+    /// For a save: its target and the bytes there just before it ran.
+    save_target: Option<(PathBuf, Option<Vec<u8>>)>,
+    /// The survey in memory just before the step.
+    memory_before: Option<String>,
     /// The traced outcome (`ok`, `err ...`).
     outcome: String,
 }
@@ -255,6 +293,15 @@ fn size_of(bytes: Option<&Vec<u8>>) -> String {
     bytes.map_or_else(|| "nothing".to_string(), |b| format!("{} bytes", b.len()))
 }
 
+/// The verbs that change the survey in memory (open, create, close, delete of
+/// the open project, merge into a new project, and an edit).
+fn changes_memory(verb: &str) -> bool {
+    matches!(
+        verb,
+        "edit" | "reopen" | "create" | "close" | "delete" | "merge"
+    )
+}
+
 impl World {
     fn new(rng: &mut Rng, hazard: bool, mutes: Vec<String>) -> Self {
         let dir = TempDir::new().expect("temp dir");
@@ -277,10 +324,9 @@ impl World {
             mutes,
             muted: BTreeMap::new(),
             fresh: 0,
-            mapped_probes: 0,
-            tainted: false,
             open_ino: None,
             focus_restore: false,
+            ran: BTreeMap::new(),
         }
     }
 
@@ -289,16 +335,15 @@ impl World {
     }
 
     /// Whether `path` is the open project: by name, or by being the inode the
-    /// live connection was opened on.
+    /// open project was read from.
     fn is_open(&self, path: &Path) -> bool {
         self.open_path().is_some_and(|open| {
             same_file(&open, path) || (self.open_ino.is_some() && file_id(path) == self.open_ino)
         })
     }
 
-    /// `apply`, then note which inode the live connection is on when an app
-    /// step may have opened a new one. Another process's moves never change
-    /// it: the connection keeps the inode it has.
+    /// `apply`, then note which inode the open project is on when an app step
+    /// may have opened or written a new one.
     fn apply_tracked(&mut self, what: &str) -> String {
         let before = self.open_path();
         let outcome = self.apply(what);
@@ -339,7 +384,7 @@ impl World {
             }
             5 => {
                 if let Some(open) = open {
-                    return open.with_extension("stalx.tmp");
+                    return stalx_v2::temp_path(&open);
                 }
             }
             6 => return self.fresh_path(ext),
@@ -398,6 +443,8 @@ impl World {
             shape,
             known: None,
             restore_expect: None,
+            save_target: None,
+            memory_before: None,
             outcome: String::new(),
         };
         match op {
@@ -448,12 +495,11 @@ impl World {
                     None
                 };
                 Step {
-                    actor: Actor::App,
-                    what: format!("restore {} <- {}", self.name(&target), self.name(&source)),
-                    shape: format!("restore:{ts}<-{ss}"),
                     known,
-                    restore_expect: None,
-                    outcome: String::new(),
+                    ..app(
+                        format!("restore {} <- {}", self.name(&target), self.name(&source)),
+                        format!("restore:{ts}<-{ss}"),
+                    )
                 }
             }
             12 => {
@@ -475,20 +521,15 @@ impl World {
                 let shape = format!("ext-{kind}:{}", self.shape_of(&target));
                 Step {
                     actor: Actor::External,
-                    what: format!("ext-{kind} {}", self.name(&target)),
-                    shape,
-                    known: None,
-                    restore_expect: None,
-                    outcome: String::new(),
+                    ..app(format!("ext-{kind} {}", self.name(&target)), shape)
                 }
             }
             _ => Step {
                 actor: Actor::External,
-                what: "ext-truncate open".to_string(),
-                shape: "ext-truncate:open".to_string(),
-                known: None,
-                restore_expect: None,
-                outcome: String::new(),
+                ..app(
+                    "ext-truncate open".to_string(),
+                    "ext-truncate:open".to_string(),
+                )
             },
         }
     }
@@ -524,19 +565,37 @@ impl World {
             ));
             return None;
         }
+        step.memory_before = memory(&self.state);
         trace(&format!(
-            "FZ706-STEP seed={seed} i={index} shape={} {}",
-            step.shape, step.what
+            "FZ706-STEP seed={seed} i={index} shape={} memory={} {}",
+            step.shape,
+            digest(step.memory_before.as_ref()),
+            step.what
         ));
         let mut words = step.what.split(' ');
-        if words.next() == Some("restore") {
-            let target = words.next().map(|n| self.path(n));
-            let source = words.nth(1).map(|n| self.path(n));
-            if let (Some(target), Some(source)) = (target, source) {
-                step.restore_expect = Some(RestoreExpect::capture(target, source));
+        let verb = words.next().unwrap_or_default().to_string();
+        let first = words.next().map(|n| self.path(n));
+        let second = words.nth(1).map(|n| self.path(n));
+        match (verb.as_str(), first) {
+            ("restore", Some(target)) => {
+                if let Some(source) = second {
+                    step.restore_expect = Some(RestoreExpect::capture(target, source));
+                }
             }
+            ("save-as", Some(target)) => {
+                let before = std::fs::read(&target).ok();
+                step.save_target = Some((target, before));
+            }
+            ("save", _) => {
+                if let Some(open) = self.open_path() {
+                    let before = std::fs::read(&open).ok();
+                    step.save_target = Some((open, before));
+                }
+            }
+            _ => {}
         }
         step.outcome = self.apply_tracked(&step.what);
+        *self.ran.entry(verb).or_default() += 1;
         trace(&format!(
             "FZ706-DONE seed={seed} i={index} {}",
             step.outcome
@@ -544,7 +603,7 @@ impl World {
         Some(step)
     }
 
-    /// Oracles that look at the files, not the live connection.
+    /// Oracles that look at the files.
     fn check_files(&self, step: &Step) -> Option<(&'static str, String)> {
         let mut words = step.what.split(' ');
         let verb = words.next().unwrap_or_default();
@@ -555,8 +614,6 @@ impl World {
                 let id = step.known.unwrap_or("new-restore-mismatch");
                 let now = |path: &Path| std::fs::read(path).ok();
                 if step.outcome == "ok" {
-                    // The backup's bytes in the target, the target's old bytes
-                    // in the safety copy.
                     let target_now = now(&e.target);
                     if target_now != e.backup_before {
                         return Some((
@@ -583,7 +640,6 @@ impl World {
                     }
                     return None;
                 }
-                // Refused or failed: nothing it could touch has changed.
                 [
                     ("project", &e.target, &e.target_before),
                     ("backup", &e.backup, &e.backup_before),
@@ -619,8 +675,63 @@ impl World {
                     },
                 )
             }
+            ("save" | "save-as", _) => {
+                let (target, before) = step.save_target.as_ref()?;
+                let now = std::fs::read(target).ok();
+                if step.outcome == "ok" {
+                    let decoded = now
+                        .as_deref()
+                        .and_then(|b| stalx_v2::decode(b, &DecodeOptions::default()).ok())
+                        .map(|d| canonical(&d.project));
+                    (decoded != memory(&self.state)).then(|| {
+                        (
+                            "new-overwrite",
+                            format!(
+                                "{verb} said ok, but {} does not hold the survey",
+                                self.name(target)
+                            ),
+                        )
+                    })
+                } else if step.outcome.contains(EXTERNALLY_MODIFIED_CODE) {
+                    (now != *before).then(|| {
+                        (
+                            "new-overwrite",
+                            format!(
+                                "{verb} was refused as changed by another program, but {} went \
+                                 from {} to {}",
+                                self.name(target),
+                                size_of(before.as_ref()),
+                                size_of(now.as_ref())
+                            ),
+                        )
+                    })
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
+    }
+
+    /// The survey in memory is changed only by the app's own edit, open,
+    /// create, close, delete or merge.
+    fn check_memory(&self, step: &Step) -> Option<(&'static str, String)> {
+        let verb = step.what.split(' ').next().unwrap_or_default();
+        if step.actor == Actor::App && changes_memory(verb) {
+            return None;
+        }
+        let now = memory(&self.state);
+        (now != step.memory_before).then(|| {
+            (
+                "new-drift",
+                format!(
+                    "the survey in memory changed from {} to {} across a step that must not \
+                     touch it",
+                    digest(step.memory_before.as_ref()),
+                    digest(now.as_ref())
+                ),
+            )
+        })
     }
 
     fn name(&self, path: &Path) -> String {
@@ -670,7 +781,9 @@ impl World {
             ("restore", Some(target), Some(source)) => {
                 brief_string(recovery::restore_from_backup_impl(state, target, source).map(|_| ()))
             }
-            ("repair", Some(p), _) => brief_string(recovery::attempt_repair(p).map(|_| ())),
+            ("repair", Some(p), _) => {
+                brief_string(recovery::attempt_repair_impl(state, p).map(|_| ()))
+            }
             ("salvage", Some(p), _) => {
                 brief_string(recovery::export_salvageable_data(p).map(|_| ()))
             }
@@ -721,40 +834,6 @@ impl World {
             _ => format!("skip unparsed {what}"),
         }
     }
-
-    /// Read every page through the live connection. Returns a finding detail
-    /// when an APP step left the live view unreadable or corrupt.
-    fn probe(&mut self, seed: u64, index: u32, actor: Actor) -> Option<String> {
-        trace(&format!("FZ706-PROBE seed={seed} i={index}"));
-        let Some(scan) = self
-            .state
-            .with_open_database_for_tests(Database::scan_live_for_tests)
-        else {
-            self.tainted = false;
-            return None;
-        };
-        let detail = match scan {
-            Ok(scan) => {
-                if scan.mmap_size > 0 {
-                    self.mapped_probes += 1;
-                }
-                if scan.quick_check == "ok" {
-                    self.tainted = false;
-                    return None;
-                }
-                format!("quick_check={} mmap={}", scan.quick_check, scan.mmap_size)
-            }
-            Err(e) => format!("probe error: {e}"),
-        };
-        trace(&format!(
-            "FZ706-PROBE-BAD seed={seed} i={index} tainted={} {detail}",
-            self.tainted
-        ));
-        if actor == Actor::External {
-            self.tainted = true;
-        }
-        (actor == Actor::App && !self.tainted).then_some(detail)
-    }
 }
 
 fn brief_result(result: &crate::core::CommandResult) -> String {
@@ -788,8 +867,14 @@ fn brief_io<T>(result: std::io::Result<T>) -> String {
     }
 }
 
-/// Run one seed; returns the first finding line, if any.
-fn run_seed(seed: u64, steps: u32, hazard: bool, focus: bool, mutes: &[&str]) -> Option<String> {
+/// Run one seed; returns the first finding line, if any, and the verbs run.
+fn run_seed_counting(
+    seed: u64,
+    steps: u32,
+    hazard: bool,
+    focus: bool,
+    mutes: &[&str],
+) -> (Option<String>, BTreeMap<String, u32>) {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(seed);
         let mutes = mutes.iter().map(ToString::to_string).collect();
@@ -804,12 +889,11 @@ fn run_seed(seed: u64, steps: u32, hazard: bool, focus: bool, mutes: &[&str]) ->
             let Some(step) = world.step(&mut rng, seed, index) else {
                 continue;
             };
-            let bad = world.check_files(&step).or_else(|| {
-                world
-                    .probe(seed, index, step.actor)
-                    .map(|d| (step.known.unwrap_or("new-torn"), d))
-            });
+            let bad = world
+                .check_files(&step)
+                .or_else(|| world.check_memory(&step));
             if let Some((id, detail)) = bad {
+                let id = step.known.filter(|_| id.starts_with("new-")).unwrap_or(id);
                 let line = format!(
                     "FZ706-FINDING seed={seed} i={index} id={id} shape={} op={} detail={detail}",
                     step.shape, step.what
@@ -823,19 +907,21 @@ fn run_seed(seed: u64, steps: u32, hazard: bool, focus: bool, mutes: &[&str]) ->
             trace(&format!("FZ706-MUTED-COUNT seed={seed} {id} x{n}"));
         }
         trace(&format!(
-            "FZ706-SEED seed={seed} end mapped_probes={} finding={}",
-            world.mapped_probes,
+            "FZ706-SEED seed={seed} end finding={}",
             finding.is_some()
         ));
-        finding
+        (finding, world.ran)
     })
 }
 
-/// What the live connection reads now, or `None` with no project open.
-fn live_digest(state: &AppState) -> Option<Result<u64, String>> {
-    state
-        .with_open_database_for_tests(Database::scan_live_for_tests)
-        .map(|scan| scan.map(|s| s.digest).map_err(|e| e.to_string()))
+fn run_seed(seed: u64, steps: u32, hazard: bool, focus: bool, mutes: &[&str]) -> Option<String> {
+    run_seed_counting(seed, steps, hazard, focus, mutes).0
+}
+
+/// The survey in memory and the bytes of `path`: what a refused restore
+/// must leave as it found them.
+fn memory_and_file(state: &AppState, path: &Path) -> (Option<String>, Option<Vec<u8>>) {
+    (memory(state), std::fs::read(path).ok())
 }
 
 /// On-demand campaign: run with `--ignored`, seed windows via `FZ706_FIRST` /
@@ -854,11 +940,17 @@ fn fz706_campaign() {
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .collect();
-    let findings: Vec<String> = (first..first.saturating_add(seeds))
-        .filter_map(|seed| run_seed(seed, steps, hazard, focus, &mutes))
-        .collect();
+    let mut ran: BTreeMap<String, u32> = BTreeMap::new();
+    let mut findings = Vec::new();
+    for seed in first..first.saturating_add(seeds) {
+        let (finding, verbs) = run_seed_counting(seed, steps, hazard, focus, &mutes);
+        findings.extend(finding);
+        for (verb, n) in verbs {
+            *ran.entry(verb).or_default() += n;
+        }
+    }
     trace(&format!(
-        "FZ706-SUMMARY first={first} seeds={seeds} steps={steps} hazard={hazard} focus={focus} mutes={} findings={}",
+        "FZ706-SUMMARY first={first} seeds={seeds} steps={steps} hazard={hazard} focus={focus} mutes={} findings={} ran={ran:?}",
         mutes.join(","),
         findings.len()
     ));
@@ -882,12 +974,66 @@ fn fz706_restore_smoke() {
     }
 }
 
-/// F1 (#720): a restore aimed at the open project is refused, and the live
-/// connection reads what it read before. It used to copy over the mapped file
-/// in place: the app went on showing the old project, and an empty backup
-/// crashed the next read with SIGBUS.
+/// The same with the open file truncated in place now and then
+/// (`FZ706_HAZARD=1`): the SQLite build's SIGBUS, an ordinary external change
+/// on v2.
 #[test]
-fn f1_a_restore_never_rewrites_the_open_project_under_its_live_connection() {
+fn fz706_hazard_smoke() {
+    for seed in 200..203 {
+        assert_eq!(run_seed(seed, 20, true, false, &[]), None, "seed {seed}");
+    }
+}
+
+/// The open file truncated to 0 bytes in place by another program: the
+/// survey in memory is untouched, and the save is refused rather than written
+/// over the file; Save As still works.
+#[test]
+fn a_file_truncated_under_the_app_is_neither_read_nor_overwritten() {
+    crate::test_helpers::with_isolated_config(|| {
+        let mut rng = Rng::new(9);
+        let world = World::new(&mut rng, true, Vec::new());
+        let open = world.pool[0].clone();
+        world
+            .state
+            .do_load_project_full(open.clone())
+            .expect("open the project");
+        let before = memory(&world.state);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&open)
+            .and_then(|f| f.set_len(0))
+            .expect("another program truncates the open file");
+        assert_eq!(
+            memory(&world.state),
+            before,
+            "the survey in memory is untouched"
+        );
+        let saved = project::save_project_impl(&world.state, None);
+        assert!(
+            !saved.success
+                && saved
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with(EXTERNALLY_MODIFIED_CODE)),
+            "{:?}",
+            saved.error
+        );
+        assert_eq!(std::fs::read(&open).expect("still there").len(), 0);
+        let elsewhere = world.path("rescued.stalx");
+        assert!(project::save_project_impl(&world.state, Some(elsewhere.clone())).success);
+        let decoded = stalx_v2::decode(
+            &std::fs::read(&elsewhere).expect("written"),
+            &DecodeOptions::default(),
+        )
+        .expect("a v2 file");
+        assert_eq!(Some(canonical(&decoded.project)), before);
+    });
+}
+
+/// F1 (#720): a restore aimed at the open project is refused, and neither the
+/// file nor the survey in memory changes.
+#[test]
+fn f1_a_restore_never_rewrites_the_open_project() {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(7);
         let world = World::new(&mut rng, false, Vec::new());
@@ -896,25 +1042,25 @@ fn f1_a_restore_never_rewrites_the_open_project_under_its_live_connection() {
             .state
             .do_load_project_full(open.clone())
             .expect("open the project");
-        let before = (live_digest(&world.state), std::fs::read(&open).ok());
+        let before = memory_and_file(&world.state, &open);
         let result = recovery::restore_from_backup_impl(&world.state, open.clone(), backup);
-        let after = (live_digest(&world.state), std::fs::read(&open).ok());
         assert_eq!(
             result,
             Err(
                 "Not restored: a.stalx is open in Stalagmight. Close it, then restore.".to_string()
             )
         );
-        assert_eq!(after, before);
+        assert_eq!(memory_and_file(&world.state, &open), before);
     });
 }
 
 /// F1 under another name (#720): another process renamed the open file, and
-/// the restore targets the new name. The app's open-project path no longer
-/// names it, so the restore goes ahead; it renames the backup into place, and
-/// the live connection keeps the inode it maps.
+/// the restore targets the new name. The open project's path no longer names
+/// it, so the restore goes ahead; the survey in memory is untouched, and the
+/// next plain save is refused (its file is gone) instead of writing a file
+/// back under the old name.
 #[test]
-fn f1_b_a_restore_never_rewrites_the_open_file_after_it_was_renamed() {
+fn f1_b_a_restore_of_the_renamed_open_file_leaves_the_survey_alone() {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(7);
         let world = World::new(&mut rng, false, Vec::new());
@@ -923,24 +1069,34 @@ fn f1_b_a_restore_never_rewrites_the_open_file_after_it_was_renamed() {
             .state
             .do_load_project_full(open.clone())
             .expect("open the project");
-        let before = live_digest(&world.state);
+        let before = memory(&world.state);
         let renamed = open.with_extension("moved");
         std::fs::rename(&open, &renamed).expect("another process renames the open file");
         let backup_bytes = std::fs::read(&backup).expect("backup");
         recovery::restore_from_backup_impl(&world.state, renamed.clone(), backup)
             .expect("the renamed file is not the open project's path");
         assert_eq!(
-            live_digest(&world.state),
+            memory(&world.state),
             before,
-            "the live inode is untouched"
+            "the survey in memory is untouched"
         );
         assert_eq!(std::fs::read(&renamed).expect("restored"), backup_bytes);
+        let saved = project::save_project_impl(&world.state, None);
+        assert!(
+            !saved.success
+                && saved
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with(EXTERNALLY_MODIFIED_CODE)),
+            "{:?}",
+            saved.error
+        );
+        assert!(!open.exists(), "nothing was written under the old name");
     });
 }
 
 /// F4 (#720): with the safety copy an earlier restore left open, the next
-/// restore of its project is refused. It used to rewrite the open file in
-/// place with the new safety copy.
+/// restore of its project is refused.
 #[test]
 fn f4_the_safety_copy_never_rewrites_the_open_project() {
     crate::test_helpers::with_isolated_config(|| {
@@ -954,7 +1110,7 @@ fn f4_the_safety_copy_never_rewrites_the_open_project() {
             .state
             .do_load_project_full(safety.clone())
             .expect("open the safety copy the first restore left");
-        let before = (live_digest(&world.state), std::fs::read(&safety).ok());
+        let before = memory_and_file(&world.state, &safety);
         let result =
             recovery::restore_from_backup_impl(&world.state, project, world.pool[2].clone());
         assert!(
@@ -963,16 +1119,11 @@ fn f4_the_safety_copy_never_rewrites_the_open_project() {
                 .is_err_and(|e| e.contains("a.stalx.pre-restore is open")),
             "{result:?}"
         );
-        assert_eq!(
-            (live_digest(&world.state), std::fs::read(&safety).ok()),
-            before
-        );
+        assert_eq!(memory_and_file(&world.state, &safety), before);
     });
 }
 
-/// F5 (#720): restoring the safety copy undoes the restore. It used to copy the
-/// project over the safety copy first, which lost the original and reported
-/// success.
+/// F5 (#720): restoring the safety copy undoes the restore.
 #[test]
 fn f5_restoring_the_safety_copy_brings_the_original_back() {
     crate::test_helpers::with_isolated_config(|| {
@@ -996,8 +1147,7 @@ fn f5_restoring_the_safety_copy_brings_the_original_back() {
     });
 }
 
-/// F2 (#720): the project picked as its own backup is refused. It used to come
-/// out as 0 bytes.
+/// F2 (#720): the project picked as its own backup is refused.
 #[test]
 fn f2_restoring_a_project_from_itself_leaves_it_intact() {
     crate::test_helpers::with_isolated_config(|| {
@@ -1020,7 +1170,7 @@ fn f2_restoring_a_project_from_itself_leaves_it_intact() {
 }
 
 /// F3 (#720): a project whose name contains `.backup` is not offered as its
-/// own backup (which is how F2 was reachable from the recovery dialog).
+/// own backup.
 #[test]
 fn f3_a_project_is_never_offered_as_its_own_backup() {
     let dir = TempDir::new().expect("temp dir");
