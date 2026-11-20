@@ -113,13 +113,13 @@ mod crash_property_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod credit_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod datum_entrance_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -223,7 +223,7 @@ mod multi_datum_fuzz_tests;
     reason = "fuzz test helpers: a trail that does not parse is a broken replay string"
 )]
 mod multi_datum_steps_fuzz;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -375,6 +375,22 @@ mod station_names_import_tests;
     clippy::print_stdout
 )]
 mod tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod topology_commands_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test kit: panics on a failed assumption are the point"
+)]
+mod topology_kit;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
