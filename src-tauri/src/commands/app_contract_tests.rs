@@ -133,3 +133,165 @@ fn test_csp_allows_the_tauri_ipc_origin() {
         }
     }
 }
+
+/// The `.stalx` version 2 file-status commands the frontend's save-conflict
+/// prompt, read-only and conversion banners and dirty tracking call.
+const FILE_STATUS_COMMANDS: [&str; 4] = [
+    "save_project_overwriting",
+    "take_conversion_notice",
+    "has_unsaved_changes",
+    "project_read_only_reason",
+];
+
+/// Every `.ts` / `.tsx` file under `dir` that is not a test.
+fn frontend_sources(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if name != "__tests__" && name != "node_modules" {
+                frontend_sources(&path, out);
+            }
+        } else if (name.ends_with(".ts") || name.ends_with(".tsx"))
+            && !name.contains(".test.")
+            && !name.contains(".spec.")
+        {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                out.push((path, text));
+            }
+        }
+    }
+}
+
+/// The four commands are registered handlers, and the frontend calls each
+/// under that exact name: a rename on either side would leave the save
+/// prompt, a banner or the dirty flag silently dead (the call fails at run
+/// time, never at build time).
+#[test]
+fn the_file_status_commands_are_registered_and_called_by_the_frontend() {
+    let block = generate_handler_block(include_str!("../lib.rs"));
+    let registered: Vec<&str> = block
+        .lines()
+        .map(|line| line.trim().trim_end_matches(','))
+        .collect();
+    let mut sources = Vec::new();
+    frontend_sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src"),
+        &mut sources,
+    );
+    assert!(!sources.is_empty(), "the frontend sources must be readable");
+    for name in FILE_STATUS_COMMANDS {
+        let handler = format!("commands::project::{name}");
+        assert!(
+            registered.contains(&handler.as_str()),
+            "`{handler}` must be registered in generate_handler!"
+        );
+        let literal = format!("'{name}'");
+        assert!(
+            sources.iter().any(|(_, text)| text.contains(&literal)),
+            "no frontend source calls {literal}"
+        );
+    }
+}
+
+/// The IPC wrappers themselves, on a real `AppState` holding a version 2 file:
+/// the answers the frontend acts on, in the order it asks.
+#[test]
+fn the_file_status_commands_answer_what_the_frontend_acts_on() {
+    use super::project;
+    use crate::core::state::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+    use crate::core::{AppState, Command};
+    use crate::models::survey::{LineMeta, Project, StartAt};
+    use crate::models::{ShotData, ShotUpdates};
+    use crate::persistence::stalx_v2::{self, Extras, Mode};
+    use tauri::Manager;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("status.stalx");
+    let mut survey = Project::new("File status", None);
+    let line = survey
+        .add_line(
+            LineMeta::default(),
+            StartAt::New,
+            vec![ShotData {
+                length: 4.0,
+                ..ShotData::default()
+            }],
+        )
+        .unwrap();
+    let start = survey.line(line).unwrap().start;
+    survey.set_placement(start, 0.0, 0.0).unwrap();
+    std::fs::write(
+        &path,
+        stalx_v2::encode(&survey, &Extras::default(), Mode::Normal).unwrap(),
+    )
+    .unwrap();
+
+    let app = tauri::test::mock_app();
+    app.manage(AppState::new().unwrap());
+    let state = || app.state::<AppState>();
+
+    // Nothing open: nothing to say.
+    assert!(!project::has_unsaved_changes(state()));
+    assert_eq!(project::take_conversion_notice(state()), None);
+    assert_eq!(project::project_read_only_reason(state()), None);
+
+    // An ordinary version 2 file: editable, nothing converted, clean.
+    let opened = state().execute(Command::OpenProject { path: path.clone() });
+    assert!(opened.success, "{:?}", opened.error);
+    assert_eq!(project::project_read_only_reason(state()), None);
+    assert_eq!(project::take_conversion_notice(state()), None);
+    assert!(!project::has_unsaved_changes(state()));
+
+    // An edit dirties it.
+    let shot_id = state().get_project_state().unwrap().lines()[0].shots[0].id;
+    let edited = state().execute(Command::UpdateShot {
+        line_id: line,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(5.0),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    assert!(project::has_unsaved_changes(state()));
+
+    // Another program changes the file: the save is refused with the code the
+    // prompt keys on, and the Overwrite answer writes it.
+    let theirs = format!("{}\n", std::fs::read_to_string(&path).unwrap());
+    std::fs::write(&path, &theirs).unwrap();
+    let refused = project::save_project(state(), None, None);
+    assert!(!refused.success);
+    assert!(refused
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with(EXTERNALLY_MODIFIED_CODE));
+    assert!(project::has_unsaved_changes(state()));
+    let overwritten = project::save_project_overwriting(state(), None);
+    assert!(overwritten.success, "{:?}", overwritten.error);
+    assert!(!project::has_unsaved_changes(state()));
+    assert_ne!(std::fs::read_to_string(&path).unwrap(), theirs);
+
+    // A file made with a newer Stalagmight: the banner's reason, and no save.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let newer = text.replacen("\"requires\":[]", "\"requires\":[\"x-future\"]", 1);
+    assert_ne!(newer, text);
+    std::fs::write(&path, &newer).unwrap();
+    let reopened = state().execute(Command::OpenProject { path: path.clone() });
+    assert!(reopened.success, "{:?}", reopened.error);
+    let reason = project::project_read_only_reason(state()).expect("read-only");
+    assert!(reason.contains("x-future"), "{reason}");
+    // A peek: asking again gives the same answer.
+    assert_eq!(project::project_read_only_reason(state()), Some(reason));
+    let refused = project::save_project_overwriting(state(), None);
+    assert!(refused
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with(READ_ONLY_FILE_CODE));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+}
