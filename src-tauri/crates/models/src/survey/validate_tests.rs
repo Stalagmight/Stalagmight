@@ -297,7 +297,7 @@ fn anchors_are_exactly_one_per_component() {
                 station: 3,
                 x: 0.0,
                 y: 0.0,
-            })
+            });
         },
         &Violation::ExtraPlacement {
             placement: 1,

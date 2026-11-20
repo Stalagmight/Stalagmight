@@ -49,14 +49,13 @@ mod test_helpers;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod anchors_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod build_tests;
@@ -64,20 +63,20 @@ mod build_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod legacy_crosscheck_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod positions_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod validate_tests;
