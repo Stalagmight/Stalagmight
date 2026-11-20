@@ -204,6 +204,14 @@ mod issue_756_tests;
     reason = "on-demand vector dump: fails loudly, and says where it wrote"
 )]
 mod legacy_disk_vectors_dump_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod merge_projects_tests;
 #[cfg(sg_unported)]
 mod metamorphic_undo_tests;
 #[cfg(sg_unported)]
@@ -245,7 +253,7 @@ mod open_undo_bugs_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod pre_line_rename_disk_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,

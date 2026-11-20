@@ -160,7 +160,8 @@ fn carried_ignores(source: &SourceProject, summary: &AppendSummary) -> Vec<Ignor
     let mut seen = BTreeSet::new();
     let mut carried = Vec::new();
     for ignore in &source.ignores {
-        if !warning_is_ignorable(&ignore.code) || source.project.shot_by_uuid(&ignore.shot).is_none()
+        if !warning_is_ignorable(&ignore.code)
+            || source.project.shot_by_uuid(&ignore.shot).is_none()
         {
             continue;
         }
