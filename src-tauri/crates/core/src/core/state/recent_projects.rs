@@ -276,32 +276,30 @@ impl AppState {
         };
 
         // Deleting the file backing the OPEN project tears the whole session down
-        // first, for the same two reasons a cache download-replace drops the open
-        // project's handle before its rename: SQLite holds a live handle with a
-        // 256 MB mmap over the file, and on Windows it opens WITHOUT
-        // `FILE_SHARE_DELETE`, so both the Recycle-Bin move and the permanent-remove
-        // fallback fail with "Access is denied" while that handle is alive. Closing
-        // after the trash would therefore be unreachable on Windows - the delete
-        // would never get that far.
+        // first. The station-graph core keeps no handle on the file (0.6.0's live
+        // SQLite handle, whose Windows open lacked `FILE_SHARE_DELETE`, made the
+        // trash fail with "Access is denied" until it was closed), but a session
+        // left open over a deleted file would let the next save or autosave write
+        // it back, and its local-only durable saves would fail against a file that
+        // is gone.
         //
         // It has to be the FULL teardown, not just `*self.project.lock() = None`:
-        // that left the live SQLite handle open on a file that no longer exists,
-        // and left the entire undo/redo stack in place so an undo could replay
-        // against the deleted project. The teardown additionally drops the database
-        // handle, clears the undo stack, drops the display-settings and
-        // adjusted-geometry caches, and resets the read-only edit gate so it cannot
-        // leak into the next open.
+        // that left the entire undo/redo stack in place so an undo could replay
+        // against the deleted project. The teardown also resets the file state
+        // (the guard fingerprint, the SpeleoDB link and local state), drops the
+        // derived-view cache, and resets the read-only edit gate so it cannot leak
+        // into the next open.
         //
         // ONE acquisition of the `project` lock covers BOTH the identity check and
         // the teardown, and that is load-bearing rather than tidiness. Reading the
         // open path through `open_project_path` (which RELEASES the lock) and only
         // then calling `close_project` (which re-acquires it) is a TOCTOU: a load
         // that finished installing project B in the gap made the close tear down
-        // B's SQLite handle and undo stack while this call went on to delete A's
+        // B's file state and undo stack while this call went on to delete A's
         // file. The other half of the atom lives in the installers (round 5):
         // every path that installs a project WITH a file path - `open_project`,
         // `do_load_project_full`, `create_project_full` - commits the slot, the
-        // gates, the database handle, the undo stack AND the recents row under
+        // gates, the file state, the undo stack AND the recents row under
         // one unbroken acquisition of this same lock, so holding it here orders
         // this delete strictly before that whole finalization or strictly after
         // it. Before: we see the pre-load world, match nothing of the loader's,
@@ -367,14 +365,14 @@ impl AppState {
             let mut held_lock = None;
             if deleting_open_project {
                 // Snapshot what releasing a held SpeleoDB write lock needs, HERE,
-                // while the database handle is still alive. Three constraints pin
+                // while the file state still holds the link. Three constraints pin
                 // this shape:
                 //
                 // - It must precede the teardown. The snapshot reads the
-                //   `speleo_link` row through the open database handle, and
-                //   `close_open_project_locked` drops that handle, so a release
-                //   attempted afterwards asks a `None` database for the link, gets
-                //   `NoRemoteProject`, and silently does nothing. That was the bug:
+                //   SpeleoDB link from the open project's file state, and
+                //   `close_open_project_locked` resets it, so a release attempted
+                //   afterwards finds no link, gets `NoRemoteProject`, and silently
+                //   does nothing. That was the bug (on the database handle then):
                 //   the `.stalx` and its link row were destroyed and the frontend
                 //   cleared its link state, while the SERVER mutex stayed held and
                 //   blocked every other diver until it timed out.
@@ -415,7 +413,7 @@ impl AppState {
                     .and_then(|p| self.speleodb_forget_lock_acquired_for(&p.project_id));
                 tracing::info!(
                     path = ?path,
-                    purpose = "release the live handle before deleting the file",
+                    purpose = "close the session before deleting the file",
                     "Closing the open project because its .stalx is being deleted"
                 );
                 self.close_open_project_locked(&mut open);
