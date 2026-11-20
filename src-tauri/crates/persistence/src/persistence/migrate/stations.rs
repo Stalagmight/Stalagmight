@@ -128,6 +128,9 @@ pub(super) fn plan(
             .map(|(alias, member)| StationAlias {
                 id: alias,
                 name: names.by_slot.get(&member).cloned(),
+                // The member's line knew the junction by this alias (UX-4,
+                // D-migration-upgrade-8).
+                line: Some(slots.slot(member).line_id),
             })
             .collect();
         for &member in group {

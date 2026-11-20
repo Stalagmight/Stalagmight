@@ -159,18 +159,74 @@ fn a_merge_is_one_station_named_by_the_label_representative() {
     assert_eq!(out.report.comments_joined, 1);
 }
 
+/// Review findings D-migration-upgrade-8 and UX-3: Main:2 is named "2" and
+/// so is Side:2. Once Side:0 joins Main:2, the junction keeps its survivor's
+/// name "2" (the map labelled it so in 0.6.0) and Side knows it by Side:0's
+/// alias, so nothing is lettered: Side shows "2" twice, as 0.6.0's map did.
+/// The conversion notice lists that Side's slot 0 now reads "2".
 #[test]
-fn a_junction_name_taken_on_another_line_gets_a_letter() {
+fn a_junction_keeps_its_name_where_a_line_knows_it_by_an_alias() {
     let mut p = project();
     let main = line(&mut p, "Main", &[(90.0, 10.0), (80.0, 10.0), (70.0, 10.0)]);
     let side = line(&mut p, "Side", &[(180.0, 5.0), (190.0, 5.0), (200.0, 5.0)]);
-    // Main:2 is named "2" and Side:2 too: once Side:0 joins Main:2, the
-    // junction's name "2" would repeat on Side.
     p.merge_stations(at(side, 0), at(main, 2)).unwrap();
     let (_, out) = migrated(&p);
     let j = station(&out.project, main, 2);
-    assert_eq!(out.project.stations[&j].name, "2a");
-    assert_eq!(out.report.stations_renamed, 1);
+    let s = &out.project.stations[&j];
+    assert_eq!(s.name, "2");
+    assert_eq!(s.aliases.len(), 1);
+    assert_eq!(s.aliases[0].name.as_deref(), Some("0"));
+    assert_eq!(s.aliases[0].line, Some(side), "Side knew it as 0");
+    assert_eq!(
+        out.project.stations[&station(&out.project, side, 2)].name,
+        "2"
+    );
+    assert_eq!(out.report.stations_renamed, 0);
+    assert_eq!(out.project.validate(), Vec::new());
+    assert_eq!(
+        out.extras.names_changed,
+        vec![super::NameChange {
+            line: "Side".to_string(),
+            from: "0".to_string(),
+            to: "2".to_string(),
+        }]
+    );
+    assert_eq!(out.report.names_changed, 1);
+}
+
+/// A true clash is still lettered, and the junction keeps its name. A
+/// settled 0.6.0 file gives every member an id, so every member's line knows
+/// the junction by an alias; a junction a line holds to its names (no alias
+/// names that line) is built directly here: Side starts at Main:2 ("2") and
+/// has its own "2". Side's "2" takes the letter.
+#[test]
+fn a_true_clash_letters_the_other_station() {
+    use crate::models::survey::{LineMeta, StartAt};
+    let mut p = Project::new_at("Clash", None, DateTime::from_timestamp(0, 0).unwrap());
+    let flat = |az: f64| crate::models::ShotData {
+        azimuth_in: az,
+        azimuth_out: az,
+        length: 10.0,
+        ..crate::models::ShotData::default()
+    };
+    let main = p
+        .add_line(LineMeta::default(), StartAt::New, vec![flat(90.0); 3])
+        .unwrap();
+    let j = p.line_stations(main).unwrap()[2];
+    let side = p
+        .add_line(LineMeta::default(), StartAt::Station(j), vec![flat(0.0); 3])
+        .unwrap();
+    let start = p.line(main).unwrap().start;
+    p.set_placement(start, 0.0, 0.0).unwrap();
+    let side2 = p.line_stations(side).unwrap()[2];
+    p.station_mut(side2).unwrap().name = "2".to_string();
+    assert!(!p.validate().is_empty(), "Side holds two 2s of its own");
+    let mut report = super::MigrationReport::default();
+    super::assemble::settle_junction_names(&mut p, &mut report);
+    assert_eq!(p.stations[&j].name, "2");
+    assert_eq!(p.stations[&side2].name, "2a");
+    assert_eq!(report.stations_renamed, 1);
+    assert_eq!(p.validate(), Vec::new());
 }
 
 #[test]
@@ -844,4 +900,29 @@ fn an_absurd_legacy_distance_is_clamped_to_the_bound() {
     );
     let raw = out.project.raw_positions();
     assert!(raw.iter().all(|(_, c)| c.iter().all(|v| v.is_finite())));
+}
+
+/// Review finding UX-4 on a converted file: Side's start was merged on
+/// Main:2 in 0.6.0. The junction keeps Main:2's id and name; Side:0's id and
+/// name are an alias naming Side. Detaching Side gives it back its own
+/// station: that id and the name "0", as the field notes have it.
+#[test]
+fn detaching_a_converted_merge_gives_the_line_its_own_station_back() {
+    let mut p = project();
+    let main = line(&mut p, "Main", &[(90.0, 10.0), (80.0, 10.0), (70.0, 10.0)]);
+    let side = line(&mut p, "Side", &[(180.0, 5.0), (190.0, 5.0), (200.0, 5.0)]);
+    p.merge_stations(at(side, 0), at(main, 2)).unwrap();
+    let (legacy, out) = migrated(&p);
+    let ids = &legacy.project.station_ids;
+    let side0_id = ids[&legacy.project.key_for_ref(at(side, 0)).unwrap()];
+    let mut project = out.project;
+    let j = station(&project, main, 2);
+    let naming = project.detach_naming(j, side).unwrap();
+    assert_eq!((naming.id, naming.name.as_str()), (side0_id, "0"));
+    let detached = project.detach_line(j, side).unwrap();
+    assert!(detached.value.restored_alias);
+    assert_eq!(station(&project, side, 0), side0_id);
+    assert_eq!(project.stations[&side0_id].name, "0");
+    assert_eq!(station(&project, main, 2), j, "Main keeps the junction");
+    assert_eq!(project.validate(), Vec::new());
 }

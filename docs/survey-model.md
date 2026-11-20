@@ -61,7 +61,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 
 ## Data and ids
 
-- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`.
+- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`; `StationAlias { id, name, line }`, where `line` is the line that knew the station by that alias (a 0.6.0 merge member's line, a merge's moving line), checked like a `via` hint, re-pointed by Split, range splits and Combine, remapped by Add, cleared when stale. Detach gives that line the alias's id and name back; on that line the station's own name is exempt from invariant 8 (`known_by_alias_on`).
 - `Project.lines` is private: read it with `lines()`, `line(id)`, `line_position(id)`;
   change it with `lines_mut()` / `line_mut(id)`, which drop the cached
   topology and shot-uuid index. Every other field is public and feeds no cache.
@@ -241,7 +241,7 @@ Shared cores (one copy each):
 
 | Core | Used by |
 |---|---|
-| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases, the comment rule (`Join`, or Combine's pick), `external`, names re-uniquified | Merge Stations, the sweep's promotions, Combine's join |
+| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming its line), the comment rule (`Join`, or Combine's pick), `external`, true clashes lettered (a line that knows the survivor by the new alias keeps its names) | Merge Stations, the sweep's promotions, Combine's join |
 | `detach_ids(station, line)` (`ops_detach.rs`): a line's slot gets a new station; `via` datums, closure ends and the hand move follow | Detach / Unmerge, Combine's torn junctions |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |

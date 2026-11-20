@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use crate::models::SpeleoLink;
-use crate::persistence::migrate::{LegacyParity, MigratedExtras, Verification};
+use crate::persistence::migrate::{LegacyParity, MigratedExtras, NameChange, Verification};
 use crate::persistence::stalx_v2::{
     write_atomic, Extras, Fingerprint, Guard, History, IgnoredWarning, LocalSync, SpeleoDbLink,
     WriteError,
@@ -60,15 +60,43 @@ pub(crate) enum FileOrigin {
 
 /// The one-line notice an upgrade shows when the migration moved stations
 /// (plan 7.2.10, G4: whenever `verification.moved().slots > 0` or anything is
-/// unexplained).
+/// unexplained) or changed a name a line showed (review findings
+/// D-migration-upgrade-8, UX-3 and UX-1: a merged station now goes by one
+/// name on all its lines, and a true clash is lettered).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConversionNotice {
     pub(crate) slots_moved: usize,
     pub(crate) max_displacement_m: f64,
     pub(crate) unexplained: usize,
+    /// The slots whose name changed, in slot order (survey content: shown,
+    /// never logged).
+    pub(crate) names_changed: Vec<NameChange>,
 }
 
+/// How many name changes the notice spells out before "and N more".
+const NAMES_LISTED: usize = 5;
+
 impl ConversionNotice {
+    /// [`Self::of`] plus the names the conversion changed: a notice also
+    /// when nothing moved but a line now shows another name.
+    pub(crate) fn of_migration(
+        verification: &Verification,
+        names_changed: &[NameChange],
+    ) -> Option<Self> {
+        match Self::of(verification) {
+            Some(notice) => Some(Self {
+                names_changed: names_changed.to_vec(),
+                ..notice
+            }),
+            None => (!names_changed.is_empty()).then(|| Self {
+                slots_moved: 0,
+                max_displacement_m: 0.0,
+                unexplained: 0,
+                names_changed: names_changed.to_vec(),
+            }),
+        }
+    }
+
     pub(crate) fn of(verification: &Verification) -> Option<Self> {
         let moved = verification.moved();
         let unexplained = verification.mismatches.len();
@@ -76,14 +104,48 @@ impl ConversionNotice {
             slots_moved: moved.slots,
             max_displacement_m: moved.max_displacement_m,
             unexplained,
+            names_changed: Vec::new(),
         })
     }
 
     pub(crate) fn message(&self) -> String {
+        let mut parts = Vec::new();
+        if self.slots_moved > 0 || self.unexplained > 0 {
+            parts.push(format!(
+                "{} stations moved by up to {:.2} m",
+                self.slots_moved, self.max_displacement_m
+            ));
+        }
+        if !self.names_changed.is_empty() {
+            parts.push(self.names_part());
+        }
         format!(
-            "Converted from the old file format; {} stations moved by up to {:.2} m; \
+            "Converted from the old file format; {}; \
              the original is kept (Recent Projects: right-click, Restore an earlier copy).",
-            self.slots_moved, self.max_displacement_m
+            parts.join("; ")
+        )
+    }
+
+    /// "3 station names changed (a merged station has one name on all its
+    /// lines): Side 0 is now 3, Loop 0 is now 1, ..."
+    fn names_part(&self) -> String {
+        let n = self.names_changed.len();
+        let listed: Vec<String> = self
+            .names_changed
+            .iter()
+            .take(NAMES_LISTED)
+            .map(|c| format!("{} {} is now {}", c.line, c.from, c.to))
+            .collect();
+        let more = n.saturating_sub(NAMES_LISTED);
+        let tail = if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        };
+        let noun = if n == 1 { "name" } else { "names" };
+        format!(
+            "{n} station {noun} changed (a merged station has one name on all its lines): {}{tail}",
+            listed.join(", ")
         )
     }
 }
@@ -158,7 +220,7 @@ impl FileState {
         let mut state = Self {
             fingerprint,
             origin: FileOrigin::Legacy,
-            conversion: ConversionNotice::of(verification),
+            conversion: ConversionNotice::of_migration(verification, &migrated.names_changed),
             legacy_parity: Some(migrated.legacy_parity),
             ..Self::default()
         };

@@ -574,10 +574,12 @@ fn a_detach_mints_a_station_named_as_the_junction_and_redo_gives_it_back() {
 }
 
 #[test]
-fn a_merge_re_letters_a_clashing_name_on_the_moving_line() {
-    // B's own station 1 is named like A:1, the survivor B:0 becomes: the
-    // junction's lines keep their names unique (plan 5.3, the letter-suffix
-    // rule).
+fn a_merge_keeps_the_names_the_moving_line_holds() {
+    // B's own station 1 is named like A:1, which the survivor B:0 becomes.
+    // B knows the junction by its alias (B's own "0"), so a merge renames
+    // nothing there, as 0.6.0 kept each line's own name for its member
+    // (review findings D-migration-upgrade-8 and UX-3; a true clash is still
+    // lettered, `a_merge_letters_only_a_true_clash`).
     let mut p = empty("Names");
     let a = line_at(&mut p, "A", [0.0, 0.0], shots(2));
     let b = line_at(&mut p, "B", [50.0, 0.0], shots(2));
@@ -586,7 +588,8 @@ fn a_merge_re_letters_a_clashing_name_on_the_moving_line() {
     let before = snapshot(state);
     merge(state, slot(b, 0), slot(a, 1));
     let p = project(state);
-    assert_eq!(names(&p, b), ["1", "1a", "2"]);
+    assert_eq!(names(&p, b), ["1", "1", "2"]);
+    assert!(p.known_by_alias_on(st(&p, a, 1), b));
     assert_eq!(
         names(&p, a),
         ["0", "1", "2"],

@@ -292,10 +292,18 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let host = *rng.pick(&ids);
             let alias = p.mint_station_id().unwrap();
             let name = rng.chance(0.5).then(|| format!("old{alias}"));
-            p.station_mut(host)
-                .unwrap()
-                .aliases
-                .push(StationAlias { id: alias, name });
+            // Half of them name a line through the host (the line that knew
+            // it by the alias), with or without a name.
+            let line = if rng.chance(0.5) {
+                p.topology().lines_of(host).first().copied()
+            } else {
+                None
+            };
+            p.station_mut(host).unwrap().aliases.push(StationAlias {
+                id: alias,
+                name,
+                line,
+            });
         }
         // An empty credit object (`{}`) is a value of its own; `from_data`
         // never stores one, so set it on the model directly.

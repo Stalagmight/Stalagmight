@@ -856,7 +856,9 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// A legacy file whose merge the 0.6.0 open never resolved (C hangs off B,
 /// its stored offset drifted 5 m, and a merge row that resolves nothing makes
 /// A the cascade's seed) converts with C's two stations moved onto B: the
-/// open offers the conversion notice once, and a clean legacy file none.
+/// open offers the conversion notice once. The same survey clean moves
+/// nothing, but C's start now reads B's station's name, so its notice says
+/// that only (review findings UX-1 and UX-3).
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     crate::app_dirs::init_for_test();
@@ -882,7 +884,15 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
 
     let path = dir.path().join("clean.stalx");
     write_legacy_drift(&path, false);
-    assert_eq!(open(&path).take_conversion_notice(), None);
+    let notice = open(&path)
+        .take_conversion_notice()
+        .expect("a name changed");
+    assert_eq!(
+        notice,
+        "Converted from the old file format; 1 station name changed (a merged station has \
+         one name on all its lines): Line 3 0 is now 1; the original is kept (Recent \
+         Projects: right-click, Restore an earlier copy)."
+    );
 }
 
 /// A 0.6.0 file whose merge of C onto B the migration moves (`drift`: C's

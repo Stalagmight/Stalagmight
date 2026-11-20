@@ -388,7 +388,7 @@ impl<'de> Visitor<'de> for AliasesSeed<'_, '_> {
     type Value = ();
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an array of aliases [id, name?]")
+        f.write_str("an array of aliases [id, name?, line?]")
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
@@ -418,19 +418,29 @@ impl<'de> Visitor<'de> for AliasSeed<'_, '_> {
     type Value = StationAlias;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an alias [id, name?]")
+        f.write_str("an alias [id, name?, line?]")
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<StationAlias, A::Error> {
-        // Range-checked by `validate` (`AliasOutOfRange`).
+        // Range-checked by `validate` (`AliasOutOfRange`); the line must pass
+        // through the station (`StaleAliasLine`).
         let id: StationId = cell(&mut seq, self.ctx, "alias id")?;
         self.ctx.field = "alias name";
-        let name = seq.next_element::<String>()?;
-        if name.is_some() {
-            end_of_row(&mut seq, self.ctx)?;
-        }
+        // `[id]`, `[id, name]`, `[id, name, line]` or `[id, null, line]`.
+        let (name, line) = match seq.next_element::<Option<String>>()? {
+            None => (None, None),
+            Some(name) => {
+                self.ctx.field = "alias line";
+                let line = seq.next_element::<LineId>()?;
+                if name.is_none() && line.is_none() {
+                    return Err(self.ctx.bad("has a null name with no line after it"));
+                }
+                end_of_row(&mut seq, self.ctx)?;
+                (name, line)
+            }
+        };
         self.ctx.field = "";
-        Ok(StationAlias { id, name })
+        Ok(StationAlias { id, name, line })
     }
 }
 

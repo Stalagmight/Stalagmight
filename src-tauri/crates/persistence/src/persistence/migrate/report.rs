@@ -49,8 +49,15 @@ pub struct MigrationReport {
     pub station_ids_dropped: usize,
     /// Stations that had no usable id and were given a fresh one.
     pub station_ids_minted: usize,
-    /// Stations renamed (letter suffix) to keep names unique on every line.
+    /// Stations renamed (letter suffix) for a true clash: a name another
+    /// station holds as its own on a line that holds the junction to its
+    /// names too (D-migration-upgrade-8: a line that knows a junction by an
+    /// alias does not).
     pub stations_renamed: usize,
+    /// Slots whose station now goes by another name than 0.6.0 showed there
+    /// (a junction's one name, a lettered clash); the names themselves are
+    /// in `MigratedExtras::names_changed`, never here.
+    pub names_changed: usize,
     /// Stations whose members' distinct comments were joined.
     pub comments_joined: usize,
     /// Name, id, comment or hand-move keys that resolve to no station.
@@ -354,6 +361,7 @@ impl MigrationReport {
         put("station_ids_dropped", self.station_ids_dropped);
         put("station_ids_minted", self.station_ids_minted);
         put("stations_renamed", self.stations_renamed);
+        put("names_changed", self.names_changed);
         put("comments_joined", self.comments_joined);
         put("station_keys_dangling", self.station_keys_dangling);
         put("station_keys_duplicate", self.station_keys_duplicate);

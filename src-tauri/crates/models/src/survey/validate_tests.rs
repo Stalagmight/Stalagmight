@@ -60,11 +60,11 @@ fn an_out_of_range_station_id_is_reported() {
 fn an_alias_equal_to_a_live_id_is_reported() {
     expect_violation(
         |p| {
-            p.stations
-                .get_mut(&0)
-                .unwrap()
-                .aliases
-                .push(StationAlias { id: 1, name: None });
+            p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
+                id: 1,
+                name: None,
+                line: None,
+            });
         },
         &Violation::AliasCollision {
             station: 0,
@@ -383,6 +383,7 @@ fn counters_must_be_above_every_id_in_use() {
             p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
                 id: 40,
                 name: Some("old".to_string()),
+                line: None,
             });
         },
         &Violation::CounterNotAbove {
@@ -524,6 +525,7 @@ fn an_alias_id_outside_the_station_id_space_is_reported() {
             p.station_mut(host).unwrap().aliases.push(StationAlias {
                 id: MAX_STATION_ID,
                 name: None,
+                line: None,
             });
         },
         &Violation::AliasOutOfRange {
@@ -894,4 +896,54 @@ fn every_derived_position_is_finite_within_the_bounds() {
     assert!(adjusted
         .iter()
         .all(|(_, c)| c.iter().all(|v| v.is_finite())));
+}
+
+/// An alias's line must pass through its station (invariant 2, like a
+/// `via`), and on that line the station's own name need not be unique
+/// (invariant 8): the line knows it by the alias (review findings UX-4,
+/// D-migration-upgrade-8 and UX-3).
+#[test]
+fn an_alias_line_must_pass_its_station_and_exempts_it_from_that_lines_names() {
+    let (mut p, [l0, l1, _]) = three_line_junction();
+    let s1 = at(&p, l0, 1);
+    let l1_end = at(&p, l1, 2);
+    // s1 is the junction of L0 and L1; give L1's end the junction's name.
+    let name = p.stations[&s1].name.clone();
+    p.stations.get_mut(&l1_end).unwrap().name = name.clone();
+    assert!(p.validate().iter().any(|v| matches!(
+        v,
+        Violation::DuplicateStationName { line, .. } if *line == l1
+    )));
+    // L1 knows s1 by an alias: no clash there.
+    let alias = p.mint_station_id().unwrap();
+    p.stations.get_mut(&s1).unwrap().aliases.push(StationAlias {
+        id: alias,
+        name: Some("0".to_string()),
+        line: Some(l1),
+    });
+    assert_eq!(p.validate(), Vec::new());
+    assert!(p.known_by_alias_on(s1, l1));
+    assert!(!p.known_by_alias_on(s1, l0));
+    // A rename the user asks for still sees every name.
+    assert!(!p.conflicts_with_name(l1_end, &name).is_empty());
+
+    // A line that does not pass the station is a stale hint.
+    let s0 = at(&p, l0, 0);
+    let other = p.mint_station_id().unwrap();
+    p.stations.get_mut(&s0).unwrap().aliases.push(StationAlias {
+        id: other,
+        name: None,
+        line: Some(l1),
+    });
+    assert_eq!(
+        p.validate(),
+        vec![Violation::StaleAliasLine {
+            station: s0,
+            alias: other,
+            line: l1
+        }]
+    );
+    let dropped = p.drop_stale_attachments();
+    assert_eq!(dropped.alias_lines, vec![(s0, other)]);
+    assert_eq!(p.validate(), Vec::new());
 }

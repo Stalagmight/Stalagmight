@@ -326,7 +326,7 @@ Project (Cave System)
 │   ├── id: StationId (u32, project-unique, never reused: the Station ID, shown)
 │   ├── name: String (unique among the stations of every line it is on, shown)
 │   ├── comment: Option<String>
-│   ├── aliases: [{ id, name }] (the stations merged into this one)
+│   ├── aliases: [{ id, name, line }] (the stations merged into this one; line = the line that knew it by that alias)
 │   └── external: Option<String> (an imported identity, attribute only)
 ├── Lines[]   (display order = list order)
 │   ├── id: u32 (internal, immutable, never shown)
@@ -468,8 +468,20 @@ newcomer's copy to a derived id (see
 
 **Uniqueness and normalization.** Every line has a non-empty name, unique in the
 project; every station has a Station ID and a name unique among the stations
-of every line it is on (invariant 8). Imports, merges and the migration make
-names unique with the letter-suffix rule below; an unnamed line is seeded
+of every line it is on (invariant 8), except a line that knows the station by
+one of its aliases: a merge records, with the retired station's id and name,
+the line it was on, and on that line the junction keeps its own name even when
+a station of that line has it too, as 0.6.0 kept each line's own name for its
+merge member (so neither a merge nor the conversion of a 0.6.0 file renames a
+station for it). Only a true clash, a name two stations hold as their own on
+one line, is lettered: imports, merges and the migration make such names
+unique with the letter-suffix rule below, the junction keeping its name and the
+other station taking the letter. A rename you type is checked against every
+name on every line of the station. Detaching a line that an alias names gives
+the line its own station back, with the alias's Station ID and name (the name
+when no other station of the line has it; else the junction's, made unique).
+The conversion notice lists every slot whose name the conversion changed, for
+example "Side 0 is now 3" for a line that now shows its junction's one name; an unnamed line is seeded
 `Line 1`, `Line 2`, ... (smallest free number, in line order); a repeated line
 name gets ` (2)`, ` (3)`, ... on the later line. Station IDs come from
 `next_station_id` and are never reused within a timeline (an undo leaves the

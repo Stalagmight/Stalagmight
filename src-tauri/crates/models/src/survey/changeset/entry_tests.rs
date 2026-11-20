@@ -359,3 +359,39 @@ fn a_non_finite_number_is_refused_on_write() {
     side.n += 1;
     assert_eq!(encode_entry(&entry(cs)).unwrap_err(), EntryError::NonFinite);
 }
+
+/// A station image's alias carries the line that knew the station by it
+/// (review finding UX-4): `[id]`, `[id, name]`, `[id, name, line]` or
+/// `[id, null, line]`; a null name with no line, or a fourth element, is
+/// refused.
+#[test]
+fn an_alias_row_carries_its_line() {
+    use super::super::{Station, StationAlias};
+    use super::stations::StationRow;
+    let mut station = Station::new(3, "3");
+    for (id, name, line) in [
+        (7, None, None),
+        (8, Some("0"), None),
+        (9, Some("1"), Some(2)),
+        (10, None, Some(4)),
+    ] {
+        station.aliases.push(StationAlias {
+            id,
+            name: name.map(str::to_string),
+            line,
+        });
+    }
+    let text = serde_json::to_string(&StationRow(station.clone())).unwrap();
+    assert_eq!(
+        text,
+        r#"[3,"3",{"aliases":[[7],[8,"0"],[9,"1",2],[10,null,4]]}]"#
+    );
+    let back: StationRow = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.0, station);
+    for bad in [
+        r#"[3,"3",{"aliases":[[7,null]]}]"#,
+        r#"[3,"3",{"aliases":[[7,"0",2,5]]}]"#,
+    ] {
+        assert!(serde_json::from_str::<StationRow>(bad).is_err(), "{bad}");
+    }
+}

@@ -192,3 +192,42 @@ fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
     );
     assert_eq!(after.station_count, p.stations.len());
 }
+
+/// Review finding UX-4: what a line knew its stations by follows them to the
+/// second half. Main's station 3 is a junction Main knows by an alias (it was
+/// Branch's station merged into Main's), and the split station 2 is one Main
+/// knows by an alias too, its name shared with Main's own station 4: after
+/// Split Line Here at 2 the hints name the second half, which holds both, and
+/// neither half holds two names that only the exemption allowed.
+#[test]
+fn a_split_moves_the_alias_hints_with_their_stations() {
+    use super::super::StationAlias;
+    let mut p = empty();
+    let l = line(&mut p, "Main", run("m", 90.0, 10.0, 5));
+    let (k, m3, m4) = (st(&p, l, 2), st(&p, l, 3), st(&p, l, 4));
+    line_from(&mut p, "Branch", k, run("b", 0.0, 5.0, 1));
+    let name4 = p.station(m4).unwrap().name.clone();
+    p.station_mut(k).unwrap().name.clone_from(&name4);
+    for (station, id) in [(k, 50), (m3, 51)] {
+        p.station_mut(station).unwrap().aliases.push(StationAlias {
+            id,
+            name: Some("old".to_string()),
+            line: Some(l),
+        });
+    }
+    p.counters.next_station_id = 52;
+    assert_valid(&p);
+    let second = ok(p.split_line(
+        l,
+        SplitAt::Station { station_index: 2 },
+        &options("Front", "Back"),
+    ));
+    assert_valid(&p);
+    assert_eq!(p.station(m3).unwrap().aliases[0].line, Some(second));
+    assert_eq!(
+        p.station(k).unwrap().aliases[0].line,
+        Some(second),
+        "its clash went to the second half"
+    );
+    assert_eq!(p.station(k).unwrap().name, name4, "nothing renamed");
+}

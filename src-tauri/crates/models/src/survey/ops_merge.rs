@@ -308,12 +308,27 @@ impl Project {
         }
         self.placements.retain(|p| p.station != retired);
 
+        // The line that knew the retired station by its name: its one line,
+        // or the one of its lines none of its own aliases names (a junction
+        // that came from merges); `None` when that is not one line.
+        let named_by_aliases: BTreeSet<LineId> =
+            gone.aliases.iter().filter_map(|a| a.line).collect();
+        let native: Vec<LineId> = junction_lines
+            .iter()
+            .copied()
+            .filter(|l| !named_by_aliases.contains(l))
+            .collect();
+        let alias_line = match native.as_slice() {
+            [line] => Some(*line),
+            _ => None,
+        };
         self.stations.remove(&retired);
         if let Some(keep) = self.stations.get_mut(&survivor) {
             keep.aliases.extend(gone.aliases.iter().cloned());
             keep.aliases.push(StationAlias {
                 id: retired,
                 name: Some(gone.name.clone()),
+                line: alias_line,
             });
             keep.comment = merged_comment(keep.comment.take(), gone.comment.clone(), comment);
             if keep.external.is_none() {

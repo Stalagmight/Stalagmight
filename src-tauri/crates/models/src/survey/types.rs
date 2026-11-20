@@ -66,6 +66,16 @@ pub struct StationAlias {
     pub id: StationId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The line that knew the station by this alias: the line the retired
+    /// station was on when it was merged (a 0.6.0 merge member's line, the
+    /// moving line of a merge). Like a datum's `via` it must pass through the
+    /// station (invariant 2; a stale one is cleared). Detaching that line
+    /// gives it this id and name back (review finding UX-4), and on that
+    /// line the station's own name need not be unique (invariant 8, review
+    /// findings D-migration-upgrade-8 and UX-3: the line knows it by the
+    /// alias).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<LineId>,
 }
 
 /// One survey run: a simple chain of stations, `start` then each shot's `to`.

@@ -57,7 +57,9 @@ fn merging_two_free_pieces_moves_a_onto_b_and_keeps_bs_placement() {
         p.stations[&b0].aliases,
         vec![StationAlias {
             id: a2,
-            name: Some(a2_name)
+            name: Some(a2_name),
+            // A knew the retired station by that name (UX-4).
+            line: Some(a),
         }]
     );
     // B stays; A moves by (100 - 20, 50 - 0).
@@ -188,13 +190,17 @@ fn the_survivor_keeps_its_name_comment_and_ids_and_joins_the_comments() {
     let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     p.station_mut(b0).unwrap().comment = Some("survivor note".to_string());
     p.station_mut(a2).unwrap().comment = Some("retired note".to_string());
-    // A:0 is named "0" like the survivor B:0: it is renamed once B:0 is on A.
+    // A:0 is named "0" like the survivor B:0. A knows the junction by the
+    // retired station's name (its alias names A), so neither is renamed: a
+    // merge renames only a true clash (review findings D-migration-upgrade-8
+    // and UX-3; 0.6.0 kept each line's own name for its member).
     assert_eq!(p.stations[&a0].name, p.stations[&b0].name);
     let out = ok(p.merge_stations(a2, b0));
     assert_valid(&p);
-    assert_eq!(out.value.renamed, vec![a0]);
+    assert!(out.value.renamed.is_empty());
     assert_eq!(p.stations[&b0].name, "0");
-    assert_eq!(p.stations[&a0].name, "0a");
+    assert_eq!(p.stations[&a0].name, "0");
+    assert!(p.known_by_alias_on(b0, a));
     assert_eq!(
         p.stations[&b0].comment.as_deref(),
         Some("survivor note\n\nretired note")
@@ -312,4 +318,33 @@ fn two_placed_pieces_joined_by_a_closure_are_connected_for_the_dialog_but_may_me
         &xy_all(&p),
         TOL,
     );
+}
+
+/// A true clash is still lettered: the retired station is a junction of two
+/// lines of its own (a Split Line Here junction, so no alias names one of
+/// them), and the survivor's name is taken on one of them. The station that
+/// had the name takes the letter; the survivor keeps its own.
+#[test]
+fn a_merge_letters_only_a_true_clash() {
+    use super::SplitOptions;
+    let (mut p, a, b) = two_free_pieces();
+    let (a0, a1, b0) = (at(&p, a, 0), at(&p, a, 1), at(&p, b, 0));
+    p.split_line(
+        a,
+        crate::SplitAt::Station { station_index: 1 },
+        &SplitOptions {
+            name_a: "A1".to_string(),
+            name_b: "A2".to_string(),
+            color_a: "#111111".to_string(),
+            color_b: "#222222".to_string(),
+        },
+    )
+    .unwrap();
+    assert_valid(&p);
+    let out = ok(p.merge_stations(a1, b0));
+    assert_valid(&p);
+    assert_eq!(out.value.renamed, vec![a0]);
+    assert_eq!(p.stations[&b0].name, "0");
+    assert_eq!(p.stations[&a0].name, "0a");
+    assert_eq!(p.stations[&b0].aliases.last().unwrap().line, None);
 }

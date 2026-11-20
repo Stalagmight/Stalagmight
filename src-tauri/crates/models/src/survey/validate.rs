@@ -227,6 +227,13 @@ pub enum Violation {
         station: StationId,
         line: LineId,
     },
+    /// An alias's line hint names a line that does not pass through its
+    /// station.
+    StaleAliasLine {
+        station: StationId,
+        alias: StationId,
+        line: LineId,
+    },
     /// A hand move keyed on a station that is not on its line.
     HandMoveOffLine {
         line: LineId,
@@ -407,6 +414,15 @@ impl fmt::Display for Violation {
                 f,
                 "closure {closure} end {end} is attached via line {line}, which does not pass \
                  through station {station}"
+            ),
+            Self::StaleAliasLine {
+                station,
+                alias,
+                line,
+            } => write!(
+                f,
+                "alias {alias} of station {station} names line {line}, which does not pass \
+                 through it"
             ),
             Self::HandMoveOffLine { line, station } => write!(
                 f,
@@ -700,6 +716,20 @@ impl Project {
                 }
             }
         }
+        for (&station, s) in &self.stations {
+            if !topology.contains(station) {
+                continue;
+            }
+            for alias in &s.aliases {
+                if let Some(line) = alias.line.filter(|&line| !via_holds(station, line)) {
+                    out.push(Violation::StaleAliasLine {
+                        station,
+                        alias: alias.id,
+                        line,
+                    });
+                }
+            }
+        }
     }
 
     fn check_chains(&self, out: &mut Vec<Violation>) {
@@ -850,13 +880,17 @@ impl Project {
             let Some(chain) = topology.chain_at(position) else {
                 continue;
             };
+            // A station the line knows by one of its aliases is not held to
+            // the line's names (`Project::known_by_alias_on`).
+            let named = |s: &StationId| {
+                self.stations
+                    .get(s)
+                    .filter(|st| !st.aliases.iter().any(|a| a.line == Some(line.id)))
+                    .map(|st| (st.name.as_str(), *s))
+            };
             // Fast path: no name on two stations of the chain.
             sorted.clear();
-            sorted.extend(
-                chain
-                    .iter()
-                    .filter_map(|s| self.stations.get(s).map(|st| (st.name.as_str(), *s))),
-            );
+            sorted.extend(chain.iter().filter_map(named));
             sorted.sort_unstable();
             if sorted
                 .windows(2)
@@ -866,7 +900,7 @@ impl Project {
             }
             let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
             for &station in chain {
-                let Some(name) = self.stations.get(&station).map(|s| s.name.as_str()) else {
+                let Some((name, _)) = named(&station) else {
                     continue;
                 };
                 match seen.get(name) {

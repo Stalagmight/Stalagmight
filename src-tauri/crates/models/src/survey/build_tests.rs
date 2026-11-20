@@ -126,6 +126,7 @@ fn inserting_a_station_raises_the_counter_past_it_and_its_aliases() {
     station.aliases.push(StationAlias {
         id: 25,
         name: Some("old".to_string()),
+        line: None,
     });
     p.insert_station(station).unwrap();
     assert_eq!(p.counters.next_station_id, 26);

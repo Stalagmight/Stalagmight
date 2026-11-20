@@ -136,6 +136,7 @@ pub(super) fn example() -> (Project, Extras) {
         s.aliases.push(StationAlias {
             id: alias,
             name: Some("B0".to_string()),
+            line: Some(side),
         });
     }
     let entrance = p.line(main).unwrap().start;

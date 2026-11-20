@@ -252,6 +252,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::DanglingClosureEnd { .. }
         | Violation::StaleDatumVia { .. }
         | Violation::StaleClosureVia { .. }
+        | Violation::StaleAliasLine { .. }
         | Violation::HandMoveOffLine { .. }
         | Violation::DanglingSection { .. } => 1,
         Violation::RepeatedStationInChain { .. }
@@ -500,6 +501,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             }
             Violation::StaleDatumVia { .. }
             | Violation::StaleClosureVia { .. }
+            | Violation::StaleAliasLine { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
             Violation::DanglingSection { line, section } => {
                 if let Some(position) = pass.position(*line, 0) {
@@ -598,7 +600,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     if stale {
         let dropped = p.drop_stale_attachments();
         repairs.push(Repair::ClearedAttachments {
-            vias: dropped.datum_vias.len() + dropped.closure_vias.len(),
+            vias: dropped.datum_vias.len() + dropped.closure_vias.len() + dropped.alias_lines.len(),
             hand_moves: dropped.hand_moves.len(),
         });
     }

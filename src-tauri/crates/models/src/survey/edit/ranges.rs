@@ -392,6 +392,7 @@ impl Project {
         second.assign_session_shot_ids();
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &tail_stations);
+        self.repoint_alias_lines(line, new_id, &tail_stations);
 
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
@@ -439,6 +440,27 @@ impl Project {
             }
             if closure.b_via == Some(from) && moved(closure.b) {
                 closure.b_via = Some(to);
+            }
+        }
+    }
+
+    /// The alias line hints of `arrived` (stations that left `from` for
+    /// `to`) that named `from` now name `to`: the new line knows them by the
+    /// same aliases (UX-4; invariant 8 exempts them there as it did on
+    /// `from`). A station that was already on `to` is not in `arrived`.
+    pub(super) fn repoint_alias_lines(
+        &mut self,
+        from: LineId,
+        to: LineId,
+        arrived: &BTreeSet<StationId>,
+    ) {
+        for station in arrived {
+            if let Some(s) = self.stations.get_mut(station) {
+                for alias in &mut s.aliases {
+                    if alias.line == Some(from) {
+                        alias.line = Some(to);
+                    }
+                }
             }
         }
     }

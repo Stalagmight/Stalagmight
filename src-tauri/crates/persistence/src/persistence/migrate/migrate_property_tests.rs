@@ -102,7 +102,9 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
         ),
         ("aliases", c.total(|r| r.aliases_created)),
         ("comments joined", c.total(|r| r.comments_joined)),
-        ("stations renamed", c.total(|r| r.stations_renamed)),
+        // A letter needs a true clash (a member without a usable id); the
+        // usual visible change is the junction's one name on a member's line.
+        ("names changed", c.total(|r| r.names_changed)),
         (
             "aligned closures to Tie",
             c.total(|r| r.aligned_closures_to_tie),

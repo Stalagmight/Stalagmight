@@ -159,7 +159,7 @@ impl Tally {
     }
 
     fn report(&mut self, r: &MigrationReport) {
-        let fields: [(&str, usize); 16] = [
+        let fields: [(&str, usize); 17] = [
             ("report.merges_collapsed", r.merges_collapsed),
             ("report.merges_demoted_cycle", r.merges_demoted_cycle),
             (
@@ -174,6 +174,7 @@ impl Tally {
             ("report.aliases_created", r.aliases_created),
             ("report.comments_joined", r.comments_joined),
             ("report.stations_renamed", r.stations_renamed),
+            ("report.names_changed", r.names_changed),
             ("report.aligned_closures_to_tie", r.aligned_closures_to_tie),
             ("report.corrections_stored", r.corrections_stored),
             ("report.hand_moves_carried", r.hand_moves_carried),
@@ -1493,7 +1494,11 @@ fn migration_fuzz_window() {
         "speleodb link",
         "report.merges_demoted_cycle",
         "report.aliases_created",
-        "report.stations_renamed",
+        // A junction keeps its survivor's name wherever a line knows it by
+        // an alias, so a letter (`stations_renamed`) needs a member without
+        // a usable id: rare. What every merge-heavy window shows is a line
+        // whose slot now reads the junction's one name.
+        "report.names_changed",
         "report.comments_joined",
         "report.hand_moves_carried",
         "report.history_rows_dropped",
