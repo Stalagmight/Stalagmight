@@ -36,13 +36,16 @@ mod adjust;
 mod anchors;
 mod build;
 mod closures;
+mod frozen;
 mod gas;
 mod graph;
 mod lsq;
 mod metrics;
 mod naming;
 mod positions;
+mod rigid;
 mod roles;
+mod stats;
 mod topology;
 mod types;
 mod validate;
@@ -75,6 +78,12 @@ mod anchors_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod build_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod derived_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -127,7 +136,9 @@ pub use naming::NameConflict;
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,
 };
+pub use rigid::RigidGroups;
 pub use roles::{FarFix, GpsGapWarning};
+pub use stats::SurveyStats;
 pub use topology::{Component, ShotLocation, ShotUuidIndex, Topology};
 pub use types::{
     ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, ProjectSettings,
