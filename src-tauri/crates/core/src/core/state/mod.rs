@@ -340,13 +340,6 @@ mod speleodb_install_sidecar_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_nonblocking_tests;
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test fixtures: a failed setup step is a failed test"
-)]
-mod speleodb_test_files;
 #[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
@@ -372,6 +365,13 @@ mod station_identity_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_names_import_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test fixtures: a failed setup step is a failed test"
+)]
+mod synthetic_stalx_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,

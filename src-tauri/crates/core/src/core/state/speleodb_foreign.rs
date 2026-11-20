@@ -493,7 +493,7 @@ impl AppState {
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::super::speleodb_test_files::{
+    use super::super::synthetic_stalx_tests::{
         legacy_linked_project, link_on_disk, write_legacy_link_only, write_v2,
     };
     use super::*;

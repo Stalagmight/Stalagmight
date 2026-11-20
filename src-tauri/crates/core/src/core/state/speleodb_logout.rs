@@ -189,7 +189,7 @@ impl AppState {
     reason = "synthetic legacy credential cleanup tests"
 )]
 mod tests {
-    use super::super::speleodb_test_files::{
+    use super::super::synthetic_stalx_tests::{
         legacy_linked_project, link, write_legacy_link_only, write_v2,
     };
     use super::*;

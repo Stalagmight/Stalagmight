@@ -907,7 +907,7 @@ impl AppState {
     reason = "unit test fixtures fail loudly on setup errors; the panic POISONS a mutex on purpose"
 )]
 mod tests {
-    use super::super::speleodb_test_files::write_v2;
+    use super::super::synthetic_stalx_tests::write_v2;
     use super::AppState;
     use crate::models::survey::Project;
     use crate::models::SpeleoLink;

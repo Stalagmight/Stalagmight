@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use super::speleodb_test_files::write_v2;
+use super::synthetic_stalx_tests::write_v2;
 use super::tests_support::{lock_server, lock_server_unreadable, release_posts};
 use super::AppState;
 use crate::models::SpeleoLink;

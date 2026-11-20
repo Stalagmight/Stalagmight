@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use super::speleodb_edit_gate::OpenProjectGate;
-use super::speleodb_test_files::write_v2;
+use super::synthetic_stalx_tests::write_v2;
 use super::AppState;
 use crate::models::SpeleoLink;
 

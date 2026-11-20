@@ -17,7 +17,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use super::speleodb_test_files::write_v2;
+use super::synthetic_stalx_tests::write_v2;
 use super::tests_support::sdk_fixture;
 use super::AppState;
 use crate::core::LockReleaseOutcome;
