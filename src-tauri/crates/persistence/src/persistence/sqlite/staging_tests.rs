@@ -153,3 +153,42 @@ fn a_staging_file_holds_the_same_bytes_as_a_synced_one() {
         "a closed staging connection leaves no journal behind"
     );
 }
+
+/// The frozen 0.6.0 reader (`stalagmight_legacy`, the switched app's only
+/// reader of SQLite files) opens a staging file exactly as it opens a synced
+/// one: what a one-sync (#823) build wrote migrates as what any 0.6.0 build
+/// wrote, so the reader needs no change for it.
+#[test]
+fn the_frozen_reader_opens_a_staging_file_as_a_synced_one() {
+    let dir = TempDir::new().unwrap();
+    let project = sample_project();
+    let synced_path = dir.path().join("synced.stalx");
+    let staged_path = dir.path().join("staged.stalx");
+
+    let mut synced = Database::open(&synced_path).unwrap();
+    write_everything(&mut synced, &project);
+    drop(synced);
+    let mut staged = Database::open_staging(&staged_path).unwrap();
+    write_everything(&mut staged, &project);
+    drop(staged);
+
+    let options = stalagmight_legacy::OpenOptions {
+        with_adjusted: false,
+        ..stalagmight_legacy::OpenOptions::default()
+    };
+    let synced = stalagmight_legacy::open_path(&synced_path, &options).unwrap();
+    let staged = stalagmight_legacy::open_path(&staged_path, &options).unwrap();
+    assert_eq!(synced.schema_version, SCHEMA_VERSION);
+    assert_eq!(staged.schema_version, synced.schema_version);
+    // `modified_at` and `file_path` are each file's own; everything else is
+    // what the file holds.
+    let read = |survey: &stalagmight_legacy::LegacySurvey| {
+        let mut project = survey.project.clone();
+        project.modified_at = project.created_at;
+        project.file_path = None;
+        serde_json::to_value(&project).unwrap()
+    };
+    assert_eq!(read(&staged), read(&synced));
+    assert_eq!(read(&staged)["lines"].as_array().map(Vec::len), Some(2));
+    assert_eq!(staged.raw_positions, synced.raw_positions);
+}
