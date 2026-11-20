@@ -307,7 +307,13 @@ fn merge(
         "Stations merged"
     );
     Ok(Applied {
-        warnings: swept_closure_warnings(names, project, &outcome.sweep, ONE_POINT_BY_MERGE, "merge"),
+        warnings: swept_closure_warnings(
+            names,
+            project,
+            &outcome.sweep,
+            ONE_POINT_BY_MERGE,
+            "merge",
+        ),
         ..Applied::default()
     })
 }

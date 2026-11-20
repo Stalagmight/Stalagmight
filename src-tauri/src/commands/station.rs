@@ -5,7 +5,10 @@ use crate::models::{
     ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef, ZeroDatumPreview,
 };
 
-/// Check merge connectivity between two stations (read-only, NOT a Command)
+/// Check merge connectivity between two stations (read-only, NOT a Command):
+/// a connected pair goes to the closure dialog (with its figures and the
+/// across-one-shot refusal), an unconnected one may merge (with the datum
+/// shift when both pieces are placed).
 #[tauri::command]
 pub fn check_merge_connectivity(
     state: State<AppState>,
@@ -57,7 +60,8 @@ pub(crate) fn remove_loop_closure_impl(state: &AppState, closure_id: u64) -> Com
     state.execute(Command::RemoveLoopClosure { closure_id })
 }
 
-/// Merge two stations
+/// Merge two stations into one shared station (a junction). The piece of
+/// `station_a` moves onto `station_b` unless that would move a placed piece.
 #[tauri::command]
 pub fn merge_stations(
     state: State<AppState>,
@@ -78,7 +82,9 @@ pub(crate) fn merge_stations_impl(
     })
 }
 
-/// Unmerge a station
+/// Unmerge a station: detach the slot's line from the junction (it gets a
+/// station of its own where the junction was); the other lines stay joined.
+/// A no-op on a station that is on one line only.
 #[tauri::command]
 pub fn unmerge_stations(state: State<AppState>, station_ref: StationRef) -> CommandResult {
     unmerge_stations_impl(state.inner(), station_ref)
@@ -88,7 +94,8 @@ pub(crate) fn unmerge_stations_impl(state: &AppState, station_ref: StationRef) -
     state.execute(Command::UnmergeStations { station_ref })
 }
 
-/// Unmerge a specific station pair
+/// Unmerge a specific station pair: the two slots must be one station on two
+/// lines; `station_b`'s line is detached from it.
 #[tauri::command]
 pub fn unmerge_station_pair(
     state: State<AppState>,
@@ -111,8 +118,8 @@ pub(crate) fn unmerge_station_pair_impl(
 
 /// Set zero datum for a station. `accuracy_m` is the GPS horizontal accuracy
 /// in metres (JS sends `accuracyM`); omitted or `null` means the default. On a
-/// merge component that is already placed the datum is stored as a GPS fix and
-/// nothing moves (#741). `entrance` (JS `entrance`) is the user's answer to
+/// piece that is already placed the datum is stored as a GPS fix and nothing
+/// moves (#741). `entrance` (JS `entrance`) is the user's answer to
 /// "is this station an entrance?"; omitted or `null` keeps the stored answer,
 /// which for a new datum is the default rule.
 #[tauri::command]

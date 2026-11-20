@@ -32,8 +32,8 @@ impl EventSink for NullSink {
 /// A version 2 project at `dir/name`, re-stamped format version `version`.
 fn project_file(dir: &TempDir, name: &str, version: u32) -> PathBuf {
     let path = dir.path().join(name);
-    let bytes = stalx_v2::encode(&Project::new(name, None), &Extras::default(), Mode::Normal)
-        .unwrap();
+    let bytes =
+        stalx_v2::encode(&Project::new(name, None), &Extras::default(), Mode::Normal).unwrap();
     let text = String::from_utf8(bytes).unwrap();
     let stamped = text.replacen("\"version\":2", &format!("\"version\":{version}"), 1);
     assert!(version == 2 || stamped != text, "setup: re-stamped");

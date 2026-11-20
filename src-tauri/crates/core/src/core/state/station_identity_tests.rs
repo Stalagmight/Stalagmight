@@ -38,7 +38,7 @@ use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
     CombineJoinEnds, CombineLinesOptions, CombinePick, LineEnd, LineId, LineUpdates, SplitAt,
-    SplitLineOptions, SplitSide, StationId, StationRef,
+    SplitLineOptions, SplitSide, StationId,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -52,7 +52,10 @@ fn identities(p: &Project) -> BTreeMap<(LineId, u32), (StationId, String)> {
     for line in p.lines() {
         for (index, station) in line.stations().enumerate() {
             let index = u32::try_from(index).unwrap();
-            out.insert((line.id, index), (station, p.stations[&station].name.clone()));
+            out.insert(
+                (line.id, index),
+                (station, p.stations[&station].name.clone()),
+            );
         }
     }
     out
@@ -72,11 +75,7 @@ fn shot_id(p: &Project, line: LineId, index: usize) -> crate::models::ShotId {
 
 fn identity_snapshot(state: &AppState) -> String {
     let p = project(state);
-    format!(
-        "{:?} next={}",
-        identities(&p),
-        p.counters.next_station_id
-    )
+    format!("{:?} next={}", identities(&p), p.counters.next_station_id)
 }
 
 /// Undo, check `before`; redo, check `after`. The counter may stand higher
@@ -442,7 +441,12 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
 fn add_stalx_offsets_the_incoming_ids_and_dedupes_line_names() {
     // The source: one line named like the target's, ids 0..=2.
     let mut source = empty("Source");
-    line_at(&mut source, "Main", [0.0, 0.0], vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    line_at(
+        &mut source,
+        "Main",
+        [0.0, 0.0],
+        vec![shot(0.0, 5.0), shot(0.0, 5.0)],
+    );
     let (opened, main) = main_line(3);
     let path = opened.dir.path().join("source.stalx");
     std::fs::write(
@@ -486,11 +490,13 @@ fn ids_and_names_survive_a_save_and_reopen() {
     let before = project(state);
 
     let path = opened.dir.path().join("ids.stalx");
-    assert!(state
-        .execute(Command::SaveProject {
-            path: Some(path.clone())
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
     let reopened = AppState::new().unwrap();
     assert!(reopened.execute(Command::OpenProject { path }).success);
     let after = project(&reopened);
@@ -520,7 +526,11 @@ fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
     assert!(!p.stations.contains_key(&b0), "the retired station is gone");
     let survivor = &p.stations[&a2];
     assert_eq!(survivor.name, "2", "the survivor keeps its name");
-    assert_eq!(survivor.comment.as_deref(), Some("sump"), "and takes the comment");
+    assert_eq!(
+        survivor.comment.as_deref(),
+        Some("sump"),
+        "and takes the comment"
+    );
     assert_eq!(
         survivor
             .aliases
@@ -587,6 +597,10 @@ fn a_merge_re_letters_a_clashing_name_on_the_moving_line() {
     merge(state, slot(b, 0), slot(a, 1));
     let p = project(state);
     assert_eq!(names(&p, b), ["1", "1a", "2"]);
-    assert_eq!(names(&p, a), ["0", "1", "2"], "the stationary line is untouched");
+    assert_eq!(
+        names(&p, a),
+        ["0", "1", "2"],
+        "the stationary line is untouched"
+    );
     assert_round_trip(state, &before, "merge with a clash");
 }

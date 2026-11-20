@@ -133,7 +133,10 @@ pub(super) fn assert_near(actual: [f64; 2], expected: [f64; 2], tol: f64, what: 
 }
 
 /// Every slot of `a` is within 1e-6 m of the same slot of `b`.
-pub(super) fn assert_same_xy(a: &BTreeMap<StationRef, [f64; 2]>, b: &BTreeMap<StationRef, [f64; 2]>) {
+pub(super) fn assert_same_xy(
+    a: &BTreeMap<StationRef, [f64; 2]>,
+    b: &BTreeMap<StationRef, [f64; 2]>,
+) {
     assert_eq!(
         a.keys().collect::<Vec<_>>(),
         b.keys().collect::<Vec<_>>(),
@@ -269,7 +272,12 @@ pub(super) fn save_close_reopen(state: &AppState, path: &Path) {
 }
 
 /// One undo and one redo land exactly on `before` and `after`.
-pub(super) fn assert_undo_redo_exact(state: &AppState, before: &Snapshot, after: &Snapshot, what: &str) {
+pub(super) fn assert_undo_redo_exact(
+    state: &AppState,
+    before: &Snapshot,
+    after: &Snapshot,
+    what: &str,
+) {
     let r = state.undo();
     assert!(r.success, "{what}: undo {:?}", r.error);
     assert_same(

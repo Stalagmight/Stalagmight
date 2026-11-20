@@ -97,8 +97,14 @@ fn a_gps_fix_through_the_command_stores_its_accuracy_and_undo_restores_both() {
     let p = project(state);
     assert_eq!(p.datums[1].accuracy_m, Some(3.0));
     let expected = gps_at(40.0, 500.0);
-    assert_eq!(p.datums[1].gps.latitude.to_bits(), expected.latitude.to_bits());
-    assert_eq!(p.datums[1].gps.longitude.to_bits(), expected.longitude.to_bits());
+    assert_eq!(
+        p.datums[1].gps.latitude.to_bits(),
+        expected.latitude.to_bits()
+    );
+    assert_eq!(
+        p.datums[1].gps.longitude.to_bits(),
+        expected.longitude.to_bits()
+    );
 
     // Undoing the add removes the fix again; nothing ever moved.
     assert!(state.undo().success);
@@ -208,10 +214,10 @@ fn ignore_datum_row(state: &AppState, station: u32) {
         .save_resolved_warning_gated(&crate::persistence::ResolvedWarning {
             line_id: row.line_id,
             shot_id: row.shot_id,
-            warning_code: row.code.clone(),
+            warning_code: row.code,
             resolved_at: chrono::Utc::now(),
             resolved_comment: None,
-            shot_uuid: row.shot_uuid.clone(),
+            shot_uuid: row.shot_uuid,
         })
         .unwrap();
 }
@@ -317,9 +323,18 @@ fn removing_the_frame_places_the_promoted_fix_and_keeps_every_piece_on_its_gps()
     );
     let p = project(state);
     let frame = p.frame_datum().unwrap();
-    assert_eq!(p.datums[frame].station, st(&p, b, 5), "the promoted fix is the frame");
+    assert_eq!(
+        p.datums[frame].station,
+        st(&p, b, 5),
+        "the promoted fix is the frame"
+    );
     assert_near(xy(&p, slot(b, 5)), [0.0, 0.0], 1e-6, "F on the origin");
-    assert_near(xy(&p, slot(c, 0)), local(&c_gps, &fix_gps), 0.01, "C on its GPS");
+    assert_near(
+        xy(&p, slot(c, 0)),
+        local(&c_gps, &fix_gps),
+        0.01,
+        "C on its GPS",
+    );
     // The traverse moved rigidly by (40, 0) then (-40, -500); C by (-40, -500).
     let (old, new) = (raw_xyz(&before), raw_xyz(&p));
     for (at, [bx, by, bz]) in &old {
@@ -354,7 +369,12 @@ fn a_batch_that_deletes_the_frame_line_settles_the_promotion_once() {
     );
     let p = project(state);
     assert_near(xy(&p, slot(b, 5)), [0.0, 0.0], 1e-6, "F on the origin");
-    assert_near(xy(&p, slot(c, 0)), local(&c_gps, &fix_gps), 0.01, "C on its GPS");
+    assert_near(
+        xy(&p, slot(c, 0)),
+        local(&c_gps, &fix_gps),
+        0.01,
+        "C on its GPS",
+    );
     assert_round_trip(state, &before, "batched delete line");
 }
 
@@ -565,7 +585,11 @@ fn an_accuracy_only_edit_never_moves_a_piece() {
         set_datum(state, at, gps, Some(7.5));
         let after = project(state);
         assert_same_xy(&before, &raw_xy(&after));
-        assert_eq!(after.datums[datum_at(&after, at)].accuracy_m, Some(7.5), "{at:?}");
+        assert_eq!(
+            after.datums[datum_at(&after, at)].accuracy_m,
+            Some(7.5),
+            "{at:?}"
+        );
     }
 
     // A placement datum an older file left 30 m off its GPS (a stored
@@ -623,7 +647,11 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
     set_datum(state, fix, gps_at(150.0, 500.0), Some(3.0));
     assert_eq!(ignored(state), vec![false]);
     assert!(state.undo().success);
-    assert_eq!(ignored(state), vec![true], "undo restores the ignored reading");
+    assert_eq!(
+        ignored(state),
+        vec![true],
+        "undo restores the ignored reading"
+    );
     assert!(state.redo().success);
     assert_eq!(ignored(state), vec![false]);
 
@@ -636,7 +664,12 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
         .find(|w| w.code == DATUM_GPS_GAP)
         .unwrap();
     state
-        .delete_resolved_warning_gated(row.line_id, row.shot_id, &row.code, row.shot_uuid.as_deref())
+        .delete_resolved_warning_gated(
+            row.line_id,
+            row.shot_id,
+            &row.code,
+            row.shot_uuid.as_deref(),
+        )
         .unwrap();
     assert_eq!(ignored(state), vec![false]);
 }
@@ -671,8 +704,18 @@ fn deleting_the_first_shot_promotes_the_next_stations_fix_onto_its_gps() {
         (fix_gps.latitude, fix_gps.longitude),
         "the fix is the frame now"
     );
-    assert_near(xy(&p, slot(a, 0)), [0.0, 0.0], 1e-6, "the promoted fix on the origin");
-    assert_near(xy(&p, slot(c, 0)), local(&c_gps, &fix_gps), 0.01, "C on its GPS");
+    assert_near(
+        xy(&p, slot(a, 0)),
+        [0.0, 0.0],
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy(&p, slot(c, 0)),
+        local(&c_gps, &fix_gps),
+        0.01,
+        "C on its GPS",
+    );
     assert_round_trip(state, &before, "delete the first shot");
 }
 
@@ -696,8 +739,18 @@ fn removing_the_frame_promotes_a_fix_that_shares_its_gps() {
         },
     );
     let p = project(state);
-    assert_near(xy(&p, slot(b, 5)), [0.0, 0.0], 1e-6, "the promoted fix on the origin");
-    assert_near(xy(&p, slot(c, 0)), local(&c_gps, &origin()), 0.01, "C on its GPS");
+    assert_near(
+        xy(&p, slot(b, 5)),
+        [0.0, 0.0],
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy(&p, slot(c, 0)),
+        local(&c_gps, &origin()),
+        0.01,
+        "C on its GPS",
+    );
     assert_round_trip(state, &before, "remove the frame");
 }
 
@@ -723,8 +776,18 @@ fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
         },
     );
     let p = project(state);
-    assert_near(xy(&p, slot(a, 0)), [0.0, 0.0], 1e-6, "the promoted fix on the origin");
-    assert_near(xy(&p, slot(c, 0)), local(&c_gps, &origin()), 0.01, "C on its GPS");
+    assert_near(
+        xy(&p, slot(a, 0)),
+        [0.0, 0.0],
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy(&p, slot(c, 0)),
+        local(&c_gps, &origin()),
+        0.01,
+        "C on its GPS",
+    );
     assert_round_trip(state, &before, "delete the first shot");
 }
 
@@ -738,8 +801,7 @@ fn fix_and_twin(
     twin_at: u32,
     closure_at: u32,
 ) -> (Opened, LineId, LineId) {
-    let (opened, a, _b, extra) =
-        two_entrances(vec![("X", north(2, 20.0)), ("Y", north(1, 20.0))]);
+    let (opened, a, _b, extra) = two_entrances(vec![("X", north(2, 20.0)), ("Y", north(1, 20.0))]);
     let (x, y) = (extra[0], extra[1]);
     let state = &opened.state;
     merge(state, slot(x, 2), slot(a, 2));
@@ -874,14 +936,24 @@ fn a_new_frame_gps_re_places_the_other_piece_and_undo_restores_it() {
     let new_frame = gps_at(0.0, 100.0);
     set_datum(state, slot(a, 0), new_frame, None);
     let after = project(state);
-    assert_near(xy(&after, slot(a, 0)), [0.0, 0.0], 1e-9, "the frame stays on the origin");
+    assert_near(
+        xy(&after, slot(a, 0)),
+        [0.0, 0.0],
+        1e-9,
+        "the frame stays on the origin",
+    );
     assert_near(
         xy(&after, slot(c, 0)),
         local(&c_gps, &new_frame),
         1e-6,
         "C:0 sits on its own GPS in the new frame",
     );
-    assert_near(xy(&after, slot(b, 5)), fix_before, 1e-9, "a GPS fix is no placement");
+    assert_near(
+        xy(&after, slot(b, 5)),
+        fix_before,
+        1e-9,
+        "a GPS fix is no placement",
+    );
     assert_placements_on_their_gps(state, "frame GPS edit");
 
     assert_round_trip(state, &snap, "frame GPS edit");
@@ -915,11 +987,21 @@ fn a_frame_gps_copied_from_a_fix_moves_every_other_piece_once() {
             Some(DatumRole::GpsFix)
         ]
     );
-    assert_near(xy(&project(state), slot(q, 0)), [0.0, 0.0], 1e-9, "Q:0 on the origin");
+    assert_near(
+        xy(&project(state), slot(q, 0)),
+        [0.0, 0.0],
+        1e-9,
+        "Q:0 on the origin",
+    );
 
     set_datum(state, slot(a, 0), fix, None);
     let after = project(state);
-    assert_near(xy(&after, slot(a, 0)), [0.0, 0.0], 1e-9, "the frame stays on the origin");
+    assert_near(
+        xy(&after, slot(a, 0)),
+        [0.0, 0.0],
+        1e-9,
+        "the frame stays on the origin",
+    );
     assert_near(
         xy(&after, slot(pl, 0)),
         local(&origin(), &fix),

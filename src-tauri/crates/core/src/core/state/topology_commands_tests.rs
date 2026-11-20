@@ -86,7 +86,12 @@ fn closure(state: &AppState, a: StationRef, b: StationRef) -> crate::core::Comma
 /// 0.6.0's Create Line put them.
 fn three_lines(a_shots: usize) -> (Project, LineId, LineId, LineId) {
     let mut p = empty("Chain");
-    let a = line_at(&mut p, "A", [0.0, 0.0], (0..a_shots).map(|_| sloped(5.0)).collect());
+    let a = line_at(
+        &mut p,
+        "A",
+        [0.0, 0.0],
+        (0..a_shots).map(|_| sloped(5.0)).collect(),
+    );
     let b = line_at(&mut p, "B", [0.0, 0.0], vec![sloped(4.0)]);
     let c = line_at(&mut p, "C", [0.0, 0.0], vec![sloped(6.0)]);
     (p, a, b, c)
@@ -169,7 +174,12 @@ fn set_and_remove_zero_datum() {
     let at = slot(line, 0);
     let before = snapshot(state);
 
-    set_datum(state, at, GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(), None);
+    set_datum(
+        state,
+        at,
+        GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        None,
+    );
     let p = project(state);
     assert_eq!(p.datums.len(), 1);
     assert_eq!(p.datums[0].gps.latitude, 45.0);
@@ -301,7 +311,10 @@ fn a_created_closure_is_stored_on_its_slots_and_named_in_the_history() {
     assert_eq!(c.strategy, ClosureStrategy::Batch);
     let wire = state.project_state_wire().unwrap().project.loop_closures;
     assert_eq!(wire.len(), 1);
-    assert_eq!((wire[0].station_a, wire[0].station_b), (slot(a, 0), slot(b, 1)));
+    assert_eq!(
+        (wire[0].station_a, wire[0].station_b),
+        (slot(a, 0), slot(b, 1))
+    );
     assert!(wire[0].path_length > 0.0, "{:?}", wire[0]);
     assert_eq!(
         history(state)[0],
@@ -325,7 +338,10 @@ fn create_loop_closure_deferred_strategy_is_rejected() {
             closure_strategy: WireStrategy::ProportionalByLength,
         },
     );
-    assert_eq!(error, "Closure distribution strategies are deferred. Use Batch.");
+    assert_eq!(
+        error,
+        "Closure distribution strategies are deferred. Use Batch."
+    );
 }
 
 #[test]
@@ -350,9 +366,8 @@ fn create_loop_closure_refuses_in_0_6_0_order_and_words() {
          loop closure."
     );
     assert!(
-        refused(state, create(slot(a, 0), slot(b, 0))).starts_with(
-            "This closure would join the two ends of one shot (A / 0 to A / 1)"
-        ),
+        refused(state, create(slot(a, 0), slot(b, 0)))
+            .starts_with("This closure would join the two ends of one shot (A / 0 to A / 1)"),
         "#737"
     );
     closure(state, slot(a, 0), slot(b, 1));
@@ -447,7 +462,10 @@ fn unmerge_pair_needs_two_slots_of_one_station() {
         (slot(a, 1), slot(a, 1)),
         (slot(a, 1), slot(b, 9)),
     ] {
-        assert_eq!(refused(state, pair(x, y)), "Stations are not directly merged");
+        assert_eq!(
+            refused(state, pair(x, y)),
+            "Stations are not directly merged"
+        );
     }
     let before = snapshot(state);
     run(state, pair(slot(a, 1), slot(b, 0)));
@@ -544,7 +562,8 @@ fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
     let c = line_from(&mut p, "C", a1, vec![shot(0.0, 3.0)]);
     let b = line_at(&mut p, "B", [0.0, -20.0], vec![shot(0.0, 10.0)]);
     p.set_datum_at(slot(a, 0), origin(), None).unwrap();
-    p.set_datum_at(slot(b, 0), gps_at(0.0, -20.0), None).unwrap();
+    p.set_datum_at(slot(b, 0), gps_at(0.0, -20.0), None)
+        .unwrap();
     p.create_closure_at(slot(b, 1), slot(a, 1), ClosureStrategy::Batch)
         .unwrap();
     let b1 = st(&p, b, 1);
@@ -684,8 +703,18 @@ fn check_merge_connectivity_of_two_placed_lines_joined_by_a_closure() {
     let c = line_at(&mut p, "C", [0.0, 0.0], vec![sloped(3.0)]);
     let opened = open(&p);
     let state = &opened.state;
-    set_datum(state, slot(a, 0), GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(), None);
-    set_datum(state, slot(b, 0), GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(), None);
+    set_datum(
+        state,
+        slot(a, 0),
+        GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        None,
+    );
+    set_datum(
+        state,
+        slot(b, 0),
+        GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        None,
+    );
     merge(state, slot(a, 1), slot(c, 0));
     closure(state, slot(c, 1), slot(b, 0));
 
@@ -724,20 +753,32 @@ fn closures_with_lists_direct_and_transitive_closures_on_junction_slots() {
             .iter()
             .any(|r| r.station_ref == to && r.is_transitive == transitive && r.via_station == via)
     };
-    assert!(has(slot(a, 2), slot(c, 1), false, None), "{:?}", closures_of(slot(a, 2)));
+    assert!(
+        has(slot(a, 2), slot(c, 1), false, None),
+        "{:?}",
+        closures_of(slot(a, 2))
+    );
     assert!(
         has(slot(b, 0), slot(c, 1), true, Some(slot(a, 2))),
         "{:?}",
         closures_of(slot(b, 0))
     );
-    assert!(has(slot(c, 1), slot(a, 2), false, None), "{:?}", closures_of(slot(c, 1)));
+    assert!(
+        has(slot(c, 1), slot(a, 2), false, None),
+        "{:?}",
+        closures_of(slot(c, 1))
+    );
     assert!(
         has(slot(c, 1), slot(b, 0), true, Some(slot(a, 2))),
         "{:?}",
         closures_of(slot(c, 1))
     );
     for quiet in [slot(a, 0), slot(a, 1), slot(b, 1), slot(c, 0)] {
-        assert!(closures_of(quiet).is_empty(), "{quiet:?}: {:?}", closures_of(quiet));
+        assert!(
+            closures_of(quiet).is_empty(),
+            "{quiet:?}: {:?}",
+            closures_of(quiet)
+        );
     }
 }
 
@@ -934,7 +975,12 @@ fn a_merge_moves_the_free_piece_onto_the_placed_one() {
     let b = line_at(&mut p, "B", [40.0, 40.0], vec![shot(0.0, 5.0)]);
     let opened = open(&p);
     let state = &opened.state;
-    set_datum(state, slot(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(), None);
+    set_datum(
+        state,
+        slot(a, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        None,
+    );
     let before = project(state);
     let (a0, a1) = (xy(&before, slot(a, 0)), xy(&before, slot(a, 1)));
 
@@ -996,7 +1042,12 @@ fn a_datum_on_a_chain_places_every_line_and_a_new_gps_keeps_the_layout() {
     merge(state, slot(a, 1), slot(b, 0));
     merge(state, slot(b, 1), slot(c, 0));
     let free = raw_xy(&project(state));
-    set_datum(state, slot(a, 0), GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(), None);
+    set_datum(
+        state,
+        slot(a, 0),
+        GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        None,
+    );
     let p = project(state);
     assert_near(xy(&p, slot(a, 0)), [0.0, 0.0], 1e-9, "the frame");
     let shift = {
@@ -1013,7 +1064,12 @@ fn a_datum_on_a_chain_places_every_line_and_a_new_gps_keeps_the_layout() {
     }
     let placed = raw_xy(&p);
 
-    set_datum(state, slot(a, 0), GpsCoordinates::new(46.0, -74.0, 200.0).unwrap(), None);
+    set_datum(
+        state,
+        slot(a, 0),
+        GpsCoordinates::new(46.0, -74.0, 200.0).unwrap(),
+        None,
+    );
     super::topology_kit::assert_same_xy(&placed, &raw_xy(&project(state)));
 }
 
@@ -1044,16 +1100,23 @@ fn a_merge_chain_survives_save_and_reopen() {
     let state = &opened.state;
     merge(state, slot(a, 1), slot(b, 0));
     merge(state, slot(b, 1), slot(c, 0));
-    set_datum(state, slot(a, 0), GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(), None);
+    set_datum(
+        state,
+        slot(a, 0),
+        GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        None,
+    );
     let before = snapshot(state);
     let c1 = xy(&project(state), slot(c, 1));
 
     let saved = opened.dir.path().join("chain.stalx");
-    assert!(state
-        .execute(Command::SaveProject {
-            path: Some(saved.clone())
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(saved.clone())
+            })
+            .success
+    );
     let other = AppState::new().unwrap();
     assert!(other.execute(Command::OpenProject { path: saved }).success);
     let p = project(&other);
@@ -1097,7 +1160,10 @@ fn a_loop_closure_closes_a_triangle_of_merged_lines() {
     assert_eq!(p.closures.len(), 1);
     assert!(p.validate().is_empty());
     let wire = state.project_state_wire().unwrap().project.loop_closures;
-    assert_eq!((wire[0].station_a, wire[0].station_b), (slot(c, 2), slot(a, 0)));
+    assert_eq!(
+        (wire[0].station_a, wire[0].station_b),
+        (slot(c, 2), slot(a, 0))
+    );
 }
 
 // === Read-only queries ===
@@ -1157,7 +1223,12 @@ fn the_segment_geometry_spans_closures_and_is_relative_to_the_line_start() {
     assert_near(line_a.shot_lines[0][0], [0.0, 0.0], 1e-9, "relative to A:0");
     assert_near(line_a.shot_lines[0][1], [10.0, 0.0], 1e-9, "A:1");
     let line_c = &geometry.lines[2];
-    assert_near(line_c.shot_lines[0][0], [40.0, 40.0], 1e-6, "C:0 relative to A:0");
+    assert_near(
+        line_c.shot_lines[0][0],
+        [40.0, 40.0],
+        1e-6,
+        "C:0 relative to A:0",
+    );
     assert_eq!(
         state.get_segment_geometry(999).unwrap_err(),
         crate::models::LINE_GONE
@@ -1185,7 +1256,10 @@ fn the_datum_preview_validates_the_gps_and_answers_none_for_no_station() {
         .preview_zero_datum(slot(a, 5), origin())
         .unwrap()
         .is_none());
-    let preview = state.preview_zero_datum(slot(a, 0), origin()).unwrap().unwrap();
+    let preview = state
+        .preview_zero_datum(slot(a, 0), origin())
+        .unwrap()
+        .unwrap();
     assert_eq!(preview.role, crate::models::DatumRole::Placement);
     assert!(project(state).datums.is_empty(), "read-only");
 }
@@ -1236,4 +1310,38 @@ fn a_batch_of_topology_commands_is_one_entry_with_every_warning() {
     assert_eq!(state.get_undo_stack().len(), 3);
     assert!(state.undo().success);
     assert_same(&snapshot(state), &before, "one undo for the batch");
+}
+
+#[test]
+fn a_topology_history_undoes_through_the_file_after_a_reopen() {
+    // Merge, closure, datum, detach: saved, closed and reopened, the
+    // persisted entries (no session ids) step back to the opened survey.
+    let (p, a, b, c) = three_lines(2);
+    let opened = open(&p);
+    let state = &opened.state;
+    let original = snapshot(state);
+    merge(state, slot(a, 2), slot(b, 0));
+    merge(state, slot(b, 1), slot(c, 0));
+    closure(state, slot(a, 0), slot(c, 1));
+    set_datum(state, slot(a, 0), origin(), None);
+    run(
+        state,
+        Command::UnmergeStations {
+            station_ref: slot(c, 0),
+        },
+    );
+    let edited = snapshot(state);
+    save_close_reopen(state, &opened.path);
+    assert_same(&snapshot(state), &edited, "the file holds the edits");
+    assert_eq!(history(state).len(), 5);
+    for _ in 0..5 {
+        let r = state.undo();
+        assert!(r.success, "{:?}", r.error);
+    }
+    assert_same(&snapshot(state), &original, "five persisted undos");
+    for _ in 0..5 {
+        let r = state.redo();
+        assert!(r.success, "{:?}", r.error);
+    }
+    assert_same(&snapshot(state), &edited, "and five redos");
 }
