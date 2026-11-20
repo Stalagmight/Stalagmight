@@ -10,10 +10,11 @@
  * representative. The image export picks by the same rule
  * (`point_representatives` in `image_labels.rs`); keep the two in step.
  *
- * A merge group is a station plus its `stationMergedWith` refs (transitive, so
- * every member lists the whole group). A member on a line the SoA leaves out
- * (a hidden Section) resolves to nothing and is not a candidate, so the
- * visible part of a group still gets its label.
+ * A merge group is the slots that share one Station ID: on the station graph a
+ * junction is ONE station, so every slot of it carries the same `stationIds`
+ * entry (plan 9.3), as well as one name. A slot on a line the SoA leaves out
+ * (a hidden Section) is simply not in the SoA, so the visible part of a group
+ * still gets its label.
  *
  * PURE: no DOM, no GL.
  */
@@ -38,19 +39,30 @@ export interface MergedStationLabels {
  */
 export function mergedStationLabels(
   data: SurveyData,
-  lookup: ReadonlyMap<number, ReadonlyMap<number, number>>,
   lineFirst: ReadonlyMap<number, number>,
   lineLast: ReadonlyMap<number, number>,
   hasLabel: (g: number) => boolean,
 ): MergedStationLabels | null {
-  if (data.stationMergedWith.size === 0) return null;
+  const n = data.stationCount;
+  const byId = new Map<number, number[]>();
+  let anyJunction = false;
+  for (let g = 0; g < n; g++) {
+    const id = data.stationIds[g];
+    if (id === undefined) continue;
+    const slots = byId.get(id);
+    if (slots) {
+      slots.push(g);
+      anyJunction = true;
+    } else {
+      byId.set(id, [g]);
+    }
+  }
+  if (!anyJunction) return null;
   const lineOrder = new Map<number, number>();
   data.lines.forEach((line, order) => lineOrder.set(line.id, order));
-  const n = data.stationCount;
   const representative = new Int32Array(n);
   for (let g = 0; g < n; g++) representative[g] = g;
   const members = new Map<number, number[]>();
-  const done = new Uint8Array(n);
   // Lower is better: not first, then not last, then line order, then index.
   const rank = (g: number): [number, number, number, number] => {
     const line = data.stationLineIds[g]!;
@@ -70,18 +82,7 @@ export function mergedStationLabels(
     }
     return false;
   };
-  for (const [g, refs] of data.stationMergedWith) {
-    if (g >= n || done[g]) continue;
-    // The groups are disjoint, so marking members as they join keeps each
-    // group a single pass over one member's refs.
-    done[g] = 1;
-    const group = [g];
-    for (const ref of refs) {
-      const m = lookup.get(ref.line_id)?.get(ref.station_index);
-      if (m === undefined || done[m]) continue;
-      done[m] = 1;
-      group.push(m);
-    }
+  for (const group of byId.values()) {
     if (group.length < 2) continue;
     let best = -1;
     for (const m of group) {

@@ -383,10 +383,10 @@ export function buildLabelDescriptors(
       const stationId = data.stationIds[g];
       return stationId === undefined ? null : formatStationLabel(stationId);
     };
-    // Merged stations are one point: ONE label per merge group, drawn for its
-    // representative (`labelMergeGroups.ts`); the other members draw none.
+    // A junction is one station: ONE label per Station ID, drawn for its
+    // representative slot (`labelMergeGroups.ts`); the other slots draw none.
     const merged = wantStationLabel
-      ? mergedStationLabels(data, lookup, lineMinIndex, lineMaxIndex, (m) => labelText(m) !== null)
+      ? mergedStationLabels(data, lineMinIndex, lineMaxIndex, (m) => labelText(m) !== null)
       : null;
     for (let g = 0; g < data.stationCount; g++) {
       const sid = data.stationLineIds[g]!;
