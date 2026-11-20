@@ -4,8 +4,8 @@
 //! The frontend keeps its positional view address, the slot
 //! `StationRef { line_id, station_index }` ("the i-th station along line L"),
 //! and its generated TypeScript types. This module turns a
-//! [`Project`](super::Project) (and
-//! the derived views of stream M3) into exactly those payloads:
+//! [`Project`](super::Project) (and the derived views of stream M3) into
+//! exactly those payloads:
 //!
 //! - [`ProjectWire`], [`LineWire`] and [`ProjectStateWire`]: the TS `Project`,
 //!   `Line` and `ProjectState`, field for field, except `Project.line_offsets`
@@ -26,8 +26,8 @@
 //! `CombinePlan`, ...), so their TypeScript cannot drift. Only the three
 //! types whose source struct is the legacy model itself are new here; they
 //! derive `TS` with the legacy TS names but without `export`, so nothing
-//! writes them until the generator is switched to them
-//! ([`docs/survey-model.md`](../../../../../docs/survey-model.md), "Wire API").
+//! writes them until the generator is switched to them (docs/survey-model.md,
+//! "Wire API", has the switch procedure).
 //!
 //! Every function is a pure function of the project state it is called on.
 //! A preview mapping takes the state the preview ran on (before the edit),

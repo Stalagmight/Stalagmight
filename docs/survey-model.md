@@ -52,6 +52,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 | `survey/frozen.rs`, `survey/rigid.rs`, `survey/stats.rs` | Frozen shots, rigid groups / anchored lines / immovable stations / merge pairs, survey stats. |
 | `survey/graph.rs` | The survey graph (stations, shots, zero-cost closures), Dijkstra, penetration, the distance field, the ruler. |
 | `survey/gas.rs`, `survey/gas/` | The Plan-mode gas engine on the station graph (`gas_reach`, `GasReach`, `gas_reach_field_wire`). |
+| `survey/wire.rs`, `survey/wire/` | The wire projection (plan 9.2): `ProjectWire`, `LineWire`, `ProjectStateWire`, the per-slot `Station` list, preview and query DTOs, slot resolution, the load envelope input. See "Wire API" below. |
 | `survey/legacy_convert.rs` | Test only: converts a survey built with `models::project` for the cross-checks, plus a random legacy survey generator. |
 | `survey/*_tests.rs`, `survey/test_helpers.rs` | Tests (see the end of this page). |
 
@@ -278,6 +279,148 @@ form for the wire. Most take the alignment of this state,
 | Survey graph | `survey_distances_from`, `penetration_distances`, `penetration`, `distance_field`, `along_line_between` | Junction = one node, closures zero-cost, reference ties infinite unless opted in; shots in line-id order. |
 | Gas | `gas_reach(..) -> GasReach`, `GasReach::to_wire`, `gas_reach_field_wire(..)` | Today's engine on stations; the route has no merge hops. |
 
+## Wire API (`survey/wire.rs`, `survey/wire/`, stream W)
+
+What the IPC sends the frontend, in the shapes it reads today (plan 9.2).
+The frontend keeps the slot `StationRef { line_id, station_index }` as its
+view address and its generated TypeScript; every function here is a pure
+function of the project state it is called on, and a preview mapping takes
+the state the preview ran on (before the edit), so every slot it names is
+one the user sees.
+
+### Payloads
+
+| IPC (today) | Builder | Notes |
+|---|---|---|
+| `get_project_state` -> `ProjectState` | `project_state_wire(include_reference_legs)`, `project_state_wire_with(&raw, ..)` | Raw layout and closure alignment computed once. `include_reference_legs` is `gas.include_reference_legs` (penetration). |
+| `Project` in `LoadProjectFullResult` / `CreateProjectFullResult` | `project_wire()`, `project_wire_with(&raw)` | |
+| `load_project_full_binary` | `load_envelope_input(include_reference_legs)` -> `LoadEnvelopeInput { state, station_offsets, station_comments_map }` | See "Binary load envelope". |
+| `get_adjusted_stations` -> `Station[]` | `adjusted_stations_wire(&adjusted)` | Same slots and relations as the raw list. |
+| `get_adjustment_report` | `adjustment_report_wire(&config)` (or M3's `adjustment_report(Some(&adjusted))`) | |
+| `check_merge_connectivity` | `check_merge_connectivity_wire(a, b)` | Today's refusal words; the preview reads each end's depth on the picked slot's line. `connectivity_wire(&MergeCheck)`, `merge_datum_shift_wire(..)` map M2's structs. |
+| closure dialog figures | `closure_preview_at(a, b)` | |
+| `preview_zero_datum` | `preview_zero_datum_at(slot, &gps)` | |
+| `preview_delete_shot` -> `DeleteShotImpact` | `delete_shot_impact(&preview)` | From M1's `DeleteShotPreview`. |
+| `preview_delete_shot_range` -> `DeleteShotRangeImpact` | `delete_range_impact(&preview)` | From M1's `DeleteRangePreview`. |
+| `split_line_preview` -> `SplitPreview` | `split_preview_wire(&preview)` | Nothing moves and nothing becomes a merge: the halves share the split station. |
+| `combine_candidate*` -> `CombineCandidate` | `combine_candidate_wire(&candidate)` | Both plans included. |
+| a combine's `CombinePlan` (preview or result) | `combine_plan_wire(&report)` | Call it on the pre-combine state. |
+| `get_line_relationships` | `line_relationships(line)` | Plan 9.3; see below. |
+| `get_station_distances_from` -> `DistanceField` | `distance_field_wire(&positions, from, include_reference)` | A `from` naming no station leaves every slot unreachable, as today. |
+| `get_along_line_distance` -> `AlongLineResult` | `along_line_wire(&positions, &a, &b, include_reference)` | No distance and no path when an endpoint names nothing, as today. |
+| `compute_gas_reach_field` -> `GasReachField` | M3's `gas_reach_field_wire(..)` | Slot inputs, today's signature. |
+| `ProjectWarning` datum and closure refs | built by the command layer | M3 already gives slots: `gps_gap_warnings()` (`slot`, `shot_index`, `code`), `ClosureAcrossOneShot` (`closure_id`, `collapsed_shot`), `AdjustmentFailure::anchor_slot`. |
+
+### Slots
+
+- Per slot `(L, i)` with station `S` (`stations_wire`): `S`'s coordinates
+  (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `S`'s
+  `id`, `name` and `comment` (shared by a junction's slots), `merged_with` =
+  `S`'s other slots (so a junction's slots list each other, transitively,
+  like today's merge groups), `is_zero_datum` / `gps_coordinates` = the datum
+  the slot's datum dialog edits (`datum_index_for(S, Some(L))`, so every slot
+  of a datum station shows it), `closures_with` by today's rule with a
+  station's slots as its merge group (direct on the end's own slot,
+  transitive on its other slots and to the far station's other slots, then
+  the closure-chain entries).
+- A datum is shown on `datum_slot` and a closure end on `closure_end_slot`:
+  the slot on its `via` line, else the station's first slot. A migrated
+  reference keeps the legacy member's line as `via`, so it comes back on the
+  slot it had.
+- `station_merges` are derived: for each junction (ascending station id) its
+  first slot paired with each other slot (`merge_pairs`). A derived pair has
+  no merge time; `merged_at` is the project's `created_at` (nothing in the
+  app reads it).
+- `loop_closures`: metrics from the raw layout (`closures_metrics`),
+  `is_aligned` from `closure_alignment`. A `Tie` is sent as an aligned
+  `Batch` (`wire_strategy`): the TS union does not change and the frontend's
+  eligibility table already treats `Batch` like a `Tie`.
+- `Line`: `reverse_parity` is `false` and `gauge_shot_uuid` /
+  `gauge_neighbour_uuid` are `null` (legacy gauge bookkeeping; no frontend
+  code reads them). Shots are the shared `Shot` (session id, uuid, the same
+  measurement fields).
+- Command boundary: `resolve_slot(slot) -> SlotTarget { station, line }`
+  (`OpError::UnknownSlot` for an unknown line or an index past the line's
+  last station) and `resolve_slot_pair(a, b)`. The reverse is
+  `closure_end_slot` / `datum_slot` / `slots_of`.
+
+### Previews
+
+What the station graph makes impossible is reported empty, never invented:
+`replacement_merges`, `replacement_closure_updates`, `*_rewire_skipped`
+(delete), `moved_side` / `moved_m` / `removed_already_one_point` (split).
+`removed_merges` is the removed slot leaving its junction (one pair per other
+slot of the station); `removed_closures` adds the closures the delete leaves
+across one shot (#737) and the ones the sweep removes; `closure_to_merge`
+lists the sweep's promotions. `LineRelationships` counts what deleting the
+line takes: the wire merge pairs on the line, closures and datums on
+stations only that line passes (a junction's stay), its hand moves
+(`station_offset_count`), and `has_line_offset` = the line alone holds its
+piece's `Placement` station and the placement is not at the origin. Combine
+kinds and reasons: a torn junction is a torn `Merge`, a torn snap a
+`SnappedClosure` (`FormerSnappedClosure` when it was not aligned before),
+`PassesTwice` -> `Loop`, `Moved` -> `JoinedStationMoves`; every closure is
+named by its ends before the combine (looked up by id, or by its torn tie).
+
+### TypeScript
+
+Only three wire types are new (their legacy source is the old model
+itself): `ProjectWire` (TS `Project`, without `line_offsets`), `LineWire`
+(TS `Line`) and `ProjectStateWire` (TS `ProjectState`). Every other payload
+is today's DTO type, so its TS cannot drift. The three derive `TS` with the
+legacy names (`#[ts(rename)]`) and no `export`: no test writes them and the
+generator still writes `src/types/ipc/` from the legacy types.
+`wire/ts_tests.rs` renders each one as `pnpm gen:ipc-types` would (ts-rs
+`export_to_string` plus the generator's import flattening) and compares it
+with the committed file, less the declared change (`line_offsets`); the
+comparison holds before and after the switch.
+
+**The switch** (stream C):
+
+1. In `src-tauri/examples/gen_ipc_types.rs` export
+   `models::survey::wire::{ProjectWire, LineWire, ProjectStateWire}` in place
+   of `Project`, `Line` and the app's `ProjectState` (delete the latter, and
+   point `LoadProjectFullResult` / `CreateProjectFullResult` at
+   `ProjectWire`; their TS does not change).
+2. `pnpm gen:ipc-types && git diff --stat -- src/types/ipc`: the only change
+   is `Project.ts` losing `line_offsets`. `wire/ts_tests.rs` still passes.
+3. Fix the TS that names `line_offsets`: `src/utils/loadProjectBinary.ts`
+   (see below), `e2e-playwright/large-dataset-operations.spec.ts`, the agent
+   harness (`e2e/agent/lib/projectSnapshot.ts`, `fuzzOracleCore.ts`,
+   `scenarios/undoPersistenceFuzz.ts`).
+4. `cargo test --workspace` writes nothing new into `src-tauri/bindings/`
+   (no wire type has `export`).
+
+### Binary load envelope
+
+`LoadEnvelopeInput` holds everything `crates/core/src/core/load_binary.rs`
+packs, under the same names: `state.project` (header fields, `lines` with
+`shots` of the shared `Shot` type, `station_merges`, `zero_datums`,
+`loop_closures` already in wire form), `state.stations` (the per-slot list),
+`state.stats`, `state.frozen_shots`, plus `station_offsets` (every hand move
+on its slot) and `station_comments_map` (every slot of a commented station).
+The packing loops stay as they are; the layout change is that
+`ProjectHeaderBinary.line_offsets` is dropped, so `BINARY_FORMAT_VERSION`
+goes 8 -> 9 (the decoder would otherwise iterate a missing key). The
+frontend decoder drops `line_offsets` from `ProjectHeaderBinary`, the
+reconstruction loop and the `Project` literal, and pins
+`EXPECTED_VERSION = 9`; the e2e IPC mock's `load_project_full_binary` builder
+does the same. Semantics the decoder sees change without a layout change:
+`stations_ids`, names and comments are shared by a junction's slots.
+
+### Equivalence with today
+
+`persistence/src/persistence/migrate/wire_equivalence_tests.rs` opens legacy
+files with the frozen 0.6.0 reader (the generator's 48 gate seeds and the two
+tracked fixtures), migrates them, and compares the wire projection with
+0.6.0's own payloads field by field: the per-slot stations (raw and Computed
+View), the IPC `Project`, line relationships, delete and range-delete
+previews, merge connectivity and datum shift, the adjustment report and the
+combine candidates. Every difference is put in a named class (a declared
+change) or fails the test; `STALAGMIGHT_RUST_WIRE_SEEDS=<n>` runs a sweep
+(ignored) and prints the classes. The combine classes are characterised
+only (M1's ported combine tests are its oracle).
+
 ## Naming and identity (`naming.rs`)
 
 - `name_conflicts(station)`, `conflicts_with_name(station, name)` (a rename
@@ -305,5 +448,6 @@ form for the wire. Most take the alignment of this state,
 | `edit/shots_tests.rs`, `lines_tests.rs`, `ranges_tests.rs`, `reverse_tests.rs`, `split_tests.rs`, `combine_tests.rs` | Each line and shot operation: names, uuids and ids, which side stays, refusals in today's words, junctions kept, datums / comments / closures leaving with a station, promotions, #737 removals, previews. |
 | `edit/combine_port_*_tests.rs` | The legacy combine tests ported (lines, closures, snaps, hand moves, residuals, realign, dedupe), each legacy test's fate in the module doc; two random-network sweeps (about 8,700 combines). |
 | `edit/edit_fuzz_tests.rs` | 32 seeds x 80 random operations: valid after every step, refusals change nothing, previews equal results, seeds replay bit for bit. |
+| `wire/ts_tests.rs`, `wire/wire_tests.rs` | The wire types generate today's TS files (less `line_offsets`); JSON keys as today's payloads; junction identity, derived merge pairs, closure references and chains, datum flags, `Tie` as aligned `Batch`, slot resolution, delete impact at a junction, line relationships, the envelope input; an ignored timing run on 78k slots. |
 | `ops_merge_tests.rs`, `ops_detach_tests.rs`, `ops_closures_tests.rs`, `ops_datums_tests.rs`, `ops_move_tests.rs`, `append_tests.rs` | Each M2 command, with ports of the legacy datum, entrance and placement tests. |
 | `ops_scenario_tests.rs`, `ops_property_tests.rs` | The model review's scenarios; 48 seeds x 70 random commands (valid after every step, refusals change nothing, no-move commands move nothing, a merge moves exactly the moving piece, a seed replays bit for bit). |
