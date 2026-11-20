@@ -5506,7 +5506,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
         .map(|w| w.shot)
         .collect();
     rows.sort();
-    let mut expected = vec![deleted_uuid.clone(), survivor_uuid.clone()];
+    let mut expected = vec![deleted_uuid, survivor_uuid];
     expected.sort();
     assert_eq!(
         rows, expected,
