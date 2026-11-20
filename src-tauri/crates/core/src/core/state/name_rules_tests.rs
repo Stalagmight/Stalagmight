@@ -364,7 +364,10 @@ fn a_rename_is_refused_in_0_6_0_words() {
         refused(rename(&state, StationRef::new(main, 9), "x")),
         "Station not found"
     );
-    assert_eq!(refused(rename(&state, StationRef::new(77, 0), "x")), LINE_GONE);
+    assert_eq!(
+        refused(rename(&state, StationRef::new(77, 0), "x")),
+        LINE_GONE
+    );
     assert_eq!(state.get_undo_stack().len(), 1, "only the first rename");
 }
 
@@ -654,10 +657,7 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
 
     // The combine does what the candidate said.
     ok(state.execute_combine_lines(main, side, combine_options("Main")));
-    assert_eq!(
-        names_on(&state, main),
-        ["A0", "A1", "A2", "A3", "B1", "B2"]
-    );
+    assert_eq!(names_on(&state, main), ["A0", "A1", "A2", "A3", "B1", "B2"]);
 }
 
 #[test]

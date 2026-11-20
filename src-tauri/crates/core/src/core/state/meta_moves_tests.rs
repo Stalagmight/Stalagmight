@@ -313,7 +313,11 @@ fn move_line_undo_redo() {
 
     ok(state.undo());
     assert_eq!(canonical(&project(&state)), canonical(&before), "undo");
-    assert_close(position(&state, line, 0), [0.0, 0.0, 10.0], "back at the origin");
+    assert_close(
+        position(&state, line, 0),
+        [0.0, 0.0, 10.0],
+        "back at the origin",
+    );
 
     ok(state.redo());
     assert_eq!(canonical(&project(&state)), canonical(&after), "redo");
@@ -335,8 +339,16 @@ fn move_line_moves_the_whole_merged_group_and_sticks() {
     let before = project(&state);
 
     ok(move_line(&state, a, 10.0, 20.0));
-    assert_close(position(&state, a, 1), plus(a1, [10.0, 20.0, 0.0]), "A moved");
-    assert_close(position(&state, b, 1), plus(b1, [10.0, 20.0, 0.0]), "B moved with it");
+    assert_close(
+        position(&state, a, 1),
+        plus(a1, [10.0, 20.0, 0.0]),
+        "A moved",
+    );
+    assert_close(
+        position(&state, b, 1),
+        plus(b1, [10.0, 20.0, 0.0]),
+        "B moved with it",
+    );
     assert_close(
         position(&state, a, 0),
         position(&state, b, 0),
@@ -353,7 +365,10 @@ fn move_line_moves_the_whole_merged_group_and_sticks() {
 fn move_line_of_a_missing_line_is_refused() {
     let state = new_state();
     add_line(&state, "A", vec![shot(5.0)]);
-    assert_eq!(refused(move_line(&state, 999, 10.0, 20.0)), "Line not found");
+    assert_eq!(
+        refused(move_line(&state, 999, 10.0, 20.0)),
+        "Line not found"
+    );
     assert_eq!(entries(&state), 0);
 }
 
@@ -370,7 +385,11 @@ fn move_station_updates_shot_data() {
     let p = project(&state);
     let s = &p.line(line).unwrap().shots[0];
     assert!((s.length - 15.0).abs() < 1e-6, "length {}", s.length);
-    assert!((s.azimuth_in - 90.0).abs() < 1e-6, "azimuth {}", s.azimuth_in);
+    assert!(
+        (s.azimuth_in - 90.0).abs() < 1e-6,
+        "azimuth {}",
+        s.azimuth_in
+    );
     assert!(p.line(line).unwrap().hand_moves.is_empty(), "no hand move");
 
     // (0, 10, 3) more: the shot is (15, 10, 3).
@@ -378,14 +397,22 @@ fn move_station_updates_shot_data() {
     let p = project(&state);
     let s = &p.line(line).unwrap().shots[0];
     let expected_length = (15.0_f64.powi(2) + 10.0_f64.powi(2) + 3.0_f64.powi(2)).sqrt();
-    assert!((s.length - expected_length).abs() < 1e-6, "length {}", s.length);
+    assert!(
+        (s.length - expected_length).abs() < 1e-6,
+        "length {}",
+        s.length
+    );
     let expected_azimuth = 15.0_f64.atan2(10.0).to_degrees();
     assert!(
         (s.azimuth_in - expected_azimuth).abs() < 1e-6,
         "azimuth {}",
         s.azimuth_in
     );
-    assert!((s.depth_out - 3.0).abs() < 1e-6, "depth_out {}", s.depth_out);
+    assert!(
+        (s.depth_out - 3.0).abs() < 1e-6,
+        "depth_out {}",
+        s.depth_out
+    );
 }
 
 #[test]
@@ -395,7 +422,11 @@ fn moving_station_zero_moves_the_placement_and_keeps_the_rest() {
     let end_before = position(&state, line, 1);
 
     ok(move_station(&state, at(line, 0), [5.0, 0.0, 0.0]));
-    assert_close(position(&state, line, 0), [5.0, 0.0, 0.0], "station 0 moved");
+    assert_close(
+        position(&state, line, 0),
+        [5.0, 0.0, 0.0],
+        "station 0 moved",
+    );
     assert_close(position(&state, line, 1), end_before, "station 1 stays");
     // 0.6.0 moved the line offset; the free piece's placement does it now.
     let p = project(&state);
@@ -666,7 +697,11 @@ fn a_repeated_station_move_after_another_command_is_its_own_move() {
         ],
         label: None,
     }));
-    assert_close(position(&state, a, 2), plus(start, [2.0, 0.0, 0.0]), "twice");
+    assert_close(
+        position(&state, a, 2),
+        plus(start, [2.0, 0.0, 0.0]),
+        "twice",
+    );
 }
 
 #[test]
@@ -741,7 +776,10 @@ fn move_segment_undo_redo() {
 #[test]
 fn move_segment_of_a_missing_line_is_refused() {
     let state = new_state();
-    assert_eq!(refused(move_segment(&state, 999, 10.0, 20.0)), "Line not found");
+    assert_eq!(
+        refused(move_segment(&state, 999, 10.0, 20.0)),
+        "Line not found"
+    );
 }
 
 #[test]
@@ -772,8 +810,12 @@ fn move_segment_is_refused_when_its_group_holds_a_datum() {
     // A snapped (aligned) closure between two datum pieces: still refused.
     let c = add_line(&state, "C", vec![shot(4.0)]);
     edit(&state, |p| {
-        p.set_datum_at(at(c, 0), gps(24.5501, -81.7801), None).unwrap();
-        let (bs, cs) = (p.station_at(at(b, 1)).unwrap(), p.station_at(at(c, 1)).unwrap());
+        p.set_datum_at(at(c, 0), gps(24.5501, -81.7801), None)
+            .unwrap();
+        let (bs, cs) = (
+            p.station_at(at(b, 1)).unwrap(),
+            p.station_at(at(c, 1)).unwrap(),
+        );
         p.push_closure(bs, Some(b), cs, Some(c), ClosureStrategy::Move);
     });
     assert_eq!(
@@ -789,7 +831,11 @@ fn move_segment_leaves_an_unconnected_line_alone() {
     let b = add_line(&state, "B", vec![shot(3.0)]);
     let (a1, b1) = (position(&state, a, 1), position(&state, b, 1));
     ok(move_segment(&state, a, 10.0, 20.0));
-    assert_close(position(&state, a, 1), plus(a1, [10.0, 20.0, 0.0]), "A moved");
+    assert_close(
+        position(&state, a, 1),
+        plus(a1, [10.0, 20.0, 0.0]),
+        "A moved",
+    );
     assert_close(position(&state, b, 1), b1, "B did not");
 }
 
@@ -799,11 +845,23 @@ fn move_segment_accumulates() {
     let a = add_line(&state, "A", vec![shot(5.0)]);
     let start = position(&state, a, 0);
     ok(move_segment(&state, a, 10.0, 5.0));
-    assert_close(position(&state, a, 0), plus(start, [10.0, 5.0, 0.0]), "first");
+    assert_close(
+        position(&state, a, 0),
+        plus(start, [10.0, 5.0, 0.0]),
+        "first",
+    );
     ok(move_segment(&state, a, 3.0, 7.0));
-    assert_close(position(&state, a, 0), plus(start, [13.0, 12.0, 0.0]), "second");
+    assert_close(
+        position(&state, a, 0),
+        plus(start, [13.0, 12.0, 0.0]),
+        "second",
+    );
     ok(move_segment(&state, a, -5.0, -2.0));
-    assert_close(position(&state, a, 0), plus(start, [8.0, 10.0, 0.0]), "third");
+    assert_close(
+        position(&state, a, 0),
+        plus(start, [8.0, 10.0, 0.0]),
+        "third",
+    );
 }
 
 #[test]
@@ -814,7 +872,11 @@ fn move_line_of_a_branch_moves_the_piece_whose_placement_is_elsewhere() {
     let b = add_branch(&state, "B", at(a, 1), vec![level(0.0, 5.0)]);
     let a0 = position(&state, a, 0);
     ok(move_line(&state, b, 0.0, -3.0));
-    assert_close(position(&state, a, 0), plus(a0, [0.0, -3.0, 0.0]), "A moved");
+    assert_close(
+        position(&state, a, 0),
+        plus(a0, [0.0, -3.0, 0.0]),
+        "A moved",
+    );
     let p = project(&state);
     assert_eq!(p.placements.len(), 1);
     assert_eq!(p.placements[0].station, p.line(a).unwrap().start);
@@ -992,7 +1054,10 @@ fn move_comment_between_a_station_and_a_shot() {
         false,
     ));
     assert_eq!(comment(&state, at(line, 1)), None);
-    assert_eq!(shot_comment(&state, line, 1).as_deref(), Some("on the station"));
+    assert_eq!(
+        shot_comment(&state, line, 1).as_deref(),
+        Some("on the station")
+    );
 
     // A swap with a station that has none leaves the shot without one.
     ok(move_comment(
@@ -1002,7 +1067,10 @@ fn move_comment_between_a_station_and_a_shot() {
         true,
     ));
     assert_eq!(shot_comment(&state, line, 1), None);
-    assert_eq!(comment(&state, at(line, 2)).as_deref(), Some("on the station"));
+    assert_eq!(
+        comment(&state, at(line, 2)).as_deref(),
+        Some("on the station")
+    );
 }
 
 #[test]
@@ -1012,7 +1080,7 @@ fn move_comment_refusals_in_0_6_0_words() {
     let empty = station_holder(at(line, 0));
     let other = station_holder(at(line, 1));
     assert_eq!(
-        refused(move_comment(&state, empty.clone(), other.clone(), false)),
+        refused(move_comment(&state, empty, other.clone(), false)),
         "Source has no comment to move"
     );
     assert_eq!(
