@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::graph::{dijkstra, StationDistances};
-use super::{Project, ZeroDatum};
+use super::{Project, RawPositions, ZeroDatum};
 
 /// A GPS fix whose gap exceeds its threshold (today's `FarGpsFix`, by datum).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -191,6 +191,11 @@ impl Project {
     /// The gap of every GPS fix, by datum index in list order (today's
     /// `gps_fix_gaps`): one raw layout and one multi-source Dijkstra.
     pub fn gps_fix_gaps(&self) -> Vec<(usize, DatumGap)> {
+        self.gps_fix_gaps_from(&self.raw_positions())
+    }
+
+    /// [`Self::gps_fix_gaps`] from this state's raw layout `positions`.
+    pub fn gps_fix_gaps_from(&self, positions: &RawPositions) -> Vec<(usize, DatumGap)> {
         let Some(frame) = self.frame_datum().and_then(|f| self.datums.get(f)) else {
             return Vec::new();
         };
@@ -199,7 +204,6 @@ impl Project {
         if fixes.is_empty() {
             return Vec::new();
         }
-        let positions = self.raw_positions();
         let distances = self.survey_distances_from_placements();
         fixes
             .into_iter()

@@ -693,3 +693,17 @@ The exporters on `models::survey` are `export::survey` (CSV, JSON, Ariane, image
 - **X8. Dive profile:** the survey renderer takes a `GasReach` and renders its wire field; the route has no merge hops (D18), so no zero-length point at a junction.
 - **X9. stalx-reader.** Sniffs the copy; SQLite goes through the reader's own pre-load checks, the frozen 0.6.0 open and `migrate`, JSON through `stalx_v2::decode` with the reader's caps mapped onto the decoder's. `Survey` keeps positional station ids and gains `format`, `format_version`, `newer_content`, `Section::station_ids`, `StationPosition::station_id` and `LoopClosure::tie`; `station_merges` are the derived junction pairs, a junction's name is listed at every slot and its comment once (first slot in reader order). New `ReadError::NewerFormat` and six JSON-only `CountLimits`. Anything that is neither format is `InvalidKind::NotSqlite` (an empty input too, which used to be `NoProjectData`). Publishing now needs `stalagmight-legacy` published or gated (G7).
 
+## Deviations (stream W, wire DTOs)
+
+The wire API is `docs/survey-model.md`, "Wire API".
+
+- **W1. Datum and closure ends are shown on their `via` slot** (`datum_slot`, `closure_end_slot`), else the station's first slot. Plan 9.2 says "first slot of the station"; with the `via` hint a migrated reference comes back on the slot it had.
+- **W2. A datum flags every slot of its station** (`is_zero_datum`, `gps_coordinates`), with the datum that slot's dialog edits (E1). Today only the merged member it was set on showed it.
+- **W3. `Tie` is an aligned `Batch` on the wire** (D1 resolved without a TS change): the frontend's exhaustive `Record<ClosureStrategy, boolean>` and its eligibility rule stay as they are, and a legacy aligned closure looked exactly like that.
+- **W4. Derived merge pairs carry the project's `created_at` as `merged_at`** (no edit changes it; nothing in the app reads it).
+- **W5. `Line.reverse_parity`, `gauge_shot_uuid`, `gauge_neighbour_uuid` stay on the wire as `false` / `null`** so the TS `Line` does not change; no frontend code reads them.
+- **W6. Previews report what cannot happen as empty**: no replacement merges or rewired closures, no rewire-skipped flags, no split half that moves. A delete's `removed_merges` is the removed slot leaving its junction; `closure_to_merge` is the sweep's promotions; `removed_closures` includes the #737 and swept removals.
+- **W7. `get_line_relationships` counts what deleting the line removes**: merge pairs on the line, closures and datums on stations only that line passes, its hand moves, and `has_line_offset` = the line alone holds its piece's non-origin `Placement` station.
+- **W8. The merge check's closure preview reads each end's depth on the picked slot's line** (`closure_metrics_via`), as today's slot-based preview did; M2's `merge_check` uses first slots.
+- **W9. The binary load envelope drops `line_offsets`: version 8 -> 9.** Every other field keeps its name and element type.
+- **W10. `file_path` is sent lossily as UTF-8**; today a non-UTF-8 path failed the serialization.
