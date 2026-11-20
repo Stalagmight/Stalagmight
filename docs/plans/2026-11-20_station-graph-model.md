@@ -589,6 +589,17 @@ What the built model does differently from the text above, and why. The module g
 - **D8. Depth summation order** (3.4 "sorted order") is `(line id, index)` over the slots of the tie group, which makes a junction's depth bit-identical to today's merge-group depth.
 - **D9. The letter-suffix rule is reused, not copied**, from `models::project::station_naming` (pure functions). That file must move under `survey/` or the crate root when C deletes `models::project`.
 
+## Deviations (stream M2, topology / closures / datums / move tools / Add)
+
+- **E1. The datum a slot has.** A station can hold several datums; Set and Remove on a slot act on the first datum on the station attached `via` the slot's line, else the first datum on the station (`datum_index_for`). Consequence (declared): Set on a junction slot whose line has no datum there edits the station's existing datum instead of adding a second one, where today each merge member could get its own (a fix beside a placement). A second datum on one station now only comes from a merge of two placed pieces or a migration.
+- **E2. The sweep reports closures as it found them** (after the command's own renames, e.g. a merge puts both ends on the survivor), with their positions and ids; the command layer names them from its pre-command snapshot by id. Promotions report the survivor and the retired station.
+- **E3. Model commands do not touch `modified_at`** and do not log; the command layer (C) does both, so every model operation is a pure function of its input (the property test replays seeds bit for bit).
+- **E4. Accuracy-only datum edits** (same latitude and longitude bits) skip the anchor algorithm entirely (nothing can move); a changed depth reference rides along, as today's in-place store did.
+- **E5. Add .stalx refuses on Station-ID exhaustion** (`base + source counter >= 2^31`) instead of renumbering every station as today's overflow path did; repeated line names are made unique (` (k)`) by the Add itself rather than by the normalisation that followed it (same result).
+- **E6. Detach station form off a junction is a no-op** (as today's `UnmergeStations`); `detach_line` and the pair form refuse with "Stations are not directly merged". Any two slots of one station are a valid pair (today a pair had to be a direct merge; the UI fell back to the whole-station unmerge otherwise).
+- **E7. A merge keeps the survivor's `external` id, else takes the retired station's** (plan 5.1 does not say).
+- **E8. Closure metrics, the across-one-shot knot rule, roles, GPS gaps and entrance defaults are stubbed in `survey/m3_stubs.rs`** until M3 lands (closure Z uses the station's depth without a slot's hand-move z).
+
 ## Deviations (stream M3, derived views)
 
 - **D10. `Tie` gives its component something to solve**, like a legacy aligned `Batch` closure today (it is "eligible"). A migrated cycle-closing merge with no other closure is therefore solved, so a torn tie is pulled together in the Closures Computed View, where today that component was shown measured.
