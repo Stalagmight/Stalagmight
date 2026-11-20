@@ -251,3 +251,57 @@ fn a_summary_that_is_not_an_object_never_blocks_a_rewrite() {
     let again = decode(&renamed, &DecodeOptions::default()).unwrap();
     assert_eq!(again.project.name, "Renamed");
 }
+
+/// The closure counter is range-checked like the station and Section ones:
+/// at the format's integer bound the file opens (the ids are used up), one
+/// more closure breaks an invariant (so the app refuses the edit), a counter
+/// or a closure id past the bound is invalid, and salvage lowers the counter
+/// and drops the closure (review finding C-file-format-6). Injection: without
+/// the bound, the closure minted at the bound validates and the save fails.
+#[test]
+fn the_closure_counter_is_range_checked() {
+    use crate::models::survey::{ClosureStrategy, CounterKind, Violation, MAX_CLOSURE_ID};
+    let (p, extras) = example();
+    let text = text_of(&encode(&p, &extras, Mode::Normal).unwrap()).to_string();
+    let at_bound = text.replacen(
+        "\"closure\":2,",
+        &format!("\"closure\":{MAX_CLOSURE_ID},"),
+        1,
+    );
+    assert_ne!(at_bound, text);
+    let mut decoded = open(&at_bound);
+    assert!(decoded.project.is_valid());
+    decoded
+        .project
+        .push_closure(1, None, 4, None, ClosureStrategy::Batch);
+    assert!(decoded
+        .project
+        .validate()
+        .contains(&Violation::CounterOutOfRange {
+            counter: CounterKind::Closure,
+            next: MAX_CLOSURE_ID + 1,
+        }));
+
+    let mut past = p.clone();
+    past.counters.next_closure_id = MAX_CLOSURE_ID + 1;
+    assert!(!past.is_valid());
+    let mut last_id = p.clone();
+    last_id.closures[0].id = MAX_CLOSURE_ID;
+    assert!(last_id.validate().contains(&Violation::IdOutOfRange {
+        kind: CounterKind::Closure,
+        id: MAX_CLOSURE_ID,
+    }));
+
+    // A file whose only closure has the last id: salvage drops it and keeps
+    // the counter writable.
+    let last = at_bound.replacen(
+        "{\"id\":1,\"a\":4",
+        &format!("{{\"id\":{MAX_CLOSURE_ID},\"a\":4"),
+        1,
+    );
+    assert_ne!(last, at_bound);
+    let (salvaged, report) = super::decode_salvage(last.as_bytes());
+    let salvaged = salvaged.unwrap();
+    assert!(salvaged.closures.is_empty(), "{report:?}");
+    assert!(encode(&salvaged, &Extras::default(), Mode::Normal).is_ok());
+}

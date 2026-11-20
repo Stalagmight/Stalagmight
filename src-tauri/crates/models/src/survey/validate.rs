@@ -10,7 +10,9 @@ use std::fmt;
 
 use crate::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
-use super::{ClosureId, Project, Topology, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS};
+use super::{
+    ClosureId, Project, Topology, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS,
+};
 
 /// Which end of a closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -281,9 +283,8 @@ pub enum Violation {
         max_in_use: u64,
     },
     /// A stored counter past its id space's bound (at the bound the ids are
-    /// used up; past it no id it could hand out is valid). Station and
-    /// Section counters only: the line counter is derived, closure ids are
-    /// `u64`.
+    /// used up; past it no id it could hand out is valid). Station, Section
+    /// and closure counters: the line counter is derived.
     CounterOutOfRange {
         counter: CounterKind,
         next: u64,
@@ -306,7 +307,7 @@ impl fmt::Display for Violation {
                     CounterKind::Station => u64::from(MAX_STATION_ID),
                     CounterKind::Line => u64::from(MAX_LINE_ID) + 1,
                     CounterKind::Section => u64::from(MAX_SECTION_ID),
-                    CounterKind::Closure => u64::MAX,
+                    CounterKind::Closure => MAX_CLOSURE_ID,
                 };
                 write!(f, "{kind} id {id} is not below {bound}")
             }
@@ -463,6 +464,7 @@ impl fmt::Display for Violation {
             Self::CounterOutOfRange { counter, next } => {
                 let bound = match counter {
                     CounterKind::Section => u64::from(MAX_SECTION_ID),
+                    CounterKind::Closure => MAX_CLOSURE_ID,
                     _ => u64::from(MAX_STATION_ID),
                 };
                 write!(f, "the next {counter} id {next} is past {bound}")
@@ -548,6 +550,12 @@ impl Project {
             if !closures.insert(closure.id) {
                 out.push(Violation::DuplicateClosureId {
                     closure: closure.id,
+                });
+            }
+            if closure.id >= MAX_CLOSURE_ID {
+                out.push(Violation::IdOutOfRange {
+                    kind: CounterKind::Closure,
+                    id: closure.id,
                 });
             }
         }
@@ -881,6 +889,12 @@ impl Project {
                     next: u64::from(next),
                 });
             }
+        }
+        if self.counters.next_closure_id > MAX_CLOSURE_ID {
+            out.push(Violation::CounterOutOfRange {
+                counter: CounterKind::Closure,
+                next: self.counters.next_closure_id,
+            });
         }
         let station_max = self
             .stations

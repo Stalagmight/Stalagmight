@@ -354,6 +354,33 @@ fn a_rule_broken_under_an_unknown_feature_is_refused_as_newer_not_corrupt() {
     assert_eq!(error.code, "CORRUPT", "{}", error.message);
 }
 
+/// A file whose closure counter is at the format's integer bound opens (its
+/// closure ids are used up), and a new loop closure is refused instead of
+/// leaving a project no save can write (review finding C-file-format-6).
+/// Injection: without the closure bounds in `validate` (the id and the
+/// counter), the closure is created and every later save fails with "above
+/// the largest integer".
+#[test]
+fn a_closure_past_the_id_space_is_refused_and_saves_keep_working() {
+    let dir = TempDir::new().unwrap();
+    let mut p = survey();
+    p.counters.next_closure_id = crate::models::survey::MAX_CLOSURE_ID;
+    let path = write_v2(dir.path(), &p, &Extras::default());
+    let state = open(&path);
+    let main = project_of(&state).lines()[0].id;
+    let branch = project_of(&state).lines()[1].id;
+    let r = state.execute(Command::CreateLoopClosure {
+        station_a: crate::models::StationRef::new(main, 3),
+        station_b: crate::models::StationRef::new(branch, 2),
+        closure_strategy: crate::models::ClosureStrategy::Batch,
+    });
+    assert!(!r.success, "a closure id past the bound was minted");
+    assert!(project_of(&state).closures.is_empty());
+    assert!(set_length(&state, 11.25).success);
+    let r = state.execute(Command::SaveProject { path: None });
+    assert!(r.success, "{:?}", r.error);
+}
+
 #[test]
 fn the_project_state_and_the_binary_envelope_are_the_wire_projection() {
     let dir = TempDir::new().unwrap();

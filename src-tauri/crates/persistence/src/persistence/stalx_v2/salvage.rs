@@ -12,6 +12,7 @@ use std::fmt;
 
 use crate::models::survey::{
     ClosureId, ClosureStrategy, CounterKind, LoopClosure, Placement, Project, Station, Violation,
+    MAX_CLOSURE_ID,
 };
 use crate::models::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
@@ -408,7 +409,15 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                         repairs.push(Repair::DroppedSection { id: section });
                     }
                 }
-                CounterKind::Closure => {}
+                CounterKind::Closure => {
+                    // Past the format's integer bound: no counter above it
+                    // can be written, so the closure goes.
+                    let before = p.closures.len();
+                    p.closures.retain(|c| c.id != *id);
+                    if p.closures.len() < before {
+                        repairs.push(Repair::DroppedClosure { id: *id });
+                    }
+                }
             },
             Violation::AliasCollision { station, alias }
             | Violation::AliasOutOfRange { station, alias } => {
@@ -776,7 +785,11 @@ fn lower_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair
             p.counters.next_section_id = MAX_SECTION_ID;
             u64::from(MAX_SECTION_ID)
         }
-        CounterKind::Line | CounterKind::Closure => return,
+        CounterKind::Closure => {
+            p.counters.next_closure_id = MAX_CLOSURE_ID;
+            MAX_CLOSURE_ID
+        }
+        CounterKind::Line => return,
     };
     repairs.push(Repair::LoweredCounter { counter, to });
 }

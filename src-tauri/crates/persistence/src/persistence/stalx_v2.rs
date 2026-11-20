@@ -207,6 +207,9 @@ pub const CONVENTIONS: [(&str, &str); 8] = [
 /// represents it exactly.
 pub const MAX_INTEGER: u64 = (1 << 53) - 1;
 
+// The closure id space is the format's integers (validate bounds both).
+const _: () = assert!(crate::models::survey::MAX_CLOSURE_ID == MAX_INTEGER);
+
 /// The deepest nesting accepted in preserved (unknown) content and history
 /// entries. The survey records themselves are at most five levels deep.
 pub const MAX_DEPTH: usize = 128;
