@@ -110,6 +110,9 @@ pub struct LoadReport {
     /// Whether a load step bumped `modified_at`; the reported project keeps
     /// the file's value either way.
     pub touched_modified_at: bool,
+    /// Merges the load created (orphan closures promoted to merges). Their
+    /// `merged_at` is the file's `modified_at`, not the wall clock.
+    pub merges_created: usize,
 }
 
 /// A legacy `.stalx` opened exactly as the 0.6.0 app opened it.

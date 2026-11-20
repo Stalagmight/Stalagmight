@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::{
     AdjustmentFailureReport, AdjustmentReport, ClassifyScope, LineId, SkippedClosure,
@@ -145,6 +147,12 @@ fn open_copy(copy: &Path, opts: &OpenOptions) -> Result<LegacySurvey, LegacyErro
         .map_err(|e| LegacyError::from_load(&e))?;
     let mut project = db.load_project().map_err(|e| LegacyError::from_load(&e))?;
     let loaded_modified_at = project.modified_at;
+    let stored_merge_times: HashSet<DateTime<Utc>> = project
+        .station_merges
+        .iter()
+        .map(|merge| merge.merged_at)
+        .collect();
+    let heal_started = Utc::now();
     let validation_stored = db
         .load_project_validation()
         .map_err(|e| LegacyError::from_load(&e))?
@@ -224,8 +232,17 @@ fn open_copy(copy: &Path, opts: &OpenOptions) -> Result<LegacySurvey, LegacyErro
     };
     let component_anchors = project.component_anchors();
 
+    // The wall clock the heal stamped: the edit time back to the file's, and
+    // a merge the load created (an orphan closure promoted) dated by it too.
     let touched_modified_at = project.modified_at != loaded_modified_at;
     project.modified_at = loaded_modified_at;
+    let mut merges_created = 0;
+    for merge in project.station_merges.iter_mut() {
+        if merge.merged_at >= heal_started && !stored_merge_times.contains(&merge.merged_at) {
+            merge.merged_at = loaded_modified_at;
+            merges_created += 1;
+        }
+    }
     Ok(LegacySurvey {
         raw_positions: positions_of(&stations),
         adjusted_positions,
@@ -248,6 +265,7 @@ fn open_copy(copy: &Path, opts: &OpenOptions) -> Result<LegacySurvey, LegacyErro
             reclassified_shots,
             integrity,
             touched_modified_at,
+            merges_created,
         },
         project,
     })

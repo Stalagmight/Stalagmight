@@ -48,7 +48,9 @@
 //!   rule and namespace), not a random v4, so every open of a file agrees.
 //!   Positions do not depend on these ids.
 //! - `project.modified_at` keeps the file's value even when a heal bumped
-//!   it in memory ([`LoadReport::touched_modified_at`]).
+//!   it in memory ([`LoadReport::touched_modified_at`]), and a merge the load
+//!   creates (an orphan closure promoted) is dated by it, not by the wall
+//!   clock ([`LoadReport::merges_created`]).
 //! - A file without stored validation thresholds keeps the 0.6.0 hardcoded
 //!   default; the app used the user's global thresholds
 //!   ([`LoadReport::validation_stored`] says which).
