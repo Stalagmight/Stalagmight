@@ -108,6 +108,8 @@ struct Case<'a> {
     /// Stations tied by `Tie` closures, grouped (a demoted merge's two
     /// stations are in one group).
     tie_group: BTreeMap<StationId, StationId>,
+    /// Slots whose legacy comment is the empty string (no comment now).
+    empty_comments: BTreeSet<StationRef>,
     /// Closure ids the legacy file did not have (`Tie`s the migration made
     /// from demoted merges, reminted ids).
     new_closure_ids: BTreeSet<u64>,
@@ -143,6 +145,7 @@ impl<'a> Case<'a> {
             what,
             lp: &legacy.project,
             p,
+            empty_comments: BTreeSet::new(),
             migrated,
             tie_group,
             new_closure_ids: p
@@ -241,6 +244,7 @@ impl<'a> Case<'a> {
         ] {
             if o.get(key) != n.get(key) {
                 if key == "comment" && o.get(key) == Some(&Value::String(String::new())) && n.get(key).is_none() {
+                    self.empty_comments.insert(slot);
                     self.tally.note("identity: an empty legacy comment is no comment");
                 } else if junction {
                     self.tally.note(class);
@@ -762,6 +766,146 @@ impl<'a> Case<'a> {
         }
     }
 
+    fn range_previews(&mut self) {
+        let lines: Vec<(u32, Vec<u32>)> = self
+            .lp
+            .lines
+            .iter()
+            .filter(|l| l.shots.len() >= 3)
+            .map(|l| (l.id, l.shots.iter().map(|s| s.id).collect()))
+            .collect();
+        for (line, shots) in lines {
+            let n = shots.len();
+            for (first, last) in [(0, n / 2), (1, n - 2), (n / 2, n - 1)] {
+                let (a, b) = (shots[first], shots[last]);
+                let old = self.lp.preview_delete_shot_range(line, a, b).map(json);
+                let new = self
+                    .p
+                    .preview_delete_shot_range(line, a, b)
+                    .map(|preview| json(self.p.delete_range_impact(&preview)));
+                match (old, new) {
+                    (Ok(old), Ok(new)) => self.range_impact(line, &old, &new),
+                    (Err(_), Err(_)) => {}
+                    (old, new) => self.fail(format!(
+                        "range {line}/{a}..{b}: {:?} -> {:?}",
+                        old.err(),
+                        new.err().map(|e| e.to_string())
+                    )),
+                }
+            }
+        }
+    }
+
+    fn range_impact(&mut self, line: u32, old: &Value, new: &Value) {
+        for key in ["line_id", "start_pos", "end_pos", "kind"] {
+            if old[key] != new[key] {
+                return self.fail(format!("range on {line}: {key} {} -> {}", old[key], new[key]));
+            }
+        }
+        let slots = |v: &Value| -> Vec<StationRef> {
+            v.as_array().into_iter().flatten().map(slot_of).collect()
+        };
+        let (old_removed, new_removed) = (slots(&old["removed_stations"]), slots(&new["removed_stations"]));
+        let junction = old_removed
+            .iter()
+            .chain(&new_removed)
+            .any(|&s| self.junction(s));
+        let tied = self.demotions();
+        if old["shift_blocked"] != new["shift_blocked"] {
+            // The removed set follows the verdict (the split's interior set
+            // when only the split is offered, else the gap-close set).
+            let anchored = Value::String("Both sides are anchored to a zero datum.".to_string());
+            let via_deleted_closure = new["shift_blocked_reasons"]
+                .as_array()
+                .is_some_and(|r| r.contains(&anchored))
+                && old["removed_closures"].as_array().map_or(0, Vec::len)
+                    > new["removed_closures"].as_array().map_or(0, Vec::len);
+            if via_deleted_closure {
+                self.tally.note(
+                    "range delete (M1 finding): \"both sides anchored\" reaches through a closure at a station the gap-close deletes",
+                );
+                return;
+            }
+            if junction || tied {
+                self.tally.note(
+                    "range delete: shift verdict at a junction / over a demoted merge (the removed set follows it)",
+                );
+                return;
+            }
+            return self.fail(format!(
+                "range on {line}: shift_blocked {} {} -> {} {}",
+                old["shift_blocked"], old["shift_blocked_reasons"], new["shift_blocked"], new["shift_blocked_reasons"]
+            ));
+        }
+        if old_removed != new_removed {
+            return self.fail(format!("range on {line}: removed stations {old_removed:?} -> {new_removed:?}"));
+        }
+        let scoped = |case: &mut Self, what: &str, class: &'static str| {
+            if junction || tied {
+                case.tally.note(class);
+            } else {
+                case.fail(format!("range on {line}: {what} {} -> {}", old[what], new[what]));
+            }
+        };
+        let ids = |v: &Value| -> BTreeSet<u64> {
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["closure_id"].as_u64())
+                .collect()
+        };
+        if ids(&old["removed_closures"]) != ids(&new["removed_closures"]) {
+            scoped(self, "removed_closures", "range delete: a closure on a junction stays");
+        }
+        if ids(&old["closures_removed_across_one_shot"]) != ids(&new["closures_removed_across_one_shot"]) {
+            scoped(
+                self,
+                "closures_removed_across_one_shot",
+                "range delete: across-one-shot removals over a junction / demoted merge",
+            );
+        }
+        for key in ["removed_datums", "removed_comments"] {
+            let (mut o, n): (BTreeSet<StationRef>, BTreeSet<StationRef>) = (
+                slots(&old[key]).into_iter().collect(),
+                slots(&new[key]).into_iter().collect(),
+            );
+            if key == "removed_comments" {
+                let before = o.len();
+                o.retain(|s| !self.empty_comments.contains(s));
+                if o.len() != before {
+                    self.tally.note("range delete: an empty legacy comment is not listed");
+                }
+            }
+            let at_junction = o.symmetric_difference(&n).all(|&s| self.junction(s));
+            if o != n {
+                if at_junction {
+                    self.tally.note("range delete: a junction keeps its datum and comment");
+                } else {
+                    scoped(self, key, "range delete: datum / comment over a demoted merge");
+                }
+            }
+        }
+        let count = |v: &Value| {
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| m["station_a"] != m["station_b"])
+                .count()
+        };
+        if count(&old["removed_merges"]) != count(&new["removed_merges"]) {
+            scoped(self, "removed_merges", "range delete: removed merges are the slots leaving their junctions");
+        }
+        if count(&old["replacement_merges"]) + old["replacement_closure_updates"].as_array().map_or(0, Vec::len) > 0 {
+            self.tally
+                .note("range delete: replacement merges / rewired closures no longer happen (declared)");
+        }
+        if count(&old["closure_to_merge"]) != count(&new["closure_to_merge"]) {
+            self.tally.note(
+                "range delete: closures promoted by the sweep differ (junction left, or a datum taken)",
+            );
+        }
+    }
+
     fn connectivity(&mut self, seed: u64) {
         let slots: Vec<StationRef> = self
             .lp
@@ -780,6 +924,15 @@ impl<'a> Case<'a> {
             let new = self.p.check_merge_connectivity_wire(a, b);
             match (old, new) {
                 (Ok((connected, preview)), Ok(new)) => {
+                    let old_shift = (!connected)
+                        .then(|| {
+                            self.lp.merge_datum_shift(
+                                m::StationRef::new(a.line_id, a.station_index),
+                                m::StationRef::new(b.line_id, b.station_index),
+                            )
+                        })
+                        .flatten();
+                    self.datum_shift(a, b, old_shift.map(json), new.datum_shift.as_ref().map(json));
                     if connected != new.connected {
                         if self.demotions() {
                             self.tally
@@ -812,6 +965,33 @@ impl<'a> Case<'a> {
                     } else {
                         self.fail(format!("connectivity {a}-{b}: {old:?} -> {new:?}"));
                     }
+                }
+            }
+        }
+    }
+
+    fn datum_shift(&mut self, a: StationRef, b: StationRef, old: Option<Value>, new: Option<Value>) {
+        match (old, new) {
+            (None, None) => {}
+            (Some(o), Some(n)) => {
+                let same_station = self.station(slot_of(&o["datum_station"]))
+                    == self.station(slot_of(&n["datum_station"]));
+                if o["moving_line_ids"] != n["moving_line_ids"] || !same_station {
+                    self.fail(format!("datum shift {a}-{b}: {o} -> {n}"));
+                } else if !close(&o["shift_m"], &n["shift_m"], XY_TOL) {
+                    if self.positions_may_move(false) {
+                        self.tally.note("merge datum shift: over a moved slot");
+                    } else {
+                        self.fail(format!("datum shift {a}-{b}: {o} -> {n}"));
+                    }
+                }
+            }
+            (old, new) => {
+                if self.demotions() || self.junction(a) || self.junction(b) {
+                    self.tally
+                        .note("merge datum shift: piece membership over a junction / demoted merge");
+                } else {
+                    self.fail(format!("datum shift {a}-{b}: {old:?} -> {new:?}"));
                 }
             }
         }
@@ -984,6 +1164,7 @@ fn compare(what: String, seed: u64, legacy: &LegacySurvey, migrated: &Migrated) 
 
     case.line_relationships();
     case.delete_previews();
+    case.range_previews();
     case.connectivity(seed);
     case.adjustment_report(legacy);
     case.combine_candidates();
