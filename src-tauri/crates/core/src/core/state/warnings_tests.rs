@@ -912,3 +912,47 @@ fn commands_naming_a_missing_line_or_shot_fail() {
     assert_eq!(project(state), before, "nothing changed");
     assert!(!state.has_unsaved_changes());
 }
+
+// ----- cost -----------------------------------------------------------------------
+
+/// The warnings pass on 80,000 shots (200 lines of 400 joined end to end,
+/// a datum, a far GPS fix, a closure and one short shot per line), cold and
+/// warm (the memoised layout). Run by hand:
+/// `cargo test -p stalagmight-core --lib warnings_pass_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing run: prints the cost of a whole-project warnings pass"]
+#[expect(clippy::print_stdout, reason = "the timing run reports its numbers")]
+fn warnings_pass_cost() {
+    let mut p = Project::new("Cost", None);
+    let mut shots = north(400, 5.0);
+    shots[7].length = 0.2;
+    let first = free_line(&mut p, "L0", [0.0, 0.0], shots.clone());
+    let mut last = first;
+    for i in 1..200 {
+        let end = st(&p, last, 400);
+        last = line_from(&mut p, &format!("L{i}"), end, shots.clone());
+    }
+    p.set_datum(st(&p, first, 0), Some(first), origin(), None)
+        .unwrap();
+    let far = st(&p, last, 400);
+    p.set_datum(far, Some(last), gps_at(20_000.0, 400_000.0), None)
+        .unwrap();
+    let (a, b) = (st(&p, first, 3), st(&p, first, 9));
+    plant(&mut p, a, b);
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(p);
+
+    let started = std::time::Instant::now();
+    let cold = state.open_project_warnings();
+    let cold_ms = started.elapsed().as_secs_f64() * 1e3;
+    let started = std::time::Instant::now();
+    let warm = state.open_project_warnings();
+    let warm_ms = started.elapsed().as_secs_f64() * 1e3;
+    assert_eq!(cold.len(), warm.len());
+    assert_eq!(of_code(&warm, "SHORT_SHOT").len(), 200);
+    assert_eq!(of_code(&warm, DATUM_GPS_GAP).len(), 1);
+    println!(
+        "warnings pass, 80,000 shots, {} warnings: cold {cold_ms:.1} ms, warm {warm_ms:.1} ms",
+        warm.len()
+    );
+}

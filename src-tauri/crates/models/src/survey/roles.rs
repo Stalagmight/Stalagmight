@@ -249,8 +249,13 @@ impl Project {
     /// The data of every GPS-gap warning, sorted by slot (today's
     /// `warnings.rs` block): one per fix whose gap exceeds its threshold.
     pub fn gps_gap_warnings(&self) -> Vec<GpsGapWarning> {
+        self.gps_gap_warnings_from(&self.raw_positions())
+    }
+
+    /// [`Self::gps_gap_warnings`] from this state's raw layout `positions`.
+    pub fn gps_gap_warnings_from(&self, positions: &RawPositions) -> Vec<GpsGapWarning> {
         let mut out: Vec<GpsGapWarning> = self
-            .gps_fix_gaps()
+            .gps_fix_gaps_from(positions)
             .into_iter()
             .filter(|(_, gap)| gap.exceeds_threshold)
             .filter_map(|(d, gap)| {

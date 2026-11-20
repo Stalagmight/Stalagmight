@@ -7,7 +7,7 @@
 //!   project's own thresholds (`settings.validation`, #57).
 //! - **GPS gaps** (`DATUM_GPS_GAP` / `DATUM_GPS_GAP_START`, #741): one per GPS
 //!   fix further from where the survey puts it than its threshold, on the
-//!   fix's slot ([`Project::gps_gap_warnings`]: station `i` -> shot `i - 1`,
+//!   fix's slot ([`Project::gps_gap_warnings_from`]: station `i` -> shot `i - 1`,
 //!   station 0 -> shot 0 under the `_START` code). A fix on a line with no
 //!   shot gets no row (logged).
 //! - **Closures across one shot** (`CLOSURE_ACROSS_ONE_SHOT`, #737): one error
@@ -83,7 +83,7 @@ fn project_warnings(
 ) -> Vec<ProjectWarning> {
     let ignored = Ignored::of(ignores);
     let mut all = shot_warnings(project, &ignored);
-    all.extend(gps_gap_warnings(project, &ignored));
+    all.extend(gps_gap_warnings(project, raw, &ignored));
     all.extend(closure_across_one_shot_warnings(project, raw));
     all.extend(adjustment_failure_warnings(project, failures, &ignored));
     // Stable: ties keep line list order, then the order of the kinds above.
@@ -167,14 +167,19 @@ fn shot_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
 /// piece's placement datum (#741 decision 4), sorted by slot.
 /// `datum_station_index` names the fix's slot on the row's line for "Go to
 /// station".
-fn gps_gap_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
-    // A GPS fix needs a placement datum before it; `gps_gap_warnings` lays
-    // the survey out, so a project with one datum or none skips it.
+fn gps_gap_warnings(
+    project: &Project,
+    raw: &RawPositions,
+    ignored: &Ignored,
+) -> Vec<ProjectWarning> {
+    // A GPS fix needs a placement datum before it, and the gaps walk the
+    // survey from every placement datum: a project with one datum or none
+    // has nothing to walk for.
     if project.datums.len() < 2 {
         return Vec::new();
     }
     project
-        .gps_gap_warnings()
+        .gps_gap_warnings_from(raw)
         .into_iter()
         .filter_map(|gap| {
             let Some(shot_index) = gap.shot_index else {
