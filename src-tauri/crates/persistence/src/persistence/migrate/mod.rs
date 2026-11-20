@@ -94,7 +94,8 @@ use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::survey::{Project, Violation};
 use crate::models::{LineId, SpeleoLink};
 
-pub use ignores::IgnoredWarning;
+use super::stalx_v2::IgnoredWarning;
+
 pub use report::{
     AdjustedCheck, AdjustedVerification, Axis, ClassStats, ExpectedClass, MigrationReport,
     Mismatch, Verification,

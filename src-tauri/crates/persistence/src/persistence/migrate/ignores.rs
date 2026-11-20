@@ -18,21 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
 use stalagmight_legacy::models::{reminted_shot_uuid, LineId};
 use stalagmight_legacy::LegacySurvey;
 
+use super::super::stalx_v2::IgnoredWarning;
 use super::MigrationReport;
-
-/// One ignored ("resolved") warning: `code` is not raised for the shot whose
-/// uuid is `shot_uuid`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IgnoredWarning {
-    pub shot_uuid: String,
-    pub code: String,
-    pub resolved_at: DateTime<Utc>,
-    pub comment: Option<String>,
-}
 
 /// Re-key the legacy ignores onto the migrated shot uuids. `final_uuid`
 /// maps a legacy shot (line, uuid after the load) to its migrated uuid.
@@ -88,9 +78,9 @@ pub(super) fn rekey(
             report.ignores_rekeyed += 1;
         }
         out.push(IgnoredWarning {
-            shot_uuid,
+            shot: shot_uuid,
             code: row.warning_code.clone(),
-            resolved_at: row.resolved_at,
+            at: row.resolved_at,
             comment: row.resolved_comment.clone(),
         });
     }

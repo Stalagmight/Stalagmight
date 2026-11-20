@@ -443,7 +443,7 @@ fn shot_uuids_and_ignores_follow_every_legacy_rule() {
         .extras
         .ignored_warnings
         .iter()
-        .map(|w| (w.shot_uuid.as_str(), w.code.as_str()))
+        .map(|w| (w.shot.as_str(), w.code.as_str()))
         .collect();
     let b0_uuid = out.project.lines()[1].shots[0].uuid.as_str();
     assert_eq!(

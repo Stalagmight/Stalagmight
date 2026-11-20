@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::survey::{Project, SlotPosition};
 
-use super::super::stalx_v2::{decode, encode, DecodeOptions, Extras, IgnoredWarning, Mode};
+use super::super::stalx_v2::{decode, encode, DecodeOptions, Extras, Mode};
 use super::test_support::random_case;
 use super::{migrate_bytes, Migrated};
 
@@ -21,17 +21,7 @@ const SEEDS: u64 = 48;
 /// ignored warnings (the rest of `MigratedExtras` is the app's to map).
 fn extras_of(migrated: &Migrated) -> Extras {
     Extras {
-        ignored_warnings: migrated
-            .extras
-            .ignored_warnings
-            .iter()
-            .map(|w| IgnoredWarning {
-                shot: w.shot_uuid.clone(),
-                code: w.code.clone(),
-                at: w.resolved_at,
-                comment: w.comment.clone(),
-            })
-            .collect(),
+        ignored_warnings: migrated.extras.ignored_warnings.clone(),
         ..Extras::default()
     }
 }
