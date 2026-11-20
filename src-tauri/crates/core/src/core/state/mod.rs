@@ -79,10 +79,10 @@ mod batch_label_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod c0_foundation_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::unwrap_in_result,
+    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod cave_sections_tests;
