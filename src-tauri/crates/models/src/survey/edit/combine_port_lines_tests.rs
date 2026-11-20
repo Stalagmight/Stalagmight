@@ -52,10 +52,10 @@
 //!     applicable (same reason; no gauge shot, 3.7; the gauge cases are 28-30).
 //! 11. `an_aligned_closure_from_the_join_into_either_line_becomes_an_ordinary_one`:
 //!     adapted into three: as snaps, `..._into_the_other_line_...` (ported)
-//!     and `..._into_the_kept_line_...` (ignored, M1 port finding), and as the
+//!     and `..._into_the_kept_line_...` (an M1 port finding, fixed), and as the
 //!     migrated `Tie` the legacy closure is,
-//!     `an_aligned_legacy_tie_from_the_join_into_either_line_...` (ignored, M1
-//!     port finding).
+//!     `an_aligned_legacy_tie_from_the_join_into_either_line_...` (an M1
+//!     port finding, fixed).
 //! 12. `different_north_references_convert_and_qualities_take_the_kept_ones`:
 //!     ported (O's reference set by the operation, which turns O about the
 //!     junction; no re-placing needed).
@@ -65,7 +65,7 @@
 //!     (`..._directly`, `..._through_a_third_line_...`), the unaligned
 //!     closure (`an_unaligned_second_closure_stays_an_ordinary_one`), and the
 //!     migrated `Tie` form of the legacy cycle merges
-//!     (`a_second_migrated_rigid_tie_...`, ignored, M1 port finding).
+//!     (`a_second_migrated_rigid_tie_...`, an M1 port finding, fixed).
 //! 15. `a_third_line_merged_at_the_join_stays_attached_as_a_branch`: ported.
 //! 16. `a_branch_merged_to_both_join_stations_is_merged_once`: adapted (C
 //!     merged to both join stations makes them one station, plan 5.1: the
@@ -116,7 +116,7 @@
 //! 41. `a_split_at_a_junction_combines_back_whatever_passes_through`: adapted
 //!     (the split makes a junction, plan 12.2): "starts there" and "passes
 //!     through" ported; "loops back" (a snap) split out as
-//!     `..._and_a_loop_back_stays_snapped` (ignored, M1 port finding).
+//!     `..._and_a_loop_back_stays_snapped` (an M1 port finding, fixed).
 //! 42. `combine_keeps_the_component_anchor_with_a_third_line`: adapted (M3:
 //!     the gauge and every raw position).
 //! 43. `split_keeps_the_component_anchor`: adapted (S's reverse parity put

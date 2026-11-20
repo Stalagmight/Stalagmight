@@ -18,7 +18,9 @@
 //! Fate of each legacy test:
 //! - `two_lines_in_a_loop_combine_at_the_closure`: ported.
 //! - `a_closure_join_moves_the_side_without_the_adjustment_anchor`: keeping K
-//!   ported (in the test above); keeping O ignored, finding F1.
+//!   ported (in the test above); keeping O adapted: a known difference (the
+//!   gauge on a station both lines pass stays on the line that does not move,
+//!   so the plain rule applies).
 //! - `the_anchor_counts_only_where_the_closure_adjusted_view_solves`: adapted:
 //!   the loop variants as the previous line (F1 for keeping O); the unmerged
 //!   variants not applicable (a closure-only tie between free pieces).
@@ -29,8 +31,8 @@
 //!   `a_closure_the_join_puts_across_one_shot_is_removed`: ported.
 //! - `a_three_line_loop_tears_the_merge_nearest_the_moving_line`,
 //!   `both_sides_held_tear_the_merge_to_the_moving_sides_datum`: ported as
-//!   `..._junction_...`; the sweep found the deeper both-held case, finding F2
-//!   (`both_sides_held_tear_the_junction_to_a_datum_beyond_it`, ignored).
+//!   `..._junction_...`; the sweep found the deeper both-held case (fixed,
+//!   `both_sides_held_tear_the_junction_to_a_datum_beyond_it`).
 //! - `the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes`,
 //!   `a_combine_leaves_no_closure_across_one_shot_it_made`: ported for the
 //!   merged passage; the snapped passage not applicable (a snap as a free
@@ -45,8 +47,8 @@
 //!   `of_two_closures_the_combine_puts_on_one_pair_the_solved_one_stays`.
 //! - The eight random sweeps and chains (`every_offered_combine_*`,
 //!   `chains_*`): adapted into one sweep and one chain test over four network
-//!   shapes; the chains found finding F3
-//!   (`lettered_names_stay_unique_on_the_other_lines_of_a_junction`, ignored).
+//!   shapes; the chains found a lettering clash on a third line (fixed,
+//!   `lettered_names_stay_unique_on_the_other_lines_of_a_junction`).
 //! - `merge_stations_never_leaves_a_closure_between_merged_stations`,
 //!   `the_sweep_removes_exactly_the_closures_between_merged_stations`: not
 //!   applicable (Merge and the sweep are stream M2's; a closure on one station
@@ -198,7 +200,7 @@ fn two_line_loop(strategy: ClosureStrategy) -> (Project, LineId, LineId) {
 /// one (the halves of the legacy
 /// `a_closure_join_moves_the_side_without_the_adjustment_anchor` and
 /// `the_anchor_counts_only_where_the_closure_adjusted_view_solves` that keep
-/// K; the halves that keep O are finding F1). Declared (plan 5.4 step 6, 12.2): the
+/// K; the halves that keep O are adapted below). Declared (plan 5.4 step 6, 12.2): the
 /// tie reaches K's start, a station of both lines besides the join, so it
 /// tears with reason `PassesTwice` (today: `Loop`), and the detached O gets a
 /// new station there (today: a merge turned into a closure).
@@ -1427,9 +1429,9 @@ fn network(seed: u64, shape: Shape) -> Project {
 /// is what it did): the legacy `check_combined`, `check_removed_across_one_shot`
 /// and `check_replaced`, on what the station graph keeps (no closure-adjusted
 /// view yet, stream M3: the gauge rule is checked on the placement station).
-/// Returns `true`, checked only up to the closures, on finding F2 (two
-/// datum-held pieces joined with no tear for a datum, see
-/// [`both_sides_held_tear_the_junction_to_a_datum_beyond_it`]).
+/// Returns `true`, checked only up to the closures, when two datum-held
+/// pieces were joined with no tear for a datum (the sweep asserts it never
+/// happens; see [`both_sides_held_tear_the_junction_to_a_datum_beyond_it`]).
 fn check_combine(
     before: &Project,
     after: &Project,
@@ -1604,10 +1606,6 @@ struct Reached {
     residual: usize,
     removed: usize,
     joined_moved: usize,
-    /// Combines that hit finding F2 (checked only up to it).
-    finding_f2: usize,
-    /// Offered combines refused as invalid by finding F3 (skipped).
-    finding_f3: usize,
 }
 
 /// Combine `candidate` keeping `kept` on a copy of `p`, check it, count it.
@@ -1627,19 +1625,15 @@ fn combine_and_check(
     let mut options = opts(join);
     options.name = format!("Joined {}", reached.combined);
     let result = after.combine_lines(kept, other, &options);
-    if let Err(super::EditError::Invalid(violations)) = &result {
-        use super::super::Violation;
-        let names = |v: &Violation| matches!(v, Violation::DuplicateStationName { .. });
-        if !violations.is_empty() && violations.iter().all(names) {
-            reached.finding_f3 += 1;
-            return p.clone();
-        }
-    }
     assert!(result.is_ok(), "{what}: {result:?}");
     let report = result.unwrap().value;
     let plan = plan_keeping(candidate, kept);
     assert_eq!(&report, plan, "{what}: the command does what the menu said");
-    reached.finding_f2 += usize::from(check_combine(p, &after, candidate, kept, &report, what));
+    let datum_pieces_joined = check_combine(p, &after, candidate, kept, &report, what);
+    assert!(
+        !datum_pieces_joined,
+        "{what}: two datum-held pieces joined with no tear for a datum"
+    );
     reached.combined += 1;
     reached.kinds.insert(format!("{:?}", candidate.join_kind));
     reached.torn += report.torn_ties.len();

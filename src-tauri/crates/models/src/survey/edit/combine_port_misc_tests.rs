@@ -11,15 +11,15 @@
 //! `combine_hand_move_tests`
 //! - `a_30_cm_hand_move_carries_its_branch_as_planned_and_nothing_after`,
 //!   `hand_moves_on_the_join_for_every_pairing` (640 combines): ported.
-//! - `nothing_merged_at_the_dropped_join_station_moves_nothing`: ported;
-//!   ignored (finding).
+//! - `nothing_merged_at_the_dropped_join_station_moves_nothing`: ported
+//!   (an M1 finding, fixed).
 //! - `a_snap_between_what_moves_with_the_joined_station_and_its_side_tears`:
 //!   adapted (reason `Moved`, legacy `Loop`).
 //! - `hand_moves_at_the_float_dust_edge_leave_nothing_to_heal`: ported as
-//!   two tests, `..._within_...` and `..._past_...` (ignored, finding).
+//!   two tests, `..._within_...` and `..._past_...` (M1 findings, fixed).
 //! - `a_merge_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart`:
 //!   adapted as `a_tie_loop_...` (the cycle-closing merge migrates to a
-//!   `Tie`, plan 7.2.1); ignored (finding).
+//!   `Tie`, plan 7.2.1); ignored: a known difference (see the test).
 //! - `closures_whose_ends_the_hand_move_moves_apart_are_measured_again`: not
 //!   applicable (closure metrics are derived, plan 1.3, 3.6).
 //! - `a_combine_at_two_hand_moved_join_stations_moves_the_view_as_worked_out`:
@@ -38,7 +38,7 @@
 //!
 //! `combine_realign_tests`
 //! - `a_torn_snap_the_shift_recloses_across_the_two_sides_...` (adapted) and
-//!   `..._inside_the_combined_line_...` (ported): ignored (one finding).
+//!   `..._inside_the_combined_line_...` (ported; an M1 finding, fixed).
 //! - `a_torn_snap_a_merged_join_recloses_beside_it_snaps_again`: ported.
 //! - `a_snap_a_dropped_hand_move_pulls_apart_becomes_an_ordinary_closure`:
 //!   adapted (reason `Moved`, legacy `JoinedStationMoves`).
@@ -52,7 +52,7 @@
 //!   load never re-mints, plan 6.6).
 //! - `a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes`:
 //!   adapted (reason `PassesTwice`, plan 5.4 step 6); its gauge half,
-//!   `..._keeps_the_gauge_where_b_started`: ignored (finding).
+//!   `..._keeps_the_gauge_where_b_started`: ported (an M1 finding, fixed).
 //! - `a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one`:
 //!   adapted (gauge on K:1).
 //! - `a_snap_the_combine_tears_replaces_a_legacy_closure_on_its_stations`:
