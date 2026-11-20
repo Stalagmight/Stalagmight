@@ -820,7 +820,9 @@ as another survey, and Recovery refused the backup pair. Labels `H1`...
   one self-contained SQLite file (its bytes may differ from the file on disk:
   a journal rolled back, a WAL checkpointed; its survey does not). The original
   at the project's path is rewritten by the settle before the write: when the
-  write then fails, the session's guard follows the settled bytes.
+  write then fails, the session's guard follows the settled bytes. An original
+  whose pair SQLite cannot settle (damaged) is never replaced, not even under
+  Overwrite; Save As still works.
 - **H2. A failed upgrade keeps no backup while the original is still whole**,
   so a save retried on a read-only folder does not fill the backups folder;
   the next upgrade of a file removes what a killed one left (the hidden

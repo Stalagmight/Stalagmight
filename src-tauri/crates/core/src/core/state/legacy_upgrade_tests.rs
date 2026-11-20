@@ -973,9 +973,10 @@ fn a_failed_upgrade_leaves_the_original_whole_and_the_next_save_works() {
 }
 
 /// The guard comes first: an original another program changed since the open
-/// refuses the upgrade before anything is written (no settle, no backup).
+/// refuses the upgrade before anything is written (no settle, no backup). The
+/// Overwrite answer then upgrades what is there with the same steps.
 #[test]
-fn an_upgrade_over_a_changed_original_writes_nothing() {
+fn an_upgrade_over_a_changed_original_writes_nothing_until_overwrite() {
     let _config = isolated_config();
     let original = Original::build(6, Kind::HotJournal).unwrap();
     let dir = TempDir::new().unwrap();
@@ -984,9 +985,8 @@ fn an_upgrade_over_a_changed_original_writes_nothing() {
         .place(dir.path(), &format!("{stem}.stalx"))
         .unwrap();
     let state = open_fresh(&path).unwrap();
-    let mut changed = original.main;
-    changed[100] ^= 1;
-    std::fs::write(&path, &changed).unwrap();
+    // Another program rolled the journal back and stopped before deleting it.
+    std::fs::write(&path, &original.settled).unwrap();
     let journal = sidecar_path(&path, "-journal");
     let journal_bytes = std::fs::read(&journal).unwrap();
 
@@ -1002,10 +1002,62 @@ fn an_upgrade_over_a_changed_original_writes_nothing() {
         "{:?}",
         saved.error
     );
-    assert_eq!(std::fs::read(&path).unwrap(), changed);
+    assert_eq!(std::fs::read(&path).unwrap(), original.settled);
     assert_eq!(std::fs::read(&journal).unwrap(), journal_bytes);
     assert_eq!(entries(dir.path()).len(), 2, "{:?}", entries(dir.path()));
     assert!(kept_originals(&stem).is_empty());
+
+    let overwritten = state.save_project_overwriting(None);
+
+    assert!(overwritten.success, "{:?}", overwritten.error);
+    assert_eq!(entries(dir.path()), [format!("{stem}.stalx")]);
+    assert_eq!(opened_as(&path).as_deref(), Ok(original.survey.as_str()));
+    let kept = kept_originals(&stem);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(std::fs::read(&kept[0]).unwrap(), original.settled);
+    forget_backups(&stem);
+}
+
+/// An original whose unfinished changes SQLite cannot fold in (the pair is
+/// damaged) is never replaced, not even by the Overwrite answer: replacing it
+/// would leave no whole copy of it. The save says why and changes nothing;
+/// Save As still works.
+#[test]
+fn a_damaged_pair_is_never_replaced() {
+    let _config = isolated_config();
+    let original = Original::build(6, Kind::HotJournal).unwrap();
+    let dir = TempDir::new().unwrap();
+    let stem = unique_stem("damaged");
+    let path = original
+        .place(dir.path(), &format!("{stem}.stalx"))
+        .unwrap();
+    let state = open_fresh(&path).unwrap();
+    let mut damaged = original.main.clone();
+    damaged[100] ^= 1;
+    std::fs::write(&path, &damaged).unwrap();
+    let journal_bytes = std::fs::read(sidecar_path(&path, "-journal")).unwrap();
+
+    let overwritten = state.save_project_overwriting(None);
+
+    assert!(!overwritten.success);
+    let error = overwritten.error.unwrap_or_default();
+    assert!(
+        error.starts_with("Can't save: the original's unfinished changes could not be finished"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), damaged);
+    assert_eq!(
+        std::fs::read(sidecar_path(&path, "-journal")).unwrap(),
+        journal_bytes
+    );
+    assert_eq!(entries(dir.path()).len(), 2, "{:?}", entries(dir.path()));
+    assert!(kept_originals(&stem).is_empty());
+    let elsewhere = dir.path().join(format!("{stem}-copy.stalx"));
+    assert!(state.save_project(Some(elsewhere.clone())).success);
+    assert_eq!(
+        opened_as(&elsewhere).as_deref(),
+        Ok(original.survey.as_str())
+    );
     forget_backups(&stem);
 }
 

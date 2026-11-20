@@ -298,7 +298,11 @@ settle already rewrote it, the session's guard follows the new bytes, so the
 next save works. A failed write removes the copy step 4 kept while the original
 still holds the same bytes, so an autosave retried on a read-only folder does
 not fill the backups folder. The next upgrade of the same file removes what a
-killed one left behind (the hidden settled copy, a partial backup).
+killed one left behind (the hidden settled copy, a partial backup). An original
+whose unfinished changes SQLite cannot fold in (a damaged pair) is never
+replaced, not even by Keep my version: there would be no whole copy of it. The
+save says so ("the original's unfinished changes could not be finished") and
+Save As still works.
 
 Settling replaces the original by a rename, so it needs what the version 2
 write needs (a writable folder) and nothing more: a write-protected legacy file
