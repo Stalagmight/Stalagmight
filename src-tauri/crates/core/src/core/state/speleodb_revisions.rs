@@ -157,29 +157,6 @@ fn unwind_discards_unpushed(has_unpushed_edits: bool, unwound_from: Option<&str>
 }
 
 impl AppState {
-    /// [#303] The preconditions for an Unwind - the one action allowed to keep a
-    /// downloaded copy's undo history, and therefore the one that has to earn it.
-    ///
-    /// Two of them, and the second is the interesting one:
-    ///
-    /// 1. **The stack in the direction of travel must be EMPTY.** That is what makes "the
-    ///    working copy equals a commit" true, and which stack it is mirrors the step.
-    ///    Going BACK, the undo stack: it is cleared at a lock or a confirmed push, so
-    ///    undoing everything since then returns the tree to exactly that commit's state.
-    ///    Going FORWARD, the redo stack: every operation of the commit being sat on has
-    ///    been re-applied, so the tree really is that commit's and the child's history
-    ///    stacks onto it cleanly. Either way, entries left on that stack mean the copy sits
-    ///    somewhere BETWEEN commits, and checking out a revision would silently discard the
-    ///    work that has not been walked through yet.
-    /// 2. **Dirt that no Unwind put there must be acknowledged.** See
-    ///    [`unwind_discards_unpushed`] for which dirt that is. It used to be a flat
-    ///    refusal, on the grounds that un-pushed work "must not be discarded on the
-    ///    strength of a waiver the user was never shown" - but the affordance is offered
-    ///    exactly when the undo stack is empty, which is also what undoing everything
-    ///    produces, so the button existed only to fail. The waiver has to be acknowledged:
-    ///    `discard_unpushed` is the caller reporting that it warned the user. Absent the
-    ///    acknowledgement this still refuses, so no caller can discard un-pushed work by
-    ///    passing `keep_undo_history` alone.
     /// [#303] Is the revision being asked for actually the step the claimed direction
     /// leads to?
     ///
@@ -220,6 +197,29 @@ impl AppState {
         )))
     }
 
+    /// [#303] The preconditions for an Unwind - the one action allowed to keep a
+    /// downloaded copy's undo history, and therefore the one that has to earn it.
+    ///
+    /// Two of them, and the second is the interesting one:
+    ///
+    /// 1. **The stack in the direction of travel must be EMPTY.** That is what makes "the
+    ///    working copy equals a commit" true, and which stack it is mirrors the step.
+    ///    Going BACK, the undo stack: it is cleared at a lock or a confirmed push, so
+    ///    undoing everything since then returns the tree to exactly that commit's state.
+    ///    Going FORWARD, the redo stack: every operation of the commit being sat on has
+    ///    been re-applied, so the tree really is that commit's and the child's history
+    ///    stacks onto it cleanly. Either way, entries left on that stack mean the copy sits
+    ///    somewhere BETWEEN commits, and checking out a revision would silently discard the
+    ///    work that has not been walked through yet.
+    /// 2. **Dirt that no Unwind put there must be acknowledged.** See
+    ///    [`unwind_discards_unpushed`] for which dirt that is. It used to be a flat
+    ///    refusal, on the grounds that un-pushed work "must not be discarded on the
+    ///    strength of a waiver the user was never shown" - but the affordance is offered
+    ///    exactly when the undo stack is empty, which is also what undoing everything
+    ///    produces, so the button existed only to fail. The waiver has to be acknowledged:
+    ///    `discard_unpushed` is the caller reporting that it warned the user. Absent the
+    ///    acknowledgement this still refuses, so no caller can discard un-pushed work by
+    ///    passing `keep_undo_history` alone.
     fn speleodb_guard_unwind(
         &self,
         link: &crate::models::SpeleoLink,
@@ -523,7 +523,7 @@ impl AppState {
 
         let link = crate::models::SpeleoLink {
             endpoint,
-            project_id: project_id.clone(),
+            project_id,
             project_name,
             base_commit_sha: base_sha,
             has_unpushed_edits,
@@ -570,7 +570,7 @@ impl AppState {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, clippy::panic, reason = "unit test fixtures")]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::super::synthetic_stalx_tests::{link_on_disk, write_legacy_link_only, write_v2};
     use super::{
@@ -900,7 +900,8 @@ mod tests {
             state.speleodb_set_inherited_through(Some("2026-11-09T10:00:00Z"));
             assert!(state.save_project(None).success, "save");
             let bytes = std::fs::read(&path).expect("bytes");
-            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let decoded =
+                stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("decode");
             let sync = &decoded.extras.local.speleodb;
             assert_eq!(sync.unwound_from.as_deref(), Some("abc1234"));
             assert_eq!(
@@ -1015,7 +1016,8 @@ mod tests {
                 .expect("an edit session may change the policy");
             assert_eq!(state.speleodb_unwound_from(), None, "the pointer is gone");
             let bytes = std::fs::read(temp.path().join("linked.stalx")).expect("bytes");
-            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let decoded =
+                stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("decode");
             assert_eq!(
                 decoded.extras.local.speleodb.unwound_from, None,
                 "on disk too"
@@ -1102,7 +1104,8 @@ mod tests {
             });
             assert_eq!(state.speleodb_unwound_from().as_deref(), Some("abc1234"));
             let bytes = std::fs::read(&path).expect("bytes");
-            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let decoded =
+                stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("decode");
             let local = &decoded.extras.local;
             assert_eq!(local.speleodb.unwound_from.as_deref(), Some("abc1234"));
             assert!(local.speleodb.inherited_through.is_some(), "the watermark");
@@ -1117,7 +1120,8 @@ mod tests {
                 state.speleodb_after_swap(at, std::collections::BTreeMap::new(), None);
             });
             let bytes = std::fs::read(&path).expect("bytes");
-            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let decoded =
+                stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("decode");
             assert_eq!(decoded.extras.local.speleodb.unwound_from, None);
             assert_eq!(decoded.extras.local.speleodb.inherited_through, None);
 

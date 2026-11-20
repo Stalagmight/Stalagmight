@@ -489,7 +489,6 @@ impl AppState {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::panic,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
@@ -637,7 +636,11 @@ mod tests {
         copy_with_a_hot_journal(&foreign, &hot);
 
         assert!(
-            crate::persistence::legacy_link::read_link(&hot, &Default::default()).is_err(),
+            crate::persistence::legacy_link::read_link(
+                &hot,
+                &crate::persistence::legacy_link::ReadOptions::default()
+            )
+            .is_err(),
             "precondition: a read-only connection cannot roll back a hot journal"
         );
 
@@ -965,7 +968,7 @@ mod tests {
                 .filter_map(Result::ok)
                 .any(|e| std::fs::read(e.path()).ok().as_deref() == Some(original.as_slice()));
             assert!(kept, "the SQLite original is kept in {}", backups.display());
-            assert!(state.open_project(foreign.clone()).success, "and it opens");
+            assert!(state.open_project(foreign).success, "and it opens");
             assert!(state.speleo_link().is_none(), "as a local project");
 
             let plain = legacy_linked_project(&temp.path().join("plain.stalx"), None);

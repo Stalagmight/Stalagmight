@@ -218,7 +218,8 @@ fn v2_bytes(name: &str, link: Option<&SpeleoLink>) -> Vec<u8> {
 /// The project name and link a file on disk holds now.
 fn on_disk(path: &Path) -> (String, Option<SpeleoDbLink>, LocalSync) {
     let bytes = std::fs::read(path).expect("bytes");
-    let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("a v2 project");
+    let decoded =
+        stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("a v2 project");
     (
         decoded.project.name,
         decoded.extras.speleodb,

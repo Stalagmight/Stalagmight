@@ -1633,7 +1633,8 @@ mod tests {
             // AppState setters write the slot freely and legitimately, and its
             // `any(test, feature = "test-support")` gate (for the root crate's
             // tests) means the truncation below no longer hides them.
-            if !name.ends_with(".rs")
+            let is_rust = entry.path().extension().is_some_and(|ext| ext == "rs");
+            if !is_rust
                 || name == "tests.rs"
                 || name == "speleodb_session.rs"
                 || name == "tests_support.rs"

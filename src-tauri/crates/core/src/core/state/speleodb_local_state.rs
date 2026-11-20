@@ -471,9 +471,9 @@ impl AppState {
                     // Release offered the moment the app dirs failed. Every other
                     // "could not establish it" path in this file fails to `unknown`;
                     // so does this one.
-                    let state = cache_root
-                        .map(|root| local_state_at(&cache_path_in(root, &id)))
-                        .unwrap_or_else(unknown_local_state);
+                    let state = cache_root.map_or_else(unknown_local_state, |root| {
+                        local_state_at(&cache_path_in(root, &id))
+                    });
                     (id, state)
                 })
                 .collect(),

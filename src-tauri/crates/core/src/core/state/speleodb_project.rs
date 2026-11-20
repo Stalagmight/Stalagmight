@@ -131,11 +131,11 @@ impl AppState {
             if link.project_id != project_id {
                 return;
             }
-            link.project_name = name.to_owned();
+            name.clone_into(&mut link.project_name);
             file.set_speleo_link(Some(&link));
             let rename = open.name != name && file.extras.read_only.is_none();
             if rename {
-                open.name = name.to_owned();
+                name.clone_into(&mut open.name);
                 if let Err(error) = rename_on_disk(path.as_deref(), &mut file, name) {
                     tracing::warn!(%error, "could not persist the SpeleoDB project name");
                 }
@@ -318,7 +318,7 @@ impl AppState {
                     &token,
                     insecure_http,
                     &link,
-                    params.message.clone(),
+                    params.message,
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
