@@ -100,6 +100,7 @@ fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt
         warnings,
         info: Vec::new(),
         zero_datum_created,
+        line_problems: None,
     };
     receipt.cap_warnings();
     receipt
@@ -272,6 +273,30 @@ impl AppState {
         self.execute_import_lines_inner(
             lines,
             closures,
+            file_hash,
+            line_hashes,
+            existing_shot_updates,
+            mode,
+            None,
+        )
+    }
+
+    /// [`Self::execute_import_lines`] for the DMP import wizard, which
+    /// still needs the whole import or nothing (#814): it maps the returned
+    /// `line_ids` onto its configs by position, records a content hash per
+    /// selected line, and sends overlap edits to existing shots that belong
+    /// to particular incoming lines.
+    pub fn execute_import_lines_all_or_nothing(
+        &self,
+        lines: Vec<ImportLineConfig>,
+        file_hash: Option<String>,
+        line_hashes: Vec<String>,
+        existing_shot_updates: Vec<ExistingShotUpdate>,
+        mode: VirtualShotMode,
+    ) -> CommandResult {
+        self.execute_import_lines_inner(
+            lines,
+            Vec::new(),
             file_hash,
             line_hashes,
             existing_shot_updates,

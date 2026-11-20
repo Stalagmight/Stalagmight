@@ -86,6 +86,24 @@ pub const CLOSURE_ACROSS_ONE_SHOT: &str = "CLOSURE_ACROSS_ONE_SHOT";
 /// says so wherever that view is drawn.
 pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
 
+/// Project warning code for a piece of the survey (one line, or lines
+/// merged together) that has no zero datum and no merge to a piece that has
+/// one, in a project where some piece does (#814). Nothing places it, so it
+/// floats wherever it was created: an import whose connection could not be
+/// made leaves exactly this, and so does a line never connected by hand.
+/// Listed once per piece, on its first shot.
+///
+/// **Advisory** (a warning, so it may be ignored): a project can keep a
+/// separate piece on purpose. A project with no zero datum at all gets none -
+/// every piece would float, and there is nothing to connect them to.
+///
+/// The code keeps master's spelling, from before the Section -> Line rename,
+/// because it is stored: an Ignore saves the code in the project file, so an
+/// Ignore made by a master build (and by a 0.5.x release cut from master)
+/// still matches here. The frontend's `WarningResolution` matches the same
+/// string, and `the_not_connected_code_keeps_masters_spelling` pins it.
+pub const LINE_NOT_CONNECTED: &str = "SECTION_NOT_CONNECTED";
+
 /// `CommandResult` warning code for a loop closure a delete-with-shift removed
 /// because, after the delete, it tied the two ends of one shot together
 /// (#737). The frontend shows each one as a toast.
@@ -115,7 +133,8 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | CLOSURE_ACROSS_ONE_SHOT => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
         // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH, DATUM_GPS_GAP,
-        // DATUM_GPS_GAP_START and CLOSURE_ADJUSTMENT_FAILED (see its docs) are
+        // DATUM_GPS_GAP_START, CLOSURE_ADJUSTMENT_FAILED and
+        // LINE_NOT_CONNECTED (see their docs) are
         // advisory; an unknown code defaults to advisory so a future warning is
         // ignorable until classified.
         _ => WarningSeverity::Warning,

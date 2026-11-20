@@ -519,6 +519,16 @@ export function WarningResolution({
               }]
             : []),
         ];
+      case 'SECTION_NOT_CONNECTED':
+        // A piece of the survey nothing places (#814): no zero datum, no merge
+        // to a piece that has one. (The code keeps its pre-rename spelling,
+        // see `LINE_NOT_CONNECTED` in warning.rs.) The fix is a merge or a datum, made on the
+        // map, so offer the way there; a separate piece may be kept on
+        // purpose, so it can be ignored.
+        return [
+          { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          ...maybeIgnore,
+        ];
       case 'CLOSURE_ADJUSTMENT_FAILED':
         // A part of the survey the closure solve could not adjust (#737). The
         // fix is in that part's closures or datums, so offer the way there. It
@@ -707,7 +717,9 @@ export function WarningResolution({
             ? closureStation
             : warning.code === 'CLOSURE_ADJUSTMENT_FAILED'
               ? { line_id: warning.lineId, station_index: warning.shotIndex }
-              : undefined;
+              : warning.code === 'SECTION_NOT_CONNECTED'
+                ? { line_id: warning.lineId, station_index: 0 }
+                : undefined;
       if (ref) {
         setSource('detail-panel');
         setSelection({ type: 'station', stationRef: ref });

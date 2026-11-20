@@ -63,9 +63,10 @@ wdio-logs/
 scripts/lib/slice-rs/target/
 scripts/lib/slice-rs/Cargo.lock
 
-# Workspace-excluded vendored crate: its tests (CI check job, #494) build into
-# its own target dir, which src-tauri/target/ above does not cover.
+# Workspace-excluded vendored crates: their tests (CI check job, #494, #811)
+# build into their own target dirs, which src-tauri/target/ above does not cover.
 src-tauri/vendor/compass_data/target/
+src-tauri/vendor/igrf/target/
 
 # Tier 2 OS helper: ensureHelperBuilt() builds into CARGO_TARGET_DIR, but a
 # hand-run `cargo build` in the crate dir drops a target/ here. Cargo.lock IS

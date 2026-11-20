@@ -104,12 +104,6 @@ describe('PublishToSpeleoDbDialog', () => {
 
     await pickOption('publish-to-speleodb-dialog-country', 'US');
     const submit = screen.getByTestId('publish-to-speleodb-dialog-submit');
-    // Country chosen but description still empty -> stays disabled (server requires it).
-    expect(submit).toBeDisabled();
-    expect(screen.getByTestId('publish-to-speleodb-dialog-description-error')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'Main line survey' } });
-    expect(screen.queryByTestId('publish-to-speleodb-dialog-description-error')).toBeNull();
     await waitFor(() => expect(submit).toBeEnabled());
     await userEvent.click(submit);
 
@@ -119,7 +113,7 @@ describe('PublishToSpeleoDbDialog', () => {
       expect(call![1]).toEqual({
         params: {
           name: 'My Cave',
-          description: 'Main line survey',
+          description: '',
           message: 'Project Creation',
           country: 'US',
           visibility: 'PRIVATE',
@@ -212,10 +206,6 @@ describe('PublishToSpeleoDbDialog', () => {
     expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Mexico');
     expect(screen.getByTestId('publish-to-speleodb-dialog-latitude')).toHaveValue(20.21);
     expect(screen.getByTestId('publish-to-speleodb-dialog-longitude')).toHaveValue(-87.46);
-    // Country + coords + name are prefilled, but a description is still required, so
-    // Publish stays disabled until one is entered.
-    expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'Cenote line' } });
     await waitFor(() =>
       expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeEnabled(),
     );

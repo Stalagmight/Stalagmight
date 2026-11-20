@@ -18,7 +18,8 @@
 //     on purpose: they never reach the built app.
 //
 //   - Vendored data: files under third_party/ that ship inside the app but come
-//     from no package manager (the matplotlib-derived colormap tables). Each
+//     from no package manager (the matplotlib-derived colormap tables, the
+//     IGRF geomagnetic model coefficients). Each
 //     notice is listed in VENDORED_NOTICES below; a file in third_party/ that
 //     the list does not account for is a hard failure.
 //
@@ -144,6 +145,11 @@ const VENDORED_NOTICES = [
     licenseName: 'MIT (Scientific colour maps, Fabio Crameri)',
     file: 'third_party/palettes/LICENSE-crameri',
     appliesTo: 'the berlin, managua and vanimo maps in `src/utils/palettes/catalog.generated.ts`',
+  },
+  {
+    licenseName: 'IGRF-14 geomagnetic model coefficients (IAGA, via NOAA NCEI)',
+    file: 'third_party/igrf/NOTICE-igrf14',
+    appliesTo: '`src-tauri/vendor/igrf/data/igrf14coeffs.txt` (magnetic declination for survey imports)',
   },
 ];
 
@@ -390,7 +396,7 @@ function renderVendored() {
   }
   const parts = [
     '## Vendored data\n',
-    'Data bundled into the frontend that comes from no package manager. Provenance for each part is in the README beside its notice under `third_party/`.\n',
+    'Data bundled into the app that comes from no package manager. Provenance for each part is in the README beside its notice under `third_party/`.\n',
   ];
   for (const n of VENDORED_NOTICES) {
     parts.push(`### ${n.licenseName}\n`);

@@ -1148,6 +1148,77 @@ impl Project {
         components
     }
 
+    /// The pieces of the survey nothing places, in a project where something
+    /// is placed (#814): rigid groups (lines joined by merges or aligned
+    /// loop closures, the edges the offset cascade follows) holding no
+    /// placement datum. Each group lists its lines in project order; the
+    /// groups come in the order of their first line. Empty when no group
+    /// holds a datum, since then every piece floats and none is the odd one
+    /// out.
+    ///
+    /// Linear in lines plus connections: one adjacency map, one walk, and
+    /// the placed set built once. The warnings pass calls it on every refresh,
+    /// so a per-group `get_rigid_connected_line_ids` (which rescans every
+    /// merge and closure per line) or a per-group datum lookup would make a
+    /// large file with many floating pieces quadratic.
+    pub fn unanchored_line_groups(&self) -> Vec<Vec<LineId>> {
+        let placed = self.placement_datum_lines();
+        if placed.is_empty() {
+            return Vec::new();
+        }
+        let mut adjacent: HashMap<LineId, Vec<LineId>> = HashMap::new();
+        let mut link = |a: LineId, b: LineId| {
+            adjacent.entry(a).or_default().push(b);
+            adjacent.entry(b).or_default().push(a);
+        };
+        for merge in &self.station_merges {
+            link(merge.station_a.line_id, merge.station_b.line_id);
+        }
+        for closure in self.loop_closures.iter().filter(|c| c.is_aligned) {
+            link(closure.station_a.line_id, closure.station_b.line_id);
+        }
+
+        let mut seen: HashSet<LineId> = HashSet::new();
+        let mut groups: Vec<Vec<LineId>> = Vec::new();
+        for line in &self.lines {
+            if !seen.insert(line.id) {
+                continue;
+            }
+            let mut members = vec![line.id];
+            let mut queue = vec![line.id];
+            while let Some(current) = queue.pop() {
+                for &next in adjacent
+                    .get(&current)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    if seen.insert(next) {
+                        members.push(next);
+                        queue.push(next);
+                    }
+                }
+            }
+            if !members.iter().any(|id| placed.contains(id)) {
+                groups.push(members);
+            }
+        }
+        // `self.lines` order: the walk starts each group at its first
+        // line, but reaches the others in edge order.
+        let order: HashMap<LineId, usize> = self
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.id, i))
+            .collect();
+        for group in &mut groups {
+            group.sort_by_key(|id| order.get(id).copied().unwrap_or(usize::MAX));
+            // A connection can name a line the project no longer holds
+            // (dangling); it is not a piece of the survey.
+            group.retain(|id| order.contains_key(id));
+        }
+        groups
+    }
+
     /// Count lines not connected to a zero datum (directly or through
     /// merges), restricted to components that contain at least one of
     /// `newly_imported_line_ids`. Used to add an info line to the import
