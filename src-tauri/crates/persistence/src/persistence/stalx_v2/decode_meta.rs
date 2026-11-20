@@ -28,7 +28,10 @@ use super::{CONVENTIONS, MAX_INTEGER};
 
 /// Run `seed` over `raw`. Map a failure with [`typed`] once the seed (and its
 /// borrow of the context) is gone.
-pub(super) fn run<'a, S: DeserializeSeed<'a>>(raw: &'a str, seed: S) -> Result<S::Value, serde_json::Error> {
+pub(super) fn run<'a, S: DeserializeSeed<'a>>(
+    raw: &'a str,
+    seed: S,
+) -> Result<S::Value, serde_json::Error> {
     let mut de = serde_json::Deserializer::from_str(raw);
     let value = seed.deserialize(&mut de)?;
     de.end()?;
@@ -37,7 +40,12 @@ pub(super) fn run<'a, S: DeserializeSeed<'a>>(raw: &'a str, seed: S) -> Result<S
 
 /// The typed error of a failed [`run`]: the one a reader stashed in the
 /// context, else serde's at the context's path (`raw` a slice of `whole`).
-pub(super) fn typed(error: serde_json::Error, ctx: &mut Ctx<'_>, whole: &str, raw: &str) -> DecodeError {
+pub(super) fn typed(
+    error: serde_json::Error,
+    ctx: &mut Ctx<'_>,
+    whole: &str,
+    raw: &str,
+) -> DecodeError {
     match ctx.fail.take() {
         Some(typed) => typed,
         None => json_error(error, &ctx.path(), whole, raw),
@@ -52,7 +60,11 @@ pub(super) struct Fields<'a, 'w> {
 }
 
 impl<'a, 'w> Fields<'a, 'w> {
-    pub(super) fn of(raw: &'a RawValue, at: impl Into<String>, whole: &'w str) -> Result<Self, DecodeError> {
+    pub(super) fn of(
+        raw: &'a RawValue,
+        at: impl Into<String>,
+        whole: &'w str,
+    ) -> Result<Self, DecodeError> {
         let at = at.into();
         let pairs = members(raw.get(), MAX_SMALL_MEMBERS)
             .map_err(|e| e.into_decode(&at, whole, raw.get()))?;
@@ -79,9 +91,14 @@ impl<'a, 'w> Fields<'a, 'w> {
         let Some(raw) = self.take(key) else {
             return Ok(None);
         };
-        serde_json::from_str(raw.get())
-            .map(Some)
-            .map_err(|e| json_error(e, &format!("{}, field {key}", self.at), self.whole, raw.get()))
+        serde_json::from_str(raw.get()).map(Some).map_err(|e| {
+            json_error(
+                e,
+                &format!("{}, field {key}", self.at),
+                self.whole,
+                raw.get(),
+            )
+        })
     }
 
     pub(super) fn req<T: DeserializeOwned>(&mut self, key: &str) -> Result<T, DecodeError> {
@@ -95,10 +112,12 @@ impl<'a, 'w> Fields<'a, 'w> {
         let Some(text) = self.opt::<String>(key)? else {
             return Ok(None);
         };
-        parse_time(&text).map(Some).ok_or_else(|| DecodeError::BadValue {
-            at: format!("{}, field {key}", self.at),
-            message: format!("{text:?} is not an RFC 3339 time"),
-        })
+        parse_time(&text)
+            .map(Some)
+            .ok_or_else(|| DecodeError::BadValue {
+                at: format!("{}, field {key}", self.at),
+                message: format!("{text:?} is not an RFC 3339 time"),
+            })
     }
 
     pub(super) fn req_time(&mut self, key: &str) -> Result<DateTime<Utc>, DecodeError> {
@@ -226,8 +245,12 @@ pub(super) fn read_settings(
         let mut v = Fields::of(raw, "settings.validation", whole)?;
         let d = ValidationConfig::default();
         settings.validation = ValidationConfig {
-            warn_shot_length_min: v.opt("warn_shot_length_min")?.unwrap_or(d.warn_shot_length_min),
-            warn_shot_length_max: v.opt("warn_shot_length_max")?.unwrap_or(d.warn_shot_length_max),
+            warn_shot_length_min: v
+                .opt("warn_shot_length_min")?
+                .unwrap_or(d.warn_shot_length_min),
+            warn_shot_length_max: v
+                .opt("warn_shot_length_max")?
+                .unwrap_or(d.warn_shot_length_max),
             warn_depth_change_per_shot_max: v
                 .opt("warn_depth_change_per_shot_max")?
                 .unwrap_or(d.warn_depth_change_per_shot_max),
@@ -237,7 +260,9 @@ pub(super) fn read_settings(
             azimuth_diff_threshold: v
                 .opt("azimuth_diff_threshold")?
                 .unwrap_or(d.azimuth_diff_threshold),
-            pitch_diff_threshold: v.opt("pitch_diff_threshold")?.unwrap_or(d.pitch_diff_threshold),
+            pitch_diff_threshold: v
+                .opt("pitch_diff_threshold")?
+                .unwrap_or(d.pitch_diff_threshold),
             inclination_depth_diff_threshold: v
                 .opt("inclination_depth_diff_threshold")?
                 .unwrap_or(d.inclination_depth_diff_threshold),
@@ -345,10 +370,18 @@ fn read_local_sync(raw: &RawValue, drop: &mut impl FnMut(String)) -> LocalSync {
     for (key, value) in pairs {
         let text = value.get();
         let ok = match key.as_ref() {
-            "base" => serde_json::from_str(text).map(|v| sync.base_commit = Some(v)).is_ok(),
-            "unpushed" => serde_json::from_str(text).map(|v| sync.unpushed_edits = v).is_ok(),
-            "last_edit" => time_value(text).map(|v| sync.last_edit_at = Some(v)).is_some(),
-            "last_verify" => time_value(text).map(|v| sync.last_verify_at = Some(v)).is_some(),
+            "base" => serde_json::from_str(text)
+                .map(|v| sync.base_commit = Some(v))
+                .is_ok(),
+            "unpushed" => serde_json::from_str(text)
+                .map(|v| sync.unpushed_edits = v)
+                .is_ok(),
+            "last_edit" => time_value(text)
+                .map(|v| sync.last_edit_at = Some(v))
+                .is_some(),
+            "last_verify" => time_value(text)
+                .map(|v| sync.last_verify_at = Some(v))
+                .is_some(),
             "unwound_from" => serde_json::from_str(text)
                 .map(|v| sync.unwound_from = Some(v))
                 .is_ok(),
@@ -419,7 +452,9 @@ fn collect_raw(text: &str, max: usize) -> Result<Vec<&RawValue>, String> {
         }
     }
     let mut de = serde_json::Deserializer::from_str(text);
-    let out = de.deserialize_seq(Collect { max }).map_err(|e| e.to_string())?;
+    let out = de
+        .deserialize_seq(Collect { max })
+        .map_err(|e| e.to_string())?;
     de.end().map_err(|e| e.to_string())?;
     Ok(out)
 }
@@ -462,10 +497,22 @@ pub(super) fn records<'a>(
     }
     ctx.loc = Loc::Member(member);
     ctx.field = "";
-    run(raw.get(), Collect { ctx: &mut *ctx, limit }).map_err(|e| typed(e, ctx, whole, raw.get()))
+    run(
+        raw.get(),
+        Collect {
+            ctx: &mut *ctx,
+            limit,
+        },
+    )
+    .map_err(|e| typed(e, ctx, whole, raw.get()))
 }
 
-pub(super) fn read_section(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<'_>) -> Result<Section, DecodeError> {
+pub(super) fn read_section(
+    raw: &RawValue,
+    at: String,
+    whole: &str,
+    ctx: &mut Ctx<'_>,
+) -> Result<Section, DecodeError> {
     let mut f = Fields::of(raw, at, whole)?;
     let section = Section {
         id: f.req("id")?,
@@ -476,7 +523,12 @@ pub(super) fn read_section(raw: &RawValue, at: String, whole: &str, ctx: &mut Ct
     Ok(section)
 }
 
-pub(super) fn read_datum(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<'_>) -> Result<ZeroDatum, DecodeError> {
+pub(super) fn read_datum(
+    raw: &RawValue,
+    at: String,
+    whole: &str,
+    ctx: &mut Ctx<'_>,
+) -> Result<ZeroDatum, DecodeError> {
     let mut f = Fields::of(raw, at, whole)?;
     let datum = ZeroDatum {
         station: f.req("station")?,
@@ -494,7 +546,12 @@ pub(super) fn read_datum(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<
     Ok(datum)
 }
 
-pub(super) fn read_placement(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<'_>) -> Result<Placement, DecodeError> {
+pub(super) fn read_placement(
+    raw: &RawValue,
+    at: String,
+    whole: &str,
+    ctx: &mut Ctx<'_>,
+) -> Result<Placement, DecodeError> {
     let mut f = Fields::of(raw, at, whole)?;
     let placement = Placement {
         station: f.req("station")?,
@@ -505,7 +562,12 @@ pub(super) fn read_placement(raw: &RawValue, at: String, whole: &str, ctx: &mut 
     Ok(placement)
 }
 
-pub(super) fn read_closure(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<'_>) -> Result<LoopClosure, DecodeError> {
+pub(super) fn read_closure(
+    raw: &RawValue,
+    at: String,
+    whole: &str,
+    ctx: &mut Ctx<'_>,
+) -> Result<LoopClosure, DecodeError> {
     let mut f = Fields::of(raw, at, whole)?;
     let id = f.big("id")?.ok_or_else(|| DecodeError::Missing {
         at: f.at().to_string(),
@@ -534,7 +596,12 @@ pub(super) fn read_closure(raw: &RawValue, at: String, whole: &str, ctx: &mut Ct
     })
 }
 
-pub(super) fn read_ignore(raw: &RawValue, at: String, whole: &str, ctx: &mut Ctx<'_>) -> Result<IgnoredWarning, DecodeError> {
+pub(super) fn read_ignore(
+    raw: &RawValue,
+    at: String,
+    whole: &str,
+    ctx: &mut Ctx<'_>,
+) -> Result<IgnoredWarning, DecodeError> {
     let mut f = Fields::of(raw, at, whole)?;
     let warning = IgnoredWarning {
         shot: f.req("shot")?,

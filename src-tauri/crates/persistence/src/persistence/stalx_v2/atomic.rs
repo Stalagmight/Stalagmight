@@ -126,7 +126,10 @@ impl std::error::Error for WriteError {}
 /// `<dest>.tmp` (`cave.stalx` saves through `cave.stalx.tmp`, the name the
 /// recovery listing looks for).
 pub fn temp_path(dest: &Path) -> PathBuf {
-    let mut name = dest.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
+    let mut name = dest
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
     name.push(".tmp");
     dest.with_file_name(name)
 }
@@ -162,7 +165,11 @@ pub fn check_unchanged(path: &Path, expected: &Fingerprint) -> Result<(), WriteE
 /// Write `bytes` to `dest` durably and atomically: afterwards `dest` holds
 /// either its old content or `bytes`, never a mix. Returns the new
 /// fingerprint for the next save's guard.
-pub fn write_atomic(dest: &Path, bytes: &[u8], guard: Guard<'_>) -> Result<Fingerprint, WriteError> {
+pub fn write_atomic(
+    dest: &Path,
+    bytes: &[u8],
+    guard: Guard<'_>,
+) -> Result<Fingerprint, WriteError> {
     let temp = temp_path(dest);
     let io = |stage: Stage, path: &Path| {
         let path = path.to_path_buf();
@@ -292,7 +299,9 @@ thread_local! {
 fn failpoint(stage: Stage) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_AT.with(std::cell::Cell::get) == Some(stage) {
-        return Err(std::io::Error::other(format!("injected failure at {stage:?}")));
+        return Err(std::io::Error::other(format!(
+            "injected failure at {stage:?}"
+        )));
     }
     let _ = stage;
     Ok(())

@@ -48,22 +48,20 @@ mod test_helpers;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point; one ignored test prints a sample"
 )]
 mod format_v2_roundtrip_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+    reason = "test module: panics on a failed assumption are the point"
 )]
 mod format_v2_canonical_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -71,7 +69,7 @@ mod format_v2_canonical_tests;
 )]
 mod format_v2_gating_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -79,15 +77,14 @@ mod format_v2_gating_tests;
 )]
 mod format_v2_hostile_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod format_v2_probe_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -95,23 +92,22 @@ mod format_v2_probe_tests;
 )]
 mod format_v2_salvage_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod format_v2_modes_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point; it prints its measurements"
 )]
 mod format_v2_diff_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -119,7 +115,7 @@ mod format_v2_diff_tests;
 )]
 mod format_v2_crash_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
@@ -127,7 +123,7 @@ mod format_v2_crash_tests;
 )]
 mod format_v2_bench_tests;
 
-pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, WriteError};
+pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, Stage, WriteError};
 pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
 pub use error::{DecodeError, EncodeError};

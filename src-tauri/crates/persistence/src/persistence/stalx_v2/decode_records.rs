@@ -33,7 +33,9 @@ use super::write::parse_date;
 pub(super) enum Loc {
     Member(&'static str),
     Element(&'static str, usize),
-    LineHeader { element: usize },
+    LineHeader {
+        element: usize,
+    },
     Shot {
         element: usize,
         line: LineId,
@@ -586,8 +588,7 @@ fn read_line_header<'de, A: MapAccess<'de>>(
                 let text: String = value(&mut map, ctx, "date")?;
                 ctx.field = "date";
                 date = Some(
-                    parse_date(&text)
-                        .ok_or_else(|| ctx.bad(format!("{text:?} is not a date")))?,
+                    parse_date(&text).ok_or_else(|| ctx.bad(format!("{text:?} is not a date")))?,
                 );
                 ctx.field = "";
             }

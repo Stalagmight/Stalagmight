@@ -231,8 +231,9 @@ fn replace_keys(
     raw: &RawValue,
     replace: &[(&str, Option<&str>)],
 ) -> Result<(), EncodeError> {
-    let pairs = members(raw.get(), MAX_SMALL_MEMBERS)
-        .map_err(|e| EncodeError::Original(e.into_decode("a header member", raw.get(), raw.get())))?;
+    let pairs = members(raw.get(), MAX_SMALL_MEMBERS).map_err(|e| {
+        EncodeError::Original(e.into_decode("a header member", raw.get(), raw.get()))
+    })?;
     let is_summary = pairs.iter().any(|(k, _)| k == "shots");
     let mut ordered: Vec<(&str, Option<&RawValue>)> = Vec::new();
     if is_summary {

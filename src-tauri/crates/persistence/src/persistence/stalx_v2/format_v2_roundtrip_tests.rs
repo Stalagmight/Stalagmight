@@ -2,7 +2,7 @@
 
 use chrono::{TimeZone, Utc};
 
-use crate::models::survey::Project;
+use crate::models::survey::{LineMeta, Project};
 use crate::models::{ShotData, SurveyCredit};
 
 use super::summary::Summary;
@@ -59,7 +59,9 @@ fn every_record_is_on_its_own_line() {
         .count();
     assert_eq!(stations, p.stations.len(), "one physical line per station");
     assert_eq!(
-        text.lines().filter(|l| l.starts_with("{\"id\":") && l.contains("\"start\":")).count(),
+        text.lines()
+            .filter(|l| l.starts_with("{\"id\":") && l.contains("\"start\":"))
+            .count(),
         p.lines().len(),
         "one physical line per line header"
     );
@@ -110,7 +112,11 @@ fn every_finite_double_survives_bit_for_bit() {
         })
         .collect();
     let line = p
-        .add_line(Default::default(), crate::models::survey::StartAt::New, shots)
+        .add_line(
+            LineMeta::default(),
+            crate::models::survey::StartAt::New,
+            shots,
+        )
         .unwrap();
     let start = p.line(line).unwrap().start;
     p.set_placement(start, -0.0, f64::from_bits(3)).unwrap();
@@ -173,7 +179,10 @@ fn the_float_spelling_is_shortest_and_exact() {
 
 #[test]
 fn times_keep_their_nanoseconds_and_are_clamped_like_810() {
-    let at = Utc.timestamp_opt(1_763_640_000, 123_456_789).single().unwrap();
+    let at = Utc
+        .timestamp_opt(1_763_640_000, 123_456_789)
+        .single()
+        .unwrap();
     assert_eq!(time_text(at), "2025-11-20T12:00:00.123456789Z");
     assert_eq!(parse_time(&time_text(at)), Some(at));
     // Any offset reads; the instant is kept.
@@ -185,9 +194,12 @@ fn times_keep_their_nanoseconds_and_are_clamped_like_810() {
 
     let mut p = Project::new_at("Times", None, at);
     p.modified_at = Utc.timestamp_opt(1, 1).single().unwrap();
-    let q = decode(&encode(&p, &Extras::default(), Mode::Normal).unwrap(), &DecodeOptions::default())
-        .unwrap()
-        .project;
+    let q = decode(
+        &encode(&p, &Extras::default(), Mode::Normal).unwrap(),
+        &DecodeOptions::default(),
+    )
+    .unwrap()
+    .project;
     assert_eq!(q.created_at, p.created_at);
     assert_eq!(q.modified_at, p.modified_at);
     // The `.plnx` ownership string is formatted from memory, so it survives.
@@ -219,7 +231,11 @@ fn a_summary_length_that_overflows_is_left_out() {
         })
         .collect();
     let line = p
-        .add_line(Default::default(), crate::models::survey::StartAt::New, shots)
+        .add_line(
+            LineMeta::default(),
+            crate::models::survey::StartAt::New,
+            shots,
+        )
         .unwrap();
     let start = p.line(line).unwrap().start;
     p.set_placement(start, 0.0, 0.0).unwrap();
@@ -249,7 +265,11 @@ fn credits_shared_by_a_line_are_written_once_in_its_header() {
         })
         .collect();
     let line = p
-        .add_line(Default::default(), crate::models::survey::StartAt::New, shots)
+        .add_line(
+            LineMeta::default(),
+            crate::models::survey::StartAt::New,
+            shots,
+        )
         .unwrap();
     let start = p.line(line).unwrap().start;
     p.set_placement(start, 0.0, 0.0).unwrap();

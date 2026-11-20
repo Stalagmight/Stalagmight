@@ -186,17 +186,27 @@ fn write_head(
     string(out, "counters");
     out.push(b':');
     let mut o = Obj::open(out);
-    small(o.key("station"), u64::from(project.counters.next_station_id));
+    small(
+        o.key("station"),
+        u64::from(project.counters.next_station_id),
+    );
     integer(o.key("closure"), project.counters.next_closure_id, || {
         "the closure counter".to_string()
     })?;
-    small(o.key("section"), u64::from(project.counters.next_section_id));
+    small(
+        o.key("section"),
+        u64::from(project.counters.next_section_id),
+    );
     o.close();
     out.extend_from_slice(b",\n");
     Ok(())
 }
 
-fn write_settings(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Result<(), EncodeError> {
+fn write_settings(
+    out: &mut Vec<u8>,
+    project: &Project,
+    extras: &Extras,
+) -> Result<(), EncodeError> {
     let settings = &project.settings;
     string(out, "settings");
     out.push(b':');
@@ -238,7 +248,11 @@ fn write_settings(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Resu
     Ok(())
 }
 
-pub(super) fn write_speleodb(out: &mut Vec<u8>, link: &super::SpeleoDbLink, preserved: &[(String, RawJson)]) {
+pub(super) fn write_speleodb(
+    out: &mut Vec<u8>,
+    link: &super::SpeleoDbLink,
+    preserved: &[(String, RawJson)],
+) {
     string(out, "speleodb");
     out.push(b':');
     let mut o = Obj::open(out);
@@ -353,7 +367,9 @@ fn write_body(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Result<u
     })?;
     records(out, "closures", &project.closures, |out, closure| {
         let mut o = Obj::open(out);
-        integer(o.key("id"), closure.id, || format!("closure id {}", closure.id))?;
+        integer(o.key("id"), closure.id, || {
+            format!("closure id {}", closure.id)
+        })?;
         small(o.key("a"), u64::from(closure.a));
         if let Some(via) = closure.a_via {
             small(o.key("a_via"), u64::from(via));
@@ -413,10 +429,8 @@ pub(super) fn canonical_ignores<'a>(
     ignores: &'a [IgnoredWarning],
 ) -> (Vec<&'a IgnoredWarning>, usize) {
     let uuids = project.shot_uuids();
-    let mut kept: Vec<&IgnoredWarning> = ignores
-        .iter()
-        .filter(|w| uuids.contains(&w.shot))
-        .collect();
+    let mut kept: Vec<&IgnoredWarning> =
+        ignores.iter().filter(|w| uuids.contains(&w.shot)).collect();
     kept.sort();
     kept.dedup_by(|b, a| a.shot == b.shot && a.code == b.code);
     let dropped = ignores.len() - kept.len();
@@ -723,8 +737,7 @@ fn history_for<'a>(
         Mode::Normal => Ok((undo, redo)),
         Mode::ForPush(options) => {
             cut.redo_dropped = redo.len();
-            if !options.keep_undo || (options.watermark.is_none() && sync.unwound_from.is_some())
-            {
+            if !options.keep_undo || (options.watermark.is_none() && sync.unwound_from.is_some()) {
                 // Without a watermark, a recorded Unwind step leaves the
                 // inherited extent unknown: ship no history rather than
                 // duplicate a loaded revision's operations (#303).
@@ -760,7 +773,10 @@ fn history_for<'a>(
 /// How many of the oldest undo entries are inherited: at or before
 /// `watermark`, or untimed before the first timed one. Refuses an untimed
 /// entry after a timed one and times out of order (today's SQLite rule).
-pub(super) fn inherited_prefix(undo: &[RawJson], watermark: DateTime<Utc>) -> Result<usize, String> {
+pub(super) fn inherited_prefix(
+    undo: &[RawJson],
+    watermark: DateTime<Utc>,
+) -> Result<usize, String> {
     #[derive(serde::Deserialize)]
     struct Stamp {
         #[serde(default)]
@@ -784,7 +800,9 @@ pub(super) fn inherited_prefix(undo: &[RawJson], watermark: DateTime<Utc>) -> Re
                     return Err(format!("undo entry {index} has a malformed time {text:?}"));
                 };
                 if previous.is_some_and(|p| at < p) {
-                    return Err(format!("undo entry {index} is older than the one before it"));
+                    return Err(format!(
+                        "undo entry {index} is older than the one before it"
+                    ));
                 }
                 previous = Some(at);
                 at <= watermark

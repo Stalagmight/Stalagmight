@@ -26,19 +26,43 @@ const MAX_PASSES: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Repair {
     /// A second station record with the same id was dropped.
-    DroppedDuplicateStation { id: StationId },
+    DroppedDuplicateStation {
+        id: StationId,
+    },
     /// A station's id was out of range and got a fresh one.
-    RenumberedStation { from: StationId, to: StationId },
+    RenumberedStation {
+        from: StationId,
+        to: StationId,
+    },
     /// A line with a repeated or out-of-range id got a fresh one.
-    RenumberedLine { from: LineId, to: LineId },
+    RenumberedLine {
+        from: LineId,
+        to: LineId,
+    },
     /// A line had a repeated id and no fresh id was left.
-    DroppedLine { id: LineId },
-    RenumberedClosure { from: ClosureId, to: ClosureId },
-    DroppedSection { id: SectionId },
-    DroppedAlias { station: StationId, alias: StationId },
-    ReMintedShotUuid { line: LineId, index: usize, uuid: String },
+    DroppedLine {
+        id: LineId,
+    },
+    RenumberedClosure {
+        from: ClosureId,
+        to: ClosureId,
+    },
+    DroppedSection {
+        id: SectionId,
+    },
+    DroppedAlias {
+        station: StationId,
+        alias: StationId,
+    },
+    ReMintedShotUuid {
+        line: LineId,
+        index: usize,
+        uuid: String,
+    },
     /// A line referenced a station with no record; one was created.
-    CreatedStation { id: StationId },
+    CreatedStation {
+        id: StationId,
+    },
     /// A chain station was replaced by a fresh one (a repeated station, or a
     /// reference no record can be created for).
     ReplacedChainStation {
@@ -47,14 +71,28 @@ pub enum Repair {
         from: StationId,
         to: StationId,
     },
-    DroppedDatum { station: StationId },
-    DroppedPlacement { station: StationId },
-    DroppedClosure { id: ClosureId },
+    DroppedDatum {
+        station: StationId,
+    },
+    DroppedPlacement {
+        station: StationId,
+    },
+    DroppedClosure {
+        id: ClosureId,
+    },
     /// Stale `via` hints cleared and hand moves dropped.
-    ClearedAttachments { vias: usize, hand_moves: usize },
-    ClearedSection { line: LineId, section: SectionId },
+    ClearedAttachments {
+        vias: usize,
+        hand_moves: usize,
+    },
+    ClearedSection {
+        line: LineId,
+        section: SectionId,
+    },
     /// A station on no line was dropped.
-    DroppedStation { id: StationId },
+    DroppedStation {
+        id: StationId,
+    },
     /// A shot that closed a loop now ends at a new station, tied to the old
     /// one by a `Batch` closure.
     BrokeCycle {
@@ -66,9 +104,17 @@ pub enum Repair {
     },
     /// A piece without an anchor got a placement at the origin (where the
     /// solver lays an unanchored piece out, so nothing moves).
-    AddedPlacement { station: StationId },
-    RenamedStation { id: StationId, name: String },
-    RaisedCounter { counter: CounterKind, to: u64 },
+    AddedPlacement {
+        station: StationId,
+    },
+    RenamedStation {
+        id: StationId,
+        name: String,
+    },
+    RaisedCounter {
+        counter: CounterKind,
+        to: u64,
+    },
 }
 
 impl fmt::Display for Repair {
@@ -438,7 +484,9 @@ fn fresh_station_id(p: &Project) -> StationId {
         .flat_map(|s| std::iter::once(s.id).chain(s.aliases.iter().map(|a| a.id)))
         .filter(|&id| id < MAX_STATION_ID)
         .map(|id| id.saturating_add(1))
-        .chain(std::iter::once(p.counters.next_station_id.min(MAX_STATION_ID)))
+        .chain(std::iter::once(
+            p.counters.next_station_id.min(MAX_STATION_ID),
+        ))
         .max()
         .unwrap_or(0)
 }
@@ -591,7 +639,13 @@ fn set_chain_station(p: &mut Project, line: LineId, index: usize, station: Stati
 
 /// Shot `index` of `line` closes a loop at `to`: end it at a new station and
 /// tie that station to `to` with a `Batch` closure.
-fn break_cycle(p: &mut Project, line: LineId, index: usize, to: StationId, repairs: &mut Vec<Repair>) {
+fn break_cycle(
+    p: &mut Project,
+    line: LineId,
+    index: usize,
+    to: StationId,
+    repairs: &mut Vec<Repair>,
+) {
     let name = p
         .station(to)
         .map_or_else(|| to.to_string(), |s| s.name.clone());

@@ -47,7 +47,12 @@ impl ScanError {
 
 /// A serde error raised while parsing `part` (a slice of `whole`), as a typed
 /// decode error with absolute line and column.
-pub(super) fn json_error(error: serde_json::Error, at: &str, whole: &str, part: &str) -> DecodeError {
+pub(super) fn json_error(
+    error: serde_json::Error,
+    at: &str,
+    whole: &str,
+    part: &str,
+) -> DecodeError {
     let (line, column) = absolute(whole, part, error.line(), error.column());
     match error.classify() {
         serde_json::error::Category::Eof => DecodeError::Truncated { line, column },

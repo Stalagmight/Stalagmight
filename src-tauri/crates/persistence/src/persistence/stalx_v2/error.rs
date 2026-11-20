@@ -60,9 +60,9 @@ impl fmt::Display for DecodeError {
                 "this is a project file in the old (SQLite) format; it opens through the \
                  conversion",
             ),
-            Self::ByteOrderMark => f.write_str(
-                "the file starts with a byte order mark, which a .stalx file never has",
-            ),
+            Self::ByteOrderMark => {
+                f.write_str("the file starts with a byte order mark, which a .stalx file never has")
+            }
             Self::TooLarge { size, max } => {
                 write!(f, "the file is {size} bytes, over the {max}-byte limit")
             }
@@ -72,7 +72,10 @@ impl fmt::Display for DecodeError {
                  version reads {supported})"
             ),
             Self::UnsupportedVersion { found } => {
-                write!(f, "format version {found} is not one Stalagmight ever wrote")
+                write!(
+                    f,
+                    "format version {found} is not one Stalagmight ever wrote"
+                )
             }
             Self::Conventions { key, found } => write!(
                 f,
@@ -158,7 +161,10 @@ impl fmt::Display for EncodeError {
                 write!(f, "{at} is {value}, which a .stalx file cannot hold")
             }
             Self::IntegerTooLarge { at, value } => {
-                write!(f, "{at} is {value}, above the largest integer a .stalx file holds")
+                write!(
+                    f,
+                    "{at} is {value}, above the largest integer a .stalx file holds"
+                )
             }
             Self::ReadOnly(reason) => write!(f, "the project is read-only: {reason}"),
             Self::UnknownFeature { name } => write!(

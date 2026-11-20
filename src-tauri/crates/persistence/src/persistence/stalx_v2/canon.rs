@@ -76,7 +76,16 @@ pub(super) fn canonical_checked(text: &str) -> Result<String, CanonError> {
                 while let Some(&c) = bytes.get(i) {
                     if matches!(
                         c,
-                        b' ' | b'\t' | b'\n' | b'\r' | b',' | b':' | b'{' | b'}' | b'[' | b']' | b'"'
+                        b' ' | b'\t'
+                            | b'\n'
+                            | b'\r'
+                            | b','
+                            | b':'
+                            | b'{'
+                            | b'}'
+                            | b'['
+                            | b']'
+                            | b'"'
                     ) {
                         break;
                     }

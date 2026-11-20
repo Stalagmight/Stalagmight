@@ -13,17 +13,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
-use crate::models::survey::{
-    ClosureStrategy, LineMeta, Project, StartAt, StationAlias, ZeroDatum,
-};
+use crate::models::survey::{ClosureStrategy, LineMeta, Project, StartAt, StationAlias, ZeroDatum};
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, NorthReference, Person, Section, ShotData,
     ShotKind, StationId, SurveyCredit, SurveyDirection, UndoMode,
 };
 
-use super::types::{
-    Extras, History, IgnoredWarning, LocalState, LocalSync, RawJson, SpeleoDbLink,
-};
+use super::types::{Extras, History, IgnoredWarning, LocalState, LocalSync, RawJson, SpeleoDbLink};
 use super::{decode, encode, DecodeOptions, Mode};
 
 /// xorshift64*, so every run builds the same survey.
@@ -127,8 +123,12 @@ fn instant(rng: &mut Rng) -> DateTime<Utc> {
 }
 
 fn day(rng: &mut Rng) -> NaiveDate {
-    NaiveDate::from_ymd_opt(1990 + rng.below(40) as i32, 1 + rng.below(12) as u32, 1 + rng.below(28) as u32)
-        .unwrap()
+    NaiveDate::from_ymd_opt(
+        1990 + rng.below(40) as i32,
+        1 + rng.below(12) as u32,
+        1 + rng.below(28) as u32,
+    )
+    .unwrap()
 }
 
 fn text(rng: &mut Rng, base: &str) -> String {
@@ -144,7 +144,11 @@ fn reference(rng: &mut Rng) -> AzimuthReference {
             epoch_year: 1900 + rng.below(200) as i32,
         },
     };
-    let north = *rng.pick(&[NorthReference::Magnetic, NorthReference::True, NorthReference::Grid]);
+    let north = *rng.pick(&[
+        NorthReference::Magnetic,
+        NorthReference::True,
+        NorthReference::Grid,
+    ]);
     // Kept exactly as written: even a `True` reference with a correction.
     AzimuthReference {
         north,
@@ -174,7 +178,11 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let rich = shape.rich;
     let mut p = Project::new_at(
-        if rich { text(&mut rng, "Synthetic cave") } else { "Synthetic cave".to_string() },
+        if rich {
+            text(&mut rng, "Synthetic cave")
+        } else {
+            "Synthetic cave".to_string()
+        },
         rng.chance(0.7).then(|| "Nowhere, synthetic".to_string()),
         instant(&mut rng),
     );
@@ -206,10 +214,16 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             })
             .collect();
         let meta = LineMeta {
-            name: rng.chance(0.8).then(|| text(&mut rng, &format!("Line {i}"))),
+            name: rng
+                .chance(0.8)
+                .then(|| text(&mut rng, &format!("Line {i}"))),
             color: rng.pick(&COLORS).to_string(),
             direction: *rng.pick(&[SurveyDirection::In, SurveyDirection::Out]),
-            quality: if rich && rng.chance(0.3) { rng.range(0.1, 3.0) } else { 1.0 },
+            quality: if rich && rng.chance(0.3) {
+                rng.range(0.1, 3.0)
+            } else {
+                1.0
+            },
             azimuth_reference: (rich && rng.chance(0.3)).then(|| reference(&mut rng)),
             section_id: (!p.sections.is_empty() && rng.chance(0.5))
                 .then(|| rng.pick(&p.sections).id),
@@ -261,7 +275,10 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let host = *rng.pick(&ids);
             let alias = p.mint_station_id().unwrap();
             let name = rng.chance(0.5).then(|| format!("old{alias}"));
-            p.station_mut(host).unwrap().aliases.push(StationAlias { id: alias, name });
+            p.station_mut(host)
+                .unwrap()
+                .aliases
+                .push(StationAlias { id: alias, name });
         }
         // An empty credit object (`{}`) is a value of its own; `from_data`
         // never stores one, so set it on the model directly.
@@ -274,7 +291,11 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let line = *rng.pick(&line_ids);
             let chain = p.line_stations(line).unwrap().to_vec();
             let station = *rng.pick(&chain);
-            let hand = [rng.awkward(-1.0, 1.0), rng.awkward(-1.0, 1.0), rng.awkward(-1.0, 1.0)];
+            let hand = [
+                rng.awkward(-1.0, 1.0),
+                rng.awkward(-1.0, 1.0),
+                rng.awkward(-1.0, 1.0),
+            ];
             p.line_mut(line).unwrap().hand_moves.insert(station, hand);
         }
     }
@@ -285,7 +306,7 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
     let mut datum_pieces = Vec::new();
     for (index, component) in topology.components().iter().enumerate() {
         if rng.chance(0.4) {
-            for _ in 0..1 + usize::from(rng.chance(0.3)) {
+            for _ in 0..=usize::from(rng.chance(0.3)) {
                 let station = *rng.pick(&component.stations);
                 let lines = topology.lines_of(station);
                 p.push_datum(ZeroDatum {
@@ -344,7 +365,8 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
     }
     if rich {
         for k in 0..rng.below(3) {
-            p.imported_file_hashes.push(format!("{:064x}", u128::from(seed as u32) + k as u128));
+            p.imported_file_hashes
+                .push(format!("{:064x}", u128::from(seed as u32) + k as u128));
         }
         for k in 0..rng.below(3) {
             p.imported_line_hashes.push(format!("line-{seed}-{k}"));
@@ -354,7 +376,10 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
     }
 
     let violations = p.validate();
-    assert!(violations.is_empty(), "the generator built an invalid survey: {violations:?}");
+    assert!(
+        violations.is_empty(),
+        "the generator built an invalid survey: {violations:?}"
+    );
     let extras = extras_for(&p, &mut rng, rich);
     (p, extras)
 }
@@ -366,7 +391,13 @@ fn shot(
     seq: u64,
     line_credit: Option<&Arc<SurveyCredit>>,
 ) -> ShotData {
-    let num = |rng: &mut Rng, lo: f64, hi: f64| if rich { rng.awkward(lo, hi) } else { (rng.range(lo, hi) * 10.0).round() / 10.0 };
+    let num = |rng: &mut Rng, lo: f64, hi: f64| {
+        if rich {
+            rng.awkward(lo, hi)
+        } else {
+            (rng.range(lo, hi) * 10.0).round() / 10.0
+        }
+    };
     let lrud = rng.below(4);
     let cell = |rng: &mut Rng| match lrud {
         0 => None,
@@ -400,8 +431,19 @@ fn shot(
         right,
         up,
         down,
-        comment: rng.chance(0.08).then(|| text(rng, "lead on the left, \"silt\"")),
-        kind: if rich { *rng.pick(&[ShotKind::Normal, ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]) } else { ShotKind::Normal },
+        comment: rng
+            .chance(0.08)
+            .then(|| text(rng, "lead on the left, \"silt\"")),
+        kind: if rich {
+            *rng.pick(&[
+                ShotKind::Normal,
+                ShotKind::Normal,
+                ShotKind::Jump,
+                ShotKind::Reference,
+            ])
+        } else {
+            ShotKind::Normal
+        },
         marker_index: rng.chance(0.05).then(|| rng.below(5) as u32),
         temperature: rng.chance(0.3).then(|| num(rng, 18.0, 28.0)),
         credit: own_credit,
@@ -492,9 +534,19 @@ pub(super) fn assert_round_trip(p: &Project, extras: &Extras) -> Vec<u8> {
     };
     let mut expected = p.clone();
     expected.assign_session_shot_ids();
-    assert!(decoded.project == expected, "the project changed in a round trip");
-    assert_eq!(&decoded.extras, extras, "the extras changed in a round trip");
-    assert!(decoded.notes.is_empty(), "notes on a clean file: {:?}", decoded.notes);
+    assert!(
+        decoded.project == expected,
+        "the project changed in a round trip"
+    );
+    assert_eq!(
+        &decoded.extras, extras,
+        "the extras changed in a round trip"
+    );
+    assert!(
+        decoded.notes.is_empty(),
+        "notes on a clean file: {:?}",
+        decoded.notes
+    );
     let again = encode(&decoded.project, &decoded.extras, Mode::Normal).unwrap();
     assert!(again == bytes, "re-encoding changed the bytes");
     bytes
@@ -503,4 +555,24 @@ pub(super) fn assert_round_trip(p: &Project, extras: &Extras) -> Vec<u8> {
 /// The text of encoded bytes.
 pub(super) fn text_of(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
+}
+
+/// `text` with `edit` applied to the first line header whose id is `id`.
+pub(super) fn edit_line_header(text: &str, id: u32, edit: impl Fn(&str) -> String) -> String {
+    let needle = format!("{{\"id\":{id},");
+    match text
+        .lines()
+        .find(|l| l.starts_with(&needle) && l.contains("\"start\":"))
+    {
+        Some(header) => text.replacen(header, &edit(header), 1),
+        None => text.to_string(),
+    }
+}
+
+/// `text` with `insert` (one or more records, no trailing comma) added at the
+/// end of the `lines` array.
+pub(super) fn append_to_lines(text: &str, insert: &str) -> String {
+    let start = text.find("\n\"lines\":[\n").unwrap();
+    let end = start + text[start..].find("\n],\n").unwrap();
+    format!("{},\n{insert}{}", &text[..end], &text[end..])
 }

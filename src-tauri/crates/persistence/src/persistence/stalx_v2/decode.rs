@@ -16,9 +16,9 @@ use crate::models::Section;
 
 use super::canon::{canonical_checked, CanonError};
 use super::decode_meta::{
-    preserve, read_closure, read_conventions, read_counters, read_datum, read_history,
-    read_ignore, read_imports, read_local, read_placement, read_project, read_section,
-    read_settings, read_speleodb, records, run, typed, ProjectMeta, RawCounters,
+    preserve, read_closure, read_conventions, read_counters, read_datum, read_history, read_ignore,
+    read_imports, read_local, read_placement, read_project, read_section, read_settings,
+    read_speleodb, records, run, typed, ProjectMeta, RawCounters,
 };
 use super::decode_records::{Ctx, LineBuild, LinesSeed, Loc, StationsSeed};
 use super::error::DecodeError;
@@ -84,7 +84,15 @@ pub(super) fn sniff_detail(bytes: &[u8]) -> Sniffed {
             *i += 1;
         }
     };
-    for token in [&b"{"[..], b"\"format\"", b":", b"\"stalx\"", b",", b"\"version\"", b":"] {
+    for token in [
+        &b"{"[..],
+        b"\"format\"",
+        b":",
+        b"\"stalx\"",
+        b",",
+        b"\"version\"",
+        b":",
+    ] {
         ws(&mut i);
         let rest = bytes.get(i..).unwrap_or_default();
         if rest.len() < token.len() {
@@ -162,7 +170,12 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
     let whole = std::str::from_utf8(bytes).map_err(|e| {
         let before = &bytes[..e.valid_up_to()];
         let line = before.split(|&b| b == b'\n').count();
-        let column = before.len() - before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1) + 1;
+        let column = before.len()
+            - before
+                .iter()
+                .rposition(|&b| b == b'\n')
+                .map_or(0, |i| i + 1)
+            + 1;
         DecodeError::Syntax {
             at: "the file".to_string(),
             line,
@@ -170,7 +183,8 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
             message: "the file is not UTF-8 text".to_string(),
         }
     })?;
-    let top = members(whole, MAX_SMALL_MEMBERS).map_err(|e| e.into_decode("the file", whole, whole))?;
+    let top =
+        members(whole, MAX_SMALL_MEMBERS).map_err(|e| e.into_decode("the file", whole, whole))?;
 
     let mut ctx = Ctx::new(&options.limits);
     let mut notes = Vec::new();
@@ -213,8 +227,7 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                 solver = true;
             }
             "requires" => {
-                extras.requires =
-                    serde_json::from_str(text).map_err(|e| simple(e, "requires"))?;
+                extras.requires = serde_json::from_str(text).map_err(|e| simple(e, "requires"))?;
             }
             "conventions" => {
                 read_conventions(raw, whole)?;
@@ -262,7 +275,12 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                     .into_iter()
                     .enumerate()
                 {
-                    sections.push(read_section(record, format!("sections[{i}]"), whole, &mut ctx)?);
+                    sections.push(read_section(
+                        record,
+                        format!("sections[{i}]"),
+                        whole,
+                        &mut ctx,
+                    )?);
                 }
             }
             "stations" => {
@@ -296,10 +314,9 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                 }
             }
             "placements" => {
-                for (i, record) in
-                    records(raw, "placements", Limit::Placements, &mut ctx, whole)?
-                        .into_iter()
-                        .enumerate()
+                for (i, record) in records(raw, "placements", Limit::Placements, &mut ctx, whole)?
+                    .into_iter()
+                    .enumerate()
                 {
                     placements.push(read_placement(
                         record,
@@ -314,7 +331,12 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                     .into_iter()
                     .enumerate()
                 {
-                    closures.push(read_closure(record, format!("closures[{i}]"), whole, &mut ctx)?);
+                    closures.push(read_closure(
+                        record,
+                        format!("closures[{i}]"),
+                        whole,
+                        &mut ctx,
+                    )?);
                 }
             }
             "ignored_warnings" => {
@@ -462,7 +484,8 @@ impl RawDoc {
         project.counters = counters_of(&project, &counters);
 
         let before = extras.ignored_warnings.len();
-        extras.ignored_warnings = kept_ignores(&project, std::mem::take(&mut extras.ignored_warnings));
+        extras.ignored_warnings =
+            kept_ignores(&project, std::mem::take(&mut extras.ignored_warnings));
         let dropped = before - extras.ignored_warnings.len();
         if dropped > 0 {
             notes.push(DecodeNote::IgnoresDropped { count: dropped });
