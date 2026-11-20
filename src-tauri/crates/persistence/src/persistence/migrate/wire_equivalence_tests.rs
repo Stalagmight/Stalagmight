@@ -98,6 +98,56 @@ impl Tally {
     }
 }
 
+/// The station graph's delete preview, with what the comparison needs.
+struct NewDelete {
+    impact: Value,
+    /// The delete removes a datum (its piece may lose its placement, and a
+    /// closure to another placed piece then promotes).
+    unplaces: bool,
+    /// Closures attached to the removed slot (on its station, `via` its
+    /// line) that the sweep promotes: today's `closure_to_merge` scope.
+    member_promoted: BTreeSet<u64>,
+    /// The `Tie`s on the removed slot that left with it (S13).
+    member_ties: BTreeSet<u64>,
+    /// The sweep's other promotions.
+    other_promotions: usize,
+    /// The removed station holds a datum.
+    datum_on_station: bool,
+}
+
+impl NewDelete {
+    fn of(p: &Project, preview: &crate::models::survey::DeleteShotPreview) -> Self {
+        let on_slot = |c: &crate::models::survey::LoopClosure| {
+            (c.a == preview.removed_station && c.a_via == Some(preview.line))
+                || (c.b == preview.removed_station && c.b_via == Some(preview.line))
+        };
+        let original = |id: u64| p.closures.iter().find(|c| c.id == id);
+        let member_promoted: BTreeSet<u64> = preview
+            .promoted_closures
+            .iter()
+            .map(|promotion| promotion.closure.id)
+            .filter(|&id| original(id).is_some_and(on_slot))
+            .collect();
+        let member_ties = preview
+            .removed_closures
+            .iter()
+            .filter(|c| c.strategy == ClosureStrategy::Tie && on_slot(c))
+            .map(|c| c.id)
+            .collect();
+        Self {
+            impact: json(p.delete_shot_impact(preview)),
+            unplaces: !preview.removed_datums.is_empty(),
+            other_promotions: preview.promoted_closures.len() - member_promoted.len(),
+            member_promoted,
+            member_ties,
+            datum_on_station: p
+                .datums
+                .iter()
+                .any(|d| d.station == preview.removed_station),
+        }
+    }
+}
+
 /// One legacy file: its two models and what the comparison needs to know
 /// about the migration.
 struct Case<'a> {
@@ -707,16 +757,12 @@ impl<'a> Case<'a> {
             picks.dedup();
             for shot in picks {
                 let old = self.lp.preview_delete_shot(line, shot).map(json);
-                let new = self.p.preview_delete_shot(line, shot).map(|preview| {
-                    (
-                        json(self.p.delete_shot_impact(&preview)),
-                        !preview.removed_datums.is_empty(),
-                    )
-                });
+                let new = self
+                    .p
+                    .preview_delete_shot(line, shot)
+                    .map(|preview| NewDelete::of(self.p, &preview));
                 match (old, new) {
-                    (Ok(old), Ok((new, unplaces))) => {
-                        self.delete_impact(line, shot, &old, &new, unplaces);
-                    }
+                    (Ok(old), Ok(new)) => self.delete_impact(line, shot, &old, &new),
                     (Err(_), Err(_)) => {}
                     (old, new) => self.fail(format!(
                         "delete {line}/{shot}: {:?} -> {:?}",
@@ -728,9 +774,8 @@ impl<'a> Case<'a> {
         }
     }
 
-    /// `unplaces`: the delete removes a datum (its piece may lose its
-    /// placement, and a closure to another placed piece then promotes).
-    fn delete_impact(&mut self, line: u32, shot: u32, old: &Value, new: &Value, unplaces: bool) {
+    fn delete_impact(&mut self, line: u32, shot: u32, old: &Value, delete: &NewDelete) {
+        let (new, unplaces) = (&delete.impact, delete.unplaces);
         if old["removed_station"] != new["removed_station"] {
             return self.fail(format!("delete {line}/{shot}: removed station"));
         }
@@ -756,8 +801,22 @@ impl<'a> Case<'a> {
                 .filter_map(|c| c["closure_id"].as_u64())
                 .collect()
         };
-        let (old_removed, new_removed) =
+        let (old_removed, mut new_removed) =
             (ids(&old["removed_closures"]), ids(&new["removed_closures"]));
+        // A demoted merge (`Tie`) on the removed slot leaves with it, as
+        // today's merge did (today's preview listed it in `removed_merges`).
+        let demoted: Vec<u64> = delete
+            .member_ties
+            .iter()
+            .copied()
+            .filter(|id| self.new_closure_ids.contains(id))
+            .collect();
+        if !demoted.is_empty() {
+            self.tally.note(
+                "delete: a demoted merge (Tie) on the removed slot leaves with it, as today's merge did (listed as a closure; S13 at a junction)",
+            );
+            new_removed.retain(|id| !demoted.contains(id));
+        }
         if old_removed != new_removed {
             if junction {
                 self.tally
@@ -801,14 +860,50 @@ impl<'a> Case<'a> {
                 ));
             }
         }
-        if count(&old["closure_to_merge"]) != count(&new["closure_to_merge"]) {
+        // Today's preview lists the promotions of the closures on the removed
+        // member only (its sweep's others ran unlisted): compare those.
+        let old_promoted = count(&old["closure_to_merge"]);
+        let new_promoted = delete.member_promoted.len();
+        if old_promoted != new_promoted {
+            let rewired: BTreeSet<u64> = old["replacement_closure_updates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|u| u["closure_id"].as_u64())
+                .collect();
+            let legacy_closure_ties = delete
+                .member_ties
+                .iter()
+                .any(|id| !self.new_closure_ids.contains(id));
             if unplaces && !junction {
                 self.tally.note(
                     "delete: a closure to another placed piece is promoted when the delete takes the piece's datum (today's preview missed the sweep)",
                 );
-            } else if junction || tied {
+            } else if new_promoted > old_promoted
+                && delete.member_promoted.iter().all(|id| rewired.contains(id))
+            {
                 self.tally.note(
-                    "delete: at a junction the line leaves it, so a closure left as the only bridge is promoted (today the merge slid to the new end)",
+                    "delete: a closure on the removed member left as the only bridge is promoted where today's preview listed it re-anchored (its execution then promoted the orphan)",
+                );
+            } else if old_promoted > new_promoted && legacy_closure_ties {
+                self.tally.note(
+                    "delete: a legacy aligned closure (now Tie) on the removed member leaves with it like a demoted merge (S13: the two Ties look alike)",
+                );
+            } else if delete.datum_on_station {
+                self.tally.note(
+                    "delete: a promotion on the removed member differs because the junction keeps its datum (declared)",
+                );
+            } else if old_promoted > new_promoted && self.kept_between_placed(line, shot) {
+                self.tally.note(
+                    "delete: a closure on the removed member stays between two placed pieces (a GPS fix the delete promotes places the junction's piece; today promoted it)",
+                );
+            } else if old_promoted >= 2 && new_promoted >= 1 && old_promoted > new_promoted {
+                self.tally.note(
+                    "delete: today also promoted a second closure on the removed member whose ends the first promotion had joined (a merge cycle); it stays a loop closure",
+                );
+            } else if tied {
+                self.tally.note(
+                    "delete: a promotion on the removed member differs over a demoted merge (a Tie does not join pieces)",
                 );
             } else {
                 self.fail(format!(
@@ -817,6 +912,18 @@ impl<'a> Case<'a> {
                 ));
             }
         }
+        if delete.other_promotions > 0 {
+            self.tally.note(
+                "delete: the sweep's promotions away from the removed member are listed (today's preview left them out; its execution ran them)",
+            );
+        }
+    }
+
+    /// Whether the delete keeps a closure between two placed pieces.
+    fn kept_between_placed(&self, line: u32, shot: u32) -> bool {
+        let mut copy = self.p.clone();
+        copy.delete_shot(line, shot)
+            .is_ok_and(|done| !done.report.sweep.kept_between_placed.is_empty())
     }
 
     fn range_previews(&mut self) {
@@ -873,18 +980,6 @@ impl<'a> Case<'a> {
         if old["shift_blocked"] != new["shift_blocked"] {
             // The removed set follows the verdict (the split's interior set
             // when only the split is offered, else the gap-close set).
-            let anchored = Value::String("Both sides are anchored to a zero datum.".to_string());
-            let via_deleted_closure = new["shift_blocked_reasons"]
-                .as_array()
-                .is_some_and(|r| r.contains(&anchored))
-                && old["removed_closures"].as_array().map_or(0, Vec::len)
-                    > new["removed_closures"].as_array().map_or(0, Vec::len);
-            if via_deleted_closure {
-                self.tally.note(
-                    "range delete (M1 finding): \"both sides anchored\" reaches through a closure at a station the gap-close deletes",
-                );
-                return;
-            }
             if junction || tied {
                 self.tally.note(
                     "range delete: shift verdict at a junction / over a demoted merge (the removed set follows it)",
@@ -1374,4 +1469,71 @@ fn wire_equivalence_sweep() {
         eprintln!("  {n:>7}  {class}");
     }
     tally.assert_clean();
+}
+
+/// Run the delete on both models: 0.6.0's (the frozen model's own removal
+/// with its rewire and orphan conversion) and the station graph's. Every
+/// slot either has must sit where 0.6.0 puts it.
+fn assert_delete_moves_what_today_moves(seed: u64, line: u32, pick: impl Fn(usize) -> usize) {
+    let legacy =
+        stalagmight_legacy::open_bytes(&random_case(seed).write(), &OpenOptions::default())
+            .unwrap();
+    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
+    let mut old = legacy.project;
+    let mut new = migrated.project;
+    let shots = &old.lines.iter().find(|l| l.id == line).unwrap().shots;
+    let shot = shots[pick(shots.len())].id;
+    old.remove_shot_with_rewire_reporting(line, shot).unwrap();
+    new.delete_shot(line, shot).unwrap();
+    let today: BTreeMap<StationRef, [f64; 2]> = old
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| {
+            let slot = StationRef::new(s.station_ref.line_id, s.station_ref.station_index);
+            (slot, [s.coordinates.x, s.coordinates.y])
+        })
+        .collect();
+    let slots = new.raw_positions().slots(&new);
+    assert_eq!(slots.len(), today.len(), "seed {seed}: slot count");
+    for slot in slots {
+        let [x, y] = today[&slot.slot];
+        assert!(
+            (slot.x - x).hypot(slot.y - y) <= XY_TOL,
+            "seed {seed}, delete {line}/{shot}: {:?} at ({}, {}), today ({x}, {y})",
+            slot.slot,
+            slot.x,
+            slot.y
+        );
+    }
+}
+
+#[test]
+fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
+    // Seed 5: line 0's station 0 is a junction with the shot-less line 3,
+    // and a 0.6.0 same-line merge on line 0's member there is a `Tie` now.
+    // Today the delete took that merge with the member: line 3 stays where
+    // it was. The junction stays for line 3 (S13).
+    assert_delete_moves_what_today_moves(5, 0, |_| 0);
+    let legacy =
+        stalagmight_legacy::open_bytes(&random_case(5).write(), &OpenOptions::default()).unwrap();
+    let mut p = migrate(&legacy, &ClosureAdjustmentConfig::default())
+        .unwrap()
+        .project;
+    let junction = p.station_at(StationRef::new(0, 0)).unwrap();
+    let shot = p.line(0).unwrap().shots[0].id;
+    let done = p.delete_shot(0, shot).unwrap();
+    assert!(!done.value.station_deleted);
+    assert_eq!(p.station_at(StationRef::new(3, 0)), Some(junction));
+    assert!(done.report.sweep.promoted.is_empty());
+    assert_eq!(done.value.closures_removed.len(), 1, "the member's Tie");
+}
+
+#[test]
+fn a_closure_on_the_member_a_delete_takes_promotes_as_today() {
+    // Seed 23: a closure on line 2's last station (a junction) is the only
+    // bridge once the line leaves it; today the junction's side moved onto
+    // the closure's far end. Seed 215: two closures could promote; today's
+    // delete promoted the one on the removed member first.
+    assert_delete_moves_what_today_moves(23, 2, |n| n - 1);
+    assert_delete_moves_what_today_moves(215, 0, |_| 0);
 }
