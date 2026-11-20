@@ -1,0 +1,1321 @@
+use anyhow::{Context, Result};
+use chrono::{NaiveDate, Utc};
+use rusqlite::OptionalExtension;
+use std::collections::{HashMap, HashSet};
+
+use crate::models::{
+    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, Line, LineData, LineId,
+    LoopClosure, MergeTopology, NorthReference, Project, Shot, ShotKind, StationKey, StationMerge,
+    SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE, MAX_LINE_ID,
+};
+
+use super::station_texts::StationTextTable;
+use super::Database;
+
+impl Database {
+    pub fn load_project(&self) -> Result<Project> {
+        tracing::debug!("Loading project from database");
+
+        // First check if project table has data and log what's there
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .unwrap_or(0);
+        tracing::debug!("Project table row count: {}", count);
+
+        if count == 0 {
+            anyhow::bail!("Project table is empty - file may be corrupted");
+        }
+
+        // Load project metadata - get the first row (don't require id = 1)
+        // Read next_closure_id if the column exists (added for monotonic ID persistence)
+        let has_next_closure_id_col: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        let (name, location, created_at, modified_at, persisted_next_closure_id): (
+            String,
+            Option<String>,
+            String,
+            String,
+            Option<u64>,
+        ) = if has_next_closure_id_col {
+            self.conn.query_row(
+                    "SELECT name, location, created_at, modified_at, next_closure_id FROM project LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, Some(row.get::<_, i64>(4).unwrap_or(1).max(1) as u64))),
+                ).context("Failed to read project metadata")?
+        } else {
+            let (n, l, c, m) = self
+                .conn
+                .query_row(
+                    "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .context("Failed to read project metadata")?;
+            (n, l, c, m, None)
+        };
+
+        // Normalized on the way in, so the value in memory is the one the
+        // next save writes (`stored_times`).
+        let created_at = super::stored_times::parse_stored(&created_at)?;
+        let modified_at = super::stored_times::parse_stored(&modified_at)?;
+
+        // Load lines
+        let mut lines: Vec<Line> = Vec::new();
+        let mut next_line_id = 0u32;
+
+        {
+            let has_quality_column: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='quality'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            // #24: `reverse_parity` is added by the schema migration, but a read-only open skips
+            // that, so tolerate its absence the same way `quality` is tolerated. Both fall back
+            // to a literal in the SELECT rather than a second pair of branches.
+            let has_reverse_parity_column: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            let has_gauge_columns: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='gauge_shot_uuid'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            // #438: same tolerance as `quality`/`reverse_parity` above - a
+            // read-only open skips the migration, so the columns can be absent.
+            let has_azimuth_columns: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='azimuth_north'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            // Every schema has `created_at`, but a file of another tool may
+            // not: absent reads as NULL, and the save writes the fallback.
+            let has_created_at_column: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='created_at'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .is_ok_and(|c| c > 0);
+
+            let quality_expr = if has_quality_column { "quality" } else { "1.0" };
+            let parity_expr = if has_reverse_parity_column {
+                "reverse_parity"
+            } else {
+                "0"
+            };
+            let (gauge_expr, gauge_nb_expr) = if has_gauge_columns {
+                ("gauge_shot_uuid", "gauge_neighbour_uuid")
+            } else {
+                ("NULL", "NULL")
+            };
+            let azimuth_exprs = if has_azimuth_columns {
+                "azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year"
+            } else {
+                "NULL, NULL, NULL, NULL"
+            };
+            let created_at_expr = if has_created_at_column {
+                "created_at"
+            } else {
+                "NULL"
+            };
+            // #557: refuse BEFORE materializing. `ORDER BY id` puts over-bound
+            // rows last, so the per-row check below would allocate the whole
+            // table first - a hostile file with millions of rows makes the
+            // refusal maximally expensive. `MAX(id)` is O(1) off the pk index,
+            // and read as i64 it also gives a line id past even u32 the
+            // same receipt-grade message instead of a bare type error.
+            let max_id: Option<i64> =
+                self.conn
+                    .query_row("SELECT MAX(id) FROM sections", [], |row| row.get(0))?;
+            if let Some(max_id) = max_id {
+                anyhow::ensure!(
+                    max_id <= i64::from(MAX_LINE_ID),
+                    "This file cannot be opened: it contains line id {max_id}, \
+                     but line ids past {MAX_LINE_ID} cannot hold shots. \
+                     The file was written by an incompatible tool or is corrupted."
+                );
+            }
+
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
+                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs}, {created_at_expr} \
+                 FROM sections ORDER BY id"
+            ))?;
+
+            let mut line_rows = Vec::new();
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, i64>(7)? != 0,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<f64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<i32>>(13)?,
+                    // Tolerant: an unusable value is no stored time, not a
+                    // failed open (`stored_line_time`).
+                    stored_line_time(row.get_ref(14)?),
+                ))
+            })?;
+            for row in rows {
+                line_rows.push(row?);
+            }
+
+            // Build the empty lines first so we can address them by
+            // ID when partitioning the bulk shot stream below.
+            let mut line_by_id: HashMap<u32, usize> = HashMap::with_capacity(line_rows.len());
+            // Each line's legacy surveyor/date exactly as stored, to compare
+            // with what this build recorded writing (`shot_credits`).
+            let mut stored_legacy: HashMap<u32, super::shot_credits::LegacyPair> =
+                HashMap::with_capacity(line_rows.len());
+            for line_row in line_rows {
+                let (
+                    id,
+                    name,
+                    surveyor,
+                    date_str,
+                    color,
+                    direction_str,
+                    quality_raw,
+                    reverse_parity,
+                    gauge_shot_uuid,
+                    gauge_neighbour_uuid,
+                    azimuth_north,
+                    azimuth_correction,
+                    azimuth_source,
+                    azimuth_epoch_year,
+                    created_at,
+                ) = line_row;
+                stored_legacy.insert(id, (surveyor.clone(), date_str.clone()));
+                let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+                let direction = direction_str
+                    .and_then(|s| s.parse::<SurveyDirection>().ok())
+                    .unwrap_or_default();
+                let quality = if quality_raw.is_finite() && quality_raw > 0.0 {
+                    quality_raw
+                } else {
+                    1.0
+                };
+
+                let line_data = LineData {
+                    name,
+                    // Carried below as the line's LEGACY credit instead: the
+                    // shots are not loaded yet, so a template here would land
+                    // on none of them.
+                    surveyor: None,
+                    date: None,
+                    color,
+                    direction: Some(direction),
+                    quality,
+                    shots: Vec::new(),
+                };
+
+                // #438: the reference exists only if the file actually recorded a
+                // north token. A NULL there is "nothing recorded" and stays
+                // `None` (inherit the project default), which is the pre-#438
+                // behaviour; `from_parts` re-imposes the type's invariants on
+                // whatever the other three columns hold.
+                let azimuth_reference = azimuth_north.map(|north| {
+                    AzimuthReference::from_parts(
+                        NorthReference::from_token(&north),
+                        azimuth_correction.unwrap_or(0.0),
+                        CorrectionSource::from_token(
+                            azimuth_source.as_deref().unwrap_or("unknown"),
+                            azimuth_epoch_year,
+                        ),
+                    )
+                });
+
+                // #557: refuse the whole open rather than construct a line
+                // whose id cannot encode a shot id. `Line::new` computes
+                // `id * FEATURE_ID_STRIDE` (debug panic, release wrap), the
+                // shot encodes saturate every shot of such a line onto
+                // u32::MAX, and the counter rebuild below would overflow -
+                // #556 bounds what the app can MINT, this bounds what a file
+                // (pre-#556, another tool, or hostile) can smuggle in.
+                anyhow::ensure!(
+                    id <= MAX_LINE_ID,
+                    "This file cannot be opened: it contains line id {id}, \
+                     but line ids past {MAX_LINE_ID} cannot hold shots. \
+                     The file was written by an incompatible tool or is corrupted."
+                );
+                let mut line = Line::new(id, line_data);
+                line.legacy_surveyor = surveyor;
+                line.legacy_date = date;
+                line.reverse_parity = reverse_parity;
+                line.gauge_shot_uuid = gauge_shot_uuid;
+                line.gauge_neighbour_uuid = gauge_neighbour_uuid;
+                line.azimuth_reference = azimuth_reference;
+                line.loaded_created_at = created_at;
+                line_by_id.insert(id, lines.len());
+                // Cannot overflow once ids are bounded above; saturating keeps
+                // the counter rebuild total even if the bound ever moves.
+                next_line_id = next_line_id.max(id.saturating_add(1));
+                lines.push(line);
+            }
+
+            // Load ALL shots in one SELECT and partition by line_id.
+            // The legacy code prepared a per-line statement inside the
+            // loop above, executing 14k+ separate queries on large files;
+            // each query had to parse + plan + execute, so cost was
+            // dominated by SQLite overhead rather than row I/O.  A single
+            // bulk SELECT cuts roughly 350 ms off a 14k-line load and
+            // is friendly to the query planner: it can stream rows
+            // sequentially without re-preparing.
+            {
+                let mut shot_stmt = self.conn.prepare(
+                    r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
+                              pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                              comment, kind, marker_index, temperature, uuid
+                       FROM shots ORDER BY section_id, sequence_order",
+                )?;
+                let shot_rows = shot_stmt.query_map([], |row| {
+                    let line_id: u32 = row.get(0)?;
+                    let seq: i64 = row.get(1)?;
+                    Ok((
+                        line_id,
+                        Shot {
+                            // Saturating, like `models::shot_display_position`:
+                            // the line id comes off disk, and a file naming
+                            // a line id >= u32::MAX / FEATURE_ID_STRIDE
+                            // would panic this encode in a debug build rather
+                            // than load. What the import can create is bounded
+                            // upstream (#427's per-run cut cap); this is the
+                            // read side refusing to trust the file.
+                            id: line_id
+                                .saturating_mul(FEATURE_ID_STRIDE)
+                                .saturating_add(seq as u32),
+                            azimuth_in: row.get(2)?,
+                            azimuth_out: row.get(3)?,
+                            length: row.get(4)?,
+                            depth_in: row.get(5)?,
+                            depth_out: row.get(6)?,
+                            pitch_in: row.get(7)?,
+                            pitch_out: row.get(8)?,
+                            left: row.get(9)?,
+                            right: row.get(10)?,
+                            up: row.get(11)?,
+                            down: row.get(12)?,
+                            comment: row.get(13)?,
+                            // Out-of-u8 values (a corrupt or newer file can hold
+                            // -1 or 256) must fail closed too. `unwrap_or(0)`
+                            // sent them to `Normal` - swimmable - which routed
+                            // straight past `from_u8`'s fail-closed rule, and
+                            // the dialog would then send no edit because it
+                            // assumes the in-memory value is already the safe
+                            // one. Map every failed conversion to a discriminant
+                            // `from_u8` rejects, so it lands on `Reference`.
+                            // Deliberately total: ANY value this build cannot
+                            // read becomes `Reference` rather than an error.
+                            // `INTEGER` here is a type AFFINITY, not a
+                            // constraint - the table is not STRICT, so a
+                            // hand-edited or corrupt row can hold TEXT, REAL or
+                            // a BLOB, and `row.get::<_, i64>` returns
+                            // InvalidColumnType for those. Propagating that
+                            // would make the whole project unopenable over one
+                            // bad cell; out-of-i64 and wrong-type alike now land
+                            // on a discriminant `from_u8` rejects, so the shot
+                            // loads safely and reaches the resolution prompt.
+                            kind: ShotKind::from_u8(
+                                row.get::<_, i64>(14)
+                                    .ok()
+                                    .and_then(|v| u8::try_from(v).ok())
+                                    .unwrap_or(u8::MAX),
+                            ),
+                            marker_index: row.get(15)?,
+                            temperature: row.get(16)?,
+                            // `uuid` column was added in schema v6; pre-v6
+                            // rows return NULL here.  Treat NULL and empty
+                            // string the same - the next save mints a
+                            // fresh UUID and persists it.
+                            uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
+                            credit: None,
+                        },
+                    ))
+                })?;
+
+                let mut sanitized_shots = 0usize;
+                for row in shot_rows {
+                    let (line_id, mut shot) = row?;
+                    // Neutralize geometry corrupt-on-disk at the load boundary: a
+                    // single non-finite (NaN/inf) value would otherwise propagate
+                    // through the offset cascade and break the whole survey. The
+                    // degenerate-but-finite result is localized and visible. (Our own
+                    // save can't write NaN - SQLite coerces it to NULL, which the
+                    // NOT NULL columns reject - so this guards inf, hand-edited DBs,
+                    // and any future nullable geometry column.)
+                    if shot.sanitize_non_finite() {
+                        sanitized_shots += 1;
+                    }
+                    if let Some(&idx) = line_by_id.get(&line_id) {
+                        lines[idx].shots.push(shot);
+                    }
+                    // (rows for unknown lines are silently dropped -
+                    // matches the legacy `WHERE line_id = ?` filter
+                    // which never returned orphan rows in the first place.)
+                }
+                if sanitized_shots > 0 {
+                    tracing::warn!(
+                        sanitized_shots,
+                        purpose = "block corruption at the source",
+                        "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
+                    );
+                }
+
+                // Per-shot survey credit: a shot's own row, keyed by its
+                // line and uuid, else its line's legacy surveyor/date
+                // (`shot_credits`). A uuid repeated inside one line reads
+                // its row once, for its first shot, as the writer wrote it.
+                // A credit table of another shape gives no rows (with a
+                // warning), and every shot falls back (#717); SQLite failing
+                // for a reason of its own (busy, I/O, corrupt) fails the open.
+                let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
+                let recorded =
+                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
+                let mut claimed: HashSet<(u32, &str)> = HashSet::new();
+                for line in lines.iter_mut() {
+                    let line_id = line.id;
+                    // The rows hold only while the legacy pair is the one this
+                    // build wrote beside them. A pair retyped by something else
+                    // (a hand edit, another tool) is then the newer truth.
+                    let rows_hold = recorded.get(&line_id) == stored_legacy.get(&line_id);
+                    // A line with no shots keeps its legacy pair: nothing
+                    // can carry it (`Line::legacy_surveyor`).
+                    if line.shots.is_empty() {
+                        continue;
+                    }
+                    // Computed once per line and SHARED by every shot that
+                    // falls back to it - one allocation, not one per shot.
+                    let fallback = crate::models::SharedCredit::new(line.take_legacy_template());
+                    for shot in &mut line.shots {
+                        let row = shot
+                            .uuid
+                            .as_deref()
+                            .filter(|_| rows_hold)
+                            .and_then(|u| credit_rows.get_key_value(&(line_id, u.to_owned())))
+                            .filter(|((_, u), _)| claimed.insert((line_id, u.as_str())));
+                        match row {
+                            Some((_, credit)) => shot.set_credit(credit.clone()),
+                            None => shot.set_shared_credit(&fallback),
+                        }
+                    }
+                    // A stored text this build would not write the same way
+                    // (longer than a role keeps, a clamped name, another
+                    // spelling) is written back as it is while nobody's
+                    // credit in the line changes (#719 review).
+                    if let Some((Some(raw), _)) = stored_legacy.get(&line_id) {
+                        line.remember_loaded_legacy_surveyor(raw);
+                    }
+                }
+
+                // Advance each line's next_shot_id past its loaded
+                // shots so future appends don't collide with persisted IDs.
+                for line in lines.iter_mut() {
+                    line.next_shot_id = line
+                        .id
+                        .saturating_mul(FEATURE_ID_STRIDE)
+                        .saturating_add(line.shots.len() as u32);
+                }
+            }
+        }
+
+        // Load station merges
+        let mut station_merges: Vec<StationMerge> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT station_a_section, station_a_index, station_b_section, station_b_index, merged_at FROM station_merges",
+            )?;
+            let merge_rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?;
+
+            for merge_row in merge_rows {
+                let (a_sec, a_idx, b_sec, b_idx, merged_at_str) = merge_row?;
+                let merged_at = super::stored_times::parse_stored(&merged_at_str)?;
+                // Persisted positionally; load as transitional Index anchors,
+                // which `reanchor_station_refs` (run on the load path) canonicalizes
+                // to stable shot-UUID anchors once shots are present.
+                station_merges.push(StationMerge {
+                    station_a: StationKey::positional(a_sec, a_idx),
+                    station_b: StationKey::positional(b_sec, b_idx),
+                    merged_at,
+                });
+            }
+        }
+
+        // Load zero datums
+        let mut zero_datums: Vec<ZeroDatum> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT section_id, station_index, latitude, longitude, depth_reference FROM zero_datums",
+            )?;
+            let zd_rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            })?;
+
+            for zd_row in zd_rows {
+                let (line_id, station_index, lat, lon, depth) = zd_row?;
+                zero_datums.push(ZeroDatum {
+                    station_ref: StationKey::positional(line_id, station_index),
+                    gps: GpsCoordinates {
+                        latitude: lat,
+                        longitude: lon,
+                        depth_reference: depth,
+                    },
+                    accuracy_m: None,
+                    entrance: None,
+                });
+            }
+        }
+        // GPS fixes and accuracies, in the saved list order (`datum_extras`).
+        // A table that no longer matches the rows above is ignored.
+        let zero_datums = super::datum_extras::combine(&self.conn, &lines, zero_datums)?;
+
+        // Load line offsets
+        let mut line_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT section_id, offset_x, offset_y FROM section_offsets")?;
+            let offset_rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })?;
+
+            let mut sanitized_offsets = 0usize;
+            for offset_row in offset_rows {
+                let (line_id, mut offset_x, mut offset_y) = offset_row?;
+                // Sanitize non-finite (NaN/inf) line offsets at the load boundary,
+                // mirroring the per-shot sanitize above. line_offsets is the one
+                // geometry field with no finite guard, and resolve_offsets never
+                // adjusts a component ANCHOR's own offset, so a non-finite anchor/
+                // floating offset from a corrupt or hand-edited DB would survive the
+                // load and poison every world coordinate for that component. Coerce
+                // to 0.0 so the subsequent re-solve can re-derive a finite position.
+                if !offset_x.is_finite() || !offset_y.is_finite() {
+                    if !offset_x.is_finite() {
+                        offset_x = 0.0;
+                    }
+                    if !offset_y.is_finite() {
+                        offset_y = 0.0;
+                    }
+                    sanitized_offsets += 1;
+                }
+                line_offsets.insert(line_id, (offset_x, offset_y));
+            }
+            if sanitized_offsets > 0 {
+                tracing::warn!(
+                    sanitized_offsets,
+                    purpose = "block corruption at the source",
+                    "Replaced non-finite (NaN/inf) line offset with 0.0 on load"
+                );
+            }
+        }
+
+        // Load station offsets
+        let station_offsets = self.load_station_offsets()?;
+
+        // Load loop closures
+        let loop_closures = self.load_loop_closures()?;
+
+        // Load imported file hashes
+        let imported_file_hashes = self.load_imported_file_hashes()?;
+
+        // Load imported line hashes
+        let imported_line_hashes = self.load_imported_line_hashes()?;
+
+        // Derive next_closure_id: use persisted value if available, otherwise fall back to max(existing) + 1.
+        // Always ensure it's at least max(existing closures) + 1 for safety.
+        let max_existing = loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        let next_closure_id = match persisted_next_closure_id {
+            Some(persisted) => persisted.max(max_existing + 1),
+            None => max_existing + 1,
+        };
+
+        // Load station comments and names
+        let station_comments = self.load_station_texts(StationTextTable::Comments)?;
+        let station_names = self.load_station_texts(StationTextTable::Names)?;
+        // Station ids and their counter (tolerant: see `station_ids`). A
+        // missing or low counter is raised above the ids on open
+        // (`Project::ensure_station_identities`).
+        let station_ids = super::station_ids::load_station_ids(&self.conn)?;
+        let next_station_id = super::station_ids::load_next_station_id(&self.conn).unwrap_or(0);
+
+        // Per-project validation thresholds (#57). The DB layer has no access to
+        // the global config, so legacy projects (no row) fall back to the
+        // hardcoded default here; the AppState open paths re-check for absence
+        // and seed from the user's global config instead (see project_io.rs).
+        let validation = self.load_project_validation()?.unwrap_or_default();
+
+        // Entrance elevation (#431). Unlike `validation`, a missing row has no
+        // legacy-seeding fallback - `None` genuinely means "unknown".
+        let surface_elevation = self.load_project_surface_elevation()?;
+        let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        // Only shots this file holds: an entry for any other uuid is stale (a
+        // file edited by hand, or by a build that did not prune it), and
+        // would otherwise wait in the set for a shot that later takes that
+        // uuid, an Add of a copy of the same survey for one.
+        let mut counter_parity_shots = self.load_project_counter_parity_shots();
+        if !counter_parity_shots.is_empty() {
+            let held: HashSet<&str> = lines
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+                .collect();
+            counter_parity_shots.retain(|uuid| held.contains(uuid.as_str()));
+        }
+
+        // Pre-populate the line_id → index lookup so callers get
+        // O(1) get_line without needing rebuild_line_index().
+        let mut line_index_cache = HashMap::with_capacity(lines.len());
+        for (i, s) in lines.iter().enumerate() {
+            line_index_cache.insert(s.id, i);
+        }
+        // (The merge adjacency needs no priming: `MergeTopology` builds it the
+        // first time `get_merged_line_ids` asks.)
+        // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
+        // is O(1) right after load (mirrors the two caches above).
+        let mut shot_uuid_index = HashMap::new();
+        for s in &lines {
+            for (i, shot) in s.shots.iter().enumerate() {
+                if let Some(u) = &shot.uuid {
+                    // First occurrence wins, matching `add_line` /
+                    // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
+                    // plain `.insert` would be last-write-wins and silently break
+                    // that invariant if a duplicate UUID ever slipped through.
+                    shot_uuid_index.entry((s.id, u.clone())).or_insert(i as u32);
+                }
+            }
+        }
+        let line_count = lines.len();
+        let mut project = Project {
+            name,
+            location,
+            created_at,
+            modified_at,
+            lines,
+            station_merges: MergeTopology::from(station_merges),
+            zero_datums,
+            loop_closures,
+            line_offsets,
+            station_offsets,
+            station_comments,
+            station_names,
+            station_ids,
+            next_station_id,
+            file_path: None,
+            next_line_id,
+            imported_file_hashes,
+            imported_line_hashes,
+            next_closure_id,
+            validation,
+            surface_elevation,
+            default_azimuth_reference,
+            counter_parity_shots,
+            held_gauges: self.load_project_held_gauges(&shot_uuid_index, line_count),
+            sections: Vec::new(),
+            next_section_id: 0,
+            cascade_deferred: false,
+            line_index_cache,
+            shot_uuid_index,
+            // Nothing loaded from disk is a proven solver fixpoint; the load path
+            // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
+            realign_fixpoint: None,
+        };
+        // Only entries that still name a station: a dangling one (a file
+        // edited by hand) anchors nothing.
+        project.prune_held_gauges();
+        // Sections (#327) and the lines' memberships, normalized.
+        super::cave_sections::load_cave_sections(&self.conn, &mut project)?;
+        Ok(project)
+    }
+
+    /// Load loop closures from database
+    fn load_loop_closures(&self) -> Result<Vec<LoopClosure>> {
+        let mut closures = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(closures);
+        }
+
+        // Check which optional columns exist
+        let has_closure_id: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        let has_strategy: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        let has_is_aligned: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        // Build SELECT dynamically based on available columns
+        let mut extra_cols = String::new();
+        if has_closure_id {
+            extra_cols.push_str(", closure_id");
+        }
+        if has_strategy {
+            extra_cols.push_str(", strategy");
+        }
+        if has_is_aligned {
+            extra_cols.push_str(", is_aligned");
+        }
+        let query = format!(
+            "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
+             path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure{extra_cols} \
+             FROM loop_closures"
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            let mut col = 9usize; // next column index after the 9 base columns
+            let id = if has_closure_id {
+                let v = row.get::<_, i64>(col).unwrap_or(0).max(0) as u64;
+                col += 1;
+                v
+            } else {
+                0
+            };
+            let strategy = if has_strategy {
+                let s: String = row.get::<_, String>(col).unwrap_or_default();
+                col += 1;
+                ClosureStrategy::from_str_lossy(&s)
+            } else {
+                ClosureStrategy::default()
+            };
+            let is_aligned = if has_is_aligned {
+                let v = row.get::<_, i64>(col).unwrap_or(0);
+                v != 0
+            } else {
+                false
+            };
+            Ok(LoopClosure {
+                id,
+                station_a: StationKey::positional(row.get(0)?, row.get(1)?),
+                station_b: StationKey::positional(row.get(2)?, row.get(3)?),
+                path_length: row.get(4)?,
+                misclosure_distance: row.get(5)?,
+                error_percentage: row.get(6)?,
+                horizontal_misclosure: row.get(7)?,
+                vertical_misclosure: row.get(8)?,
+                strategy,
+                is_aligned,
+            })
+        })?;
+
+        for row in rows {
+            closures.push(row?);
+        }
+
+        Ok(closures)
+    }
+
+    /// Load station offsets from database
+    fn load_station_offsets(&self) -> Result<HashMap<StationKey, (f64, f64, f64)>> {
+        let mut offsets = HashMap::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(offsets);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT section_id, station_index, offset_x, offset_y, offset_z FROM station_offsets",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (line_id, station_index, offset_x, offset_y, offset_z) = row?;
+            offsets.insert(
+                StationKey::positional(line_id, station_index),
+                (offset_x, offset_y, offset_z),
+            );
+        }
+
+        Ok(offsets)
+    }
+
+    /// Load one positional `(line_id, station_index, text)` table into a
+    /// `StationKey` map. The keys are transitional positional ones; the load
+    /// re-anchor pass canonicalizes them.
+    ///
+    /// A missing table reads as empty. That is not only for files older than
+    /// the table: `station_names` arrived without a schema bump (readers outside
+    /// the app pin v18), so a v18 file takes `ensure_schema_version`'s fast path
+    /// and `migrate_schema` never creates it on open, and read-only opens never
+    /// migrate at all.
+    fn load_station_texts(&self, table: StationTextTable) -> Result<HashMap<StationKey, String>> {
+        let mut texts = HashMap::new();
+
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table.name()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(texts);
+        }
+
+        let mut stmt = self.conn.prepare(table.select_sql())?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (line_id, station_index, text) = row?;
+            texts.insert(StationKey::positional(line_id, station_index), text);
+        }
+
+        Ok(texts)
+    }
+
+    /// Load the SpeleoDB hand-off link from the single-row `speleo_link` table
+    /// (schema v9, #189). Returns `None` for pre-v9 projects (table absent) or
+    /// when no row is present.
+    ///
+    /// Deliberately `pub`: it is called
+    /// cross-module from `core/state/speleodb.rs` (stamp-on-pull readback) and
+    /// the #190/#191 tests. `base_commit_sha` is read as `Option<String>` so an
+    /// on-disk NULL stays `None` (never coerced to `""`).
+    pub fn load_speleo_link(&self) -> Result<Option<crate::models::SpeleoLink>> {
+        // The error is PROPAGATED, not swallowed. `count(*)` over `sqlite_master`
+        // returns a row for any readable database - including one that simply has no
+        // `speleo_link` table (count 0, handled below) - so a failure here means the
+        // FILE could not be read at all: not a database, a hot journal a read-only
+        // connection cannot roll back (`SQLITE_READONLY_ROLLBACK`), a transient
+        // `SQLITE_BUSY`. `unwrap_or(false)` rendered all of those as "no link row",
+        // i.e. indistinguishable from a perfectly readable unmanaged `.stalx`, which
+        // is what let the un-pushed-edits guard read an unreadable cached copy as
+        // clean and pull the server copy over recoverable work. Callers that only
+        // want "is this remote?" already treat `Err` as no (`matches!(.., Ok(Some(_)))`
+        // / `.ok().flatten()`), so nothing else changes shape.
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+
+        if !table_exists {
+            return Ok(None);
+        }
+
+        // The table can be NARROWER than today's schema, and this reader has to
+        // cope: `open_for_metadata` runs NO migration (it is a read-only connection
+        // opened for a handful of SELECTs), so a `.stalx` last written by a build at
+        // schema v9/v10 still has the v9/v10 `speleo_link` shape while the crate is
+        // at v13. Selecting `last_edit_at` (v10) / `last_verify_at` (v11)
+        // unconditionally failed those files with `no such column`, and that error is
+        // PROPAGATED (see above) - so a perfectly readable legacy cache copy was
+        // reported as an unreadable FILE. That wedged it permanently: the guard
+        // refused every pull / adopt / revision-restore for the project with a
+        // factually wrong "has local edits that were never pushed", and the cache
+        // scan reported "no local copy" for a project that has one.
+        //
+        // Probe the actual columns and substitute a literal NULL for the ones this
+        // file predates - the same value a migrated-but-never-stamped row carries, so
+        // the `Option<String>` reads below are unchanged. A genuinely unreadable FILE
+        // still fails here (the pragma cannot be run either) and still propagates,
+        // which is the fail-closed behaviour the guard depends on.
+        let mut columns = self
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('speleo_link')")?;
+        let columns: HashSet<String> = columns
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        // Named as expressions rather than as a dynamic column list so the SELECT
+        // keeps a fixed arity and the indices below stay literal.
+        let last_edit_at = if columns.contains("last_edit_at") {
+            "last_edit_at"
+        } else {
+            "NULL"
+        };
+        let last_verify_at = if columns.contains("last_verify_at") {
+            "last_verify_at"
+        } else {
+            "NULL"
+        };
+        let undo_mode = if columns.contains("undo_mode") {
+            "undo_mode"
+        } else {
+            "NULL"
+        };
+
+        let row = self.conn.query_row(
+            &format!(
+                "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, {last_edit_at}, {last_verify_at}, {undo_mode}
+                 FROM speleo_link WHERE id = 1"
+            ),
+            [],
+            |row| {
+                Ok(crate::models::SpeleoLink {
+                    endpoint: row.get::<_, String>(0)?,
+                    project_id: row.get::<_, String>(1)?,
+                    project_name: row.get::<_, String>(2)?,
+                    base_commit_sha: row.get::<_, Option<String>>(3)?,
+                    has_unpushed_edits: row.get::<_, i64>(4)? != 0,
+                    last_edit_at: row.get::<_, Option<String>>(5)?,
+                    last_verify_at: row.get::<_, Option<String>>(6)?,
+                    // [#303] An unrecognized string reads as `UndoMode::Unknown`, which
+                    // resolves to the default rather than failing the load - the same
+                    // tolerance the serde sentinel gives a hand-edited config.
+                    undo_mode: row
+                        .get::<_, Option<String>>(7)?
+                        .as_deref()
+                        .map(crate::models::UndoMode::from_db_str),
+                })
+            },
+        );
+
+        match row {
+            Ok(link) => Ok(Some(link)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Load imported file hashes from database
+    fn load_imported_file_hashes(&self) -> Result<Vec<String>> {
+        let mut hashes = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_file_hashes'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(hashes);
+        }
+
+        let mut stmt = self.conn.prepare("SELECT hash FROM imported_file_hashes")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        for row in rows {
+            hashes.push(row?);
+        }
+
+        Ok(hashes)
+    }
+
+    /// Load imported line hashes from database
+    fn load_imported_line_hashes(&self) -> Result<Vec<String>> {
+        let mut hashes = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_section_hashes'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(hashes);
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT hash FROM imported_section_hashes")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        for row in rows {
+            hashes.push(row?);
+        }
+
+        Ok(hashes)
+    }
+
+    /// Load the per-project validation config (#57). Returns `None` for legacy
+    /// projects that predate the feature - either no stored `validation` row, or
+    /// a project_settings table that doesn't exist at all (open_existing() skips
+    /// migrations and pre-#57 .stalx files predate the table). `None` lets the
+    /// caller seed from the live global config (the "defaults for new projects")
+    /// instead of the hardcoded ValidationConfig::default(); a present-but-
+    /// unparseable row is treated as legacy too (`None`).
+    /// Whether the v12->v13 migration (#27) left a one-shot chain
+    /// classification pending. The migration seeds every legacy `is_reference`
+    /// row as Jump, which is only a guess; the real verdict needs the project
+    /// graph, so the flag defers it to the next load.
+    pub fn is_kind_classification_pending(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'pending_kind_classification'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .is_some_and(|v| v == "1")
+    }
+
+    /// Shots whose stored `kind` this build does not recognise (#27).
+    ///
+    /// There is no `CHECK` constraint on the column, so a corrupt byte, a manual
+    /// edit, or a file written by a newer build can hold anything. `from_u8`
+    /// fails those closed to `Reference` so they cannot invent a swimmable leg,
+    /// but silently substituting a kind would leave the user with a leg missing
+    /// from gas and penetration and no idea why - so the load path collects them
+    /// here and asks.
+    ///
+    /// Detected with a standalone query rather than during row decode: the loader
+    /// builds `Shot`s through `from_u8`, which has already discarded the raw
+    /// value by then, and threading a diagnostic out of `load_project` would
+    /// change a signature every caller shares.
+    ///
+    /// `shot_id` is the in-memory id the frontend addresses shots by
+    /// (`line_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
+        // `kind` was added in v13; an older file legitimately has no such column.
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(Vec::new());
+        }
+        // `quote(...)`, not a raw read or a CAST: the column can legally hold any
+        // storage class (see the loader's note), and reading a TEXT/BLOB cell as
+        // i64 would error out the whole diagnostic - so the case most in need of
+        // the prompt would be the one that never reached it. `CAST(blob AS
+        // TEXT)` is no good either: it can yield invalid UTF-8. `quote` is total
+        // and renders every class legibly (7, 'abc', X'DEADBEEF'), which is
+        // exactly what the dialog wants to show.
+        let mut stmt = self.conn.prepare(
+            "SELECT s.section_id, s.sequence_order, quote(s.kind), sec.name
+             FROM shots s
+             LEFT JOIN sections sec ON sec.id = s.section_id
+             WHERE s.kind NOT IN (0, 1, 2)
+             ORDER BY s.section_id, s.sequence_order",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let line_id: LineId = row.get(0)?;
+            let sequence_order: u32 = row.get(1)?;
+            Ok(UnrecognisedShotKind {
+                line_id,
+                // Saturating like the loader's shot encode: this diagnostic
+                // runs its own query, so a shots row can name a line id no
+                // lines row (and no #557 open-refusal) ever vetted.
+                shot_id: line_id
+                    .saturating_mul(FEATURE_ID_STRIDE)
+                    .saturating_add(sequence_order),
+                shot_number: sequence_order.saturating_add(1),
+                line_name: row.get(3)?,
+                raw_value: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Rewrite every unreadable `kind` to `Reference` on disk (#27).
+    ///
+    /// The loader already substitutes `Reference` in memory, so without this the
+    /// two disagree: the app behaves correctly for the session, but the invalid
+    /// discriminant survives, the project is never dirty (nothing was edited),
+    /// and the same prompt reappears on every single open - while the dialog
+    /// tells the user their choice is saved with the project.
+    ///
+    /// Writing the fail-closed value is not a decision taken from the user: it
+    /// is the value already in force. Choosing anything else is still an
+    /// ordinary undoable `SetShotKind` on top.
+    pub fn repair_unrecognised_shot_kinds(&self) -> Result<usize> {
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(0);
+        }
+        // 2 == ShotKind::Reference, pinned like the migration's literals.
+        let repaired = self
+            .conn
+            .execute("UPDATE shots SET kind = 2 WHERE kind NOT IN (0, 1, 2)", [])?;
+        Ok(repaired)
+    }
+
+    pub fn load_project_validation(
+        &self,
+    ) -> Result<Option<crate::models::config::ValidationConfig>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'validation'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    /// Load the project-level entrance elevation (#431), same key/value table
+    /// as `validation`. A missing key - either no stored row, or a
+    /// `project_settings` table that doesn't exist at all (a project written
+    /// before this feature) - reads as `None`, which is the correct "unknown"
+    /// value for those files; no migration needed.
+    pub fn load_project_surface_elevation(&self) -> Result<Option<f64>> {
+        let text: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'surface_elevation'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(text.and_then(|s| {
+            // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
+            // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
+            // carry one, and a non-finite value would defeat the no-clobber
+            // comparison on import (every NaN compare is false) and land
+            // verbatim in a TML export. Same idiom as
+            // `parsers::tml::firstStartAbsoluteElevation`.
+            let parsed = s.parse::<f64>().ok().filter(|v: &f64| v.is_finite());
+            if parsed.is_none() {
+                tracing::warn!(
+                    raw = %s,
+                    "stored surface_elevation is present but unparseable or non-finite; reading as unknown"
+                );
+            }
+            parsed
+        }))
+    }
+
+    /// Load the stations a split, combine or delete-and-split held as their
+    /// component's least-squares gauge (`Project::held_gauges`), kept in
+    /// `project_settings` under `held_gauges` (no schema bump; readers that do
+    /// not know the key fall back to the lowest-id rule). A missing key reads
+    /// as none; an unparseable value too, with a warning: the gauge then falls
+    /// back to the lowest-id rule, which moves the adjusted view, never the
+    /// survey.
+    ///
+    /// The file is untrusted, so the work is bounded before anything else
+    /// reads the list: entries whose line does not hold their shot (one
+    /// probe of `shot_uuid_index`, the index the load just built) and
+    /// duplicates are dropped, and what is left is cut to `line_count`
+    /// entries (the edits keep at most one per component). The load's heal
+    /// then keeps one per component (`Project::normalize_held_gauges`).
+    pub fn load_project_held_gauges(
+        &self,
+        shot_uuid_index: &HashMap<(u32, String), u32>,
+        line_count: usize,
+    ) -> Vec<crate::models::HeldGauge> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'held_gauges'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let parsed: Vec<crate::models::HeldGauge> = json
+            .map(|s| {
+                crate::models::disk_names::from_disk_str(&s).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "stored held_gauges is present but unparseable; reading as none"
+                    );
+                    Vec::new()
+                })
+            })
+            .unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut held: Vec<crate::models::HeldGauge> = parsed
+            .into_iter()
+            .filter(|g| shot_uuid_index.contains_key(&(g.line_id, g.shot.clone())))
+            .filter(|g| seen.insert(g.clone()))
+            .collect();
+        if held.len() > line_count {
+            tracing::warn!(
+                stored = held.len(),
+                line_count,
+                "stored held_gauges has more entries than lines; keeping the first"
+            );
+            held.truncate(line_count);
+        }
+        held
+    }
+
+    /// Load the shots whose record orientation runs against their line's
+    /// parity (`Project::counter_parity_shots`), kept in `project_settings`
+    /// under `counter_parity_shots` like the other project-level values (no
+    /// schema bump; readers that do not know the key skip it). A missing key
+    /// reads as none; an unparseable value too, with a warning: the set only
+    /// refines single-neighbour dive-plan pins, so a lost entry costs a pin
+    /// that may need re-placing, never the survey.
+    pub fn load_project_counter_parity_shots(&self) -> std::collections::BTreeSet<String> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'counter_parity_shots'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        json.map(|s| {
+            serde_json::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "stored counter_parity_shots is present but unparseable; reading as none"
+                );
+                std::collections::BTreeSet::new()
+            })
+        })
+        .unwrap_or_default()
+    }
+
+    /// Load the project-level default north reference (#438). A missing key -
+    /// no row, or no `project_settings` table at all - reads as `None`, which
+    /// resolves to a zero correction: exactly what every pre-#438 file means.
+    /// A row that does not parse is treated the same way and warned about,
+    /// rather than defaulting to some other rotation.
+    pub fn load_project_default_azimuth_reference(&self) -> Result<Option<AzimuthReference>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'default_azimuth_reference'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(json.and_then(|s| {
+            let parsed = serde_json::from_str::<AzimuthReference>(&s).ok().map(|r| {
+                // Re-impose the type's invariants on a hand-edited row.
+                AzimuthReference::from_parts(r.north, r.correction, r.source)
+            });
+            if parsed.is_none() {
+                tracing::warn!(
+                    raw = %s,
+                    "stored default_azimuth_reference is present but unparseable; reading as none recorded"
+                );
+            }
+            parsed
+        }))
+    }
+}
+
+/// A line's stored `sections.created_at`, or `None` when it is not text, not
+/// RFC 3339, or not a time every reader parses (`stored_times`): the save
+/// then writes the fallback (`Line::loaded_created_at`).
+fn stored_line_time(value: rusqlite::types::ValueRef<'_>) -> Option<chrono::DateTime<Utc>> {
+    let at = chrono::DateTime::parse_from_rfc3339(value.as_str().ok()?)
+        .ok()?
+        .with_timezone(&Utc);
+    (super::stored_times::normalized(at) == at).then_some(at)
+}

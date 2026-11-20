@@ -15,7 +15,7 @@ Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 ## Formatting: rustfmt scope and adoption
 
 `cargo fmt` is the formatter for the **`src-tauri` workspace** (the
-`stalagmight` app package plus the eight member crates under
+`stalagmight` app package plus the member crates under
 `src-tauri/crates/`), enforced in CI: the `check` job runs
 `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and then the same
 check in a loop over `src-tauri/crates/*/Cargo.toml`, failing on any drift.
@@ -91,6 +91,21 @@ exemptions don't go stale. When you add a test that uses a new denied lint
 > Do **not** introduce `clippy.toml` `allow-*-in-tests` - it conflicts with the
 > ~90 existing test-module `#[expect]` attributes (it suppresses the lint,
 > leaving them unfulfilled). Follow the existing idiom.
+
+## The frozen legacy crate
+
+`src-tauri/crates/legacy` (`stalagmight-legacy`) is a frozen copy of the 0.6.0
+model and SQLite reader, kept so old `.stalx` files open exactly as 0.6.0 opened
+them (docs/plans/2026-11-20_station-graph-model.md, section 7.1). It is a
+workspace member, so fmt, clippy (every deny-level lint) and the file-size
+ratchet gate it like any other crate. Its only exception: the two frozen modules
+(`models`, `persistence`) carry
+`#[expect(clippy::pedantic, clippy::style, clippy::complexity)]` on their `mod`
+declarations in `lib.rs`, because the copy keeps the warnings the live crates
+have and is never edited to satisfy a lint. The crate's own API and tests get
+no such exemption. Unlike `vendor/compass_data` it is not excluded from
+anything: the copied files are all under the ratchet's warn line once their
+tests are stripped, and a frozen file cannot grow.
 
 ## Extending the policy: measure, don't vibe
 
