@@ -1361,3 +1361,644 @@ fn a_read_only_refusal_names_the_command_without_positional_ids() {
         format!("Command 'Set comment on station {name} / 1' is not allowed in batch context")
     );
 }
+
+// ===========================================================================
+// Save a Copy: an explicit destination on a LINKED project writes a detached,
+// unlinked copy and leaves the session on the managed file.
+// ===========================================================================
+
+#[test]
+fn save_as_on_a_linked_project_writes_an_unlinked_copy_and_stays_put() {
+    let (state, line, _, temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+    let copy_path = temp.path().join("copy.stalx");
+
+    let result = state.save_project(Some(copy_path.clone()));
+
+    assert!(result.success, "copy save: {:?}", result.error);
+    assert_eq!(
+        result.unlinked_copy_path.as_deref(),
+        Some(copy_path.display().to_string().as_str()),
+        "the copy is reported through unlinked_copy_path"
+    );
+    assert!(
+        result.saved_path.is_none(),
+        "saved_path stays None: the frontend re-points file_path on it"
+    );
+    assert_eq!(state.open_project_path().unwrap(), open_path);
+    assert!(state.speleodb_open_link().is_ok(), "the managed file keeps its link");
+    let copy = decoded(&copy_path);
+    assert!(copy.extras.speleodb.is_none(), "the copy carries no link");
+    assert!(
+        copy.extras.local.speleodb.is_empty(),
+        "nor the link's sync state"
+    );
+    assert_eq!(copy.project.lines().len(), 1, "the survey is in the copy");
+    assert_eq!(copy.project.line(line).unwrap().shots.len(), 2);
+}
+
+/// 0.6.0 refused an explicit destination that IS the managed file (writing
+/// the unlinked copy there would strip its link in place). On v2 that
+/// destination is a normal save (plan deviation C6): the link stays.
+#[test]
+fn save_as_onto_the_managed_file_itself_is_a_normal_save_that_keeps_the_link() {
+    let (state, _, _, _temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+
+    let result = state.save_project(Some(open_path.clone()));
+
+    assert!(result.success, "{:?}", result.error);
+    assert!(result.unlinked_copy_path.is_none(), "not a copy save");
+    let on_disk = super::synthetic_stalx_tests::link_on_disk(&open_path);
+    assert_eq!(
+        on_disk.map(|l| l.project_id),
+        Some(REMOTE_ID.to_string()),
+        "the managed file keeps its link"
+    );
+    assert_eq!(state.open_project_path().unwrap(), open_path);
+}
+
+/// Pins the upload's pre-push flush (`save_project(None)`): an implicit save
+/// is never a copy save; it keeps the link and the dirty bit.
+#[test]
+fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() {
+    let (state, line, first, _temp) = remote_fixture_editable();
+    run(&state, length_edit(line, first, 9.0));
+    assert!(dirty_bit(&state));
+
+    let result = state.save_project(None);
+
+    assert!(result.success, "{:?}", result.error);
+    assert!(result.saved_path.is_some(), "an implicit save reports saved_path");
+    assert!(result.unlinked_copy_path.is_none());
+    assert!(state.speleodb_open_link().is_ok(), "the link survived the save");
+    assert!(
+        dirty_bit(&state),
+        "a local save never clears the dirty bit, only a push does"
+    );
+    let path = state.open_project_path().unwrap();
+    assert!(
+        super::synthetic_stalx_tests::link_on_disk(&path)
+            .unwrap()
+            .has_unpushed_edits
+    );
+}
+
+/// The Save As contract of a plain local project: it relocates the session.
+#[test]
+fn save_as_on_an_unlinked_project_still_relocates_the_session() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = local_state();
+    let dest = temp.path().join("relocated.stalx");
+
+    let result = state.save_project(Some(dest.clone()));
+
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        result.saved_path.as_deref(),
+        Some(dest.display().to_string().as_str()),
+        "an unlinked Save As reports saved_path"
+    );
+    assert!(result.unlinked_copy_path.is_none());
+    assert_eq!(state.open_project_path().unwrap(), dest);
+}
+
+/// The detach flow reopens the copy and must not lose the edit trail.
+#[test]
+fn the_copy_carries_the_undo_history() {
+    let (state, line, first, temp) = remote_fixture_editable();
+    run(&state, length_edit(line, first, 9.0));
+    let copy_path = temp.path().join("copy.stalx");
+    let result = state.save_project(Some(copy_path.clone()));
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(decoded(&copy_path).extras.history.undo.len(), 1);
+
+    let copy = AppState::new().unwrap();
+    assert!(copy.open_project(copy_path).success);
+    assert_eq!(copy.get_undo_stack().len(), 1);
+    assert!(copy.undo().success, "the copy's edit undoes");
+    assert_eq!(uuid_lengths(&copy, line)[0].1, 2.0);
+}
+
+// ===========================================================================
+// What is left of "wedge healing" (#413 Q8): no entry can be unappliable on
+// the changeset engine, so the wedges are gone; the redo-branch rules stay.
+// ===========================================================================
+
+/// A command that changes nothing records nothing and keeps the redo branch,
+/// and the redo still lands exactly (the state it replays onto is the one it
+/// was recorded on). 0.6.0 cleared the branch here, because its epilogue
+/// reconciled derived state without an entry; nothing derived is stored now
+/// (plan C0 pipeline rule: an empty changeset is a no-op).
+#[test]
+fn a_command_that_changes_nothing_keeps_the_redo_branch_and_its_redo_is_exact() {
+    let state = AppState::new().unwrap();
+    run(
+        &state,
+        Command::CreateProject {
+            name: "Redo Keep".to_string(),
+            location: None,
+        },
+    );
+    let mut ids = Vec::new();
+    for name in ["A", "B", "C"] {
+        let created = run(
+            &state,
+            Command::CreateLine {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#4ecdc4".to_string(),
+                direction: None,
+                shots: vec![shot(0.0, 5.0)],
+                cave_section_id: None,
+            },
+        );
+        ids.push(created.line_id.unwrap());
+    }
+    let all = snapshot(&state);
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    let depth = state.get_undo_stack().len();
+
+    // A:0 is on no junction: Unmerge is a no-op.
+    run(
+        &state,
+        Command::UnmergeStations {
+            station_ref: StationRef::new(ids[0], 0),
+        },
+    );
+    assert_eq!(state.get_undo_stack().len(), depth, "no entry");
+    assert!(state.can_redo(), "the redo branch is kept");
+    assert!(state.redo().success);
+    assert!(state.redo().success);
+    assert_same(&snapshot(&state), &all, "the kept branch redoes exactly");
+}
+
+/// #24: a reverse of a shot-less line is a provable no-op. It keeps the redo
+/// branch, and on a linked project in an edit session it stamps no phantom
+/// edit (`has_unpushed_edits` would proliferate it to SpeleoDB).
+#[test]
+fn a_shotless_reverse_keeps_the_redo_branch_and_stamps_no_remote_edit() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("remote.stalx");
+    let mut p = Project::new("Remote Cave", None);
+    let waypoint = free_line(&mut p, "Waypoint", [0.0, 0.0], Vec::new());
+    let real = free_line(&mut p, "Real", [5.0, 0.0], vec![shot(0.0, 5.0)]);
+    write_v2_project(&path, &p, Some(&remote_link()));
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+    state.set_edit_enabled(true);
+    run(&state, length_edit(real, shot_ids(&state, real)[0], 6.0));
+    assert!(state.undo().success);
+    state
+        .with_file(|file| {
+            let mut link = file.speleo_link().unwrap();
+            link.has_unpushed_edits = false;
+            file.set_speleo_link(Some(&link));
+        });
+    assert!(!dirty_bit(&state), "setup: clean");
+    let before = snapshot(&state);
+
+    run(
+        &state,
+        Command::ReverseLine {
+            line_id: waypoint,
+            swap_left_right: false,
+        },
+    );
+
+    assert!(state.can_redo(), "a provable no-op leaves the redo branch alone");
+    assert!(!dirty_bit(&state), "and stamps no edit for the push");
+    assert_same(&snapshot(&state), &before, "and changes nothing");
+}
+
+// ===========================================================================
+// `AppState::update_config` normalization (#357 item 1)
+// ===========================================================================
+
+#[test]
+fn test_update_config_repairs_a_degenerate_whole_config_payload() {
+    // A whole-`Config` payload with junk in unrelated lines is repaired on the
+    // way in, as the load path repairs a hand-edited config.toml, not
+    // persisted as is for the next launch to fix.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let mut payload = state.get_config();
+        payload.panels.sections_panel_width = 5; // out of the 150..400 bound
+        payload.placement_suggestion.azimuth_sigma = f64::NAN;
+        payload.general.locale = "   ".to_string(); // blank after trim
+
+        state.update_config(payload).expect("settings saved");
+
+        let after = state.get_config();
+        assert_eq!(after.panels.sections_panel_width, 150);
+        assert_eq!(
+            after.placement_suggestion.azimuth_sigma,
+            crate::config::default_ps_azimuth_sigma()
+        );
+        assert_eq!(after.general.locale, "system");
+    });
+}
+
+#[test]
+fn test_update_config_leaves_an_explicitly_cleared_shortcut_empty() {
+    // `normalize_shortcut_field` reads an EMPTY binding list as "missing from
+    // the file" and re-seeds the stock binding: right on load, wrong on write
+    // (the Settings UI sends an empty list when the user clears the last
+    // binding of an action). `update_config` keeps a deliberate clear.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let mut payload = state.get_config();
+        assert!(!payload.shortcuts.select.is_empty(), "setup: a stock binding");
+        payload.shortcuts.select = Vec::new();
+
+        state.update_config(payload).expect("settings saved");
+
+        assert!(state.get_config().shortcuts.select.is_empty());
+    });
+
+    // The load path's plain `normalize()` does re-seed an empty binding.
+    let mut loaded = crate::config::Config::default();
+    loaded.shortcuts.select = Vec::new();
+    loaded.normalize();
+    assert_eq!(
+        loaded.shortcuts.select,
+        crate::config::Config::default().shortcuts.select
+    );
+}
+
+// ===========================================================================
+// #413 finding 26: a shot edit never re-georeferences the survey
+// ===========================================================================
+
+/// Every slot's raw position, through the app.
+fn slot_xy(state: &AppState) -> std::collections::BTreeMap<StationRef, [f64; 2]> {
+    raw_xy(&project(state))
+}
+
+/// 0.6.0's reduction: removing the FIRST datum re-defined the frame without
+/// moving anything, and the next geometry edit in the promoted group
+/// translated the whole group onto the new frame, unundoably. Positions are
+/// derived now (the frame change is measured once, plan 4.3): the removal
+/// puts the promoted datum on the origin, the shot edit moves only what is
+/// downstream of the edited shot, and the undo restores every slot.
+#[test]
+fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_removed() {
+    let state = AppState::new().unwrap();
+    run(
+        &state,
+        Command::CreateProject {
+            name: "datum frame".to_string(),
+            location: None,
+        },
+    );
+    let line = |name: &str| {
+        run(
+            &state,
+            Command::CreateLine {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: None,
+                shots: vec![shot(30.0, 5.0), shot(60.0, 5.0)],
+                cave_section_id: None,
+            },
+        )
+        .line_id
+        .unwrap()
+    };
+    let (anchor, a, b) = (line("anchor"), line("a"), line("b"));
+    run(
+        &state,
+        Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(b, 0),
+        },
+    );
+    let datum = |at: StationRef, lat: f64, lon: f64| {
+        run(
+            &state,
+            Command::SetZeroDatum {
+                station_ref: at,
+                coordinates: GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
+            },
+        )
+    };
+    datum(StationRef::new(anchor, 0), 20.30, -87.45);
+    datum(StationRef::new(a, 0), 20.20, -87.24);
+    let placed = slot_xy(&state)[&slot(a, 0)];
+    assert!(
+        placed[0].abs() > 1000.0,
+        "the second datum places the group kilometres out: {placed:?}"
+    );
+
+    run(
+        &state,
+        Command::RemoveZeroDatum {
+            station_ref: StationRef::new(anchor, 0),
+        },
+    );
+    let promoted = slot_xy(&state);
+    assert_near(
+        promoted[&slot(a, 0)],
+        [0.0, 0.0],
+        1e-6,
+        "the promoted datum's station sits on the new origin",
+    );
+    let before = snapshot(&state);
+
+    let second = shot_ids(&state, a)[1];
+    run(&state, length_edit(a, second, 6.0));
+
+    let edited = slot_xy(&state);
+    for at in [slot(a, 0), slot(a, 1), slot(anchor, 0), slot(anchor, 1), slot(anchor, 2)] {
+        assert_near(
+            edited[&at],
+            promoted[&at],
+            1e-6,
+            &format!("{at:?}: a shot edit re-georeferenced the survey"),
+        );
+    }
+    assert!(
+        super::topology_kit::apart(edited[&slot(a, 2)], promoted[&slot(a, 2)]) > 0.5,
+        "the edit moved what is downstream of it"
+    );
+
+    assert!(state.undo().success);
+    assert_same_xy(&slot_xy(&state), &promoted);
+    assert_same(&snapshot(&state), &before, "the undo restores every slot");
+}
+
+// ===========================================================================
+// #413 finding 7, second half: a jump lands where single steps land
+// ===========================================================================
+
+/// A survey with a history of six entries: two lines, a datum, a merge and
+/// two station moves. Returns the state, the snapshots before each entry
+/// (index 0: the empty project) and the line ids.
+fn jump_history() -> (AppState, Vec<super::topology_kit::Snapshot>) {
+    let state = AppState::new().unwrap();
+    run(
+        &state,
+        Command::CreateProject {
+            name: "Jumps".to_string(),
+            location: None,
+        },
+    );
+    let mut states = vec![snapshot(&state)];
+    let mut line = |name: &str, shots: Vec<ShotData>| {
+        let id = run(
+            &state,
+            Command::CreateLine {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#3388FF".to_string(),
+                direction: None,
+                shots,
+                cave_section_id: None,
+            },
+        )
+        .line_id
+        .unwrap();
+        states.push(snapshot(&state));
+        id
+    };
+    let a = line("A", north(2, 5.0));
+    let b = line("B", vec![shot(90.0, 5.0)]);
+    for cmd in [
+        Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
+        },
+        Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(b, 0),
+        },
+        Command::MoveStation {
+            station_ref: StationRef::new(a, 1),
+            offset: Coordinates::new(1.0, 2.0, 0.0),
+        },
+        Command::MoveStation {
+            station_ref: StationRef::new(a, 1),
+            offset: Coordinates::new(1.0, 2.0, 0.0),
+        },
+    ] {
+        run(&state, cmd);
+        states.push(snapshot(&state));
+    }
+    assert_eq!(state.get_undo_stack().len(), 6);
+    (state, states)
+}
+
+/// In the session: `undo_to(2)` (three steps) lands on the state three
+/// single undos land on, and `redo_to(2)` back on the state before them.
+#[test]
+fn undo_to_and_redo_to_land_where_the_same_number_of_single_steps_land() {
+    let (state, states) = jump_history();
+    let jump = state.undo_to(2);
+    assert!(jump.success, "{:?}", jump.error);
+    assert_same(&snapshot(&state), &states[3], "undo_to(2)");
+    assert_eq!(state.get_undo_stack().len(), 3);
+    let jump = state.redo_to(2);
+    assert!(jump.success, "{:?}", jump.error);
+    assert_same(&snapshot(&state), &states[6], "redo_to(2)");
+
+    // And the single steps land on the same states.
+    for depth in (3..6).rev() {
+        assert!(state.undo().success);
+        assert_same(&snapshot(&state), &states[depth], "single undo");
+    }
+}
+
+/// The same through the file: two sessions opened from one saved history,
+/// one jumping and one stepping, end on the same survey to the bit (the
+/// decoded entries mint the same session ids in both).
+#[test]
+fn a_jump_and_single_steps_over_a_reopened_history_reach_the_same_survey() {
+    let (state, _) = jump_history();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("jumps.stalx");
+    run(&state, Command::SaveProject { path: Some(path.clone()) });
+    let twin = || {
+        let s = AppState::new().unwrap();
+        assert!(s.open_project(path.clone()).success);
+        assert_eq!(s.get_undo_stack().len(), 6);
+        s
+    };
+    let (jumped, stepped) = (twin(), twin());
+    assert_same(&snapshot(&jumped), &snapshot(&stepped), "the twins start equal");
+
+    assert!(jumped.undo_to(2).success);
+    for _ in 0..3 {
+        assert!(stepped.undo().success);
+    }
+    assert_same(&snapshot(&jumped), &snapshot(&stepped), "three steps back");
+
+    assert!(jumped.redo_to(1).success);
+    for _ in 0..2 {
+        assert!(stepped.redo().success);
+    }
+    assert_same(&snapshot(&jumped), &snapshot(&stepped), "two steps forward");
+    assert_eq!(jumped.get_undo_stack().len(), stepped.get_undo_stack().len());
+}
+
+// ===========================================================================
+// #413 finding 24: a line's session shot ids never overflow or repeat
+// ===========================================================================
+
+/// The ids of `line`'s shots are distinct, inside the line's id window, and
+/// below its allocator, which is at most the window's end.
+fn assert_ids_sound(state: &AppState, line: LineId, what: &str) {
+    let p = project(state);
+    let l = p.line(line).unwrap();
+    let base = line * FEATURE_ID_STRIDE;
+    let end = base + FEATURE_ID_STRIDE;
+    let ids: Vec<ShotId> = l.shots.iter().map(|s| s.id).collect();
+    let distinct: HashSet<ShotId> = ids.iter().copied().collect();
+    assert_eq!(distinct.len(), ids.len(), "{what}: a repeated id {ids:?}");
+    assert!(
+        ids.iter().all(|&id| id >= base && id < end && id < l.next_shot_id),
+        "{what}: ids {ids:?} outside [{base}, {end}) or not below {}",
+        l.next_shot_id
+    );
+    assert!(l.next_shot_id <= end, "{what}: allocator past the window");
+}
+
+/// 0.6.0's two overflow cases came from a persisted shot id at `u32::MAX`;
+/// session ids are never persisted now (U8). What is left of the shape is a
+/// line whose session used up its id window: the last id is handed out, the
+/// next create is refused in so many words and changes nothing, and an undo
+/// and redo of the last create give back the state they recorded, session
+/// ids included.
+#[test]
+fn a_line_that_used_up_its_session_ids_refuses_the_next_shot_and_steps_exactly() {
+    let mut p = empty("Ids");
+    let a = free_line(&mut p, "A", [0.0, 0.0], north(2, 5.0));
+    let o = open(&p);
+    let end = (a + 1) * FEATURE_ID_STRIDE;
+    // The session minted every id of the window but the last (create and
+    // delete 99,997 times): the allocator is session state, set here.
+    {
+        let mut guard = o.state.project.lock().unwrap();
+        guard.as_mut().unwrap().line_mut(a).unwrap().next_shot_id = end - 1;
+    }
+
+    let created = create_shot(&o.state, a, shot(0.0, 3.0), None, None);
+    assert_eq!(created.shot_id, Some(end - 1), "the window's last id");
+    assert_ids_sound(&o.state, a, "after the last create");
+    let after = snapshot(&o.state);
+
+    let refused = super::topology_kit::refused(
+        &o.state,
+        Command::CreateShot {
+            line_id: a,
+            shot: shot(0.0, 4.0),
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+    );
+    assert!(refused.contains("used up its shot numbers"), "{refused}");
+
+    assert!(o.state.undo().success);
+    assert_ids_sound(&o.state, a, "after the undo");
+    assert!(o.state.redo().success);
+    assert_ids_sound(&o.state, a, "after the redo");
+    assert_same(&snapshot(&o.state), &after, "the redo lands on the recorded state");
+}
+
+// ===========================================================================
+// #413 finding 1: a redo puts every uuid back on its own shot
+// ===========================================================================
+
+/// The undo of a CreateLine with recorded edits after it, and their redo,
+/// keep every uuid on the shot that owned it (0.6.0 zipped the recorded
+/// shots against the recorded uuids by position).
+#[test]
+fn undo_and_redo_of_a_created_line_keep_every_uuid_on_its_own_shot() {
+    let state = AppState::new().unwrap();
+    run(
+        &state,
+        Command::CreateProject {
+            name: "Identity".to_string(),
+            location: None,
+        },
+    );
+    let line = run(
+        &state,
+        Command::CreateLine {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#3388FF".to_string(),
+            direction: None,
+            shots: vec![shot(0.0, 5.0), shot(0.0, 7.0)],
+            cave_section_id: None,
+        },
+    )
+    .line_id
+    .unwrap();
+    let first = shot_ids(&state, line)[0];
+    create_shot(&state, line, shot(180.0, 3.0), None, Some(first));
+    let owned = uuid_lengths(&state, line);
+    assert_eq!(
+        owned.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
+        vec![3.0, 5.0, 7.0]
+    );
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    assert!(project(&state).line(line).is_none(), "the line is gone");
+    assert!(state.redo().success);
+    assert!(state.redo().success);
+
+    assert_eq!(uuid_lengths(&state, line), owned, "every uuid on its own shot");
+    assert_same(&snapshot(&state), &after, "and the survey to the bit");
+}
+
+/// The other half of the old shape: a shot that appeared on the line behind
+/// the engine's back (0.6.0: an undo-less heal) makes the line differ from
+/// what the entry recorded, so the undo is refused, keeps its entry and
+/// changes nothing (the line hash precondition, plan deviation U2), instead
+/// of re-creating the line with somebody else's identity on redo.
+#[test]
+fn an_undo_over_a_line_changed_behind_the_engine_is_refused_and_kept() {
+    let mut p = empty("Behind");
+    let a = free_line(&mut p, "A", [0.0, 0.0], north(1, 5.0));
+    let o = open(&p);
+    let line = run(
+        &o.state,
+        Command::CreateLine {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#3388FF".to_string(),
+            direction: None,
+            shots: vec![shot(0.0, 5.0), shot(0.0, 7.0)],
+            cave_section_id: None,
+        },
+    )
+    .line_id
+    .unwrap();
+    {
+        let mut guard = o.state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let l = project.line_mut(line).unwrap();
+        l.shots[0].length = 3.0;
+    }
+    let before = snapshot(&o.state);
+
+    let undone = o.state.undo();
+
+    assert!(!undone.success, "a step whose precondition fails is refused");
+    assert_same(&snapshot(&o.state), &before, "and changes nothing");
+    assert_eq!(o.state.get_undo_stack().len(), 1, "and keeps its entry");
+    assert!(project(&o.state).line(a).is_some());
+}
