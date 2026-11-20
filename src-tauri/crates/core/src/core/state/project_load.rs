@@ -199,16 +199,19 @@ impl AppState {
     /// Commit a read file into the project slot: the project, its file
     /// state, the edit gate, the undo stacks, the banner flags. The caller
     /// holds no lock. A lock held for the project that leaves is released
-    /// first (detached).
-    pub(crate) fn commit_opened(&self, opened: Opened) {
+    /// first (detached). Returns the revision the commit made (read under its
+    /// guard), the key of anything derived from the opened survey.
+    pub(crate) fn commit_opened(&self, opened: Opened) -> u64 {
         self.speleodb_release_held_lock_detached();
         let mut proj_guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.commit_opened_locked(&mut proj_guard, opened, None);
+        let revision = self.current_revision();
         drop(proj_guard);
         self.persist_pending_local_state();
+        revision
     }
 
     /// [`Self::commit_opened`] under the caller's `project` guard, in ONE
@@ -446,29 +449,21 @@ impl AppState {
         progress.complete_phase(LoadingPhase::LoadingSettings);
         progress.start_phase(LoadingPhase::Finalizing);
         cancelled(progress)?;
-        // `commit_opened`, with the raw layout of the committed revision
-        // seeded under the same `project` guard: the load does not take
-        // `command_lock`, so an edit landing between the commit and a later
-        // seed would have the opened survey's layout cached as its own.
-        self.speleodb_release_held_lock_detached();
-        {
-            let mut proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.commit_opened_locked(&mut proj_guard, opened, None);
-            let revision = self.current_revision();
-            *self
-                .derived
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some(super::app_state::DerivedCache {
-                    revision,
-                    raw,
-                    adjusted: None,
-                });
-        }
-        self.persist_pending_local_state();
+        // The raw layout of the committed revision, keyed by the revision the
+        // commit made: the load does not take `command_lock`, so an edit may
+        // land before the seed, and keyed by the revision read now the opened
+        // survey's layout would be cached as the edited one's. Keyed by the
+        // commit's, it is merely stale then, and never read.
+        let revision = self.commit_opened(opened);
+        *self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(super::app_state::DerivedCache {
+                revision,
+                raw,
+                adjusted: None,
+            });
         self.note_recent_project(&path);
         progress.complete_phase(LoadingPhase::Finalizing);
         tracing::info!(path = ?path, purpose = "load project for workspace", "Project loaded via load_project_full");
