@@ -34,13 +34,16 @@
 //! cancels. In exact arithmetic it is the same minimiser.
 //!
 //! **The solve.** Exact Gaussian elimination of every node whose current
-//! degree is at most 2 (leaf back-substitution and series reduction), both
-//! axes in lockstep; the surviving 2-core (about the cycle space) is solved
-//! with Jacobi-PCG from zero corrections (a null-space direction keeps its
-//! reference position), then the peeled nodes are recovered in reverse
-//! order. The working adjacency is a `BTreeMap` per node, so every float sum
-//! runs in node order and the solve is bit-reproducible (#413 finding 21).
-//! History of the peeling: #81.
+//! degree is at most `MAX_PEEL_DEGREE`, lowest degree first (leaves and
+//! series chains, the bulk of a cave survey, go first, as the degree-2
+//! peeling of #81 did), both axes in lockstep; whatever core survives is
+//! solved with Jacobi-PCG from zero corrections (a null-space direction keeps
+//! its reference position), then the eliminated nodes are recovered in
+//! reverse order. The caller refines: it solves again for what the corrected
+//! positions leave (`adjust::SOLVE_PASSES`), on the same factoring. The
+//! working adjacency is a `BTreeMap` per node and the elimination order a
+//! heap of `(degree, node)`, so every float sum runs in a fixed order and the
+//! solve is bit-reproducible (#413 finding 21).
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};

@@ -19,6 +19,9 @@
 //!   `base_sigma_azimuth_deg * quality`, each axis's sigma floored at
 //!   `sigma_len x sigma_az` ([`ShotSigmas`]); soft GPS fixes add a diagonal
 //!   term.
+//! - **Solved for corrections** to each free group's raw reference (its
+//!   lowest member), from misclosure currents, never for absolute
+//!   coordinates, then refined twice (`lsq` module docs, plan Deviations D21).
 //! - **Held**: each placement datum's group at its raw position (two in one
 //!   group fail the component), hard GPS fixes (accuracy below 1 mm, the
 //!   default) at their GPS, else the gauge: the component's anchor station
