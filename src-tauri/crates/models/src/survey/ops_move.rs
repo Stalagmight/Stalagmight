@@ -115,6 +115,16 @@ impl Project {
         })
     }
 
+    /// Move Line ("Adjust Position" on a line): today it moves the line's
+    /// whole rigid group, exactly as [`Self::move_segment`].
+    pub fn move_line(
+        &mut self,
+        line: LineId,
+        offset: [f64; 3],
+    ) -> Result<OpOutcome<SegmentMoved>, OpError> {
+        self.move_segment(line, offset)
+    }
+
     /// Move station `station` by `offset` (x, y east/north metres, z depth
     /// metres, +down) by rewriting its incident shots (see the module docs).
     pub fn move_station(
