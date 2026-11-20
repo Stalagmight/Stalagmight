@@ -17,6 +17,10 @@ import type { ProjectStore } from './projectStore';
  * would not save the ignore and the exit prompt would let "Don't save" pass
  * without asking. The backend's own flag (`has_unsaved_changes`) is the
  * authority; asking it covers a resolve and unresolve that cancel out too.
+ *
+ * An ignore also moves `projectTreeGeneration`, as every edit does: a save in
+ * flight clears `isDirty` only when the tree is the one it was issued for, so
+ * an ignore that reached the backend after that save stays unsaved here too.
  */
 export interface ProjectWarningActions {
   refreshWarnings: () => Promise<void>;
@@ -27,10 +31,12 @@ export interface ProjectWarningActions {
 export function createProjectWarningActions(
   set: StoreApi<ProjectStore>['setState'],
   get: StoreApi<ProjectStore>['getState'],
+  nextTreeGeneration: () => number,
 ): ProjectWarningActions {
   /** Follow the backend's dirty flag after an ignore changed (see above). */
   const syncDirtyAfterIgnore = async (): Promise<void> => {
     const issuedFor = get().project?.created_at ?? null;
+    if (issuedFor !== null) set({ projectTreeGeneration: nextTreeGeneration() });
     try {
       const dirty = await invokeIpc<boolean>('has_unsaved_changes', undefined, {
         purpose: 'keep the unsaved-changes state in step after a warning ignore',
