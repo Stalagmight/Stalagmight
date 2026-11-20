@@ -60,7 +60,11 @@ mod undo;
 mod undo_policy;
 mod warnings;
 
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "a fuzzer's summary IS its output, and `--nocapture` is a test's only channel"
+)]
 mod adversarial_tests;
 #[cfg(test)]
 #[expect(
@@ -313,6 +317,12 @@ mod project_unique_uuid_tests;
 mod raw_data_tests;
 #[cfg(test)]
 mod recents_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test kit: a setup step that fails is a broken fixture"
+)]
+mod robustness_kit;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
