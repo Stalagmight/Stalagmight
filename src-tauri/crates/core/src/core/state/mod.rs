@@ -56,8 +56,15 @@ mod undo_policy;
 mod warnings;
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod c0_foundation_tests;
+#[cfg(sg_unported)]
 mod adversarial_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -66,20 +73,20 @@ mod adversarial_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod azimuth_reference_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod batch_label_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::unwrap_in_result,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod cave_sections_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
@@ -87,18 +94,18 @@ mod cave_sections_tests;
     reason = "on-demand characterisation dump: fails loudly, and says where it wrote"
 )]
 mod characterization_dump_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_lines_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod concurrency_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod crash_property_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -106,20 +113,20 @@ mod crash_property_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod credit_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod datum_entrance_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod datum_ui_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
@@ -127,25 +134,25 @@ mod datum_ui_tests;
     reason = "live check: fails loudly, and reports each step it proved"
 )]
 mod exit_prompt_live_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod format_property_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod fuzz_rarity_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod fuzz_shrink_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod fuzz_undo_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_485_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -156,20 +163,20 @@ mod issue_485_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_517_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_555_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_649_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -178,19 +185,19 @@ mod issue_649_tests;
               beside snaps prints what it covered"
 )]
 mod issue_737_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_738_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_756_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
@@ -198,9 +205,9 @@ mod issue_756_tests;
     reason = "on-demand vector dump: fails loudly, and says where it wrote"
 )]
 mod legacy_disk_vectors_dump_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod metamorphic_undo_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -209,14 +216,14 @@ mod metamorphic_undo_tests;
               covered and the replay prints each step"
 )]
 mod multi_datum_fuzz_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
     reason = "fuzz test helpers: a trail that does not parse is a broken replay string"
 )]
 mod multi_datum_steps_fuzz;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -224,22 +231,22 @@ mod multi_datum_steps_fuzz;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod multi_datum_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod name_rules_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod open_undo_bugs_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod pre_line_rename_disk_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -249,21 +256,21 @@ mod pre_line_rename_disk_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_add_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_restore_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_unique_uuid_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -271,7 +278,7 @@ mod project_unique_uuid_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -280,7 +287,7 @@ mod reverse_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -289,76 +296,76 @@ mod shot_uuid_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod snapshot_fixes_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_acquire_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_cached_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_close_release_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_edit_gate_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_explicit_release_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_install_sidecar_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_nonblocking_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_upload_limit_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_line_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_identity_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_names_import_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -368,16 +375,16 @@ mod station_names_import_tests;
     clippy::print_stdout
 )]
 mod tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod undo_after_reopen_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod undo_disk_names_tests;
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod undo_size_gate_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's

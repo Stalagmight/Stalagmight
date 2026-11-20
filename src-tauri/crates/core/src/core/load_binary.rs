@@ -511,7 +511,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;

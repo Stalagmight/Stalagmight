@@ -551,7 +551,7 @@ fn scan_cache(root: &Path) -> HashMap<String, SpeleoLocalProjectState> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"

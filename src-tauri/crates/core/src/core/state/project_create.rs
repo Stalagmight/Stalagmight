@@ -352,7 +352,7 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;

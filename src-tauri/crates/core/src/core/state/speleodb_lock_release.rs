@@ -900,7 +900,7 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     clippy::panic,

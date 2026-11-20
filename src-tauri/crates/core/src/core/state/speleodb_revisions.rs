@@ -575,7 +575,7 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{

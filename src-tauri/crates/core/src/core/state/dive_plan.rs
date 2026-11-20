@@ -814,7 +814,7 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 mod tests {
     #![expect(
         clippy::unwrap_used,

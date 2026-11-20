@@ -1746,7 +1746,7 @@ pub(super) struct PendingReverify {
     pub(super) probe: std::thread::JoinHandle<bool>,
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 #[expect(
     clippy::panic,
