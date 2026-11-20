@@ -184,8 +184,15 @@ export function useAutoSave(): AutoSaveState {
             // PAUSE auto-save rather than retry on every edit for a file another
             // program changed, or a read-only one: retrying would fail the same
             // way until the user decides. It resumes via the check at the top of
-            // the subscriber once that failure clears.
-            if (isPausingFailure(classifySaveError(result.error))) {
+            // the subscriber once that failure clears - which needs the store to
+            // hold it. The save action records it only while the project is
+            // still dirty (a save that landed meanwhile made it moot), so pause
+            // only on what it recorded: a pause with nothing recorded showed no
+            // banner and never resumed, for the rest of the session.
+            if (
+              isPausingFailure(classifySaveError(result.error)) &&
+              isPausingFailure(useProjectStore.getState().autosaveFailureKind)
+            ) {
               pausedRef.current = true;
             }
             if (flashRef.current) {
