@@ -11,7 +11,7 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 
-use crate::project::station_naming::name_with_free_letter;
+use crate::station_naming::name_with_free_letter;
 use crate::{
     AzimuthReference, LineId, SectionId, ShotData, StationId, StationRef, MAX_LINE_ID,
     MAX_SECTION_ID, MAX_STATION_ID,

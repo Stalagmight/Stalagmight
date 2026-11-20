@@ -8,7 +8,7 @@
 use super::commands::{Applied, Record};
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::project::station_naming::name_characters_refusal;
+use crate::models::station_naming::name_characters_refusal;
 use crate::models::survey::Project;
 use crate::models::{StationId, StationRef, LINE_GONE};
 

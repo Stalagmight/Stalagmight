@@ -32,7 +32,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::project::station_naming::{name_after_end, name_before_start, name_with_free_letter};
+use crate::station_naming::{name_after_end, name_before_start, name_with_free_letter};
 use crate::{
     LineId, ShotData, ShotId, ShotKind, ShotUpdates, StationId, StationRef, SurveyCredit,
     FEATURE_ID_STRIDE,

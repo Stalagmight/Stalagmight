@@ -3,12 +3,12 @@
 //! A station's name must be unique among the stations of every line it is on;
 //! a junction is checked on all of its lines. Repeats are resolved by the
 //! existing letter-suffix rule
-//! ([`crate::project::station_naming::name_with_free_letter`]): `5` -> `5a`,
+//! ([`crate::station_naming::name_with_free_letter`]): `5` -> `5a`,
 //! `Junction` -> `Junction-a`.
 
 use std::collections::BTreeSet;
 
-use crate::project::station_naming::name_with_free_letter;
+use crate::station_naming::name_with_free_letter;
 use crate::{LineId, StationId};
 
 use super::{Project, ShotLocation};

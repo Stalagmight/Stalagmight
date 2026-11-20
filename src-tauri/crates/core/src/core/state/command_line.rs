@@ -15,7 +15,7 @@ use super::AppState;
 use crate::core::{
     Command, CommandResult, ReversedLine, ValidationWarning, Validator, WarningSeverity,
 };
-use crate::models::project::station_naming::{dedupe_line_name, seed_line_name_from};
+use crate::models::station_naming::{dedupe_line_name, seed_line_name_from};
 use crate::models::survey::changeset::EntryLimits;
 use crate::models::survey::{ClosureId, LineMeta, Project, StartAt};
 use crate::models::{

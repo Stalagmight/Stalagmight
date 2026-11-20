@@ -87,3 +87,10 @@ impl SplitLineOptions {
             .then(|| "A zero datum can stay on only one half of a split".to_string())
     }
 }
+
+/// Minimum length (meters) either child of a split may end up with (issue
+/// #59). A split is only accepted when both `distance` and
+/// `shot.length - distance` are at least this floor, so a shot must be at
+/// least `2 * MIN_SPLIT_CHILD_LENGTH_M` long to be splittable at all. Mirrored
+/// on the frontend in `src/utils/shotSplit.ts`.
+pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;

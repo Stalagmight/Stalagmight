@@ -11,13 +11,7 @@ use super::{
     ClosurePair, ClosureUpdate, DeleteShotImpact, DeleteShotRangeImpact, Project, RangeDeleteKind,
     StationPair,
 };
-
-/// Minimum length (meters) either child of a split may end up with (issue
-/// #59). A split is only accepted when both `distance` and
-/// `shot.length - distance` are at least this floor, so a shot must be at
-/// least `2 * MIN_SPLIT_CHILD_LENGTH_M` long to be splittable at all. Mirrored
-/// on the frontend in `src/utils/shotSplit.ts`.
-pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
+use crate::MIN_SPLIT_CHILD_LENGTH_M;
 
 impl Project {
     /// The merge edges of the station graph, plus the loop closures when

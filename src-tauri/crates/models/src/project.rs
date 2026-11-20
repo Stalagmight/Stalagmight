@@ -53,7 +53,7 @@ mod mutations;
 mod shots;
 mod split_line;
 mod station_identity;
-pub mod station_naming;
+pub use crate::station_naming;
 mod station_rekey;
 
 mod integrity;
@@ -205,66 +205,27 @@ mod multi_datum_tests;
 )]
 mod split_line_tests;
 
-pub use adjustment_report::{
-    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, FarGpsFix,
-    SkippedClosure,
-};
+pub use adjustment_report::{AdjustedStations, AdjustmentFailure};
 pub use classify::ClassifyScope;
 pub use closure_shots::{ClosureAcrossOneShot, ClosuresBeforeEdit};
-pub use combine_candidate::{
-    line_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
-};
+pub use combine_candidate::line_label;
 pub use datum_placement::DatumLayout;
-pub use datum_roles::{
-    datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,
-    DATUM_GAP_WARN_FRACTION,
-};
+
+use crate::adjustment::*;
+use crate::previews::*;
+use crate::project_info::*;
+#[cfg(test)]
+use crate::shot_uuid::*;
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };
 pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
-pub use merge_datum_shift::MergeDatumShift;
 pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
-pub use reverse::{reverse_shots, reversed_azimuths, shot_run_displacement};
-pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
-pub use station_identity::{IdentityHeal, UNNAMED_LINE};
-pub use uuid_unique::{
-    live_shot_uuid_for_stored, remap_project_json, remap_station_keys_json, reminted_shot_uuid,
-    reminted_shot_uuid_avoiding, stored_shot_uuid_matches, ShotUuidRemap,
-    SHOT_UUID_REMINT_NAMESPACE,
-};
-
-/// Relationships that reference a given line (merges, closures, offsets, zero datums).
-/// Used by the frontend to show affected relationships before line deletion.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct LineRelationships {
-    /// Station merges referencing the line (positional wire form)
-    pub merges: Vec<StationMergeWire>,
-    /// Loop closures referencing the line (positional wire form)
-    pub closures: Vec<LoopClosureWire>,
-    /// Whether the line has a line offset
-    pub has_line_offset: bool,
-    /// Number of station offsets referencing the line
-    pub station_offset_count: usize,
-    /// Number of zero datums referencing the line
-    pub zero_datum_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-pub struct StationPair {
-    pub station_a: StationRef,
-    pub station_b: StationRef,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct ClosurePair {
-    pub closure_id: u64,
-    pub station_a: StationRef,
-    pub station_b: StationRef,
-}
+pub use station_identity::IdentityHeal;
+pub use uuid_unique::{remap_project_json, remap_station_keys_json, ShotUuidRemap};
 
 #[derive(Debug, Clone, Copy)]
 enum PathEdge {
@@ -316,104 +277,6 @@ impl PartialOrd for HeapItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-pub struct ClosureUpdate {
-    pub closure_id: u64,
-    pub old_station: StationRef,
-    pub new_station: StationRef,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct DeleteShotImpact {
-    pub removed_station: StationRef,
-    pub removed_merges: Vec<StationPair>,
-    pub removed_closures: Vec<ClosurePair>,
-    pub replacement_merges: Vec<StationPair>,
-    pub replacement_closure_updates: Vec<ClosureUpdate>,
-    /// Closures broken by the deletion: the surviving endpoints are no longer
-    /// connected through the survey, so the closure is replaced by a plain
-    /// station merge instead of being kept as a (false) loop. See issue #8.
-    #[serde(default)]
-    pub closure_to_merge: Vec<StationPair>,
-    pub merge_rewire_skipped: bool,
-    pub closure_rewire_skipped: bool,
-    #[serde(default)]
-    pub shift_blocked: bool,
-    #[serde(default)]
-    pub shift_blocked_reasons: Vec<String>,
-}
-
-/// Which structural case a contiguous shot-range deletion falls into. Computed
-/// from the range endpoints relative to the line's shot count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum RangeDeleteKind {
-    /// The range covers every shot - the whole line is removed.
-    WholeLine,
-    /// The range starts at the first shot (nothing before); the survivors keep
-    /// their absolute position by an offset shift.
-    Prefix,
-    /// The range ends at the last shot (nothing after); the head is truncated.
-    Suffix,
-    /// Shots remain both before and after - the line can be split (A=before,
-    /// B=after) or gap-closed (shift).
-    Interior,
-}
-
-/// Aggregate impact of deleting a contiguous range of shots `[start_pos..=end_pos]`
-/// from one line. The merge/closure fields mirror [`DeleteShotImpact`] (so the
-/// frontend can render them with the same component); `kind` drives the dialog
-/// routing and `shift_blocked` reports whether the gap-close path is available.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct DeleteShotRangeImpact {
-    pub line_id: LineId,
-    pub start_pos: u32,
-    pub end_pos: u32,
-    pub kind: RangeDeleteKind,
-    /// Stations any offered action removes. For an interior range this is the
-    /// gap-close (shift) set `(start_pos+1 ..= end_pos+1)` - the superset that
-    /// also covers the split's interior set - so the relationship panel never
-    /// hides what closing the gap touches. (Prefix/suffix/whole remove exactly
-    /// the gap-close set; only an interior split keeps the boundary `end_pos+1`.)
-    pub removed_stations: Vec<StationRef>,
-    pub removed_merges: Vec<StationPair>,
-    pub removed_closures: Vec<ClosurePair>,
-    pub replacement_merges: Vec<StationPair>,
-    pub replacement_closure_updates: Vec<ClosureUpdate>,
-    #[serde(default)]
-    pub closure_to_merge: Vec<StationPair>,
-    pub merge_rewire_skipped: bool,
-    pub closure_rewire_skipped: bool,
-    /// True when the gap-close (shift) path is unavailable for this range (the
-    /// two sides are already connected or both anchored, or the gap-close drops
-    /// a zero datum).
-    #[serde(default)]
-    pub shift_blocked: bool,
-    #[serde(default)]
-    pub shift_blocked_reasons: Vec<String>,
-    /// Zero datums the SPLIT would drop (anchored on a strictly-interior station
-    /// the split removes) - surfaced so the dialog can warn. The gap-close path
-    /// is instead blocked when it would drop a datum, so this set is split-only.
-    #[serde(default)]
-    pub removed_datums: Vec<StationRef>,
-    /// Station comments the SPLIT would drop (anchored on a strictly-interior
-    /// station the split removes) - surfaced so the dialog can warn before the
-    /// annotation disappears.
-    #[serde(default)]
-    pub removed_comments: Vec<StationRef>,
-    /// Loop closures the GAP-CLOSE would remove because, once the range is
-    /// gone, they would tie the two ends of one shot together (#737) - e.g.
-    /// closure A:1-A:5 with shots 1..=3 gap-closed would become A:1-A:2. Named
-    /// by their stations BEFORE the delete, the ids the user created them with.
-    /// Predicted by running the very gap-close the command runs on a clone
-    /// ([`Project::preview_gap_close_closure_removals`]), so preview and
-    /// execution cannot disagree. `None` when no gap-close is offered (the
-    /// whole line, or a blocked shift), or when it could not be simulated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub closures_removed_across_one_shot: Option<Vec<ClosurePair>>,
 }
 
 /// A complete cave survey project
@@ -669,137 +532,6 @@ pub struct Project {
 /// never had a Section serializes exactly as before.
 fn is_zero_section_id(id: &SectionId) -> bool {
     *id == 0
-}
-
-/// Apply the Ariane `.tml`/`.tmlu` no-data convention to a raw
-/// `firstStartAbsoluteElevation` value: Ariane encodes "no elevation
-/// recorded" as exactly `0.0`, so an exact zero is treated as absent here
-/// (see `Project::surface_elevation`'s doc comment above). This is
-/// format-forced, not a design choice: a genuine entrance at exactly 0.0 m
-/// above mean sea level is not representable, while any near-zero but
-/// nonzero value passes through unchanged.
-pub fn ariane_elevation_or_absent(raw: f64) -> Option<f64> {
-    (raw.abs() > f64::EPSILON).then_some(raw)
-}
-
-/// Project metadata for listing
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ProjectMetadata {
-    pub name: String,
-    pub location: Option<String>,
-    #[ts(type = "string")]
-    pub file_path: PathBuf,
-    #[ts(type = "string")]
-    pub modified_at: DateTime<Utc>,
-    pub line_count: usize,
-    /// Surveyed length, Reference shots excluded (#689). The on-disk listing
-    /// computes it in SQL (`Database::load_metadata`) with the same rule as
-    /// [`ProjectStats::total_length`], so an opened project reports the same
-    /// figure. For a file not yet opened since the shot-kind backfill (#27) it
-    /// is an upper bound until its first open, which classifies the migrated
-    /// virtual shots and re-saves them.
-    pub total_length: f64,
-    /// Number of stations in the project (shots + 1 per line)
-    pub station_count: usize,
-    /// GPS center from first zero datum (lng, lat) - MapLibre order
-    pub gps_center: Option<(f64, f64)>,
-    /// GPS bounds including all zero datums
-    pub gps_bounds: Option<GpsBounds>,
-    // [Track B] (#189, D-B14) Whether this `.stalx` is a pulled SpeleoDB project.
-    // DERIVED from EXISTS(speleo_link) in load_metadata, never a stored column;
-    // tolerant of a missing table on a read-only metadata open.
-    pub is_remote: bool,
-    /// The linked SpeleoDB project UUID (from `speleo_link.project_id`), or `None`
-    /// for a local project. Lets the recents/GlobalView list cross-reference a
-    /// single `GET /projects/` lock scan to badge each entry's lock state (#201).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub speleodb_project_id: Option<String>,
-}
-
-/// Per-station along-cave distance field from a chosen origin (or the zero-datum
-/// entrance default). `distances[i]` corresponds to `station_refs[i]`; `None`
-/// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
-/// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
-/// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
-/// shared reachability graph. Since #27 that is literally true: jumps are in
-/// (they are swum), references are out (they are not) unless the
-/// `gas.include_reference_legs` opt-in is set - see `build_survey_graph`.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct DistanceField {
-    pub distances: Vec<Option<f64>>,
-    pub station_refs: Vec<StationRef>,
-    pub max_reachable: f64,
-}
-
-/// One end of a ruler measurement (#26): either a **station** (set
-/// `station_index`; leave `shot_id`/`t` null) or an exact **point on a shot** at
-/// fraction `t` ∈ [0,1] from the shot's from-station toward its to-station (set
-/// `shot_id` + `t`). `t` ≈ 0 / ≈ 1 collapses to the from/to station.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-pub struct RulerEndpoint {
-    pub line_id: LineId,
-    #[serde(default)]
-    pub station_index: Option<u32>,
-    #[serde(default)]
-    pub shot_id: Option<ShotId>,
-    #[serde(default)]
-    pub t: Option<f64>,
-}
-
-/// A shot on the along-line path, identified for tinting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct PathShot {
-    pub line_id: LineId,
-    pub shot_id: ShotId,
-}
-
-/// Result of an along-cave-line ruler query (#26). `along_line` is `None` when the
-/// two endpoints lie in different connected components (no path). `path_shots`
-/// are the shots traversed from A toward B - whole shots, even when an endpoint
-/// only partially crosses one - with zero-cost merge/closure ties skipped (they
-/// aren't shots and must not be tinted). Uses the same shots+merges+closures
-/// graph as the distance-gradient overlay (#34), so it matches the Display
-/// "line distance" view.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct AlongLineResult {
-    pub along_line: Option<f64>,
-    pub path_shots: Vec<PathShot>,
-    /// Stations traversed along the path (the chain nodes), in order from A toward
-    /// B. Shot-point endpoints contribute their adjacent stations but not a
-    /// station of their own. Tinted alongside `path_shots`.
-    pub path_stations: Vec<StationRef>,
-}
-
-/// Overall project statistics
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ProjectStats {
-    pub line_count: usize,
-    /// Every shot, Reference shots included.
-    pub shot_count: usize,
-    /// Surveyed length: the sum of [`crate::LineStats::total_length`], which leaves
-    /// out Reference shots (#689).
-    pub total_length: f64,
-    /// Shallowest absolute station z. Filled by the caller from
-    /// [`Project::depth_range`], never by [`Project::stats`] (#481).
-    pub min_depth: f64,
-    /// Deepest absolute station z. Same source as
-    /// [`min_depth`](Self::min_depth).
-    pub max_depth: f64,
-    pub station_count: usize,
-    pub loop_count: usize,
-    /// Maximum straight-line distance from zero datum to any station
-    pub penetration_distance: f64,
-    /// The earliest survey date of any shot; absent when no shot has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    #[ts(type = "string")]
-    pub first_survey_date: Option<chrono::NaiveDate>,
-    /// The latest survey date of any shot; absent when no shot has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    #[ts(type = "string")]
-    pub last_survey_date: Option<chrono::NaiveDate>,
 }
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
@@ -1956,9 +1688,6 @@ mod station_names_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod station_identity_tests;
-
-#[cfg(test)]
-mod station_naming_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]

@@ -7,7 +7,7 @@
 //! station.
 
 use crate::config::ReservePreset;
-use crate::project::gas::{CylRole, Cylinder};
+use crate::gas::{CylRole, Cylinder};
 
 use super::budget::{cyl_basis, free_in_gas, free_usable_bar, required_stages, stage_in_gas};
 use super::physics::deliverable_gas;

@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 
 use super::AppState;
 use crate::config::GasConfig;
-use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
+use crate::models::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::survey::{Project, ShotLocation};
 use crate::models::{
     Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, LineId, MarkedPoint, PlanAnchorSet,

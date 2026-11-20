@@ -14,12 +14,12 @@
 use super::super::legacy_convert::convert;
 use super::budget::{penetration_budget, required_stages, usable_oc_gas};
 use super::physics::{
-    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, edge_gas_basis,
-    gas_rate, sac_to_rmv,
+    air_z_factor, ata, avg_depth, deliverable_gas, edge_gas, edge_gas_basis, gas_rate,
 };
 use super::profile::route_metrics;
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
-use crate::project::gas::{
+use crate::gas::{cylinder_gas_volume, sac_to_rmv};
+use crate::gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteProfilePoint,
     TankMaterial, Team,
 };

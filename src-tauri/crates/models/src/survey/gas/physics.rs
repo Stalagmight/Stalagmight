@@ -1,8 +1,8 @@
 //! Pure gas-planning physics - no graph, no config, no I/O. Golden-tested in
 //! `super::tests`.
 //!
-//! Copied from `models/src/project/gas/physics.rs` unchanged for the station-graph engine
-//! (`survey::gas`); the legacy model's constructors (`project::gas::model`) still use that copy.
+//! Ported from the legacy model's gas physics unchanged. The two constructor primitives
+//! (`sac_to_rmv`, `cylinder_gas_volume`) live beside the constructors in `crate::gas`.
 //! Canonical SI throughout: depth in metres (positive-down), RMV in
 //! L/min, pressure in bar, gas volume in litres. These are plain `f64` functions; the
 //! finite/positive guards live in the `model` constructors (RMV, cylinders) and in
@@ -64,35 +64,6 @@ pub(crate) fn edge_gas(
 /// arithmetic the golden tests pin.
 pub(crate) fn edge_gas_basis(length_m: f64, z_from: f64, z_to: f64) -> f64 {
     ata(avg_depth(z_from, z_to)) * length_m
-}
-
-/// Convert a SAC (surface air consumption, bar/min measured against a reference
-/// cylinder) to a volumetric RMV (L/min): `rmv = sac × reference_water_volume`.
-/// SAC is a constructor concern only - never stored (see `model::Diver::from_sac`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the model constructors still use the legacy copy until stream C moves them here"
-    )
-)]
-pub(crate) fn sac_to_rmv(sac_bar_per_min: f64, ref_cyl_water_volume_l: f64) -> f64 {
-    sac_bar_per_min * ref_cyl_water_volume_l
-}
-
-/// Ideal free-gas volume (litres) a cylinder holds at `fill_bar`: `fill × water_volume`.
-/// Ideal-gas relation - at typical 200-232 bar fills real compressibility (Z) over-states this
-/// by ~4-6%, rising to ~12% at 300 bar (the unsafe direction). This is the raw ideal primitive;
-/// the usable-gas paths use [`deliverable_gas`] instead, which divides by [`air_z_factor`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the model constructors still use the legacy copy until stream C moves them here"
-    )
-)]
-pub(crate) fn cylinder_gas_volume(fill_bar: f64, water_volume_l: f64) -> f64 {
-    fill_bar * water_volume_l
 }
 
 /// Real-gas compressibility factor Z for air/nitrox at `fill_bar` (bar). A quadratic fit

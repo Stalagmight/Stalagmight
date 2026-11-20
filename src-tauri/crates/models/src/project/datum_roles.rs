@@ -19,67 +19,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{LineId, Project, StationRef, ZeroDatum};
+use super::{
+    datum_gap_threshold_m, DatumGap, LineId, Project, StationRef, ZeroDatum, ZeroDatumPreview,
+};
 use crate::station::DatumRole;
 use crate::{gps_to_local, GpsCoordinates};
-
-/// Fixed part of the gap warning threshold, in metres (#741 decision 4).
-pub const DATUM_GAP_WARN_BASE_M: f64 = 15.0;
-
-/// Part of the gap warning threshold that grows with the survey distance from
-/// the datum's placement datum: 2% (#741 decision 4).
-pub const DATUM_GAP_WARN_FRACTION: f64 = 0.02;
-
-/// The gap above which a datum's GPS and its surveyed position disagree enough
-/// to warn: 15 m plus 2% of the survey distance from the placement datum of
-/// the datum's piece. An infinite or NaN distance (none reachable) yields the
-/// base.
-pub fn datum_gap_threshold_m(survey_distance_m: f64) -> f64 {
-    if survey_distance_m.is_finite() && survey_distance_m > 0.0 {
-        DATUM_GAP_WARN_BASE_M + DATUM_GAP_WARN_FRACTION * survey_distance_m
-    } else {
-        DATUM_GAP_WARN_BASE_M
-    }
-}
-
-/// How far a datum's GPS position is from where the survey puts its station,
-/// in the frame's local metres. Backend-owned so every UI readout agrees.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[ts(export_to = "bindings/DatumGap.ts")]
-pub struct DatumGap {
-    /// Horizontal distance from the surveyed position to the GPS position.
-    pub gap_m: f64,
-    /// Bearing of that vector, degrees clockwise from grid north, in [0, 360).
-    pub bearing_deg: f64,
-    /// Survey distance, along shots and merges, from the placement datum of
-    /// this station's merge component (the datum its raw position is carried
-    /// from), or `None` when that component has no placement datum.
-    pub survey_distance_m: Option<f64>,
-    /// [`datum_gap_threshold_m`] for that distance.
-    pub threshold_m: f64,
-    /// `gap_m > threshold_m`.
-    pub exceeds_threshold: bool,
-}
-
-/// What setting a zero datum on a station would do, for the Edit Station dialog
-/// to show before the user commits (#741).
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[ts(export_to = "bindings/ZeroDatumPreview.ts")]
-pub struct ZeroDatumPreview {
-    /// The role the datum would have once stored.
-    pub role: DatumRole,
-    /// For a [`DatumRole::GpsFix`], how far the GPS is from the surveyed
-    /// position. `None` for a placement datum (it moves its group onto the GPS,
-    /// so there is no disagreement to show) or when there is no frame yet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub gap: Option<DatumGap>,
-    /// Whether the datum would count as an entrance: the stored answer for a
-    /// station that already holds a datum, else the default rule for `role`
-    /// (`Project::datum_is_entrance`), so the dialog's Entrance checkbox
-    /// starts from the backend's answer.
-    pub is_entrance: bool,
-}
 
 impl Project {
     /// What setting a zero datum with `gps` on `station_ref` would do. A station
@@ -347,18 +291,5 @@ impl DatumGap {
             threshold_m,
             exceeds_threshold: gap_m > threshold_m,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn threshold_is_15_m_plus_2_percent() {
-        assert!((datum_gap_threshold_m(1400.0) - 43.0).abs() < 1e-9);
-        assert!((datum_gap_threshold_m(0.0) - 15.0).abs() < 1e-9);
-        assert!((datum_gap_threshold_m(f64::INFINITY) - 15.0).abs() < 1e-9);
-        assert!((datum_gap_threshold_m(f64::NAN) - 15.0).abs() < 1e-9);
     }
 }

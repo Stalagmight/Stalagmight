@@ -72,8 +72,9 @@ use super::combine_plan::{JoinPoint, Tie, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
-use super::uuid_unique::{reminted_shot_uuid_avoiding, ShotUuidRemap};
+use super::uuid_unique::ShotUuidRemap;
 use super::Project;
+use crate::shot_uuid::reminted_shot_uuid_avoiding;
 
 #[cfg(test)]
 thread_local! {

@@ -412,3 +412,21 @@ pub struct CombineCandidate {
     /// What changes when `b` is kept.
     pub plan_keeping_b: CombinePlan,
 }
+
+/// How far apart (metres) the two join stations may be and still count as the
+/// same point (side by side); also the bound on how far a co-located join
+/// moves a side, which it does by the residual (#740, `combine_plan.rs`).
+pub const COMBINE_TOLERANCE_M: f64 = 0.001;
+
+/// Above this depth gap (metres) between two co-located, unmerged join
+/// stations, the candidate reports it and the dialog shows it: the joined
+/// station takes their average, so each end moves by half the gap. Half the
+/// 0.1 m resolution depth gauges and dive computers record; a smaller gap is
+/// below what the survey can tell apart.
+pub const COMBINE_DEPTH_NOTICE_M: f64 = 0.05;
+
+/// The most other line ends the station query lists at one point. Past it
+/// the point is a pile (unplaced lines all start at the origin), not a
+/// junction to choose from in a menu, and every partner costs a pair query;
+/// the Sections panel still combines any two of them.
+pub const MAX_COMBINE_PARTNERS: usize = 16;

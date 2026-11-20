@@ -4,15 +4,15 @@
     reason = "tests construct from known-valid literals; a failed unwrap should fail the test"
 )]
 
-use super::model::{
-    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, TankMaterial, Team,
-};
 use super::physics::{
     air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, edge_gas_basis,
     gas_rate, sac_to_rmv,
 };
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
+use crate::gas::{
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, TankMaterial, Team,
+};
 use crate::{
     Coordinates, GpsCoordinates, LineData, Project, ShotData, ShotKind, StationRef, ZeroDatum,
 };

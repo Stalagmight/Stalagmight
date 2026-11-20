@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::project::station_naming::name_characters_refusal;
+use crate::station_naming::name_characters_refusal;
 use crate::{
     legacy_halves, legacy_people, AzimuthReference, LineId, LineUpdates, ShotData, StationId,
     SurveyCredit, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,

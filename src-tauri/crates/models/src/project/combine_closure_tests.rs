@@ -1937,7 +1937,7 @@ struct SweepStats {
 /// ends a fraction of a millimetre apart, or merged ends whose chain
 /// positions differ (#740)?
 fn moves_a_residual(plan: &crate::CombinePlan) -> bool {
-    plan.moving_line.is_some() && plan.shift_m <= super::combine_candidate::COMBINE_TOLERANCE_M
+    plan.moving_line.is_some() && plan.shift_m <= crate::COMBINE_TOLERANCE_M
 }
 
 /// Start counting this thread's closure dedupes (#749) from zero.

@@ -59,7 +59,7 @@ pub const SECTION_PALETTE: [&str; 8] = [
 
 /// `name` made fit for a Section on automatic paths (an import, a file, an
 /// undo record): the characters a typed name is refused for
-/// ([`crate::project::station_naming::is_forbidden_name_char`]) go - a control
+/// ([`crate::station_naming::is_forbidden_name_char`]) go - a control
 /// character becomes a space, an invisible formatting one is dropped - then
 /// it is trimmed and cut to [`MAX_SECTION_NAME_CHARS`].
 pub fn clamp_section_name(name: &str) -> String {
@@ -68,7 +68,7 @@ pub fn clamp_section_name(name: &str) -> String {
         .filter_map(|c| {
             if c.is_control() {
                 Some(' ')
-            } else if crate::project::station_naming::is_forbidden_name_char(c) {
+            } else if crate::station_naming::is_forbidden_name_char(c) {
                 None
             } else {
                 Some(c)

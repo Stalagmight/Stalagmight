@@ -36,7 +36,7 @@
 use std::collections::BTreeSet;
 
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
-use crate::project::gas::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
+use crate::gas::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
 use crate::{StationId, StationRef};
 
 use super::super::legacy_convert::{

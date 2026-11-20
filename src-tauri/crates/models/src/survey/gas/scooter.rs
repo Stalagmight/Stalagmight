@@ -1,16 +1,16 @@
 //! Plan segments and the DPV range cap (#317) - the pure, graph-free half of scooter support.
 //!
-//! Copied from `models/src/project/gas/scooter.rs` for the station-graph engine (`survey::gas`).
-//! The two public speed bounds are NOT copied: they are re-used from `project::gas`, because the
-//! `.plnx` merge and the frontend's segment editor read them there, and a second copy is exactly
-//! how a stored plan starts resolving differently from the plan the diver saw.
+//! Ported from the legacy model's gas engine for the station-graph engine (`survey::gas`).
+//! The two public speed bounds live in `crate::gas`, because the `.plnx` merge and the
+//! frontend's segment editor read them there, and a second copy is exactly how a stored plan
+//! starts resolving differently from the plan the diver saw.
 //!
 //! The engine proper ([`super`]) owns the graph walk; everything here is arithmetic over the
 //! plan's own inputs, which is what keeps it testable without building a project.
 
 use crate::config::DpvRig;
 
-use crate::project::gas::{PlanSegment, MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
+use crate::gas::{PlanSegment, MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 
 /// One route span with its speed already decided - what the engine actually walks.
 ///
@@ -28,24 +28,8 @@ pub(super) struct ResolvedSegment {
     pub(super) range_per_metre: f64,
 }
 
-// The per-span speed bounds (`MIN_SEGMENT_SPEED_M_PER_MIN`, `MAX_SEGMENT_SPEED_M_PER_MIN`) are
-// re-used from `project::gas`. Their rationale, kept from the source:
-//
-// Slowest per-span speed (metres per minute) the engine will fly; below it the span inherits the
-// plan speed instead.
-//
-// A floor is needed, not just `> 0.0`. A stored speed can be any positive `f64` a hand-edited
-// `.plnx` or a bad round-trip contains, and the engine divides by it twice - once for the gas
-// scalar `rmv / speed`, once for the runtime rider `1 / speed`. A denormal (1e-320) overflows both
-// to `INFINITY`, which is not merely "very expensive": a real edge is then priced at `INFINITY`, so
-// `nd < dist[v]` fails and it never relaxes, and a zero-weight merge / loop-closure tie is priced
-// at `0.0 * INFINITY = NaN`, which fails the same comparison. Nothing propagates and the whole
-// field collapses to the origin. 0.1 m/min is two orders of magnitude under any real survey pace,
-// so nothing legitimate is excluded.
-
-// Fastest per-span speed the engine will fly; above it the span inherits the plan speed. The
-// ceiling is the floor's mirror - it keeps the reciprocal off the denormal end - and 1000 m/min is
-// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
+// The per-span speed bounds (`MIN_SEGMENT_SPEED_M_PER_MIN`, `MAX_SEGMENT_SPEED_M_PER_MIN`) and
+// their rationale are in `crate::gas`.
 
 /// The cruise speed the range cap is built from: the slower of the two units.
 ///

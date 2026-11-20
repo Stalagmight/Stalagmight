@@ -152,7 +152,7 @@ impl Seg {
 // ----- the transform ---------------------------------------------------------
 
 /// Re-associate one shot's readings with the opposite direction of travel:
-/// exactly Reverse Line's per-shot step (`project::reverse_shots`).
+/// exactly Reverse Line's per-shot step (`crate::reverse_shots`).
 fn flip(shot: &mut Shot, swap_lr: bool) {
     (shot.azimuth_in, shot.azimuth_out) = reversed_azimuths(shot.azimuth_in, shot.azimuth_out);
     std::mem::swap(&mut shot.depth_in, &mut shot.depth_out);

@@ -37,7 +37,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::core::{Command, ValidationWarning, Validator};
-use crate::models::project::station_naming::{
+use crate::models::station_naming::{
     dedupe_line_name_from, fill_line_station_names, name_with_free_letter, seed_line_name_from,
     settle_line_station_names,
 };

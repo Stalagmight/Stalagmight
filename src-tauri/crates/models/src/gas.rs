@@ -1,4 +1,5 @@
-//! Gas-planning domain model: divers, cylinders, teams. Canonical SI (L/min, L, bar, m).
+//! Gas-planning domain model: divers, cylinders, teams, and the wire shapes of the
+//! Plan-mode gas engine (`survey::gas`). Canonical SI (L/min, L, bar, m).
 //! Constructors guard non-finite / non-positive inputs at the ingest boundary (mirroring
 //! `Coordinates::new_checked`), so a NaN RMV or zero cylinder can never poison the gas
 //! field downstream. The persisted/per-plan `GasConfig` (units, reserve preset, speeds)
@@ -15,8 +16,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::StationRef;
-
-use super::physics::{cylinder_gas_volume, sac_to_rmv};
 
 fn default_true() -> bool {
     true
@@ -401,4 +400,37 @@ pub struct GasReachField {
     /// the two read as merely equal in exactly the case being asked about. Same class of mistake as
     /// re-deriving [`Self::turn_toward_endpoint`], and as the #233 gauge divergence.
     pub turn_on_scooter_range: bool,
+}
+
+/// Slowest per-span speed (metres per minute) the engine will fly; below it the span inherits the
+/// plan speed instead.
+///
+/// A floor is needed, not just `> 0.0`. A stored speed can be any positive `f64` a hand-edited
+/// `.plnx` or a bad round-trip contains, and the engine divides by it twice - once for the gas
+/// scalar `rmv / speed`, once for the runtime rider `1 / speed`. A denormal (1e-320) overflows both
+/// to `INFINITY`, which is not merely "very expensive": a real edge is then priced at `INFINITY`, so
+/// `nd < dist[v]` fails and it never relaxes, and a zero-weight merge / loop-closure tie is priced
+/// at `0.0 * INFINITY = NaN`, which fails the same comparison. Nothing propagates and the whole
+/// field collapses to the origin. 0.1 m/min is two orders of magnitude under any real survey pace,
+/// so nothing legitimate is excluded.
+pub const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
+
+/// Fastest per-span speed the engine will fly; above it the span inherits the plan speed. The
+/// ceiling is the floor's mirror - it keeps the reciprocal off the denormal end - and 1000 m/min is
+/// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
+pub const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
+
+/// Convert a surface air consumption (bar/min, measured on a reference
+/// cylinder) to a volumetric RMV (L/min): `rmv = sac × reference_water_volume`.
+/// SAC is a constructor concern only - never stored (see [`Diver::from_sac`]).
+pub(crate) fn sac_to_rmv(sac_bar_per_min: f64, ref_cyl_water_volume_l: f64) -> f64 {
+    sac_bar_per_min * ref_cyl_water_volume_l
+}
+
+/// Ideal free-gas volume (litres) a cylinder holds at `fill_bar`: `fill × water_volume`.
+/// Ideal-gas relation - at typical 200-232 bar fills real compressibility (Z) over-states this
+/// by ~4-6%, rising to ~12% at 300 bar (the unsafe direction). This is the raw ideal primitive;
+/// the usable-gas paths of the engine divide by the real-gas Z factor instead.
+pub(crate) fn cylinder_gas_volume(fill_bar: f64, water_volume_l: f64) -> f64 {
+    fill_bar * water_volume_l
 }

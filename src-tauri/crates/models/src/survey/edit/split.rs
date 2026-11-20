@@ -20,7 +20,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::project::MIN_SPLIT_CHILD_LENGTH_M;
+use crate::MIN_SPLIT_CHILD_LENGTH_M;
 use crate::{LineId, SplitAt, StationId};
 
 use super::super::{EditContext, Line, LoopClosure, Project};

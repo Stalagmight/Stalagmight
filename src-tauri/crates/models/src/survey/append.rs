@@ -26,7 +26,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use crate::project::station_naming::dedupe_line_name;
+use crate::station_naming::dedupe_line_name;
 use crate::{
     clamp_section_name, gps_to_local, reminted_shot_uuid_avoiding, LineId, Section, SectionId,
     StationId, MAX_LINE_ID, MAX_STATION_ID,

@@ -1976,7 +1976,7 @@ fn depth_gap_pair(gap: f64, merged: bool) -> (Project, LineId, LineId) {
 /// already averages, so it reports nothing.
 #[test]
 fn a_depth_gap_at_an_unmerged_join_is_reported_never_refused() {
-    use super::combine_candidate::COMBINE_DEPTH_NOTICE_M;
+    use crate::COMBINE_DEPTH_NOTICE_M;
     const { assert!(COMBINE_DEPTH_NOTICE_M < 0.1) };
 
     let (mut project, k, o) = depth_gap_pair(0.3, false);

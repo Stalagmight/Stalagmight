@@ -52,7 +52,7 @@ mod differential_tests;
 use std::collections::VecDeque;
 
 use crate::config::{DpvRig, GasConfig, ReservePreset};
-use crate::project::gas::{Cylinder, Diver, PlanSegment};
+use crate::gas::{Cylinder, Diver, PlanSegment};
 use crate::{LineId, ShotKind, StationId};
 
 use super::graph::{dense_coords, slot_coords};
@@ -73,12 +73,12 @@ use scooter::{resolve_segments, scooter_drop_index, scooter_range_limit};
 use walk::{budget_view, waypoint_walk, BudgetView};
 
 /// The gas reach field on the station graph: the station-level twin of [`GasReachField`]
-/// (`crate::project::gas::GasReachField`). Every per-station vector is indexed like
+/// (`crate::gas::GasReachField`). Every per-station vector is indexed like
 /// [`Self::stations`] (the dense order of [`super::Topology::stations`], ascending by id); route
 /// vectors are indexed by route node (`route`) or by route leg (`route_shots`, `route_leg_kinds`,
 /// leg `i` joining nodes `i` and `i + 1`). See the wire field for what each readout means.
 ///
-/// [`GasReachField`]: crate::project::gas::GasReachField
+/// [`GasReachField`]: crate::gas::GasReachField
 #[derive(Debug, Clone, PartialEq)]
 pub struct GasReach {
     /// Every station on a line, ascending: the index space of the per-station vectors.

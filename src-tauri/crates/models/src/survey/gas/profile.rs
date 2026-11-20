@@ -79,7 +79,7 @@ pub(super) fn route_metrics(depths: &[f64], legs: &[LegEnds]) -> (f64, Option<f6
 }
 
 /// One point of the anticipated dive profile (#299) on the station graph: the wire's
-/// [`crate::project::gas::RouteProfilePoint`] with the route node's station in place of its slot
+/// [`crate::gas::RouteProfilePoint`] with the route node's station in place of its slot
 /// (the wire names the slot, see `GasReach::to_wire`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GasProfilePoint {

@@ -22,10 +22,7 @@ use super::station_naming::{
     seed_line_name_from, settle_line_station_names, CombinePrefixReason, CombinePrefixes,
 };
 use super::{station_key_order, Project};
-
-/// What a line without a name is called in user-facing text
-/// ([`Project::line_label`]).
-pub const UNNAMED_LINE: &str = "unnamed line";
+use crate::UNNAMED_LINE;
 
 /// What one [`Project::ensure_station_identities`] pass changed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

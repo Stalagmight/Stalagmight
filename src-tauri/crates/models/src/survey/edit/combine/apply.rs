@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::project::station_naming::plan_combine_prefixes;
+use crate::station_naming::plan_combine_prefixes;
 use crate::{
     normalize_azimuth, CombineLinesOptions, CombinePick, LineEnd, LineId, StationId, StationRef,
 };
@@ -602,7 +602,7 @@ impl Project {
         kept: LineId,
         other: LineId,
         jo: StationId,
-    ) -> crate::project::station_naming::CombinePrefixes {
+    ) -> crate::station_naming::CombinePrefixes {
         let kept_chain = self.line_stations(kept).unwrap_or(&[]);
         let shared_join = kept_chain.contains(&jo);
         let names = |chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
@@ -673,7 +673,7 @@ impl Project {
         jk: StationId,
         jo: StationId,
     ) -> Option<crate::CombineStationRenames> {
-        use crate::project::station_naming::CombinePrefixReason;
+        use crate::station_naming::CombinePrefixReason;
         let plan = self.combine_prefix_plan(kept, other, jo);
         let reason = match plan.reason? {
             CombinePrefixReason::Collision => crate::CombineRenameReason::Collision,

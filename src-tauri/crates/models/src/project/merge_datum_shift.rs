@@ -6,22 +6,7 @@
 //! so the two picked stations meet, and that datum is a GPS fix from then on.
 //! `datum_ui_tests` pins the preview against the real merge.
 
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-
-use super::{LineId, Project, StationRef};
-
-/// The piece a merge of two placed pieces moves, and how far.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export_to = "bindings/MergeDatumShift.ts")]
-pub struct MergeDatumShift {
-    /// Every line of the piece that moves, ascending.
-    pub moving_line_ids: Vec<LineId>,
-    /// How far it moves, horizontal metres.
-    pub shift_m: f64,
-    /// The station of its placement datum, which becomes a GPS fix.
-    pub datum_station: StationRef,
-}
+use super::{LineId, MergeDatumShift, Project, StationRef};
 
 impl Project {
     /// What merging `station_a` with `station_b` would do to a placed piece,

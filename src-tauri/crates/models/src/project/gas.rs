@@ -8,7 +8,6 @@
 //! coordinate-independent, so it never triggers the slow closure-adjusted solve. The engine is
 //! called by the `commands::gas` IPC command via `AppState::gas_reach_field`.
 
-mod model;
 mod physics;
 mod scooter;
 
@@ -21,7 +20,7 @@ use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::{Coordinates, ShotKind, StationKey, StationRef};
 
 use super::Project;
-pub use model::{
+pub use crate::gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };

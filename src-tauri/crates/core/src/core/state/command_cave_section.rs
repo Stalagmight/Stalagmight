@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use super::command_line::{missing_section, push_ref};
 use super::commands::{Applied, Record};
 use crate::core::Command;
-use crate::models::project::station_naming::name_characters_refusal;
+use crate::models::station_naming::name_characters_refusal;
 use crate::models::survey::Project;
 use crate::models::{
     is_section_color, LineId, Section, SectionId, LINE_GONE, MAX_SECTION_NAME_CHARS,

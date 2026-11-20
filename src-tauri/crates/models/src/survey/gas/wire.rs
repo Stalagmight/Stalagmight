@@ -16,9 +16,7 @@
 //! - route indices index the station route, which has no merge hops.
 
 use crate::config::GasConfig;
-use crate::project::gas::{
-    Cylinder, Diver, GasReachField, PlanSegment, RouteLeg, RouteProfilePoint,
-};
+use crate::gas::{Cylinder, Diver, GasReachField, PlanSegment, RouteLeg, RouteProfilePoint};
 use crate::{LineId, ShotKind, StationId, StationRef};
 
 use super::super::{Project, Topology};

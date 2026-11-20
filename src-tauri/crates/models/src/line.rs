@@ -22,6 +22,10 @@ pub const LINE_GONE: &str = "That line no longer exists.";
 /// [`LINE_GONE`] for a shot.
 pub const SHOT_GONE: &str = "That shot no longer exists.";
 
+/// What a line without a name is called in user-facing text
+/// (the line label of history rows, refusals and the Combine dialog).
+pub const UNNAMED_LINE: &str = "unnamed line";
+
 /// Survey direction (In = going into cave, Out = returning)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]

@@ -5,7 +5,7 @@
 //! file) unchanged for the station-graph engine (`survey::gas`).
 
 use crate::config::{ReservePreset, ReserveProfile};
-use crate::project::gas::{CylRole, Cylinder};
+use crate::gas::{CylRole, Cylinder};
 
 use super::physics::deliverable_gas;
 

@@ -5,7 +5,7 @@
 
 use crate::config::DpvRig;
 
-use super::model::PlanSegment;
+use crate::gas::PlanSegment;
 
 /// One route span with its speed already decided - what the engine actually walks.
 ///
@@ -23,23 +23,7 @@ pub(super) struct ResolvedSegment {
     pub(super) range_per_metre: f64,
 }
 
-/// Slowest per-span speed (metres per minute) the engine will fly; below it the span inherits the
-/// plan speed instead.
-///
-/// A floor is needed, not just `> 0.0`. A stored speed can be any positive `f64` a hand-edited
-/// `.plnx` or a bad round-trip contains, and the engine divides by it twice - once for the gas
-/// scalar `rmv / speed`, once for the runtime rider `1 / speed`. A denormal (1e-320) overflows both
-/// to `INFINITY`, which is not merely "very expensive": a real edge is then priced at `INFINITY`, so
-/// `nd < dist[v]` fails and it never relaxes, and a zero-weight merge / loop-closure tie is priced
-/// at `0.0 * INFINITY = NaN`, which fails the same comparison. Nothing propagates and the whole
-/// field collapses to the origin. 0.1 m/min is two orders of magnitude under any real survey pace,
-/// so nothing legitimate is excluded.
-pub const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
-
-/// Fastest per-span speed the engine will fly; above it the span inherits the plan speed. The
-/// ceiling is the floor's mirror - it keeps the reciprocal off the denormal end - and 1000 m/min is
-/// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
-pub const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
+pub use crate::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 
 /// The cruise speed the range cap is built from: the slower of the two units.
 ///

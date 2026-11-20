@@ -2,7 +2,7 @@
 //! and no station moves.
 //!
 //! The chain is reversed (the old last station is the new start) and every
-//! shot is flipped by today's transform (`project::reverse_shots`: bearings
+//! shot is flipped by today's transform (`crate::reverse_shots`: bearings
 //! reciprocated and swapped, the degenerate antipodal pair swapped only,
 //! depths swapped, pitches swapped and negated, left and right swapped when
 //! asked). Uuids and credits travel with their records; session shot ids
@@ -13,7 +13,7 @@
 //! Positions do not change, up to the documented ulp rounding of the
 //! `(az + 180) % 360` turn.
 
-use crate::project::reverse_shots;
+use crate::reverse_shots;
 use crate::{LineId, ShotData};
 
 use super::super::{EditContext, Project, Shot};
