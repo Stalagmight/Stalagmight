@@ -85,6 +85,14 @@ mod migrate_v2_roundtrip_tests;
 )]
 mod test_support;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point; the sweep prints class counts only"
+)]
+mod wire_equivalence_tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
