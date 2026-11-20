@@ -57,6 +57,20 @@ mod reverse;
 mod shots;
 mod split;
 
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    reason = "test helpers: a refused edit is a broken test setup"
+)]
+mod edit_test_helpers;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod shots_tests;
+
 pub use combine::{
     CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
     TornTie, TornTieKind, TornTieReason,
