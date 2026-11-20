@@ -645,14 +645,16 @@ fn scan_cache(root: &Path) -> HashMap<String, SpeleoLocalProjectState> {
         .collect()
 }
 
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
+    use super::super::speleodb_test_files::{
+        instant, link_on_disk, write_legacy_link_only, write_v2,
+    };
     use super::*;
-    use crate::models::{Project, SpeleoLink};
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";
     const ID_B: &str = "22222222-2222-2222-2222-222222222222";
@@ -665,22 +667,20 @@ mod tests {
     /// recorded as [`ME`]'s.
     fn seed_based(root: &Path, base: Option<&str>, dirty: bool) -> PathBuf {
         let path = cache_path_in(root, ID_A);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Cached".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: SERVER.to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Cached".to_owned(),
-            base_commit_sha: base.map(str::to_owned),
-            has_unpushed_edits: dirty,
-            last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        write_v2(
+            &path,
+            "Cached",
+            Some(&SpeleoLink {
+                endpoint: SERVER.to_owned(),
+                project_id: ID_A.to_owned(),
+                project_name: "Cached".to_owned(),
+                base_commit_sha: base.map(str::to_owned),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        );
         AppState::new()
             .expect("state")
             .speleodb_record_cache_owner(&path, SERVER, ME, "Cached");
@@ -692,11 +692,7 @@ mod tests {
     }
 
     fn link_at(path: &Path) -> SpeleoLink {
-        Database::open_for_metadata(path)
-            .expect("open")
-            .load_speleo_link()
-            .expect("read")
-            .expect("linked")
+        link_on_disk(path).expect("linked")
     }
 
     #[test]
@@ -862,15 +858,18 @@ mod tests {
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_none());
-        // The edit's dirty stamp, set as a fixture (see the forward-edit tripwire).
-        state
-            .database
-            .lock()
-            .expect("database")
-            .as_ref()
-            .expect("open")
-            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
-            .expect("stamp the dirty bit");
+        // The edit's dirty stamp, set IN MEMORY only (the file stays clean): the arm
+        // must answer from the live link, which is at least as fresh as the file.
+        state.with_file(|file| {
+            let mut link = file.speleo_link().expect("linked");
+            link.has_unpushed_edits = true;
+            link.last_edit_at = Some("2026-11-09T10:00:00Z".to_owned());
+            file.set_speleo_link(Some(&link));
+        });
+        assert!(
+            !link_at(&path).has_unpushed_edits,
+            "precondition: the file is clean"
+        );
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_some());
@@ -909,11 +908,12 @@ mod tests {
     /// bit, and return its path.
     fn seed_cache(root: &Path, project_id: &str, dirty: bool) -> PathBuf {
         let path = cache_path_in(root, project_id);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Cached".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
+        write_v2(&path, "Cached", Some(&cached_link(project_id, dirty)));
+        path
+    }
+
+    fn cached_link(project_id: &str, dirty: bool) -> SpeleoLink {
+        SpeleoLink {
             endpoint: "http://x/".to_owned(),
             project_id: project_id.to_owned(),
             project_name: "Cached".to_owned(),
@@ -922,9 +922,26 @@ mod tests {
             last_edit_at: dirty.then(|| "2026-07-26T00:00:00Z".to_owned()),
             last_verify_at: None,
             undo_mode: None,
-        }))
-        .expect("save link");
-        path
+        }
+    }
+
+    /// A copy of `project_id` open from outside the cache (the Save-As shape),
+    /// named `name`, with the given dirty bit.
+    fn seed_elsewhere(path: &Path, project_id: &str, name: &str, dirty: bool) {
+        write_v2(
+            path,
+            name,
+            Some(&SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: project_id.to_owned(),
+                project_name: name.to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-07-26T12:00:00Z".to_owned()),
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        );
     }
 
     #[test]
@@ -940,8 +957,8 @@ mod tests {
         let a = all.get(ID_A).expect("dirty project reported");
         assert!(a.has_local_copy && a.has_unpushed_edits, "A is dirty");
         assert_eq!(
-            a.last_edit_at.as_deref(),
-            Some("2026-07-26T00:00:00Z"),
+            instant(a.last_edit_at.as_deref()),
+            instant(Some("2026-07-26T00:00:00Z")),
             "the dirty copy carries its edit time"
         );
         assert!(!a.is_open, "nothing is open in this fixture");
@@ -954,7 +971,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path();
         seed_cache(root, ID_A, true);
-        // A corrupt cache entry for B: a file of the right name that is not SQLite.
+        // A corrupt cache entry for B: a file of the right name that is not a project.
         let corrupt = cache_path_in(root, ID_B);
         std::fs::create_dir_all(corrupt.parent().expect("parent")).expect("mkdir");
         std::fs::write(&corrupt, b"not a database at all").expect("write corrupt");
@@ -1023,21 +1040,7 @@ mod tests {
         seed_cache(&root, ID_A, false);
         // The open copy of A lives elsewhere and is dirty.
         let open_path = temp.path().join("open.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Open".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Open".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: true,
-            last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Open", true);
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(open_path).success, "open the fixture");
@@ -1049,7 +1052,10 @@ mod tests {
             "the live open link wins over the clean file in the cache"
         );
         assert!(a.is_open, "and is flagged as the open project");
-        assert_eq!(a.last_edit_at.as_deref(), Some("2026-07-26T12:00:00Z"));
+        assert_eq!(
+            instant(a.last_edit_at.as_deref()),
+            instant(Some("2026-07-26T12:00:00Z"))
+        );
     }
 
     #[test]
@@ -1066,28 +1072,14 @@ mod tests {
         // A's cache copy is present and UNREADABLE; B's is present and DIRTY.
         let cached_a = cache_path_in(&root, ID_A);
         std::fs::create_dir_all(cached_a.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&cached_a, b"not a sqlite database at all").expect("write junk");
+        std::fs::write(&cached_a, b"not a project file at all").expect("write junk");
         seed_cache(&root, ID_B, true);
 
         // A CLEAN copy of BOTH projects cannot be open at once, so run the shape
         // twice - once per project - against a clean copy open from outside the cache.
         for (id, assertion) in [(ID_A, "unreadable"), (ID_B, "dirty")] {
             let open_path = temp.path().join(format!("my-copy-{id}.stalx"));
-            let mut db = Database::open(&open_path).expect("open db");
-            db.save_project(&Project::new("Mine".to_owned(), None))
-                .expect("save project");
-            db.save_speleo_link(Some(&SpeleoLink {
-                endpoint: "http://x/".to_owned(),
-                project_id: id.to_owned(),
-                project_name: "Mine".to_owned(),
-                base_commit_sha: Some("abc123".to_owned()),
-                has_unpushed_edits: false,
-                last_edit_at: None,
-                last_verify_at: None,
-                undo_mode: None,
-            }))
-            .expect("save link");
-            drop(db);
+            seed_elsewhere(&open_path, id, "Mine", false);
 
             let state = AppState::new().expect("state");
             assert!(
@@ -1150,7 +1142,7 @@ mod tests {
         let root = temp.path();
         let path = cache_path_in(root, ID_A);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, b"not a sqlite database at all").expect("write junk");
+        std::fs::write(&path, b"not a project file at all").expect("write junk");
         let state = AppState::new().expect("state");
 
         let out = state.speleodb_local_project_states_in(Some(root), Some(vec![ID_A.to_owned()]));
@@ -1197,22 +1189,21 @@ mod tests {
 
     #[test]
     fn a_legacy_cached_stalx_reads_as_a_known_local_copy_not_as_unreadable() {
-        // A `.stalx` pulled by an older build has a NARROWER `speleo_link` table, and
-        // `open_for_metadata` runs no migration - so the reader used to fail it with
-        // `no such column` and the failure landed in the Unreadable branch. That
-        // wedged the project permanently in both directions at once: the guard refused
-        // every pull / adopt / revision-restore with a factually wrong "has local edits
-        // that were never pushed", while the cache scan claimed there was no local copy
-        // at all. Neither statement was true, and neither could be cleared by anything
-        // the user could do.
+        // A `.stalx` pulled by an older build is SQLite, often with a NARROWER
+        // `speleo_link` table, and the link reader runs no migration - so a reader that
+        // selected the newer columns failed it with `no such column` and the failure
+        // landed in the Unreadable branch. That wedged the project permanently in both
+        // directions at once: the guard refused every pull / adopt / revision-restore
+        // with a factually wrong "has local edits that were never pushed", while the
+        // cache scan claimed there was no local copy at all.
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path();
-        let path = seed_cache(root, ID_A, false);
-        // Rebuild the link table in its pre-v10 shape, as an older build wrote it.
-        let conn = rusqlite::Connection::open(&path).expect("open to narrow the table");
+        let path = cache_path_in(root, ID_A);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        // The link table in its pre-v10 shape, as an older build wrote it.
+        let conn = rusqlite::Connection::open(&path).expect("create the legacy copy");
         conn.execute_batch(
-            "DROP TABLE speleo_link;
-             CREATE TABLE speleo_link (
+            "CREATE TABLE speleo_link (
                  id INTEGER PRIMARY KEY CHECK (id = 1),
                  endpoint TEXT NOT NULL,
                  project_id TEXT NOT NULL,
@@ -1245,6 +1236,88 @@ mod tests {
         );
     }
 
+    /// A hot rollback journal beside a LEGACY copy makes it unknown by rule: its
+    /// committed state is the file plus the journal. A version 2 copy is written
+    /// whole by a rename and has no journal, so a stray `-journal` beside one (left
+    /// from its SQLite past) means nothing and the copy reads as it is.
+    #[test]
+    fn a_hot_journal_makes_only_a_legacy_copy_unknown() {
+        const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+        let journal_of = |path: &Path| {
+            let mut name = path.as_os_str().to_owned();
+            name.push("-journal");
+            PathBuf::from(name)
+        };
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path();
+        let legacy = cache_path_in(root, ID_A);
+        write_legacy_link_only(&legacy, &cached_link(ID_A, false));
+        std::fs::write(journal_of(&legacy), JOURNAL_MAGIC).expect("armed journal");
+        let v2 = seed_cache(root, ID_B, false);
+        std::fs::write(journal_of(&v2), JOURNAL_MAGIC).expect("stray journal");
+
+        let state = AppState::new().expect("state");
+        let rows = state.speleodb_local_project_states_in(Some(root), None);
+        assert!(
+            rows.get(ID_A).is_some_and(|row| row.state_unknown),
+            "the legacy copy with a hot journal is unknown: {rows:?}"
+        );
+        assert!(
+            state.local_copy_state(ID_A, &legacy).is_none(),
+            "and the guard fails closed on it"
+        );
+        assert!(
+            rows.get(ID_B)
+                .is_some_and(|row| row.has_local_copy && !row.state_unknown),
+            "the version 2 copy reads as it is: {rows:?}"
+        );
+    }
+
+    /// The probe the whole module stands on, on the shapes a link reader meets.
+    #[test]
+    fn the_link_probe_reads_both_formats_and_says_what_it_could_not_read() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let v2 = temp.path().join("v2.stalx");
+        write_v2(&v2, "V2", Some(&cached_link(ID_A, true)));
+        let legacy = temp.path().join("legacy.stalx");
+        write_legacy_link_only(&legacy, &cached_link(ID_B, false));
+        let plain = temp.path().join("plain.stalx");
+        write_v2(&plain, "Plain", None);
+        let empty = temp.path().join("empty.stalx");
+        std::fs::write(&empty, b"").expect("empty");
+        let junk = temp.path().join("junk.stalx");
+        std::fs::write(&junk, b"not a project file at all").expect("junk");
+        let truncated = temp.path().join("truncated.stalx");
+        std::fs::write(
+            &truncated,
+            br#"{"format":"stalx","version":2,"solver":1,"requi"#,
+        )
+        .expect("truncated");
+
+        let read = |path: &Path| probe_link(path, LegacyRead::ReadOnly);
+        assert!(
+            matches!(read(&v2), FileLink::Read(Some(ref l)) if l.project_id == ID_A && l.has_unpushed_edits),
+            "{:?}",
+            read(&v2)
+        );
+        assert!(
+            matches!(read(&legacy), FileLink::Read(Some(ref l)) if l.project_id == ID_B && !l.has_unpushed_edits),
+            "{:?}",
+            read(&legacy)
+        );
+        assert!(matches!(read(&plain), FileLink::Read(None)));
+        assert!(
+            matches!(read(&empty), FileLink::Read(None)),
+            "nothing to lose"
+        );
+        assert!(matches!(read(&junk), FileLink::Unreadable(_)));
+        assert!(matches!(read(&truncated), FileLink::Unreadable(_)));
+        assert!(matches!(
+            read(&temp.path().join("missing.stalx")),
+            FileLink::Missing
+        ));
+    }
+
     #[test]
     fn a_live_link_only_vouches_for_an_unreadable_copy_when_it_is_that_file() {
         // The waiver the fail-closed guard had. In the Unreadable branch the live open
@@ -1263,21 +1336,7 @@ mod tests {
 
         // A CLEAN copy of the same project, open from elsewhere (the Save-As shape).
         let open_path = temp.path().join("my-copy.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Mine".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Mine".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Mine", false);
 
         let state = AppState::new().expect("state");
         assert!(
@@ -1317,21 +1376,7 @@ mod tests {
 
         // A DIRTY copy of the same project, open from elsewhere (the Save-As shape).
         let open_path = temp.path().join("my-copy.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Mine".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Mine".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: true,
-            last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Mine", true);
 
         let state = AppState::new().expect("state");
         assert!(
