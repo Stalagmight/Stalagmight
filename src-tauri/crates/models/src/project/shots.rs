@@ -83,6 +83,25 @@ impl Project {
         excluded_shot: Option<(SectionId, usize)>,
         include_closures: bool,
     ) -> bool {
+        self.are_stations_connected_with_planned(
+            station_a,
+            station_b,
+            excluded_shot,
+            include_closures,
+            &[],
+        )
+    }
+
+    /// [`Self::are_stations_connected_excluding_shot`] over the survey plus
+    /// `planned`: merges an edit has decided to record but not recorded yet.
+    fn are_stations_connected_with_planned(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
         if station_a == station_b {
             return true;
         }
@@ -92,8 +111,19 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in
-                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
+            let planned_partners = planned.iter().filter_map(|&(a, b)| {
+                if a == current {
+                    Some(b)
+                } else if b == current {
+                    Some(a)
+                } else {
+                    None
+                }
+            });
+            for neighbor in self
+                .station_neighbors_excluding_shot(current, excluded_shot, include_closures)
+                .into_iter()
+                .chain(planned_partners)
             {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
@@ -727,11 +757,12 @@ impl Project {
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
-                    } else if self.are_stations_connected_excluding_shot(
+                    } else if self.are_stations_connected_with_planned(
                         replacement_station,
                         other,
                         Some((section_id, pos)),
                         false,
+                        &planned,
                     ) || self.would_double_anchor_after_removal(
                         replacement_station.section_id,
                         other.section_id,
@@ -742,7 +773,12 @@ impl Project {
                         // deleted station:
                         //
                         // * the two ends still reach each other through the survey
-                        //   (shots + merges), so it remains a genuine loop;
+                        //   (shots + merges), so it remains a genuine loop. The
+                        //   merges include the ones planned above, as the guard
+                        //   below does: once an earlier closure of this station
+                        //   is promoted, the next may reach its other end through
+                        //   that merge, and promoting it too would weld one
+                        //   station onto two separate points (#776);
                         // * or promoting it would weld two components that each
                         //   survive independently zero-datum-anchored. That edge
                         //   puts two GPS anchors in one rigid group -
