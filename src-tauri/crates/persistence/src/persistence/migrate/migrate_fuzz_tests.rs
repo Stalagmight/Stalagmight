@@ -2055,7 +2055,8 @@ fn a_doubled_closure_leaves_with_the_slot_as_today() {
 ///   (807 m from the exact solution: rounding of `weight x coordinate`
 ///   currents and a diagonal leaking to ground, which the weak shot
 ///   amplified);
-/// - 34014784, 34016414 (and 34013171, which the farm shrank to 34014784):
+/// - 34014784, 34016414 (the farm's finding on the window from 34013171
+///   shrinks to 34014784):
 ///   a station moves by exactly its misclosures (one GPS fix 72 km off, or
 ///   one closure), so the oracle's bound is attained and the solve's
 ///   rounding, 9.4e-4 m and 0.022 m, broke it;
@@ -2069,17 +2070,16 @@ fn a_doubled_closure_leaves_with_the_slot_as_today() {
 /// The solve now finds corrections to the raw layout from misclosure
 /// currents and refines them (`models::survey::lsq`); a 100-digit solve of
 /// each seed's least squares agrees with it within 5e-9 m. Injections: the
-/// absolute solve fails 34022454, 34014784 and 34016414 on the bound; one
-/// pass without the refinement fails 34022454's model test
-/// (`adjust_precision_tests`); the precision scale without the datums
-/// leaves 34019254's four slots unexplained.
+/// absolute solve fails 34022454, 34014784 and 34016414 on the bound (one
+/// pass without the refinement is caught by the synthetic
+/// `models::survey::adjust_precision_tests` instead); the precision scale
+/// without the datums leaves 34019254's four slots unexplained.
 #[test]
 fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
     for (seed, class) in [
         (34_022_454, None),
         (34_014_784, None),
         (34_016_414, None),
-        (34_013_171, None),
         (34_019_254, Some(ExpectedClass::LegacySolvePrecision)),
     ] {
         let classes = pinned_seed(seed, DEFAULT_KNOBS);

@@ -779,9 +779,9 @@ The full format is `docs/file-format.md`.
 
 - **G11. The Computed View's maximum principle on the farm (wave Y0).** The oracle (`migrate_fuzz_tests::computed_view_within_its_misclosures`, G9) is a true property of the solve as built: per axis the least squares is a resistor network (positive weights; the floor never changes a sign) driven by the tie gaps, fix offsets and raw shot misfits, so by superposition and the maximum principle no station moves further than their sum; its doc carries the argument. Farm seeds against it:
   - 34022454 was the solver (D21): 809 m against 37 m of misclosure.
-  - 34014784 and 34016414 (34013171 shrinks to the first) attain the bound exactly (one GPS fix 72 km off, or one closure, moves a station by all of it), so the absolute solve's rounding (9.4e-4 m and 0.022 m) broke the slack of `1e-6 m + 1e-9 x scale`; with D21 the solve is within 1.5e-11 m of exact there and the slack is unchanged.
+  - 34014784 and 34016414 (the farm's finding on the window from 34013171 shrinks to the first) attain the bound exactly (one GPS fix 72 km off, or one closure, moves a station by all of it), so the absolute solve's rounding (9.4e-4 m and 0.022 m) broke the slack of `1e-6 m + 1e-9 x scale`; with D21 the solve is within 1.5e-11 m of exact there and the slack is unchanged.
   - 34019254 (a migration check, 4 slots at 3.4 mm) was 0.6.0: it placed a spur beyond a merge by its group's solved position, and with GPS fixes holding the 17 m survey 2 km away its absolute solve's rounding scaled with them; the port lays the spur out from its shots (1e-13 m from exact). `LegacySolvePrecision`'s scale now counts the datums' local GPS positions as well as the raw layout, in the verification and the property check's cross-check.
-  `migrate_fuzz_tests::farm_seeds_keep_the_computed_view_within_its_misclosures` pins all five.
+  `migrate_fuzz_tests::farm_seeds_keep_the_computed_view_within_its_misclosures` pins the four.
 
 ## Deviations (stream U, undo engine)
 
