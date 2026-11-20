@@ -109,6 +109,45 @@ impl AdjustmentFailure {
     }
 }
 
+/// How the Closures Computed View treats the solve component (the shot
+/// components joined by any closure) holding a station: whether it is
+/// solved, and the station it is held at when nothing else is. Edits that
+/// must not shift the view (Combine Lines' choice of the side that moves)
+/// read it, so they and the solve share one rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SolveHold {
+    /// The held station: the station of the component's first placement
+    /// datum in list order, else the `Placement` station of its piece with
+    /// the lowest station (the gauge).
+    pub anchor: StationId,
+    /// Whether `anchor` is a placement datum's station.
+    pub datum: bool,
+    /// Whether the solve adjusts the component (it holds an eligible closure
+    /// the across-one-shot rule does not skip, or a GPS fix); otherwise it
+    /// keeps its raw layout.
+    pub solved: bool,
+}
+
+/// The solve components of one state (module docs).
+struct SolvePartition {
+    /// Per shot component: the root shot component of its solve component.
+    solve_of: Vec<usize>,
+    /// Per root: whether the solve adjusts it.
+    wanted: Vec<bool>,
+    /// Per closure (list order): skipped as across one shot.
+    skipped: Vec<bool>,
+}
+
+/// The shot component whose anchor holds the solve of `members`: the one
+/// whose placement datum is first in list order, else the lowest.
+fn held_component(anchors: &[Anchor], members: &[usize], fallback: usize) -> usize {
+    members
+        .iter()
+        .copied()
+        .min_by_key(|&c| (anchors[c].datum().unwrap_or(usize::MAX), c))
+        .unwrap_or(fallback)
+}
+
 /// The Closures Computed View of one project state: per-station positions
 /// plus what the solve skipped and could not do.
 #[derive(Debug, Clone, PartialEq)]
@@ -314,19 +353,36 @@ impl Project {
         }
     }
 
-    /// The components to solve, in the order of their first line in the list,
-    /// with their sorted line ids and anchor slot.
-    fn solve_inputs(
+    /// How the Closures Computed View treats the solve component holding
+    /// `station` ([`SolveHold`]); `None` for a station on no line.
+    pub fn solve_hold(&self, station: StationId) -> Option<SolveHold> {
+        let raw = self.raw_positions();
+        let aligned = self.closure_alignment(&raw);
+        let skipped = self.closures_across_one_shot_with(&aligned);
+        let partition = self.solve_partition(&skipped, &self.datum_roles());
+        let root = partition.solve_of[self.topology().component_of(station)?];
+        let members: Vec<usize> = (0..partition.solve_of.len())
+            .filter(|&c| partition.solve_of[c] == root)
+            .collect();
+        let anchors = raw.anchors();
+        let held = held_component(anchors, &members, root);
+        Some(SolveHold {
+            anchor: anchors[held].station(),
+            datum: anchors[held].datum().is_some(),
+            solved: partition.wanted[root],
+        })
+    }
+
+    /// The solve components (shot components joined by every closure) and
+    /// which of them the solve adjusts: an eligible closure it does not skip
+    /// with both ends in the component, or a GPS fix.
+    fn solve_partition(
         &self,
-        raw: &RawPositions,
-        aligned: &[bool],
         skipped: &[ClosureAcrossOneShot],
         roles: &[Option<DatumRole>],
-    ) -> Vec<(SolveInput<'_>, Vec<LineId>, StationRef)> {
+    ) -> SolvePartition {
         let topology = self.topology();
         let components = topology.components();
-        let anchors = raw.anchors();
-        // Shot components joined by every closure.
         let mut parent: Vec<usize> = (0..components.len()).collect();
         for closure in &self.closures {
             if let (Some(a), Some(b)) = (
@@ -349,8 +405,6 @@ impl Project {
             }
         }
         let solve_of_station = |s: StationId| topology.component_of(s).map(|c| solve_of[c]);
-
-        // Which solve components hold an eligible, unskipped closure or a fix.
         let mut wanted = vec![false; components.len()];
         for (i, closure) in self.closures.iter().enumerate() {
             if Self::closure_is_eligible(closure.strategy) && !skipped_mask[i] {
@@ -370,6 +424,31 @@ impl Project {
                 }
             }
         }
+        SolvePartition {
+            solve_of,
+            wanted,
+            skipped: skipped_mask,
+        }
+    }
+
+    /// The components to solve, in the order of their first line in the list,
+    /// with their sorted line ids and anchor slot.
+    fn solve_inputs(
+        &self,
+        raw: &RawPositions,
+        aligned: &[bool],
+        skipped: &[ClosureAcrossOneShot],
+        roles: &[Option<DatumRole>],
+    ) -> Vec<(SolveInput<'_>, Vec<LineId>, StationRef)> {
+        let topology = self.topology();
+        let components = topology.components();
+        let anchors = raw.anchors();
+        let SolvePartition {
+            solve_of,
+            wanted,
+            skipped: skipped_mask,
+        } = self.solve_partition(skipped, roles);
+        let solve_of_station = |s: StationId| topology.component_of(s).map(|c| solve_of[c]);
 
         // Order: by the list position of the first line of the component.
         let mut first_line: Vec<usize> = vec![usize::MAX; components.len()];
@@ -489,11 +568,7 @@ impl Project {
             lines.dedup();
             // The anchor: the component whose placement datum is first in list
             // order, else the (single) placement station.
-            let anchor_component = members
-                .iter()
-                .copied()
-                .min_by_key(|&c| (anchors[c].datum().unwrap_or(usize::MAX), c))
-                .unwrap_or(s);
+            let anchor_component = held_component(anchors, &members, s);
             let anchor_station = anchors[anchor_component].station();
             let anchor_slot = match anchors[anchor_component] {
                 Anchor::Datum { datum, .. } => {

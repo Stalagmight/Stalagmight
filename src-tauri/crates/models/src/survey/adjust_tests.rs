@@ -506,3 +506,49 @@ fn a_large_survey_solves_in_linear_time() {
         "derived views took {elapsed:?}"
     );
 }
+
+/// [`Project::solve_hold`] names the station the least squares holds (it
+/// does not move in the Computed View), says whether the component is solved
+/// (an eligible closure, `Tie` included per D10; none: raw layout), and
+/// reports a placement datum's station when the component holds one. This is
+/// the rule Combine Lines' gauge check reads.
+#[test]
+fn solve_hold_names_the_station_the_least_squares_holds() {
+    use super::test_helpers::{at, gps, three_line_junction};
+    use super::ZeroDatum;
+
+    let config = ClosureAdjustmentConfig::default();
+    let (base, [l0, l1, _]) = three_line_junction();
+    let (s0, s2, b) = (at(&base, l0, 0), at(&base, l0, 2), at(&base, l1, 2));
+
+    let hold = base.solve_hold(b).unwrap();
+    assert_eq!((hold.anchor, hold.datum, hold.solved), (s0, false, false));
+
+    for strategy in [ClosureStrategy::Batch, ClosureStrategy::Tie] {
+        let mut p = base.clone();
+        p.push_closure(b, Some(l1), s2, Some(l0), strategy);
+        assert!(p.is_valid(), "{strategy:?}: {:?}", p.validate());
+        let hold = p.solve_hold(s2).unwrap();
+        assert_eq!(
+            (hold.anchor, hold.datum, hold.solved),
+            (s0, false, true),
+            "{strategy:?}"
+        );
+        let raw = p.raw_positions();
+        let adjusted = p.adjusted_positions_from(&raw, &config);
+        assert!(adjusted.failures().is_empty(), "{strategy:?}");
+        assert_eq!(adjusted.xy(s0), raw.xy(s0), "{strategy:?}: the gauge stays");
+        assert_ne!(adjusted.xy(b), raw.xy(b), "{strategy:?}: the loop is solved");
+    }
+
+    let mut p = base.clone();
+    p.placements.clear();
+    p.push_datum(ZeroDatum::new(s2, gps(20.0, -87.0)));
+    p.push_closure(b, Some(l1), s2, Some(l0), ClosureStrategy::Batch);
+    assert!(p.is_valid(), "{:?}", p.validate());
+    let hold = p.solve_hold(s0).unwrap();
+    assert_eq!((hold.anchor, hold.datum, hold.solved), (s2, true, true));
+    let raw = p.raw_positions();
+    let adjusted = p.adjusted_positions_from(&raw, &config);
+    assert_eq!(adjusted.xy(s2), raw.xy(s2), "the datum is held");
+}

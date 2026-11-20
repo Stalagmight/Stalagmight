@@ -499,57 +499,22 @@ impl Project {
         path.into_iter().find(|(_, line)| *line != m)
     }
 
-    /// The adjusted-view gauge the anchor rule protects (step 1): the first
-    /// placement (list order) of the closure-connected group of the kept
-    /// join station, when the Closures Computed View solves the joined
-    /// survey; `None` otherwise (the plain rule applies).
+    /// The adjusted-view gauge the anchor rule protects (step 1): the station
+    /// the Closures Computed View holds the kept join station's solve
+    /// component at ([`Project::solve_hold`]: its first placement datum's
+    /// station, else its lowest piece's `Placement` station), when the view
+    /// solves the joined survey; `None` otherwise (the plain rule applies).
+    /// A datum station is never on a free side, so with a datum in the
+    /// component no side holds the gauge, as today.
     fn combine_gauge(&self, join: &CombineJoin) -> Option<StationId> {
-        let group = &self.reach_without_shots(&[join.kept_station], &|_, _| false, true)[0];
-        let solved = self.solves(group) || self.plain_combine_solves(join);
-        if !solved {
-            return None;
-        }
-        self.placements
-            .iter()
-            .find(|p| group.contains(&p.station))
-            .map(|p| p.station)
-    }
-
-    /// Does the least-squares solve adjust `group`: it holds a GPS fix, or a
-    /// closure the solve takes (`Batch`, `LeastSquaresWeighted`) that it does
-    /// not skip as across one shot?
-    pub(super) fn solves(&self, group: &BTreeSet<StationId>) -> bool {
-        let placement: BTreeSet<usize> = self.placement_datum_indices().into_iter().collect();
-        let fix = self
-            .datums
-            .iter()
-            .enumerate()
-            .any(|(i, d)| !placement.contains(&i) && group.contains(&d.station));
-        if fix {
-            return true;
-        }
-        let eligible = |strategy: ClosureStrategy| {
-            matches!(
-                strategy,
-                ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
-            )
-        };
-        if !self
-            .closures
-            .iter()
-            .any(|c| eligible(c.strategy) && group.contains(&c.a))
-        {
-            return false;
-        }
-        let skipped = self.skipped_closure_ids(&self.raw_positions());
-        self.closures
-            .iter()
-            .any(|c| eligible(c.strategy) && group.contains(&c.a) && !skipped.contains(&c.id))
+        let hold = self.solve_hold(join.kept_station)?;
+        (hold.solved || self.plain_combine_solves(join)).then_some(hold.anchor)
     }
 
     /// Would the plain plan (the other line moves, its loop tears only) give
     /// the joined survey something to solve? Only when it tears a tie: a
-    /// dry run of that combine, then [`Self::solves`] on the joined group.
+    /// dry run of that combine, then [`Project::solve_hold`] on the joined
+    /// station.
     fn plain_combine_solves(&self, join: &CombineJoin) -> bool {
         let trial = self.trial(join, join.other);
         let snaps = self.snaps_crossing(join, &trial);
@@ -570,11 +535,9 @@ impl Project {
         if copy.run_combine(&decision, &options).is_err() {
             return false;
         }
-        let Some(joined) = end_station(&copy, join.kept, join.kept_end) else {
-            return false;
-        };
-        let group = &copy.reach_without_shots(&[joined], &|_, _| false, true)[0];
-        copy.solves(group)
+        end_station(&copy, join.kept, join.kept_end)
+            .and_then(|joined| copy.solve_hold(joined))
+            .is_some_and(|hold| hold.solved)
     }
 
     /// Is a snap (aligned `Move` closure) across the two sides of `trial`?

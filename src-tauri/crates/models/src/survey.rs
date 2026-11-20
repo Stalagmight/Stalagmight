@@ -204,7 +204,7 @@ mod ops_scenario_tests;
 )]
 mod ops_test_helpers;
 
-pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure};
+pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
