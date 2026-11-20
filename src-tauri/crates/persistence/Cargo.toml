@@ -28,7 +28,7 @@ serde = { workspace = true, features = ["derive"] }
 # roundtrip-exactly - declaring it here keeps a standalone
 # `cargo test -p stalagmight-persistence` on the same parser, and this crate is
 # precisely where the roundtrip matters (it deserializes saved projects).
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
@@ -36,6 +36,10 @@ anyhow = { workspace = true }
 flate2 = { workspace = true }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 uuid = { workspace = true, features = ["v4"] }
+# `.stalx` v2: the canonical float spelling (shortest round trip) and the
+# external-modification guard's content hash.
+ryu = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
