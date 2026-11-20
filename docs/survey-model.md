@@ -38,6 +38,14 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 | `survey/positions.rs` | Solver v1 raw positions and depth: `RawPositions`, `Anchor`, `SlotPosition`, `PositionIssue`, `closure_is_aligned`. |
 | `survey/anchors.rs` | `AnchorSnapshot`, `EditContext`, `settle_anchors`, `correction_to_hold`, `AnchorReport` (plan 4.1, 4.3). |
 | `survey/naming.rs` | Station-name uniqueness on every line of a station, the letter-suffix rule, shot-uuid helpers. |
+| `survey/closures.rs` | Closure alignment per closure, the across-one-shot knot rule (skip set, `CLOSURE_ACROSS_ONE_SHOT` data), tie groups. |
+| `survey/metrics.rs` | Closure metrics from raw positions (`closure_metrics`, `closures_metrics`), path length along shots. |
+| `survey/lsq.rs`, `survey/adjust.rs` | The Closures Computed View (`adjusted_positions`, `AdjustedPositions`, failures, `adjustment_report`). |
+| `survey/roles.rs` | Datum roles, the entrance rule with `via`, GPS-fix gaps, far fixes, the GPS-gap warning data. |
+| `survey/frozen.rs`, `survey/rigid.rs`, `survey/stats.rs` | Frozen shots, rigid groups / anchored lines / immovable stations / merge pairs, survey stats. |
+| `survey/graph.rs` | The survey graph (stations, shots, zero-cost closures), Dijkstra, penetration, the distance field, the ruler. |
+| `survey/gas.rs`, `survey/gas/` | The Plan-mode gas engine on the station graph (`gas_reach`, `GasReach`, `gas_reach_field_wire`). |
+| `survey/legacy_convert.rs` | Test only: converts a survey built with `models::project` for the cross-checks, plus a random legacy survey generator. |
 | `survey/*_tests.rs`, `survey/test_helpers.rs` | Tests (see the end of this page). |
 
 ## Data and ids
@@ -181,6 +189,26 @@ anything else.
 Add .stalx). `AnchorReport` lists the frame change, the translation, datums
 placed on their GPS, demoted datums and dropped placement stations.
 
+## Derived views (stream M3)
+
+Every view is a pure function of the model; per station, with a per-slot
+form for the wire. Most take the alignment of this state,
+`let aligned = p.closure_alignment(&p.raw_positions())`.
+
+| View | API | Notes |
+|---|---|---|
+| Alignment | `closure_alignment(&raw) -> Vec<bool>` | `Tie` always; `Move` within 1 cm and not double-anchoring. |
+| Skip set | `closures_across_one_shot()`, `..._with(&aligned)`, `closure_spans_one_shot(a, b)` | Today's knot rule over the closures that tie in the solve (eligible `Batch`/`LeastSquaresWeighted`/`Tie`, aligned snaps), list order, transitive. `ClosureAcrossOneShot::to_wire` gives today's `SkippedClosure`. |
+| Tie groups | `tie_groups(&aligned) -> TieGroups` | Stations joined by aligned closures (depth, Move tools). |
+| Metrics | `closure_metrics(a, b)`, `closure_metrics_via(..)`, `closures_metrics(&raw)` | Misclosures from raw positions (slot z on the `via` line); `path_length` along shots only (0 between two pieces). |
+| Computed View | `adjusted_positions(&config) -> AdjustedPositions`; `adjustment_report(Some(&adj))` | One unknown per constraint group, gauge = the `Placement` station, hard/soft GPS fixes, spurs, failures rolled back to raw. |
+| Roles, entrances, gaps | `datum_roles`, `datum_entrances`, `entrance_stations`, `datum_gap`, `gps_fix_gaps`, `far_gps_fixes`, `gps_gap_warnings` | Entrance default: first or last station of the `via` line, else of the station's first line. Survey distance along shots only. |
+| Frozen shots | `frozen_shots(&aligned)`, `is_shot_frozen(line, index)` | Tarjan bridges over shots and aligned closures; positional output. |
+| Rigid groups | `rigid_groups(&aligned)`, `rigid_lines_of`, `anchored_lines`, `immovable_stations(&ties)`, `merge_pairs()` | Fixes count as anchors for Move Segment and Move Station, as today. |
+| Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct) and `slot_count`; `to_project_stats` keeps today's slot count. |
+| Survey graph | `survey_distances_from`, `penetration_distances`, `penetration`, `distance_field`, `along_line_between` | Junction = one node, closures zero-cost, reference ties infinite unless opted in; shots in line-id order. |
+| Gas | `gas_reach(..) -> GasReach`, `GasReach::to_wire`, `gas_reach_field_wire(..)` | Today's engine on stations; the route has no merge hops. |
+
 ## Naming and identity (`naming.rs`)
 
 - `name_conflicts(station)`, `conflicts_with_name(station, name)` (a rename
@@ -200,3 +228,8 @@ placed on their GPS, demoted datums and dropped placement stations.
 | `anchors_tests.rs` | Shot edits, explicit and undeclared placement changes, cut-off pieces, merges (free, placed, re-keyed placement), detach with and without a `via` fix, first and later datums, frame removal (translation and promotion), last datum, GPS edits, idempotence, declared corrections. |
 | `build_tests.rs` | Construction, refusals, ids, caches, naming, uuids, closure strategy spellings, stale attachments. |
 | `legacy_crosscheck_tests.rs` | Surveys built with `models::project` (merges, a merge at a line's last station, hand moves on merged members, datum pieces, a fix, free pieces, 40 seeded random surveys) lay out every slot within 1e-9 m of `compute_station_coordinates`. |
+| `graph_tests.rs` | Penetration, distance fields, the ruler, roles, entrances and GPS gaps against the legacy model (30 random legacy surveys). |
+| `adjust_tests.rs` | The Computed View per slot within 1e-6 m of `compute_adjusted_stations` (150 random legacy surveys), skip set, failures, alignment, new-closure verdicts, misclosures, path length, spurs, gauge, determinism, scale. |
+| `gama_tests.rs` | The GNU Gama gold standard (`tests/fixtures/gama_golden.json`) on networks built directly on the new model. |
+| `derived_tests.rs` | Frozen shots, rigid groups, anchored lines, immovable stations, stats against the legacy model; derived views bit-identical under shuffled lines. |
+| `gas/tests.rs`, `gas/differential_tests.rs` | The 112 ported gas-engine tests and the old-vs-new differential run (36 surveys x 8 rigs x 5 argument sets). |

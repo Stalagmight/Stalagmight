@@ -469,14 +469,14 @@ fn a_large_survey_solves_in_linear_time() {
         );
         p.push_closure(sa, None, sb, None, ClosureStrategy::Batch);
     }
-    for k in 0..150 {
-        let l = add(&mut p, StartAt::New, rail(40, (k % 360) as f64));
+    for k in 0..150_i32 {
+        let l = add(&mut p, StartAt::New, rail(40, f64::from(k % 360)));
         let chain: Vec<crate::StationId> = p.line(l).unwrap().stations().collect();
         let (s0, s9) = (chain[0], chain[39]);
-        let mut d = ZeroDatum::new(s0, gps(20.5 + k as f64 * 1e-4, -87.39));
+        let mut d = ZeroDatum::new(s0, gps(20.5 + f64::from(k) * 1e-4, -87.39));
         d.via = Some(l);
         p.push_datum(d);
-        let mut fix = ZeroDatum::new(s9, gps(20.5 + k as f64 * 1e-4, -87.388));
+        let mut fix = ZeroDatum::new(s9, gps(20.5 + f64::from(k) * 1e-4, -87.388));
         fix.accuracy_m = Some(5.0);
         p.push_datum(fix);
         p.push_closure(chain[20], None, s9, None, ClosureStrategy::Batch);
