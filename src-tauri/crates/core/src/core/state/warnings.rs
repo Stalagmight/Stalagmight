@@ -18,6 +18,9 @@
 //!   the cache only, never solved here (0.6.0's rule): it appears once the
 //!   Computed View, Plan or Export has solved the current revision, and an
 //!   edit drops it until the next solve, which is why it is advisory.
+//! - **Unconnected pieces** (`LINE_NOT_CONNECTED`, #814): one advisory per
+//!   piece that holds no datum, in a project where some piece does, on the
+//!   first shot of its first line.
 //!
 //! Ignored warnings are survey content now (plan 6.5): the file's
 //! `ignored_warnings` member, held in memory (`FileState`), keyed by the
@@ -34,7 +37,7 @@
 //! The IPC keeps its `ResolvedWarning` shape, converted here through the
 //! open project's shots.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -45,7 +48,7 @@ use crate::models::survey::{AdjustmentFailure, Project, RawPositions};
 use crate::models::{
     datum_gap_ignore_code, severity_for_code, warning_is_ignorable, DatumGap, DatumRole, LineId,
     ProjectWarning, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START, LINE_NOT_CONNECTED,
 };
 use crate::persistence::stalx_v2::IgnoredWarning;
 use crate::persistence::ResolvedWarning;
@@ -86,6 +89,7 @@ fn project_warnings(
     all.extend(gps_gap_warnings(project, raw, &ignored));
     all.extend(closure_across_one_shot_warnings(project, raw));
     all.extend(adjustment_failure_warnings(project, failures, &ignored));
+    all.extend(unconnected_piece_warnings(project, &ignored));
     // Stable: the rows of one shot keep the order of the kinds above.
     all.sort_by(|a, b| {
         let severity_order = |s: WarningSeverity| match s {
@@ -277,6 +281,78 @@ fn adjustment_failure_warnings(
             warning.is_resolved = warning.shot_uuid.as_deref().is_some_and(|uuid| {
                 ignored.covers(uuid, CLOSURE_ADJUSTMENT_FAILED, CLOSURE_ADJUSTMENT_FAILED)
             });
+            Some(warning)
+        })
+        .collect()
+}
+
+/// One advisory warning per piece of the survey that nothing places (#814,
+/// [`LINE_NOT_CONNECTED`]): a piece (stations joined by shots; a junction is
+/// one station) holding no datum, in a project where some piece holds one.
+/// An import whose connection could not be made leaves such a piece, and
+/// while the project holds a datum this is where the user finds it again
+/// once the receipt is closed (in a project with none, every piece floats
+/// and the receipt is the only record). On the first shot of the piece's
+/// first line (list order) that has one, so an Ignore keys on that shot; a
+/// piece of shot-less lines gets no row.
+///
+/// 0.6.0's pieces were its rigid groups, which also followed aligned loop
+/// closures; on the station graph a closure joins two pieces only when both
+/// hold a datum (invariant 7), so it never changes which piece floats.
+fn unconnected_piece_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
+    if project.datums.is_empty() {
+        return Vec::new();
+    }
+    let topology = project.topology();
+    let placed = project.placement_datums();
+    let order: HashMap<LineId, usize> = project
+        .lines()
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.id, i))
+        .collect();
+    let mut floating: Vec<&[LineId]> = topology
+        .components()
+        .iter()
+        .enumerate()
+        .filter(|&(c, component)| {
+            placed.get(c).copied().flatten().is_none() && !component.lines.is_empty()
+        })
+        .map(|(_, component)| component.lines.as_slice())
+        .collect();
+    // Components come by lowest station; the list reads in line order.
+    floating.sort_by_key(|lines| lines.first().and_then(|id| order.get(id).copied()));
+    floating
+        .into_iter()
+        .filter_map(|lines| {
+            let line = lines
+                .iter()
+                .filter_map(|&id| project.line(id))
+                .find(|l| !l.shots.is_empty())?;
+            // File-controlled text, so the same bound and filter as every
+            // receipt string: no bidi overrides, no unbounded length. Named as
+            // the user knows the line, never by its id.
+            let name = crate::models::sanitize_display_text(
+                &project.line_label_of(line.id),
+                crate::core::command::MAX_FILE_NAME_LEN,
+            );
+            let others = lines.len() - 1;
+            let piece = match others {
+                0 => format!("Line \"{name}\" is"),
+                1 => format!("Line \"{name}\" and 1 line merged with it are"),
+                n => format!("Line \"{name}\" and {n} lines merged with it are"),
+            };
+            let message = format!(
+                "{piece} not connected to the rest of the survey and {} no zero datum, so \
+                 nothing places {}: merge a station onto the survey or give it a zero datum",
+                if others == 0 { "has" } else { "have" },
+                if others == 0 { "it" } else { "them" },
+            );
+            let mut warning = row(project, line.id, 0, LINE_NOT_CONNECTED, message)?;
+            warning.is_resolved = warning
+                .shot_uuid
+                .as_deref()
+                .is_some_and(|uuid| ignored.covers(uuid, LINE_NOT_CONNECTED, LINE_NOT_CONNECTED));
             Some(warning)
         })
         .collect()

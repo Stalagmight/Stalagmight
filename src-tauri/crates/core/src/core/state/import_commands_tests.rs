@@ -874,37 +874,71 @@ fn test_execute_import_lines_zero_datum_placement_at_non_origin_station() {
     );
 }
 
+/// Since #814 a failed placement costs the line its connection, not the
+/// import: both lines import, the second a free piece, and the receipt says
+/// why. The DMP wizard's all-or-nothing route still rolls the whole import
+/// back, exactly, with no entry.
 #[test]
-fn test_execute_import_lines_rollback_on_failure() {
+fn test_execute_import_lines_keeps_a_line_whose_merge_fails() {
+    let lines = || {
+        vec![
+            config(
+                0,
+                "GoodLine",
+                vec![test_shot_data(5.0)],
+                ImportPlacement::Origin,
+            ),
+            config(
+                1,
+                "BadLine",
+                vec![test_shot_data(3.0)],
+                ImportPlacement::FromExisting {
+                    import_station: 0,
+                    existing_station: StationRef::new(9999, 0),
+                },
+            ),
+        ]
+    };
     let state = new_state();
     let before = project(&state);
-    // First line succeeds, second fails (placed onto a line that does not
-    // exist).
-    let lines = vec![
-        config(
-            0,
-            "GoodLine",
-            vec![test_shot_data(5.0)],
-            ImportPlacement::Origin,
-        ),
-        config(
-            1,
-            "BadLine",
-            vec![test_shot_data(3.0)],
-            ImportPlacement::FromExisting {
-                import_station: 0,
-                existing_station: StationRef::new(9999, 0),
-            },
-        ),
-    ];
-    let result = import(&state, lines);
+    let result = import(&state, lines());
+    assert!(result.success, "{:?}", result.error);
+    let p = project(&state);
+    assert_eq!(p.lines().len(), 2, "both lines import");
+    assert!(
+        p.merge_pairs().is_empty(),
+        "the failed placement is not made"
+    );
+    assert_eq!(
+        result.import_receipt.unwrap().line_problems,
+        Some(vec![
+            "Line \"BadLine\" was imported, but its connection to the existing survey could \
+             not be made: Station 0 of line 9999 does not exist"
+                .to_string()
+        ])
+    );
+    assert_one_exact_entry(&state, &before);
+
+    let state = new_state();
+    let before = project(&state);
+    let result = state.execute_import_lines_all_or_nothing(
+        lines(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(
         !result.success,
-        "should fail when merge target doesn't exist"
+        "the DMP route keeps the whole import or nothing"
     );
     assert_eq!(
         result.error.as_deref(),
-        Some("Failed to merge line \"BadLine\": Station 0 of line 9999 does not exist")
+        Some(
+            "The import was undone and nothing was kept, because one line could not be \
+             imported whole. Line \"BadLine\" was imported, but its connection to the \
+             existing survey could not be made: Station 0 of line 9999 does not exist"
+        )
     );
     let p = project(&state);
     assert_eq!(
@@ -916,25 +950,49 @@ fn test_execute_import_lines_rollback_on_failure() {
     assert!(state.get_undo_stack().is_empty());
 }
 
-/// A same-batch placement onto a line not built yet refuses the import with
-/// 0.6.0's words.
+/// A same-batch placement onto a line not built yet: the line imports on its
+/// own (#814); the all-or-nothing route refuses the import.
 #[test]
-fn a_placement_onto_a_line_not_created_yet_refuses_the_import() {
+fn a_placement_onto_a_line_not_created_yet_imports_it_on_its_own() {
+    let lines = || {
+        vec![config(
+            0,
+            "Early",
+            vec![test_shot_data(3.0)],
+            ImportPlacement::FromImporting {
+                import_station: 0,
+                target_line_index: 1,
+                target_station_index: 0,
+            },
+        )]
+    };
     let state = new_state();
-    let lines = vec![config(
-        0,
-        "Early",
-        vec![test_shot_data(3.0)],
-        ImportPlacement::FromImporting {
-            import_station: 0,
-            target_line_index: 1,
-            target_station_index: 0,
-        },
-    )];
-    let result = import(&state, lines);
+    let result = import(&state, lines());
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(project(&state).lines().len(), 1);
+    assert_eq!(
+        result.import_receipt.unwrap().line_problems,
+        Some(vec![
+            "Line \"Early\" was imported on its own: the line it joins was not imported"
+                .to_string()
+        ])
+    );
+
+    let state = new_state();
+    let result = state.execute_import_lines_all_or_nothing(
+        lines(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert_eq!(
         result.error.as_deref(),
-        Some("Line \"Early\" references import line index 1 which has not been created yet")
+        Some(
+            "The import was undone and nothing was kept, because one line could not be \
+             imported whole. Line \"Early\" was imported on its own: the line it joins was \
+             not imported"
+        )
     );
     assert!(project(&state).lines().is_empty());
 }
