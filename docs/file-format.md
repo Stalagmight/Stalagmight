@@ -650,28 +650,48 @@ caps that fit their own deadlines.
 
 ## 12. How Stalagmight saves
 
-For context; nothing here changes the format.
+For context; nothing here changes the format. The app's side is
+[saving.md](saving.md).
 
-- A save validates the survey (section 6) and refuses to write an invalid
+- **Opening reads the file once** and keeps it in memory; Stalagmight holds no
+  handle on it while the project is open. Opening never writes: a file is
+  rewritten only by a save or by one of the narrow rewrites below.
+- **A save** validates the survey (section 6) and refuses to write an invalid
   one, writes `<name>.stalx.tmp` beside the file, flushes it to disk, checks
   that the file on disk is still the one it last read or wrote (size and
   SHA-256), renames the temp over it and flushes the folder. The file on disk
   is always either the old or the new version, and a torn temp never reads as
-  a project.
-- An upload to SpeleoDB writes the same survey without `local` and without
+  a project. A file that another program changed (or moved or deleted) since
+  Stalagmight read it is not overwritten: the user is asked to keep their
+  version, save under another name, or reload the file's version. Unknown
+  members and keys of tier 2 (section 7) survive a save; a file this build
+  would lose something of (tier 1, an unknown `requires`) opens read-only and
+  is never saved.
+- **An upload to SpeleoDB** writes the same survey without `local` and without
   `redo`, with `undo` only when the project's undo mode is `full` (never when
   `speleodb.undo_mode` is `"disabled"`): entries at or before
   `local.speleodb.inherited_through` are left out, then the oldest entries
   until the file fits the 5 MiB upload limit. An Unwind position recorded
   without a watermark ships no undo at all (the inherited extent is
-  unknown).
-- "Save a Copy" of a SpeleoDB project writes no `speleodb`, no
+  unknown). It is sent as `application/json`, named `project.stalx`.
+- **"Save a Copy" of a SpeleoDB project** writes no `speleodb`, no
   `local.speleodb` and no undo entries inherited from the server.
-- Changes to the link, the sync state, display settings and the history alone
-  rewrite those members and copy every other member byte for byte, even when
-  the file is open read-only.
+- **Local-only rewrites.** Changes to the link, the sync state, display
+  settings and the history alone rewrite those members and copy every other
+  member byte for byte, even when the file is open read-only. Renaming a
+  project from its Recent Projects card rewrites `project.name` and
+  `summary.name` the same way.
+- **A legacy (SQLite) file** is converted in memory when opened; its first save
+  writes version 2 over it, after copying the original into the app's data
+  folder (`backups/<stem>.<UTC stamp>.pre-v2.stalx`) and moving any `-journal`,
+  `-wal` or `-shm` file beside that copy, so no older build can roll a stale
+  journal into the JSON file. Until that save the file is untouched. Its undo
+  history is not converted.
+- **Repair** of a damaged version 2 file copies it to `<name>.stalx.backup` (or
+  the next free `.backup.N`) first, then writes the salvaged survey in its
+  place, without history.
 - A symbolic link at the file's path is replaced by the saved file, not
-  written through.
+  written through. On Unix the saved file keeps the old file's permissions.
 
 ## 13. A complete example
 

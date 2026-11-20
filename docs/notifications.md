@@ -147,6 +147,23 @@ regions). Read the comment blocks in those two files plus
   not be silent either (an unsaved-changes condition is ongoing). Its Dismiss is a
   deliberate override - the banner re-raises on the next failing autosave rather
   than tracking the condition continuously; the close guard remains the backstop.
+- **A file another program changed is a modal decision, but only on a manual
+  save.** A save refused with `EXTERNALLY_MODIFIED` (the `.stalx` guard,
+  [saving.md](saving.md#the-external-modification-guard)) puts data at risk
+  either way, so `surfaceSaveFailure` opens `SaveConflictDialog`: Keep my
+  version, Save as a new file, Use the file's version (not for a SpeleoDB copy,
+  whose reload belongs to the sync), or Decide later. An autosave refused the
+  same way raises no modal (a background save never does): it goes to the
+  autosave banner ("changed by another program") and autosave pauses until a
+  save lands; the banner's Save opens the prompt.
+- **A read-only file and a converted file are banners, not dialogs.** A file
+  made with a newer Stalagmight opens read-only with a banner naming the reason
+  (`read-only-file-banner`, no button: there is nothing to do here but update);
+  a refused save is worded for it and never routed to Review & Repair. An old
+  file whose conversion moved stations shows the one-time conversion notice
+  (`conversion-notice-banner`, "the original is kept in Recovery") until
+  dismissed. The history-discarded banner (`history-discarded-banner`) is
+  unchanged: it also covers an old file's history, which the conversion drops.
 
 ## Command-failure contract
 

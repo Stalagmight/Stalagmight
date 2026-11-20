@@ -1,15 +1,16 @@
 # The station-graph survey model (`models::survey`)
 
-The new survey model of the station-graph redesign
+The survey model of the app, from the station-graph redesign
 ([plan](plans/2026-11-20_station-graph-model.md), sections 1-5). It lives in
-`src-tauri/crates/models/src/survey.rs` and `src-tauri/crates/models/src/survey/`,
-next to the legacy `models::project`, which it does not use or change (it only
-reuses the crate's shared types and pure helpers). Streams M0 to M3 built it;
-in the persistence crate, the `.stalx` v2 codec (`persistence::stalx_v2`,
+`src-tauri/crates/models/src/survey.rs` and `src-tauri/crates/models/src/survey/`
+and reuses the crate's shared types and pure helpers. Streams M0 to M3 built
+it; in the persistence crate, the `.stalx` v2 codec (`persistence::stalx_v2`,
 [file format](file-format.md)) reads and writes it and the legacy migration
-(`persistence::migrate`) produces it. Its undo engine (stream U) is
-`survey::changeset` ([Undo engine](#undo-engine-changeset)); the app core (C)
-builds on both next.
+(`persistence::migrate`) produces it from an old SQLite file through the frozen
+0.6.0 reader (`crates/legacy`). Its undo engine (stream U) is
+`survey::changeset` ([Undo engine](#undo-engine-changeset)). The app core
+(stream C, `stalagmight-core`) runs every command, query and subsystem on it:
+see [The app core on the model](#the-app-core-on-the-model-stream-c).
 
 Run its tests with:
 
@@ -526,14 +527,13 @@ Only three wire types are new (their legacy source is the old model
 itself): `ProjectWire` (TS `Project`, without `line_offsets`), `LineWire`
 (TS `Line`) and `ProjectStateWire` (TS `ProjectState`). Every other payload
 is today's DTO type, so its TS cannot drift. The three derive `TS` with the
-legacy names (`#[ts(rename)]`) and no `export`: no test writes them and the
-generator still writes `src/types/ipc/` from the legacy types.
-`wire/ts_tests.rs` renders each one as `pnpm gen:ipc-types` would (ts-rs
-`export_to_string` plus the generator's import flattening) and compares it
-with the committed file, less the declared change (`line_offsets`); the
-comparison holds before and after the switch.
+legacy names (`#[ts(rename)]`) and no `export`: no test writes them into
+`bindings/`; `src-tauri/examples/gen_ipc_types.rs` renders them
+(`export_wire`, ts-rs `export_to_string` plus the generator's import
+flattening) into `src/types/ipc/`. `wire/ts_tests.rs` renders each one the
+same way and compares it with the committed file.
 
-**The switch** (stream C):
+**The switch** (done in C0 and C21), for the record:
 
 1. In `src-tauri/examples/gen_ipc_types.rs` export
    `models::survey::wire::{ProjectWire, LineWire, ProjectStateWire}` in place
@@ -580,6 +580,76 @@ itself on both models and compare every slot (S13). Every difference is put
 in a named class (a declared change) or fails the test; `STALAGMIGHT_RUST_WIRE_SEEDS=<n>` runs a sweep
 (ignored) and prints the classes. The combine classes are characterised
 only (M1's ported combine tests are its oracle).
+
+## The app core on the model (stream C)
+
+`stalagmight-core` holds the open survey as `models::survey::Project` in
+`AppState::project` and has no database handle; [architecture.md](architecture.md#appstate-and-the-open-file)
+has the state, the pipeline and the lock order, [saving.md](saving.md) the file
+side, [undo-redo.md](undo-redo.md) the history. What the core adds on top of
+the model:
+
+- **Slots to stations.** Commands keep their 0.6.0 payloads (slots, line ids,
+  session shot ids, closure ids). The family applies resolve slots with
+  `resolve_slot` / `resolve_slot_pair` (an out-of-range slot refuses) and shots
+  through the line's session ids, then call the model operation. A slot that
+  names no station answers 0.6.0's words, not the model's.
+- **Refusals the model leaves to the core**: frozen shots (S12: `is_shot_frozen`
+  before every geometry edit, delete and split, in 0.6.0's words and order), the
+  SpeleoDB edit gate, the read-only file, the batch allowlist.
+- **The pipeline** (`core/state/commands.rs`): one `apply(project, record, cmd)`
+  per family, the model's anchors, sweep and validate inside the operation, then
+  the core's own `validate()`, `capture`, the record-time label, the
+  `modified_at` stamp (E3: the model never touches it) and the logs. Every
+  recipe runs the same pipeline (`run_recorded`).
+- **Derived views memoised per revision**: `raw_positions_of` and
+  `adjusted_positions` cache the model's pure functions; everything the IPC
+  sends is a `survey::wire` builder over them (`get_project_state` is
+  `project_state_wire_with(&raw, ..)`).
+- **Warnings** (`core/state/warnings.rs`): the per-shot validator over the
+  project's own thresholds, the model's GPS-gap and across-one-shot data, and
+  the Computed View failures of the memoised solve of the current revision
+  only; ignores matched by `(shot uuid, code)` from the file's ignored warnings.
+
+| Family (file) | Commands | Model operations |
+|---|---|---|
+| `command_line.rs` | CreateLine, DeleteLine, UpdateLineMetadata, ReverseLine | `create_line`, `delete_line`, `update_line_meta`, `reverse_line` |
+| `command_shot.rs` | CreateShot, UpdateShot, DeleteShot, SetShotKind | `create_shot`, `update_shot`, `delete_shot`, `set_shot_kind` |
+| `command_station.rs` | MergeStations, UnmergeStations, UnmergeStationPair, CreateLoopClosure, RemoveLoopClosure, SetZeroDatum, RemoveZeroDatum | `merge_stations`, `unmerge_station`, `unmerge_station_pair`, `create_closure_at`, `remove_closure`, `set_datum_at` (+ `set_datum_entrance`), `remove_datum_at` |
+| `command_station_name.rs`, `command_comment.rs` | SetStationName, SetStationComment, MoveComment | the station's one name and comment (`conflicts_with_name`) |
+| `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
+| `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
+| `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction), `append_project` |
+
+Subsystems ported onto the model and the v2 file:
+
+- **Open, save, create** (`project_load.rs`, `project_io.rs`, `project_create.rs`):
+  sniff, decode or migrate, the guard, the legacy upgrade, the local-only save
+  (`open_file.rs`).
+- **SpeleoDB**: pull, install and revision swaps decode or migrate the
+  download in memory before anything is locked or written
+  (`prepare_download`); a push serializes `Mode::ForPush` under the push guard;
+  every sync-state change is a local-only save; one link probe reads either
+  format (`speleodb_local_state::probe_link`, legacy through
+  `persistence::legacy_link`).
+- **Recents, recovery, raw data** (`recent_projects.rs`, `project_restore.rs`,
+  `project_salvage.rs`, `raw_data.rs`): the `summary` header for Recents
+  (`migrate::legacy_header` for a legacy file), backups of either format and
+  the pre-upgrade originals, salvage into the file with a `.backup`, the raw
+  table view over the saved file's members.
+- **Dive plans** (`dive_plan.rs`): a `.plnx` pin is placed by its Station ID
+  when its own neighbour shots vouch for it, else by the neighbours (0.6.0's
+  rule), else by its pre-#24 key; the upgrading save rewrites a migrated
+  project's 0.6.0 pins (`upgrade_dive_plan_anchors`).
+- **Add .stalx / Merge Projects** (`project_add.rs`, `project_merge.rs`): sources of
+  either format read the way an open reads them, then the model's
+  `append_project`; a merge writes a new v2 file.
+- **Exports** (`src/commands/export.rs`): `export::survey` on a snapshot of the
+  open survey and its memoised views.
+
+The deviations each package made from the plan are in the plan's "Deviations
+(stream C, the command families and subsystems)" section.
 
 ## Naming and identity (`naming.rs`)
 

@@ -6,17 +6,37 @@ Developer reference for the three move tools: **Move Station**, **Move Shot**, a
 
 | Tool | Shortcut | Scope | What moves |
 |------|----------|-------|------------|
-| Move Station | T | Single station | Station + co-located stations (merged/aligned-closure) |
-| Move Shot | G | One shot | Both endpoints + all co-located stations |
-| Move Segment | V | Entire branch | All lines connected via merges/aligned-closures |
+| Move Station | T | Single station | The station (every slot of a junction is one station) + the stations aligned closures tie to it |
+| Move Shot | G | One shot | Both endpoint stations + the stations aligned closures tie to them |
+| Move Segment | V | Entire branch | The rigid group: every line joined to it by shots at junctions or by aligned closures |
 
 All three share the same drag preview engine and Ctrl+drag panning. They differ in scope and hover behavior.
+
+On the station graph a station is one entity however many lines pass
+through it: the map draws a junction once per line (one slot each), and those
+slots always move together. The backend side is `survey/ops_move.rs`
+(`move_station`, `move_segment`, `move_line`; plan 4.4) behind
+`core/state/command_move.rs`:
+
+- **Move Station** rewrites every shot incident to the station, on every line
+  through it (a junction has three or more), so the station lands at its
+  position plus the offset and every neighbour stays. A legacy hand move on
+  the station is folded into the rewritten shots and deleted. When the station
+  is its free piece's `Placement` station, the placement moves with it. Refused
+  on a station holding a zero datum ("Cannot move a zero datum station") and
+  when a rewritten shot would have no length.
+- **Move Segment / Move Line** translates the rigid group's `Placement`s;
+  refused, for a non-zero offset, when the rigid group holds any datum,
+  placement datum or GPS fix ("Cannot move a segment whose rigid group holds a
+  zero datum").
+- A move by nothing (every axis within 1e-9 m) changes nothing and records no
+  undo entry.
 
 ---
 
 ## Move Station
 
-Click a station to begin dragging it. If the station shares coordinates with other stations (via merges or **aligned** loop closures), all co-located stations move together.
+Click a station to begin dragging it. Every slot of the station moves (its `merged_with` slots), and so do the stations **aligned** loop closures tie to it (its tie group).
 
 **Hover**: Only stations get hover highlight. Shot hover is suppressed.
 
@@ -24,7 +44,7 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 1. Click on station &rarr; `handleMoveDragStart` (MapCanvas) &rarr; immovable guard check
 2. `beginStationDragPreview()` (SurveyLayer) &rarr; BFS to find co-located stations, create temp layers + dynamic sources for connected shots
 3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry. Snap-to-merge detection runs each frame (see [Snap-to-Merge](#snap-to-merge)).
-4. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
+4. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call, ONE per Station ID (`onePerStation` in the identity labels drops the other slots of a junction); several stations of a tie group go as one batch. The backend also moves a station once when a batch names several of its slots (`StationMoves`, plan 9.1)
 
 ## Move Shot
 
@@ -38,7 +58,7 @@ Click a shot to begin dragging it. Both endpoints move rigidly together, along w
 
 ## Move Segment
 
-Click any station or shot in a line to drag the entire connected branch. Connected lines (via merges/aligned closures) move together as a rigid unit.
+Click any station or shot in a line to drag the entire connected branch. Connected lines (joined at junctions or by aligned closures) move together as a rigid unit.
 
 **Hover**: Both stations and shots get hover. Hovering highlights the full connected segment (all connected lines).
 
@@ -71,7 +91,7 @@ When hovering in Move Segment mode, the connected line IDs are resolved asynchro
 
 ## Immovable Stations
 
-A station is immovable if it is a zero-datum or transitively reachable from one via merges and **aligned** loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"lineId:stationIndex"` keys.
+A station is immovable if it holds a zero datum, or is tied to one by **aligned** loop closures, transitively. Computed in `MapCanvas` via BFS (`computeImmovableStationKeys`, `src/utils/immovableStations.ts`) over `merged_with` (the other slots of a junction) and aligned `closures_with` links when Move Station or Move Shot is active. Returns `Set<string>` of `"lineId:stationIndex"` keys. The backend's derived set is `immovable_stations` (`survey/rigid.rs`; plan Deviation D15: the frontend walk also follows chain-transitive `closures_with` entries, so it can dim a station the backend would move).
 
 "Zero datum" here means EVERY datum, placement datum and GPS fix alike (#741). A GPS fix
 station is immovable like any datum station, although a fix never places raw geometry:
@@ -80,11 +100,11 @@ station is immovable like any datum station, although a fix never places raw geo
   and the fix's GPS, which the gap warning reports and the Closures Computed View solve pulls
   across. The fix is a measurement of where that station is; dragging the station away from it
   is not an edit of the survey the user can see.
-- The two sides agree on one set. The frontend seeds its BFS from the per-station
-  `is_zero_datum` flag, which `Project::compute_station_coordinates` sets for every resolvable
-  datum, fixes included; the backend's `move_station` (`command_move.rs`) refuses a non-zero
-  offset on any station `zero_datums` names ("Cannot move a zero datum station"). Exempting
-  fixes on one side only would let the map offer a drag the backend refuses.
+- The two sides agree on the datum stations. The frontend seeds its BFS from the per-slot
+  `is_zero_datum` flag, which the wire sets on every slot of a station that holds a datum,
+  fixes included (W2); the backend's `move_station` refuses a non-zero offset on any station
+  holding a datum ("Cannot move a zero datum station"). Exempting fixes on one side only
+  would let the map offer a drag the backend refuses.
 
 Visual feedback:
 - Immovable stations and shots with immovable endpoints are dimmed (0.25 opacity via `feature-state: anchored`)

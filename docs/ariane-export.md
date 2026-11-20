@@ -131,12 +131,14 @@ A shot UUID is unique across the whole project:
   v4, so the SpeleoDB sidecar keeps it). Importing the same file twice therefore
   gives the second copy derived ids, and only the first copy round-trips to the
   file's `<UUID>`s.
-- **The load heals older files.** A file saved before this can hold one id in
-  several lines. The load keeps it in the lowest line and gives the others
-  the derived replacement (`Project::make_shot_uuids_project_unique`), and
-  translates the persisted undo/redo history through the same renames (see
-  [Undo/Redo](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
-  Derived, so every open of an unsaved file agrees.
+- **Older files are healed when they are converted.** A legacy (SQLite) file
+  saved before this can hold one id in several lines. The frozen 0.6.0 reader
+  keeps it in the lowest line and gives the others the derived replacement
+  (`make_shot_uuids_project_unique` in `crates/legacy`), so the migrated
+  project holds each id once; a legacy file's undo history is not kept (see
+  [Undo/Redo](undo-redo.md#persisted-entries)). Derived, so every open of an
+  unsaved file agrees. A version 2 file that repeats a shot uuid breaks an
+  invariant and is refused with the repair offer.
 - **The integrity check flags a repeat** (`duplicate_shot_uuid_across_lines`,
   Critical). The guard refuses only NEWLY introduced corruption, so on a project
   that is otherwise sound a door that forgot its rename is rolled back; on one
