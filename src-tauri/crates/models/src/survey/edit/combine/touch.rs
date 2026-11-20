@@ -236,11 +236,15 @@ impl Project {
     }
 
     /// The candidate for one touching pairing (`join` names `a` as kept).
+    /// With [`Plans::Without`] its two plans are left empty: they are the
+    /// combine run on a copy, both ways, which the dialog shows and the
+    /// refusal and the join do not read.
     fn candidate_for(
         &self,
         positions: &RawPositions,
         join: CombineJoin,
         touch: Touch,
+        plans: Plans,
     ) -> Option<CombineCandidate> {
         let mut join = if join.kept <= join.other {
             join
@@ -320,8 +324,14 @@ impl Project {
             branches: touch.branches,
             loose_ends: touch.loose_ends,
             passing_through: touch.passing_through,
-            plan_keeping_a: self.report_keeping(&join, blocked),
-            plan_keeping_b: self.report_keeping(&keeping_b, blocked),
+            plan_keeping_a: match plans {
+                Plans::With => self.report_keeping(&join, blocked),
+                Plans::Without => CombineReport::empty(join.kept),
+            },
+            plan_keeping_b: match plans {
+                Plans::With => self.report_keeping(&keeping_b, blocked),
+                Plans::Without => CombineReport::empty(keeping_b.kept),
+            },
         })
     }
 
@@ -331,6 +341,16 @@ impl Project {
     /// one that needs no reverse. `None` when either is missing or they are
     /// the same line.
     pub fn combine_candidate_for_lines(&self, s1: LineId, s2: LineId) -> Option<CombineCandidate> {
+        self.candidate_for_lines(s1, s2, Plans::With)
+    }
+
+    /// [`Self::combine_candidate_for_lines`], its plans as `plans` asks.
+    fn candidate_for_lines(
+        &self,
+        s1: LineId,
+        s2: LineId,
+        plans: Plans,
+    ) -> Option<CombineCandidate> {
         if s1 == s2 {
             return None;
         }
@@ -386,7 +406,7 @@ impl Project {
             );
             (join, Touch::refused(reason))
         };
-        self.candidate_for(&positions, join, touch)
+        self.candidate_for(&positions, join, touch, plans)
     }
 
     /// The candidate for combining `other` into `kept` at `join` (the kept and
@@ -398,8 +418,19 @@ impl Project {
         other: LineId,
         join: Option<CombineJoinEnds>,
     ) -> Option<CombineCandidate> {
+        self.candidate_joining(kept, other, join, Plans::With)
+    }
+
+    /// [`Self::combine_candidate_joining`], its plans as `plans` asks.
+    fn candidate_joining(
+        &self,
+        kept: LineId,
+        other: LineId,
+        join: Option<CombineJoinEnds>,
+        plans: Plans,
+    ) -> Option<CombineCandidate> {
         let Some(ends) = join else {
-            return self.combine_candidate_for_lines(kept, other);
+            return self.candidate_for_lines(kept, other, plans);
         };
         if kept == other {
             return None;
@@ -428,7 +459,7 @@ impl Project {
             );
             (join, Touch::refused(reason))
         };
-        self.candidate_for(&positions, join, touch)
+        self.candidate_for(&positions, join, touch, plans)
     }
 
     /// Why combining `other` into `kept` at `join` is refused, if it is: the
@@ -439,14 +470,28 @@ impl Project {
         other: LineId,
         join: Option<CombineJoinEnds>,
     ) -> Option<String> {
-        let Some(candidate) = self.combine_candidate_joining(kept, other, join) else {
+        let candidate = self.candidate_joining(kept, other, join, Plans::Without);
+        self.refusal_of(kept, other, candidate.as_ref())
+    }
+
+    /// [`Self::combine_refusal`] from the pair's candidate.
+    fn refusal_of(
+        &self,
+        kept: LineId,
+        other: LineId,
+        candidate: Option<&CombineCandidate>,
+    ) -> Option<String> {
+        let Some(candidate) = candidate else {
             return Some(self.cannot_combine_message(kept, other));
         };
-        candidate.blocked_reason.or(if candidate.line_a == kept {
-            candidate.blocked_keeping_a
-        } else {
-            candidate.blocked_keeping_b
-        })
+        candidate
+            .blocked_reason
+            .clone()
+            .or(if candidate.line_a == kept {
+                candidate.blocked_keeping_a.clone()
+            } else {
+                candidate.blocked_keeping_b.clone()
+            })
     }
 
     /// The join `combine_lines` would make, from the kept line's side.
@@ -456,11 +501,13 @@ impl Project {
         other: LineId,
         join: Option<CombineJoinEnds>,
     ) -> Result<CombineJoin, EditError> {
-        if let Some(refusal) = self.combine_refusal(kept, other, join) {
+        // One candidate, without its plans: the refusal and the join read
+        // neither (the plans are the dialog's dry runs).
+        let candidate = self.candidate_joining(kept, other, join, Plans::Without);
+        if let Some(refusal) = self.refusal_of(kept, other, candidate.as_ref()) {
             return Err(EditError::Refused(refusal));
         }
-        let candidate = self
-            .combine_candidate_joining(kept, other, join)
+        let candidate = candidate
             .ok_or_else(|| EditError::Refused(self.cannot_combine_message(kept, other)))?;
         Ok(if candidate.line_a == kept {
             CombineJoin {
@@ -636,7 +683,7 @@ impl Project {
                 "{count} line ends meet here: select the two to combine in the Sections panel"
             ));
             return self
-                .candidate_for(&positions, join, touch)
+                .candidate_for(&positions, join, touch, Plans::With)
                 .into_iter()
                 .collect();
         }
@@ -655,7 +702,7 @@ impl Project {
             };
             let touch = Touch::refused("Merged to the middle of another line".to_string());
             return self
-                .candidate_for(&positions, join, touch)
+                .candidate_for(&positions, join, touch, Plans::With)
                 .into_iter()
                 .collect();
         }
@@ -709,7 +756,16 @@ impl Project {
             }
         }
         best.into_iter()
-            .filter_map(|(join, touch)| self.candidate_for(&positions, join, touch))
+            .filter_map(|(join, touch)| self.candidate_for(&positions, join, touch, Plans::With))
             .collect()
     }
+}
+
+/// Whether a candidate carries its two plans (the combine run on a copy,
+/// each way): the dialog shows them; the refusal and the join do not need
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plans {
+    With,
+    Without,
 }

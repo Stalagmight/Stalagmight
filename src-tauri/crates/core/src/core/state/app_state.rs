@@ -50,6 +50,26 @@ pub(super) struct DerivedCache {
     pub(super) revision: u64,
     pub(super) raw: Arc<RawPositions>,
     pub(super) adjusted: Option<(u64, Arc<AdjustedPositions>)>,
+    /// A copy of this revision's project, for derived views computed
+    /// without the project lock (the gas engine, C9): taken once per
+    /// revision, on the first such view.
+    pub(super) snapshot: Option<Arc<Project>>,
+    /// The gas reach field last computed on this revision, keyed by its
+    /// inputs (C9: the planner asks again on every gas-input keystroke).
+    pub(super) gas: Option<(String, GasReachField)>,
+}
+
+impl DerivedCache {
+    /// A revision's cache holding only its raw layout.
+    pub(super) fn new(revision: u64, raw: Arc<RawPositions>) -> Self {
+        Self {
+            revision,
+            raw,
+            adjusted: None,
+            snapshot: None,
+            gas: None,
+        }
+    }
 }
 
 /// Hash the closure-adjustment config fields that affect the solve, for the
@@ -418,15 +438,24 @@ impl AppState {
     /// durable at once by a local-only save (B3), so a crash after an edit
     /// still knows the copy has unpushed work.
     pub(super) fn mark_remote_dirty(&self) {
-        let result = self.mutate_speleo_link(|link| {
-            let Some(link) = link.as_mut() else {
-                return false;
-            };
-            link.has_unpushed_edits = true;
-            link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
-            true
+        // The flag is what a crash must not lose (this copy holds work that
+        // is not on the server); the edit time is the push fence, read live,
+        // and rides the next save with the survey it dates. So only the flip
+        // to dirty rewrites the file now: every edit of a linked project used
+        // to rewrite the whole file to restamp the time (C11).
+        let flipped = self.with_file(|file| {
+            let mut link = file.speleo_link();
+            let l = link.as_mut()?;
+            let flipped = !l.has_unpushed_edits || l.last_edit_at.is_none();
+            l.has_unpushed_edits = true;
+            l.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            file.set_speleo_link(link.as_ref());
+            Some(flipped)
         });
-        if let Err(e) = result {
+        if flipped != Some(true) {
+            return;
+        }
+        if let Err(e) = self.persist_local_state() {
             tracing::warn!(
                 error = %e,
                 purpose = "flip SpeleoDB dirty bit after a remote edit",
@@ -501,11 +530,7 @@ impl AppState {
             return Arc::clone(&entry.raw);
         }
         let raw = Arc::new(project.raw_positions());
-        *cache = Some(DerivedCache {
-            revision,
-            raw: Arc::clone(&raw),
-            adjusted: None,
-        });
+        *cache = Some(DerivedCache::new(revision, Arc::clone(&raw)));
         raw
     }
 
@@ -573,6 +598,12 @@ impl AppState {
         Some(project.distance_field_wire(raw.as_ref(), from.copied(), include_reference))
     }
 
+    /// The gas reach field of a dive plan (`compute_gas_reach_field`, which
+    /// the planner calls on every gas-input keystroke). The engine runs on
+    /// the raw layout cached for this revision and on a copy of the project
+    /// taken once per revision, without the project lock (C9); the last
+    /// field per revision is kept, so asking again with the same inputs
+    /// costs nothing.
     pub fn gas_reach_field(
         &self,
         origin: Option<&StationRef>,
@@ -584,9 +615,49 @@ impl AppState {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
-        let guard = self.project.lock().ok()?;
-        let project = guard.as_ref()?;
-        Some(project.gas_reach_field_wire(
+        // Every input, exactly (`Debug` tells -0.0, NaN and None apart).
+        let key = format!(
+            "{:?}",
+            (
+                origin,
+                endpoint,
+                waypoints,
+                segments,
+                diver,
+                cylinders,
+                gas_config,
+                stage_drop_overrides,
+            )
+        );
+        let (project, raw, revision) = {
+            let guard = self.project.lock().ok()?;
+            let project = guard.as_ref()?;
+            let revision = self.current_revision();
+            let raw = self.raw_positions_of(project);
+            let mut cache = self
+                .derived
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let snapshot = match cache.as_mut().filter(|e| e.revision == revision) {
+                Some(entry) => {
+                    if let Some((_, field)) =
+                        entry.gas.as_ref().filter(|(cached, _)| *cached == key)
+                    {
+                        return Some(field.clone());
+                    }
+                    Arc::clone(
+                        entry
+                            .snapshot
+                            .get_or_insert_with(|| Arc::new(project.clone())),
+                    )
+                }
+                // A load seeded the cache for another revision meanwhile.
+                None => Arc::new(project.clone()),
+            };
+            (snapshot, raw, revision)
+        };
+        let field = project.gas_reach_field_wire_with(
+            &raw,
             origin,
             endpoint,
             waypoints,
@@ -595,7 +666,15 @@ impl AppState {
             cylinders,
             gas_config,
             stage_drop_overrides,
-        ))
+        );
+        let mut cache = self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = cache.as_mut().filter(|e| e.revision == revision) {
+            entry.gas = Some((key, field.clone()));
+        }
+        Some(field)
     }
 
     /// The ruler: the along-cave distance between two endpoints, on the

@@ -194,8 +194,15 @@ impl RawPositions {
 pub(super) struct Layout {
     pub(super) xy: Vec<[f64; 2]>,
     pub(super) placed: Vec<bool>,
-    walked: Vec<bool>,
+    /// Per line list position: the chain index the line was walked from
+    /// ([`NOT_WALKED`] until it is). In a valid model (a forest) that is the
+    /// line's station nearest the anchor, and every other station of the
+    /// line is placed by this walk.
+    pub(super) entry: Vec<usize>,
 }
+
+/// [`Layout::entry`] of a line not walked yet.
+pub(super) const NOT_WALKED: usize = usize::MAX;
 
 impl Layout {
     pub(super) fn new(topology: &Topology, line_count: usize) -> Self {
@@ -203,7 +210,7 @@ impl Layout {
         Self {
             xy: vec![[0.0, 0.0]; n],
             placed: vec![false; n],
-            walked: vec![false; line_count],
+            entry: vec![NOT_WALKED; line_count],
         }
     }
 }
@@ -364,32 +371,38 @@ impl Project {
                 let Some(position) = topology.line_position(slot.line_id) else {
                     continue;
                 };
-                if layout.walked[position] {
+                if layout.entry[position] != NOT_WALKED {
                     continue;
                 }
-                layout.walked[position] = true;
-                self.walk_line(
-                    topology,
-                    position,
-                    slot.station_index as usize,
-                    p,
-                    layout,
-                    &mut queue,
-                );
+                let index = slot.station_index as usize;
+                layout.entry[position] = index;
+                self.fold_line(topology, position, index, p, |station, shown| {
+                    if let Some(d) = topology.dense(station) {
+                        if !layout.placed[d] {
+                            layout.xy[d] = shown;
+                            layout.placed[d] = true;
+                            queue.push_back(station);
+                        }
+                    }
+                });
             }
         }
     }
 
-    /// Walk the line at list position `position` outwards from chain index
-    /// `index`, whose station is shown at `p`.
-    fn walk_line(
+    /// The line at list position `position` walked outwards from chain index
+    /// `index`, whose station is shown at `p`: `visit` gets every other
+    /// station of the chain with its shown position, forwards from `index`
+    /// first, then backwards. The one arithmetic of the traversal (each
+    /// position is the previous one plus today's shot vector, hand moves
+    /// applied per line), shared by the full walk and the incremental one of
+    /// a run of shot edits (`edit/shot_run.rs`), so the two agree to the bit.
+    pub(super) fn fold_line(
         &self,
         topology: &Topology,
         position: usize,
         index: usize,
         p: [f64; 2],
-        layout: &mut Layout,
-        queue: &mut VecDeque<StationId>,
+        mut visit: impl FnMut(StationId, [f64; 2]),
     ) {
         let (Some(line), Some(chain)) = (self.lines.get(position), topology.chain_at(position))
         else {
@@ -409,13 +422,7 @@ impl Project {
                 Some(hand) => [chain_xy[0] + hand[0], chain_xy[1] + hand[1]],
                 None => chain_xy,
             };
-            if let Some(d) = topology.dense(station) {
-                if !layout.placed[d] {
-                    layout.xy[d] = shown;
-                    layout.placed[d] = true;
-                    queue.push_back(station);
-                }
-            }
+            visit(station, shown);
         };
         let mut c = origin;
         for k in index + 1..chain.len() {
@@ -500,7 +507,7 @@ impl Project {
 
 /// [`Project::closure_is_aligned`] over precomputed state: `held[c]` says
 /// component `c` holds a datum.
-fn is_aligned(
+pub(super) fn is_aligned(
     topology: &Topology,
     held: &[bool],
     closure: &LoopClosure,

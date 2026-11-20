@@ -401,6 +401,12 @@ fn run(seed: u64, steps: usize) -> (Project, Vec<&'static str>) {
     (state.p, names)
 }
 
+/// A random valid survey: the project `steps` random operations from `seed`
+/// leave (closures, datums, merges and free pieces among them).
+pub(super) fn random_survey(seed: u64, steps: usize) -> Project {
+    run(seed, steps).0
+}
+
 /// The model with every shot uuid replaced by its position (uuids minted by
 /// a split inside a shot are random v4s).
 fn normalised(p: &Project) -> Project {

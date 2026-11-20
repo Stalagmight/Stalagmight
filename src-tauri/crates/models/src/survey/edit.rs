@@ -57,6 +57,7 @@ mod junction_leave;
 mod lines;
 mod ranges;
 mod reverse;
+mod shot_run;
 mod shots;
 mod split;
 
@@ -119,6 +120,12 @@ mod reverse_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod shot_run_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod shots_closure_promotion_tests;
 #[cfg(test)]
 #[expect(
@@ -141,6 +148,7 @@ pub use combine::{
 };
 pub use lines::DeletedLine;
 pub use ranges::{DeleteRangePreview, DeletedRange, RangeDeleteMode};
+pub use shot_run::ShotEditRun;
 pub use shots::{CreatedShot, DeleteShotPreview, DeletedShot, ShotPlace, SplitShot};
 
 use super::Promotion;

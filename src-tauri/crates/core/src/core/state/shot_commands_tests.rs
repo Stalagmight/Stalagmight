@@ -2303,3 +2303,160 @@ fn a_closure_whose_ends_a_promotion_joins_is_reported_by_its_stations_before_the
          its two stations one point."
     );
 }
+
+// ----- a paste: a batch of shot updates (D2) ---------------------------------
+
+/// A tree held by a datum (its branches entered at junctions, one with a
+/// snap closure), a free tree, and a third free piece, for pastes.
+fn paste_survey() -> (Build, [LineId; 5]) {
+    let mut b = Build::new();
+    let held = b.datum_line(
+        "Held",
+        (0..8)
+            .map(|i| along(3.0 + f64::from(i) * 0.5, 80.0))
+            .collect(),
+        gps(20.5, -87.25),
+    );
+    let branch = b.from(
+        "Branch",
+        b.st(held, 3),
+        (0..6).map(|i| along(2.0 + f64::from(i), 170.0)).collect(),
+    );
+    let snap_a = b.st(branch, 6);
+    let snap_b = b.st(held, 7);
+    b.closure(snap_a, snap_b, ClosureStrategy::Move);
+    let free = b.free_at(
+        "Free",
+        (0..7).map(|i| along(4.0, 10.0 * f64::from(i))).collect(),
+        [100.0, -40.0],
+    );
+    let twig = b.from(
+        "Twig",
+        b.st(free, 4),
+        (0..5)
+            .map(|i| along(2.5, 300.0 - 7.0 * f64::from(i)))
+            .collect(),
+    );
+    let island = b.free_at("Island", shots(&[5.0, 6.0, 7.0]), [-50.0, 60.0]);
+    (b, [held, branch, free, twig, island])
+}
+
+/// A paste over every shot of `lines`: geometry and annotation cells mixed,
+/// each value different.
+fn paste_commands(p: &Project, lines: &[LineId]) -> Vec<Command> {
+    let mut commands = Vec::new();
+    for &line in lines {
+        for (k, id) in shot_ids(p, line).into_iter().enumerate() {
+            let n = commands.len() as f64;
+            let updates = match k % 4 {
+                0 => ShotUpdates {
+                    length: Some(2.0 + n * 0.37),
+                    ..ShotUpdates::default()
+                },
+                1 => ShotUpdates {
+                    azimuth_in: Some(5.0 + n * 3.1),
+                    azimuth_out: Some(5.0 + n * 3.1),
+                    ..ShotUpdates::default()
+                },
+                2 => ShotUpdates {
+                    depth_out: Some(12.0 + n * 0.2),
+                    left: Some(Some(n * 0.1)),
+                    ..ShotUpdates::default()
+                },
+                _ => ShotUpdates {
+                    comment: Some(Some(format!("cell {n}"))),
+                    ..ShotUpdates::default()
+                },
+            };
+            commands.push(Command::UpdateShot {
+                line_id: line,
+                shot_id: id,
+                updates,
+            });
+        }
+    }
+    commands
+}
+
+/// A paste is its updates one after another: the batch (one survey pass)
+/// lands on the stored model the same updates land on one at a time, to the
+/// bit, with one entry whose undo and redo are exact. Free pieces move their
+/// placements at every geometry cell, as each update does on its own.
+#[test]
+fn a_paste_lands_where_its_updates_one_at_a_time_land() {
+    let (b, lines) = paste_survey();
+    let base = b.0.clone();
+    let batched = b.state();
+    let single = {
+        let state = AppState::new().unwrap();
+        state.set_project_for_tests(base.clone());
+        state
+    };
+    let commands = paste_commands(&base, &lines);
+    assert!(commands.len() > 25);
+    for command in commands.clone() {
+        ok(single.execute(command));
+    }
+    let (_, after) = one_exact_entry(&batched, || {
+        batched.execute(Command::Batch {
+            commands,
+            label: None,
+        })
+    });
+    let expected = project(&single);
+    assert_ne!(after.placements, base.placements, "the free pieces moved");
+    assert_eq!(canonical(&after), canonical(&expected));
+    let bits = |p: &Project| -> Vec<(StationId, [u64; 3])> {
+        p.raw_positions()
+            .iter()
+            .map(|(s, [x, y, z])| (s, [x.to_bits(), y.to_bits(), z.to_bits()]))
+            .collect()
+    };
+    assert_eq!(bits(&after), bits(&expected));
+}
+
+/// A paste that reaches a frozen shot is refused with the frozen-shot words
+/// and changes nothing, as the update alone is; so is one whose last cell
+/// is a zero length (the model's refusal, after every other cell applied).
+#[test]
+fn a_paste_with_a_refused_cell_changes_nothing() {
+    let (mut b, lines) = paste_survey();
+    // A tie from the branch back onto the held line closes a loop on the
+    // datum's piece: the shots around it are frozen.
+    let (a, z) = (b.st(lines[1], 2), b.st(lines[0], 6));
+    b.closure(a, z, ClosureStrategy::Tie);
+    let state = b.state();
+    let p = project(&state);
+    let mut frozen = paste_commands(&p, &lines[2..]);
+    frozen.push(Command::UpdateShot {
+        line_id: lines[1],
+        shot_id: shot_ids(&p, lines[1])[1],
+        updates: ShotUpdates {
+            length: Some(9.0),
+            ..ShotUpdates::default()
+        },
+    });
+    let error = assert_refused_changes_nothing(&state, || {
+        state.execute(Command::Batch {
+            commands: frozen,
+            label: None,
+        })
+    });
+    assert_eq!(error, super::commands::FROZEN_GEOMETRY);
+    let mut zero = paste_commands(&p, &lines[2..]);
+    zero.push(Command::UpdateShot {
+        line_id: lines[4],
+        shot_id: shot_ids(&p, lines[4])[1],
+        updates: ShotUpdates {
+            length: Some(0.0),
+            ..ShotUpdates::default()
+        },
+    });
+    let error = assert_refused_changes_nothing(&state, || {
+        state.execute(Command::Batch {
+            commands: zero,
+            label: None,
+        })
+    });
+    assert!(error.contains("has zero length"), "{error}");
+}

@@ -583,3 +583,205 @@ fn station_and_section_counters_stay_within_their_id_spaces() {
         },
     );
 }
+
+// ----- the fast checks against the map-based ones they replace (D2) ---------
+
+/// The reports of the checks `validate` makes with sorted fast paths and a
+/// dense union-find (uuid repeats, dangling starts and targets, repeated
+/// chain stations, orphans, cycles, repeated names), computed the way they
+/// were before: ordered maps keyed by uuid, station id and name. In
+/// `validate`'s order.
+fn map_based_reports(p: &Project) -> Vec<Violation> {
+    use std::collections::BTreeMap;
+    let topology = p.topology();
+    let mut out = Vec::new();
+    let mut first_seen: BTreeMap<&str, (crate::LineId, usize)> = BTreeMap::new();
+    for line in p.lines() {
+        for (index, shot) in line.shots.iter().enumerate() {
+            if let Some(&first) = first_seen.get(shot.uuid.as_str()) {
+                out.push(Violation::DuplicateShotUuid {
+                    uuid: shot.uuid.clone(),
+                    first,
+                    second: (line.id, index),
+                });
+            } else {
+                first_seen.insert(&shot.uuid, (line.id, index));
+            }
+        }
+    }
+    for line in p.lines() {
+        if !p.stations.contains_key(&line.start) {
+            out.push(Violation::DanglingLineStart {
+                line: line.id,
+                station: line.start,
+            });
+        }
+        for (index, shot) in line.shots.iter().enumerate() {
+            if !p.stations.contains_key(&shot.to) {
+                out.push(Violation::DanglingShotTarget {
+                    line: line.id,
+                    index,
+                    station: shot.to,
+                });
+            }
+        }
+    }
+    for line in p.lines() {
+        let mut seen: BTreeMap<crate::StationId, usize> = BTreeMap::new();
+        for (index, station) in line.stations().enumerate() {
+            if let Some(&first) = seen.get(&station) {
+                out.push(Violation::RepeatedStationInChain {
+                    line: line.id,
+                    station,
+                    first,
+                    second: index,
+                });
+            } else {
+                seen.insert(station, index);
+            }
+        }
+    }
+    for &station in p.stations.keys() {
+        if !topology.contains(station) {
+            out.push(Violation::OrphanStation { station });
+        }
+    }
+    let mut parent: BTreeMap<crate::StationId, crate::StationId> = BTreeMap::new();
+    fn find(
+        parent: &BTreeMap<crate::StationId, crate::StationId>,
+        x: crate::StationId,
+    ) -> crate::StationId {
+        let mut root = x;
+        while let Some(&p) = parent.get(&root) {
+            if p == root {
+                break;
+            }
+            root = p;
+        }
+        root
+    }
+    for line in p.lines() {
+        parent.entry(line.start).or_insert(line.start);
+        let mut from = line.start;
+        for (index, shot) in line.shots.iter().enumerate() {
+            parent.entry(shot.to).or_insert(shot.to);
+            let (ra, rb) = (find(&parent, from), find(&parent, shot.to));
+            if ra == rb {
+                out.push(Violation::Cycle {
+                    line: line.id,
+                    index,
+                    from,
+                    to: shot.to,
+                });
+            } else {
+                parent.insert(ra.max(rb), ra.min(rb));
+            }
+            from = shot.to;
+        }
+    }
+    for (position, line) in p.lines().iter().enumerate() {
+        let Some(chain) = topology.chain_at(position) else {
+            continue;
+        };
+        let mut seen: BTreeMap<&str, crate::StationId> = BTreeMap::new();
+        for &station in chain {
+            let Some(name) = p.stations.get(&station).map(|s| s.name.as_str()) else {
+                continue;
+            };
+            match seen.get(name) {
+                Some(&first) if first != station => out.push(Violation::DuplicateStationName {
+                    line: line.id,
+                    name: name.to_string(),
+                    first,
+                    second: station,
+                }),
+                Some(_) => {}
+                None => {
+                    seen.insert(name, station);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_rewritten_report(v: &Violation) -> bool {
+    matches!(
+        v,
+        Violation::DuplicateShotUuid { .. }
+            | Violation::DanglingLineStart { .. }
+            | Violation::DanglingShotTarget { .. }
+            | Violation::RepeatedStationInChain { .. }
+            | Violation::OrphanStation { .. }
+            | Violation::Cycle { .. }
+            | Violation::DuplicateStationName { .. }
+    )
+}
+
+/// Random corruptions of a branching survey (repeated uuids, dangling and
+/// orphaned stations, a station twice on a chain, shots closing loops,
+/// repeated names): `validate` reports exactly what the map-based checks
+/// report, in the same order. Injection: drop a fast path's fallback (e.g.
+/// `continue` unconditionally in `check_chains`) and this fails.
+#[test]
+fn the_fast_checks_report_what_the_map_based_ones_did() {
+    let mut reported = 0;
+    for seed in 0..300_u64 {
+        let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut below = |n: usize| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % n as u64) as usize
+        };
+        let (mut p, lines) = three_line_junction();
+        let extra = add(&mut p, StartAt::New, vec![flat(30.0, 4.0); 6]);
+        let lines = [lines[0], lines[1], lines[2], extra];
+        let stations: Vec<crate::StationId> = p.stations.keys().copied().collect();
+        for _ in 0..=below(3) {
+            let line = lines[below(lines.len())];
+            let shots = p.line(line).unwrap().shots.len();
+            if shots == 0 {
+                continue;
+            }
+            let index = below(shots);
+            match below(6) {
+                0 => {
+                    let other = lines[below(lines.len())];
+                    let uuid = p.line(other).unwrap().shots[0].uuid.clone();
+                    p.line_mut(line).unwrap().shots[index].uuid = uuid;
+                }
+                1 => p.line_mut(line).unwrap().shots[index].to = 900_000 + below(3) as u32,
+                2 => {
+                    let station = stations[below(stations.len())];
+                    p.line_mut(line).unwrap().shots[index].to = station;
+                }
+                3 => {
+                    let orphan = 800_000 + below(5) as u32;
+                    p.stations
+                        .insert(orphan, Station::new(orphan, format!("o{orphan}")));
+                }
+                4 => {
+                    let station = stations[below(stations.len())];
+                    let name = p.stations[&station].name.clone();
+                    let to = p.line(line).unwrap().shots[index].to;
+                    if let Some(s) = p.stations.get_mut(&to) {
+                        s.name = name;
+                    }
+                }
+                _ => {
+                    let start = stations[below(stations.len())];
+                    p.line_mut(line).unwrap().start = start;
+                }
+            }
+        }
+        let fast: Vec<Violation> = p
+            .validate()
+            .into_iter()
+            .filter(is_rewritten_report)
+            .collect();
+        assert_eq!(fast, map_based_reports(&p), "seed {seed}");
+        reported += usize::from(!fast.is_empty());
+    }
+    assert!(reported > 200, "most corruptions are reported: {reported}");
+}

@@ -56,7 +56,7 @@ use crate::gas::{Cylinder, Diver, PlanSegment};
 use crate::{LineId, ShotKind, StationId};
 
 use super::graph::{dense_coords, slot_coords};
-use super::{Project, ShotLocation, Topology};
+use super::{Project, RawPositions, ShotLocation, Topology};
 
 use budget::{
     all_thirds_backgas_turn, backgas_fraction, backgas_turn_pressure, cylinder_usable_bars,
@@ -186,6 +186,34 @@ impl Project {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationId>],
     ) -> GasReach {
+        self.gas_reach_with(
+            &self.raw_positions(),
+            origin,
+            endpoint,
+            waypoints,
+            segments,
+            diver,
+            cylinders,
+            gas_config,
+            stage_drop_overrides,
+        )
+    }
+
+    /// [`Self::gas_reach`] on this state's raw layout `positions` (the
+    /// caller's per-revision cache), so a plan re-priced on every gas input
+    /// does not lay the survey out each time.
+    pub fn gas_reach_with(
+        &self,
+        positions: &RawPositions,
+        origin: Option<StationId>,
+        endpoint: Option<StationId>,
+        waypoints: &[Option<StationId>],
+        segments: &[PlanSegment],
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationId>],
+    ) -> GasReach {
         // Disabled tanks (#245) are excluded from EVERY gas computation - budget, gauges, stage
         // drops. Filter once here so no downstream helper has to know about `enabled`; rig (vec)
         // order is preserved, so "stage 1/2" still means the first/second enabled Stage cylinder.
@@ -198,7 +226,7 @@ impl Project {
         let stations = topology.stations().to_vec();
         let n = stations.len();
         // The MEASURED positions (#34): per dense station, z without any line's hand move.
-        let coords = dense_coords(topology, &self.raw_positions());
+        let coords = dense_coords(topology, positions);
 
         let entrance_roots = || -> Vec<usize> {
             self.entrance_stations()

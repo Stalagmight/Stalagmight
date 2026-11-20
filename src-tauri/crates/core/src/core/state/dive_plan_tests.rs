@@ -29,8 +29,8 @@ use crate::models::survey::{
 };
 use crate::models::{
     CombineLinesOptions, CombinePick, CylRole, Cylinder, DivePlanSnapshot, Diver, GasReachField,
-    LineEnd, LineId, MarkedPoint, PlanSegment, ShotData, ShotId, ShotKind, SplitAt, StationAnchor,
-    StationId, StationKey, StationRef, TankMaterial,
+    LineEnd, LineId, MarkedPoint, PlanSegment, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt,
+    StationAnchor, StationId, StationKey, StationRef, TankMaterial,
 };
 use crate::persistence::migrate::LegacyParity;
 use crate::persistence::plnx::PlnxStore;
@@ -2447,4 +2447,94 @@ mod legacy {
             "endpoint"
         );
     }
+}
+
+// ----- the gas field per revision (C9) ---------------------------------------
+
+/// The reach field the planner asks for on every gas-input keystroke is the
+/// engine's own answer, whether it is computed (outside the project lock,
+/// on the revision's layout) or served from the revision's cache: asking
+/// again gives the same field; another input (a smaller cylinder) and an
+/// edit of the survey each give a fresh one. Injection: key the cache on
+/// anything less than every input (e.g. drop `cylinders` from the key) and
+/// the smaller cylinder is answered with the larger one's field.
+#[test]
+fn the_gas_field_is_the_engines_answer_cached_per_revision_and_inputs() {
+    let (project, line) = one_line(30);
+    let state = state_with(project);
+    let origin = slot(line, 0);
+    let cylinder = |litres: f64| {
+        vec![Cylinder::new(
+            litres,
+            200.0,
+            200.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()]
+    };
+    let mut config = GasConfig::default();
+    config.normalize();
+    let diver = default_diver();
+    let field = |cylinders: &[Cylinder]| {
+        state
+            .gas_reach_field(
+                Some(&origin),
+                None,
+                &[],
+                &[],
+                &diver,
+                cylinders,
+                &config,
+                &[],
+            )
+            .expect("a project is open")
+    };
+    let engine = |cylinders: &[Cylinder]| {
+        project_of(&state).gas_reach_field_wire(
+            Some(&origin),
+            None,
+            &[],
+            &[],
+            &diver,
+            cylinders,
+            &config,
+            &[],
+        )
+    };
+    let reachable = |f: &GasReachField| f.reachable.iter().filter(|r| **r).count();
+    let large = field(&cylinder(24.0));
+    assert_eq!(
+        large,
+        engine(&cylinder(24.0)),
+        "computed: the engine's field"
+    );
+    assert_eq!(field(&cylinder(24.0)), large, "asked again: the same field");
+    let small = field(&cylinder(1.0));
+    assert_eq!(
+        small,
+        engine(&cylinder(1.0)),
+        "another input: computed afresh"
+    );
+    assert!(
+        reachable(&small) < reachable(&large),
+        "a smaller cylinder reaches less: {} vs {}",
+        reachable(&small),
+        reachable(&large)
+    );
+    // An edit makes a new revision: the cached field is not served for it.
+    let shot = shot_id(&project_of(&state), line, 0);
+    let edited = state.execute(Command::UpdateShot {
+        line_id: line,
+        shot_id: shot,
+        updates: ShotUpdates {
+            length: Some(400.0),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    let after = field(&cylinder(24.0));
+    assert_eq!(after, engine(&cylinder(24.0)));
+    assert_ne!(after, large, "a 400 m first shot changes the reach");
 }

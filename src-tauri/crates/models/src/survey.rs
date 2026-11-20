@@ -254,8 +254,8 @@ pub use edit::{
 };
 pub use edit::{
     CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange, DeletedShot,
-    EditError, EditReport, Edited, RangeDeleteMode, ShotPlace, SplitLinePreview, SplitOptions,
-    SplitShot,
+    EditError, EditReport, Edited, RangeDeleteMode, ShotEditRun, ShotPlace, SplitLinePreview,
+    SplitOptions, SplitShot,
 };
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;
@@ -386,6 +386,33 @@ impl Project {
         self.caches
             .shot_uuids
             .get_or_init(|| Arc::new(ShotUuidIndex::build(&self.lines)))
+    }
+
+    /// Edit the values of shot `index` of the line at list position
+    /// `position` (measurements and annotations) without dropping the
+    /// derived caches: the topology and the shot-uuid index read only a
+    /// shot's `to` and `uuid`. Should `edit` change either (or the session
+    /// id), the caches are dropped after all. `false` when there is no such
+    /// shot.
+    pub(super) fn edit_shot_values(
+        &mut self,
+        position: usize,
+        index: usize,
+        edit: impl FnOnce(&mut Shot),
+    ) -> bool {
+        let Some(shot) = self
+            .lines
+            .get_mut(position)
+            .and_then(|line| line.shots.get_mut(index))
+        else {
+            return false;
+        };
+        let (to, id, uuid) = (shot.to, shot.id, shot.uuid.clone());
+        edit(shot);
+        if shot.to != to || shot.id != id || shot.uuid != uuid {
+            self.drop_caches();
+        }
+        true
     }
 
     fn drop_caches(&mut self) {

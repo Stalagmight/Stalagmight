@@ -82,7 +82,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [uat/ledger.md](uat/ledger.md) | The acceptance tier: one line per real-app UAT run, the per-RC checklist in `uat/checklists/`, and the machine-readable records in `uat/runs/`. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |
 | [linting.md](linting.md) | The `cargo fmt` + clippy CI gates, the anti-AI-slop lint policy, the per-test-module `#[expect]` idiom, deferred lints. |
-| [performance.md](performance.md) | Where the time goes and how to measure it: the closure solver, frozen-shot detection, geometry reconcile, and the WebGL renderer's per-frame vs per-data-change cost. |
+| [performance.md](performance.md) | Where the time goes and how to measure it: the closure solver, frozen-shot detection, the edit pipeline and its benchmark against 0.6.0, and the WebGL renderer's per-frame vs per-data-change cost. |
 
 ## Platform and ops
 

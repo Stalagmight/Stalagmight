@@ -5,7 +5,7 @@
 //! ids, references, chains, orphans, forest, anchors, closures, names,
 //! counters, numbers; within each, in list (or id) order.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
@@ -481,7 +481,7 @@ impl Project {
         self.check_references(topology, &mut out);
         self.check_chains(&mut out);
         self.check_orphans(topology, &mut out);
-        self.check_forest(&mut out);
+        self.check_forest(topology, &mut out);
         self.check_anchors(topology, &mut out);
         self.check_closures(topology, &mut out);
         self.check_names(topology, &mut out);
@@ -565,7 +565,9 @@ impl Project {
                 });
             }
         }
-        let mut first_seen: BTreeMap<&str, (LineId, usize)> = BTreeMap::new();
+        // Hashed: the report order is the shots' list order either way.
+        let shot_count = self.lines.iter().map(|l| l.shots.len()).sum();
+        let mut first_seen: HashMap<&str, (LineId, usize)> = HashMap::with_capacity(shot_count);
         for line in &self.lines {
             for (index, shot) in line.shots.iter().enumerate() {
                 if shot.uuid.is_empty() || shot.uuid.chars().count() > MAX_SHOT_UUID_CHARS {
@@ -590,15 +592,19 @@ impl Project {
 
     fn check_references(&self, topology: &Topology, out: &mut Vec<Violation>) {
         let section_ids: BTreeSet<SectionId> = self.sections.iter().map(|s| s.id).collect();
+        // Every chain station is a topology station: when all of those are
+        // stored, no start or shot target can dangle (one sorted merge
+        // instead of a map lookup per shot).
+        let chains_resolve = sorted_subset(topology.stations(), self.stations.keys());
         for line in &self.lines {
-            if !self.stations.contains_key(&line.start) {
+            if !chains_resolve && !self.stations.contains_key(&line.start) {
                 out.push(Violation::DanglingLineStart {
                     line: line.id,
                     station: line.start,
                 });
             }
             for (index, shot) in line.shots.iter().enumerate() {
-                if !self.stations.contains_key(&shot.to) {
+                if !chains_resolve && !self.stations.contains_key(&shot.to) {
                     out.push(Violation::DanglingShotTarget {
                         line: line.id,
                         index,
@@ -672,7 +678,15 @@ impl Project {
     }
 
     fn check_chains(&self, out: &mut Vec<Violation>) {
+        let mut sorted: Vec<StationId> = Vec::new();
         for line in &self.lines {
+            // Fast path: no station twice, nothing to report.
+            sorted.clear();
+            sorted.extend(line.stations());
+            sorted.sort_unstable();
+            if sorted.windows(2).all(|w| w[0] != w[1]) {
+                continue;
+            }
             let mut seen: BTreeMap<StationId, usize> = BTreeMap::new();
             for (index, station) in line.stations().enumerate() {
                 if let Some(&first) = seen.get(&station) {
@@ -690,6 +704,9 @@ impl Project {
     }
 
     fn check_orphans(&self, topology: &Topology, out: &mut Vec<Violation>) {
+        if sorted_subset(self.stations.keys(), topology.stations()) {
+            return;
+        }
         for &station in self.stations.keys() {
             if !topology.contains(station) {
                 out.push(Violation::OrphanStation { station });
@@ -697,40 +714,39 @@ impl Project {
         }
     }
 
-    fn check_forest(&self, out: &mut Vec<Violation>) {
-        // Union-find keyed by station id, edges in list order.
-        let mut parent: BTreeMap<StationId, StationId> = BTreeMap::new();
-        fn find(parent: &mut BTreeMap<StationId, StationId>, x: StationId) -> StationId {
+    fn check_forest(&self, topology: &Topology, out: &mut Vec<Violation>) {
+        // Union-find over the topology's dense index (ascending station id,
+        // so "the lower id is the root" is the lower index), edges in list
+        // order. Every chain station has a dense index.
+        let mut parent: Vec<usize> = (0..topology.stations().len()).collect();
+        fn find(parent: &mut [usize], x: usize) -> usize {
             let mut root = x;
-            while let Some(&p) = parent.get(&root) {
-                if p == root {
-                    break;
-                }
-                root = p;
+            while parent[root] != root {
+                root = parent[root];
             }
             let mut cur = x;
             while cur != root {
-                let next = parent.get(&cur).copied().unwrap_or(root);
-                parent.insert(cur, root);
+                let next = parent[cur];
+                parent[cur] = root;
                 cur = next;
             }
             root
         }
         for line in &self.lines {
-            parent.entry(line.start).or_insert(line.start);
             let mut from = line.start;
             for (index, shot) in line.shots.iter().enumerate() {
-                parent.entry(shot.to).or_insert(shot.to);
-                let (ra, rb) = (find(&mut parent, from), find(&mut parent, shot.to));
-                if ra == rb {
-                    out.push(Violation::Cycle {
-                        line: line.id,
-                        index,
-                        from,
-                        to: shot.to,
-                    });
-                } else {
-                    parent.insert(ra.max(rb), ra.min(rb));
+                if let (Some(a), Some(b)) = (topology.dense(from), topology.dense(shot.to)) {
+                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                    if ra == rb {
+                        out.push(Violation::Cycle {
+                            line: line.id,
+                            index,
+                            from,
+                            to: shot.to,
+                        });
+                    } else {
+                        parent[ra.max(rb)] = ra.min(rb);
+                    }
                 }
                 from = shot.to;
             }
@@ -804,10 +820,25 @@ impl Project {
     }
 
     fn check_names(&self, topology: &Topology, out: &mut Vec<Violation>) {
+        let mut sorted: Vec<(&str, StationId)> = Vec::new();
         for (position, line) in self.lines.iter().enumerate() {
             let Some(chain) = topology.chain_at(position) else {
                 continue;
             };
+            // Fast path: no name on two stations of the chain.
+            sorted.clear();
+            sorted.extend(
+                chain
+                    .iter()
+                    .filter_map(|s| self.stations.get(s).map(|st| (st.name.as_str(), *s))),
+            );
+            sorted.sort_unstable();
+            if sorted
+                .windows(2)
+                .all(|w| w[0].0 != w[1].0 || w[0].1 == w[1].1)
+            {
+                continue;
+            }
             let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
             for &station in chain {
                 let Some(name) = self.stations.get(&station).map(|s| s.name.as_str()) else {
@@ -973,4 +1004,25 @@ impl Project {
             check(NumberField::ValidationThreshold { field }, value);
         }
     }
+}
+
+/// Whether every element of the ascending `small` is in the ascending
+/// `large` (one merge walk).
+fn sorted_subset<'a>(
+    small: impl IntoIterator<Item = &'a StationId>,
+    large: impl IntoIterator<Item = &'a StationId>,
+) -> bool {
+    let mut large = large.into_iter().peekable();
+    for x in small {
+        loop {
+            match large.peek() {
+                Some(y) if *y < x => {
+                    large.next();
+                }
+                Some(y) if *y == x => break,
+                _ => return false,
+            }
+        }
+    }
+    true
 }

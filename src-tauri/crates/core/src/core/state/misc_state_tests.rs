@@ -1352,6 +1352,40 @@ fn dirty_bit_is_idempotent_and_set_only() {
     assert!(on_disk.has_unpushed_edits, "and the file says so");
 }
 
+/// Only the flip to dirty rewrites the file (C11): the second edit of a
+/// linked project leaves the file as the first one left it (the flag is on
+/// disk already), its new edit time is kept in memory as the push fence, and
+/// the next save writes it with the survey it dates. Injection: persist on
+/// every edit again and the bytes after the second edit differ.
+#[test]
+fn only_the_flip_to_dirty_rewrites_a_linked_file() {
+    let (state, line, first, _temp) = remote_fixture_editable();
+    let path = state.open_project_path().unwrap();
+    run(&state, length_edit(line, first, 9.0));
+    let on_disk = super::synthetic_stalx_tests::link_on_disk(&path).unwrap();
+    assert!(on_disk.has_unpushed_edits, "the flip is durable at once");
+    let after_first = std::fs::read(&path).unwrap();
+    let stamped = state.speleodb_open_link().unwrap().last_edit_at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    run(&state, length_edit(line, first, 8.0));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        after_first,
+        "a second edit does not rewrite the file"
+    );
+    let live = state.speleodb_open_link().unwrap();
+    assert!(live.has_unpushed_edits);
+    assert_ne!(live.last_edit_at, stamped, "the edit time moves in memory");
+    run(&state, Command::SaveProject { path: None });
+    let saved = super::synthetic_stalx_tests::link_on_disk(&path).unwrap();
+    assert!(saved.has_unpushed_edits);
+    assert_eq!(
+        super::synthetic_stalx_tests::instant(saved.last_edit_at.as_deref()),
+        super::synthetic_stalx_tests::instant(live.last_edit_at.as_deref()),
+        "the save writes the latest edit time"
+    );
+}
+
 #[test]
 fn dirty_bit_noop_for_local_only_project() {
     let temp = TempDir::new().unwrap();
