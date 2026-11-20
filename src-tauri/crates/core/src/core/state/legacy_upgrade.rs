@@ -35,8 +35,11 @@
 //! write that fails removes the copy step 4 kept while the original still
 //! holds the same bytes, so a save retried on a read-only folder does not fill
 //! the backups folder. Settling replaces the file by a rename, so it needs what
-//! the version 2 write needs (a writable folder) and nothing more: a
-//! write-protected legacy file upgrades as an ordinary one does.
+//! the version 2 write needs (a writable folder) and nothing more: on Unix a
+//! write-protected legacy file upgrades as an ordinary one does and keeps its
+//! permission bits. On Windows a rename cannot replace a read-only file, so
+//! the upgrade of one is refused like its version 2 write, and nothing is
+//! left beside it (the staged copy is never made read-only).
 
 use std::fmt;
 use std::io::Write as _;
@@ -270,12 +273,7 @@ fn replace_original(
         .write_all(whole)
         .map_err(io(Stage::WriteTemp, &staged))
         .and_then(|()| {
-            // The original's permissions, set through the handle that writes.
-            if let Ok(meta) = std::fs::metadata(original) {
-                if let Err(e) = file.set_permissions(meta.permissions()) {
-                    tracing::warn!(error = %e, "Could not carry the original's permissions onto its settled copy");
-                }
-            }
+            inherit_mode(&file, original);
             file.sync_all().map_err(io(Stage::SyncTemp, &staged))
         })
         .and_then(|()| {
@@ -293,6 +291,26 @@ fn replace_original(
     let modified = std::fs::metadata(original).and_then(|m| m.modified()).ok();
     Ok(Fingerprint::of(whole, modified))
 }
+
+/// Give the staged settled copy the original's Unix permission bits, set
+/// through the handle that writes, as `write_atomic` does for its temp. Unix
+/// only: on Windows the only bit is read-only, a rename cannot replace a
+/// read-only file anyway, and a read-only staged copy could not be removed
+/// after that refused rename (review finding D-migration-upgrade-12).
+#[cfg(unix)]
+fn inherit_mode(staged: &std::fs::File, original: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let Ok(metadata) = std::fs::metadata(original) else {
+        return;
+    };
+    let mode = metadata.permissions().mode() & 0o777;
+    if let Err(e) = staged.set_permissions(std::fs::Permissions::from_mode(mode)) {
+        tracing::warn!(error = %e, "Could not carry the original's permissions onto its settled copy");
+    }
+}
+
+#[cfg(not(unix))]
+const fn inherit_mode(_staged: &std::fs::File, _original: &Path) {}
 
 /// Step 3: remove every sidecar beside `original`, durably.
 fn remove_sidecars(original: &Path) -> Result<(), UpgradeError> {

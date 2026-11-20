@@ -348,10 +348,13 @@ save says so ("the original's unfinished changes could not be finished") and
 Save As still works.
 
 Settling replaces the original by a rename, so it needs what the version 2
-write needs (a writable folder) and nothing more: a write-protected legacy file
-in a writable folder upgrades like any other and keeps its permission bits. On
-write-protected media the upgrade is refused with `PERMISSION_DENIED` and
-changes nothing.
+write needs (a writable folder) and nothing more: on Unix a write-protected
+legacy file in a writable folder upgrades like any other and keeps its
+permission bits. On Windows a rename cannot replace a read-only file, so the
+upgrade of one is refused like its version 2 write would be; the staged
+settled copy never carries the read-only attribute, so nothing is left beside
+the original. On write-protected media the upgrade is refused with
+`PERMISSION_DENIED` and changes nothing.
 
 The Recovery dialog lists the kept originals with the project's own backups
 (`list_project_backups`), and Restore puts one back. The save itself is
