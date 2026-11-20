@@ -350,6 +350,12 @@ saved it only marks `local_pending`; the next real save writes it. A caller
 that already holds the `project` guard uses `persist_local_state_at`
 (`Mutex` is not reentrant).
 
+A local-only save refused after a push LANDED (the file was changed by another
+program while the upload ran) is logged, never a push failure: the commit is on
+the server, memory holds the new BASE and the clean dirty bit, the
+clear-on-push still runs, and the next save writes them, after the save-conflict
+prompt (`speleodb_record_landing`, review G-speleodb-7).
+
 ## Unsaved changes
 
 `FileState.dirty` is the backend's "changes no save has written":

@@ -49,6 +49,12 @@ enum Upload {
 /// says, a release frees the lock and a create (`POST /projects/`) answers the
 /// project.
 fn server(upload: Upload) -> (String, Arc<Mutex<Seen>>) {
+    server_touching(upload, None)
+}
+
+/// [`server`], appending a byte to `touch` (another program changing the cache
+/// file) before it answers an accepted upload.
+fn server_touching(upload: Upload, touch: Option<PathBuf>) -> (String, Arc<Mutex<Seen>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
     let seen = Arc::new(Mutex::new(Seen::default()));
@@ -90,6 +96,13 @@ fn server(upload: Upload) -> (String, Arc<Mutex<Seen>>) {
                         (status, refusal.to_owned())
                     }
                     Upload::Accept => {
+                        if let Some(path) = &touch {
+                            if let Ok(mut file) =
+                                std::fs::OpenOptions::new().append(true).open(path)
+                            {
+                                let _ = file.write_all(b"\n");
+                            }
+                        }
                         landed = true;
                         (
                             200,
@@ -429,6 +442,43 @@ fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
                 .iter()
                 .any(|l| l.contains("/release/")),
             "nothing released the lock"
+        );
+    });
+}
+
+#[test]
+fn a_landed_push_whose_bookkeeping_save_fails_still_succeeds_and_clears_its_history() {
+    // Review G-speleodb-7: another program touched the cache file while the upload
+    // ran, so the local-only save after the landing is refused (the external-
+    // modification guard). The commit is on the server: the push succeeds, the
+    // history it carried is cleared, and the next push uploads nothing again.
+    // Injection: return the save's error from `speleodb_record_landing` and the
+    // push reports a failure with the pushed history still on the stack.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let path = cache_path_in(temp.path(), ID);
+        let (endpoint, seen) = server_touching(Upload::Accept, Some(path.clone()));
+        let (_, state) = editing(temp.path(), &endpoint);
+        reverse_the_line(&state);
+
+        let pushed = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("the commit landed");
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+        let link = state.speleodb_open_link().expect("linked");
+        assert!(!link.has_unpushed_edits);
+        assert_eq!(link.base_commit_sha.as_deref(), Some(PUSHED));
+        assert!(!state.can_undo(), "the pushed history is cleared");
+
+        let again = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("nothing left to push");
+        assert!(matches!(again, PushResult::Pushed { .. }), "{again:?}");
+        assert_eq!(
+            seen.lock().expect("log").uploads.len(),
+            1,
+            "the landed history is never uploaded twice"
         );
     });
 }

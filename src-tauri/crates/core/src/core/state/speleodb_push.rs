@@ -15,7 +15,9 @@
 //! Every state change a landed push makes (BASE, the dirty bit, the cut history,
 //! the cleared Unwind chain) is durable at once through the local-only save
 //! (plan 6.5 mode 4, R2 B3), so a close right after Done never reopens to a stale
-//! BASE over a "dirty" copy.
+//! BASE over a "dirty" copy. A save refused after the landing (another program
+//! changed the file) is logged, not a push failure: memory holds the landing and
+//! the next save writes it (`speleodb_record_landing`).
 //!
 //! Rollout (plan 12.1): a SpeleoDB server that still refuses non-SQLite uploads
 //! answers the version 2 upload with a refusal of the content (or a server error
@@ -768,12 +770,11 @@ impl AppState {
                     undo_history_omitted: false,
                 };
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link_held(project.as_ref(), |l| {
+                self.speleodb_record_landing(project.as_ref(), |l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
                     l.last_edit_at = None;
-                })
-                .map_err(local_dto)?;
+                })?;
                 return Ok(landed);
             }
             // A stranger's commit, OR a server inconsistency (non-linear / multi-root
@@ -976,7 +977,7 @@ impl AppState {
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link_held(project.as_ref(), |l| {
+                self.speleodb_record_landing(project.as_ref(), |l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
                     // over a dirty copy fences straight to Diverged, then walks the
                     // whole history to the service-account creation root and calls
@@ -1008,8 +1009,7 @@ impl AppState {
                         l.has_unpushed_edits = false;
                         l.last_edit_at = None;
                     }
-                })
-                .map_err(local_dto)?;
+                })?;
                 self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                 Ok(landed)
             }
@@ -1034,7 +1034,7 @@ impl AppState {
                         server_kind.as_deref(),
                     );
                     let project = self.speleodb_push_project_guard(generation)?;
-                    self.speleodb_mutate_link_held(project.as_ref(), |l| {
+                    self.speleodb_record_landing(project.as_ref(), |l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
                             Some(&push_start),
@@ -1042,8 +1042,7 @@ impl AppState {
                             l.has_unpushed_edits = false;
                             l.last_edit_at = None;
                         }
-                    })
-                    .map_err(local_dto)?;
+                    })?;
                     self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                     return Ok(landed);
                 }
@@ -1165,6 +1164,38 @@ impl AppState {
                 purpose = "label a landed project stalagmight (unfinished adoption or legacy other)",
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
+        }
+    }
+
+    /// Record what a CONCLUDED landing changes on the link (BASE, the dirty bit):
+    /// in memory first, then made durable by the local-only save
+    /// (`speleodb_mutate_link_held`).
+    ///
+    /// The commit is on the server whatever the disk says, so a failed save is
+    /// logged, never returned (review G-speleodb-7). Returning it reported a push
+    /// failure for a commit that landed and skipped the clear-on-push, so the next
+    /// push shipped the same history again. Memory is the authority from here: the
+    /// clear-on-push still runs, and the next save writes both (a file another
+    /// program changed goes through the save-conflict prompt first; a copy reopened
+    /// from the stale disk recovers by ancestry, its BASE behind our own commit).
+    /// Only a link that is gone is an error: then nothing was recorded at all.
+    fn speleodb_record_landing(
+        &self,
+        open: Option<&crate::models::survey::Project>,
+        record: impl FnOnce(&mut crate::models::SpeleoLink),
+    ) -> Result<(), SpeleoErrorDto> {
+        match self.speleodb_mutate_link_held(open, record) {
+            Ok(()) => Ok(()),
+            Err(SpeleoDbError::NoRemoteProject) => Err(local_dto(SpeleoDbError::NoRemoteProject)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "record a landed push (review G-speleodb-7)",
+                    "speleodb push: the commit landed, but its bookkeeping could not be \
+                     saved; it is recorded in memory and the next save writes it"
+                );
+                Ok(())
+            }
         }
     }
 
