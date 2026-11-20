@@ -1,10 +1,11 @@
 //! Characterisation goldens (stream K of
 //! `docs/plans/2026-11-20_station-graph-model.md`, sections 11 and 12).
 //!
-//! Before `models::project` is replaced by the station-graph model, this
-//! records what the CURRENT build does for a fixed set of synthetic scenarios,
-//! so the build after the switch can be compared against it and every
-//! difference shown to be a declared change (plan 12.2).
+//! Recorded on the 0.6.0 model (`models::project`) before the switch, this
+//! dump captures what the build does for a fixed set of synthetic scenarios;
+//! run on the station-graph build (`models::survey`), it gives the output to
+//! compare with those goldens, so every difference can be shown to be a
+//! declared change (plan 12.2 and the Deviations sections).
 //!
 //! Each scenario starts a fresh `AppState`, runs its steps through the same
 //! `Command` / `AppState` entry points the IPC handlers call, and after every
@@ -53,16 +54,25 @@
 //! ```
 //!
 //! `STALAGMIGHT_CHAR_ONLY=name,name` runs only the named scenarios. A step
-//! whose outcome differs from its expectation, or a scenario that panics, is
-//! listed in `mismatches.json` and fails the test once everything is
-//! written. Compare two output directories with
-//! `node scripts/dev/compare-characterization.mjs <old> <new>`.
+//! whose outcome differs from its expectation, a scenario that panics, or a
+//! full undo/redo round trip that does not come back identical is listed in
+//! `mismatches.json` and fails the test once everything is written. Compare
+//! two output directories with
+//! `node scripts/dev/compare-characterization.mjs <old> <new>` (`--canon`
+//! across the station-graph switch). The same scenarios also run in the
+//! normal test run, into a temporary directory, as a gate on those three
+//! failure kinds (`every_characterisation_scenario_does_what_it_expects`).
 //!
-//! Porting to the new model: the scenario functions only speak `Command`,
-//! the `AppState` recipes and positional handles (`StationRef` slots, line
-//! ids, shots by position), so they should survive as they are. The query
-//! half (`query_*`, `Script::project` and the lookups) is where the new
-//! model's API goes.
+//! The scenario functions only speak `Command`, the `AppState` recipes and
+//! positional handles (`StationRef` slots, line ids, shots by position); they
+//! are the 0.6.0 scripts unchanged. The query half reads what the IPC
+//! handlers send on the station graph: `get_project_state` is
+//! `AppState::project_state_wire` (the wire `Project` without
+//! `line_offsets`, the per-slot stations, stats, frozen shots), the previews
+//! go through the same wire mappings as their handlers
+//! (`delete_shot_impact`, `delete_range_impact`, `line_relationships`, the
+//! `AppState` previews), and the exports through `export::survey` (the
+//! image from `AppState::export_views`, as `export_image` draws it).
 
 use std::collections::BTreeMap;
 use std::io::Read as _;
@@ -77,11 +87,12 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::export::{ColorMode, ExportImageOptions, ImageFormat};
+use crate::models::survey::wire::ProjectStateWire;
+use crate::models::survey::Project;
 use crate::models::{
-    serialize_project_ipc, ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates,
-    CreditEdit, CreditTargets, GpsCoordinates, LineId, LineUpdates, Person, Project, ShotData,
-    ShotId, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, Station, StationRef, SurveyCredit,
-    SurveyDirection,
+    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CreditEdit, CreditTargets,
+    GpsCoordinates, LineId, LineUpdates, Person, ShotData, ShotId, ShotUpdates, SplitAt,
+    SplitLineOptions, SplitSide, Station, StationRef, SurveyCredit, SurveyDirection,
 };
 
 // ---------------------------------------------------------------------------
@@ -290,11 +301,9 @@ impl UuidBook {
     /// Number every shot UUID of `project` not seen yet, in line order then
     /// shot order.
     fn register(&mut self, project: &Project) {
-        for line in &project.lines {
+        for line in project.lines() {
             for shot in &line.shots {
-                if let Some(uuid) = &shot.uuid {
-                    self.token(uuid);
-                }
+                self.token(&shot.uuid);
             }
         }
     }
@@ -440,17 +449,8 @@ fn result_value<T: Serialize>(result: Result<T, String>) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Queries: everything read from the build. Port these to the new model.
+// Queries: everything read from the build, as the IPC handlers read it.
 // ---------------------------------------------------------------------------
-
-/// The `project` member of `get_project_state`, serialized as the IPC does.
-struct WireProject<'a>(&'a Project);
-
-impl Serialize for WireProject<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serialize_project_ipc(self.0, serializer)
-    }
-}
 
 /// Stations in slot order, with their relation lists sorted, so the
 /// comparison does not depend on map iteration order.
@@ -465,21 +465,19 @@ fn sorted_stations(mut stations: Vec<Station>) -> Vec<Station> {
     stations
 }
 
-/// The derived half of `get_project_state` (as `get_project_state_impl` in
-/// the app crate builds it): stations, stats, frozen shots.
-fn query_stations(state: &AppState, project: &Project) -> Value {
-    let stations = project.compute_station_coordinates();
-    let mut stats = project.stats();
-    let include_reference_legs = state.get_config().gas.include_reference_legs;
-    stats.penetration_distance =
-        project.calculate_penetration_with(&stations, include_reference_legs);
-    let (min_depth, max_depth) = Project::depth_range(&stations);
-    stats.min_depth = min_depth;
-    stats.max_depth = max_depth;
+/// The `get_project_state` payload (`get_project_state_impl` in the app
+/// crate is `AppState::project_state_wire`).
+fn project_state(state: &AppState) -> ProjectStateWire {
+    state.project_state_wire().expect("a project is open")
+}
+
+/// The derived half of `get_project_state`: per-slot stations, stats (with
+/// penetration and the depth range), frozen shots.
+fn query_stations(wire: &ProjectStateWire) -> Value {
     json!({
-        "stations": to_value(&sorted_stations(stations)),
-        "stats": to_value(&stats),
-        "frozen_shots": to_value(&project.compute_frozen_shots()),
+        "stations": to_value(&sorted_stations(wire.stations.clone())),
+        "stats": to_value(&wire.stats),
+        "frozen_shots": to_value(&wire.frozen_shots),
     })
 }
 
@@ -501,9 +499,10 @@ fn query_closures(project: &Project, wire: &Value) -> Value {
     })
 }
 
-fn query_warnings(state: &AppState, project: &Project) -> Value {
+/// `get_project_warnings` (`open_project_warnings`) and the integrity check.
+fn query_warnings(state: &AppState) -> Value {
     json!({
-        "warnings": to_value(&state.compute_project_warnings(project, None)),
+        "warnings": to_value(&state.open_project_warnings()),
         "integrity": to_value(&state.integrity_check()),
     })
 }
@@ -537,14 +536,15 @@ struct Snapshot {
 
 fn snapshot(state: &AppState) -> Snapshot {
     let project = state.get_project_state().expect("a project is open");
-    let wire = to_value(&WireProject(&project));
+    let wire_state = project_state(state);
+    let wire = to_value(&wire_state.project);
     Snapshot {
         history: query_history(state),
-        stations: query_stations(state, &project),
+        stations: query_stations(&wire_state),
         adjusted: query_adjusted(state),
         closures: query_closures(&project, &wire),
         project: wire,
-        warnings: query_warnings(state, &project),
+        warnings: query_warnings(state),
     }
 }
 
@@ -580,14 +580,23 @@ impl Preview {
                 .get_project_state()
                 .ok_or_else(|| "No project open".to_string())
         };
+        // Each arm answers as its IPC handler does (`preview_delete_shot_impl`,
+        // `preview_delete_shot_range_impl`, `get_line_relationships_impl` in
+        // the app crate; the rest are `AppState` methods).
         match self {
             Self::MergeConnectivity(a, b) => result_value(state.check_merge_connectivity(*a, *b)),
-            Self::DeleteShot(line, shot) => {
-                result_value(project().and_then(|p| p.preview_delete_shot(*line, *shot)))
-            }
-            Self::DeleteShotRange(line, from, to) => result_value(
-                project().and_then(|p| p.into_preview_delete_shot_range(*line, *from, *to)),
-            ),
+            Self::DeleteShot(line, shot) => result_value(project().and_then(|p| {
+                let preview = p
+                    .preview_delete_shot(*line, *shot)
+                    .map_err(|e| e.to_string())?;
+                Ok(p.delete_shot_impact(&preview))
+            })),
+            Self::DeleteShotRange(line, from, to) => result_value(project().and_then(|p| {
+                let preview = p
+                    .preview_delete_shot_range(*line, *from, *to)
+                    .map_err(|e| e.to_string())?;
+                Ok(p.delete_range_impact(&preview))
+            })),
             Self::CombineCandidates(station) => result_value(state.combine_candidates(*station)),
             Self::CombineForLines(a, b) => result_value(state.combine_candidate_for_lines(*a, *b)),
             Self::SplitLine(line, at, options) => {
@@ -595,10 +604,10 @@ impl Preview {
             }
             Self::ZeroDatum(station, gps) => result_value(state.preview_zero_datum(*station, *gps)),
             Self::LineRelationships(line) => result_value(project().and_then(|p| {
-                if p.get_line(*line).is_none() {
+                if p.line(*line).is_none() {
                     return Err(crate::models::LINE_GONE.to_string());
                 }
-                Ok(p.get_line_relationships(*line))
+                Ok(p.line_relationships(*line))
             })),
         }
     }
@@ -623,7 +632,8 @@ impl Preview {
 }
 
 /// The exports of the current project, as the export commands write them
-/// (the map image from the adjusted stations, as `export_image` does).
+/// (`export::survey`; the map image from the memoised Computed View and raw
+/// layout of `AppState::export_views`, as `export_image` draws it).
 fn query_exports(state: &AppState, rec: &mut Recorder) {
     let project = state.get_project_state().expect("a project is open");
     rec.uuids.register(&project);
@@ -631,7 +641,7 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
     std::fs::create_dir_all(&tmp).expect("create the export temp directory");
 
     let csv = tmp.join("export.csv");
-    match crate::export::export_csv(&project, &csv) {
+    match crate::export::survey::export_csv(&project, &csv) {
         Ok(()) => {
             let text = std::fs::read_to_string(&csv).expect("read the CSV export");
             rec.write_text("final-export.csv", &text);
@@ -644,7 +654,7 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
     }
 
     let json_path = tmp.join("export.json");
-    match crate::export::export_json(&project, &json_path) {
+    match crate::export::survey::export_json(&project, &json_path) {
         Ok(()) => {
             let text = std::fs::read_to_string(&json_path).expect("read the JSON export");
             let value: Value = serde_json::from_str(&text).expect("the JSON export parses");
@@ -658,7 +668,7 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
     }
 
     let tmlu = tmp.join("export.tmlu");
-    match crate::export::export_tml(&project, &tmlu) {
+    match crate::export::survey::export_tml(&project, &tmlu) {
         Ok(notes) => {
             let text = std::fs::read_to_string(&tmlu).expect("read the TMLU export");
             rec.write_text("final-export.tmlu", &text);
@@ -672,7 +682,7 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
     }
 
     let tml = tmp.join("export.tml");
-    match crate::export::export_tml(&project, &tml) {
+    match crate::export::survey::export_tml(&project, &tml) {
         Ok(_) => {
             let file = std::fs::File::open(&tml).expect("open the TML export");
             let mut zip = zip::ZipArchive::new(file).expect("the TML export is a zip");
@@ -704,9 +714,7 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
         ),
     }
 
-    let stations = state
-        .get_adjusted_stations()
-        .unwrap_or_else(|| project.compute_station_coordinates());
+    let views = state.export_views().expect("a project is open");
     for (file, ids) in [
         ("final-export-station-ids.svg", true),
         ("final-export-station-names.svg", false),
@@ -724,8 +732,12 @@ fn query_exports(state: &AppState, rec: &mut Recorder) {
             include_reference_legs: state.get_config().gas.include_reference_legs,
             ..Default::default()
         };
-        match crate::export::generate_svg_string_with_stations(&project, &options, stations.clone())
-        {
+        match crate::export::survey::generate_svg_string_with_positions(
+            &views.project,
+            &options,
+            views.adjusted.as_ref(),
+            &views.raw,
+        ) {
             Ok(svg) => rec.write_text(file, &svg),
             Err(e) => rec.write_value(
                 &format!("{file}-error.json"),
@@ -769,7 +781,7 @@ impl Script {
 
     fn line_named(&self, name: &str) -> LineId {
         self.project()
-            .lines
+            .lines()
             .iter()
             .find(|l| l.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("no line named {name}"))
@@ -778,7 +790,7 @@ impl Script {
 
     fn shots(&self, line: LineId) -> Vec<ShotId> {
         self.project()
-            .get_line(line)
+            .line(line)
             .unwrap_or_else(|| panic!("line {line} exists"))
             .shots
             .iter()
@@ -806,9 +818,10 @@ impl Script {
         StationRef::new(line, self.shots(line).len() as u32)
     }
 
+    /// The measured (raw) position of a slot, as `get_project_state` sends it.
     fn coords(&self, station: StationRef) -> Coordinates {
-        self.project()
-            .compute_station_coordinates()
+        project_state(&self.state)
+            .stations
             .into_iter()
             .find(|s| s.station_ref == station)
             .unwrap_or_else(|| panic!("station {station} exists"))
@@ -984,7 +997,7 @@ impl Script {
             }
             undone += 1;
         }
-        let bottom_lines = self.project().lines.len();
+        let bottom_lines = self.project().lines().len();
         let mut redone = 0_usize;
         let mut redo_errors = Vec::new();
         while self.state.can_redo() && redone < 500 {
@@ -1022,6 +1035,11 @@ impl Script {
                  redo errors {redo_errors:?}"
             ));
         }
+        if !differing.is_empty() {
+            self.rec.mismatch(format!(
+                "roundtrip: {differing:?} differ after undoing and redoing everything"
+            ));
+        }
         let value = json!({
             "undone": undone,
             "redone": redone,
@@ -1043,8 +1061,10 @@ impl Script {
     fn finish(mut self) -> Vec<String> {
         self.roundtrip();
         query_exports(&self.state, &mut self.rec);
-        // Stream X: the final state as a 0.6.0 file plus the uuid book, so the
-        // station-graph exporters can be run on its migration and masked alike.
+        // Stream X: the final state as a `.stalx` plus the uuid book, so the
+        // exporters can be run on it and masked alike. The 0.6.0 build wrote
+        // the SQLite file `export::survey::golden_tests` migrates; this build
+        // writes version 2.
         if let Ok(dir) = std::env::var("STALAGMIGHT_CHAR_SAVE") {
             let dir = PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create the save directory");
@@ -1187,7 +1207,7 @@ fn loop_batch_closure(s: &mut Script) {
     s.preview("delete-closing-shot", &Preview::DeleteShot(north, last));
     let closure = s
         .project()
-        .loop_closures
+        .closures
         .first()
         .expect("the loop has a closure")
         .id;
@@ -2036,7 +2056,7 @@ fn paste_batch(s: &mut Script) {
         },
     );
     let mut commands = Vec::new();
-    for line in s.project().lines.iter().map(|l| l.id) {
+    for line in s.project().lines().iter().map(|l| l.id) {
         for (k, shot) in s.shots(line).into_iter().enumerate() {
             let v = 0.25 + (commands.len() % 7) as f64 * 0.5 + k as f64 * 0.01;
             commands.push(Command::UpdateShot {
@@ -2217,30 +2237,21 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("credit-edits", credit_edits),
 ];
 
-#[test]
-#[ignore = "on demand: writes characterisation goldens to $STALAGMIGHT_CHAR_OUT"]
-fn characterization_dump() {
-    let out = PathBuf::from(
-        std::env::var("STALAGMIGHT_CHAR_OUT")
-            .expect("set STALAGMIGHT_CHAR_OUT to an output directory"),
-    );
-    std::fs::create_dir_all(&out).expect("create the output directory");
-    let only: Option<Vec<String>> = std::env::var("STALAGMIGHT_CHAR_ONLY")
-        .ok()
-        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+/// Run the scenarios (all, or the ones named in `only`) into `out`, write
+/// `manifest.json` and `mismatches.json` there, and return the scenarios run
+/// and the mismatches.
+fn dump_scenarios(out: &Path, only: Option<&[String]>) -> (Vec<&'static str>, Vec<String>) {
+    std::fs::create_dir_all(out).expect("create the output directory");
     let temp = TempDir::new().expect("temp dir");
 
     let mut ran = Vec::new();
     let mut mismatches = Vec::new();
     for (name, scenario) in SCENARIOS {
-        if only
-            .as_ref()
-            .is_some_and(|only| !only.iter().any(|o| o == name))
-        {
+        if only.is_some_and(|only| !only.iter().any(|o| o == name)) {
             continue;
         }
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut script = Script::new(&out, temp.path(), name);
+            let mut script = Script::new(out, temp.path(), name);
             scenario(&mut script);
             script.finish()
         }));
@@ -2273,12 +2284,44 @@ fn characterization_dump() {
     let mut text = serde_json::to_string_pretty(&mismatches).expect("serialize mismatches");
     text.push('\n');
     std::fs::write(out.join("mismatches.json"), text).expect("write mismatches");
+    (ran, mismatches)
+}
 
+#[test]
+#[ignore = "on demand: writes characterisation goldens to $STALAGMIGHT_CHAR_OUT"]
+fn characterization_dump() {
+    let out = PathBuf::from(
+        std::env::var("STALAGMIGHT_CHAR_OUT")
+            .expect("set STALAGMIGHT_CHAR_OUT to an output directory"),
+    );
+    let only: Option<Vec<String>> = std::env::var("STALAGMIGHT_CHAR_ONLY")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+    let (ran, mismatches) = dump_scenarios(&out, only.as_deref());
     println!(
         "characterisation: {} scenarios -> {}",
         ran.len(),
         out.display()
     );
+    assert!(
+        mismatches.is_empty(),
+        "steps that did not do what they expected:\n{}",
+        mismatches.join("\n")
+    );
+}
+
+/// The gate the dump leaves in the normal test run: every scenario's steps
+/// do what they expect (each command succeeds or is refused as in 0.6.0 and
+/// moves the undo stack by one, or not at all), no scenario panics, and
+/// undoing and redoing everything gives back the same history, stations,
+/// Computed View, closures, wire project and warnings (all 18 did on
+/// 0.6.0). The output is compared with the goldens on demand
+/// (`characterization_dump`, `scripts/dev/compare-characterization.mjs`).
+#[test]
+fn every_characterisation_scenario_does_what_it_expects() {
+    let out = TempDir::new().expect("temp dir");
+    let (ran, mismatches) = dump_scenarios(out.path(), None);
+    assert_eq!(ran.len(), SCENARIOS.len());
     assert!(
         mismatches.is_empty(),
         "steps that did not do what they expected:\n{}",

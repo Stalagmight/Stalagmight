@@ -17,6 +17,9 @@
 //   --tol <x>           numbers within x of each other are equal (default 0;
 //                       the dumper already rounds derived floats to 1e-9)
 //   --summary           one line per file, no change list
+//   --canon             compare what the station-graph switch re-derives in
+//                       canonical form (below); each such difference still
+//                       shows, as one `note` line
 //
 // Files are matched per scenario by name with the step number stripped
 // (`07-merge-south-onto-hub-stations.json` -> `merge-south-onto-hub-stations.json`),
@@ -25,6 +28,20 @@
 // stations, closures or other records by their identity (`station_ref`,
 // `closure_id`, `id`) when every element has one, else by position. Text
 // exports (.csv, .tmlu, .tml.xml, .svg) are compared line by line.
+//
+// `--canon` (for a dump from before the station-graph switch against one from
+// after it):
+//   - merge pair lists (`station_merges`, `merges`, `removed_merges`,
+//     `replacement_merges`) are compared as sets of unordered slot pairs: the
+//     station graph derives each junction's pairs (its first slot paired with
+//     each other slot), where 0.6.0 listed the merges as made. Pairs that are
+//     the same set in another order or orientation give one note; pairs in
+//     only one set are listed as `pair L:I~L:I`.
+//   - Ariane exports (.tmlu, .tml.xml) are compared with their ids (`ID`,
+//     `FRID` / `FromID`, `CID` / `ClosureToID`) renumbered by first
+//     appearance in row order: rows now carry Station IDs instead of a row
+//     count. A file equal after renumbering gives one note; otherwise the
+//     note is followed by the line diff of the renumbered texts.
 //
 // Exit code: 0 when the dumps are identical, 1 when anything differs, 2 on a
 // usage error.
@@ -36,19 +53,20 @@ function usage(message) {
   if (message) console.error(message);
   console.error(
     'usage: node scripts/dev/compare-characterization.mjs <old-dir> <new-dir> ' +
-      '[--scenario <name>]... [--max <n>] [--tol <x>] [--summary]',
+      '[--scenario <name>]... [--max <n>] [--tol <x>] [--summary] [--canon]',
   );
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const options = { dirs: [], scenarios: [], max: 8, tol: 0, summary: false };
+  const options = { dirs: [], scenarios: [], max: 8, tol: 0, summary: false, canon: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--scenario') options.scenarios.push(argv[++i] ?? usage('--scenario needs a name'));
     else if (arg === '--max') options.max = Number(argv[++i] ?? usage('--max needs a number'));
     else if (arg === '--tol') options.tol = Number(argv[++i] ?? usage('--tol needs a number'));
     else if (arg === '--summary') options.summary = true;
+    else if (arg === '--canon') options.canon = true;
     else if (arg === '--help' || arg === '-h') usage();
     else if (arg.startsWith('--')) usage(`unknown option ${arg}`);
     else options.dirs.push(arg);
@@ -101,18 +119,70 @@ function equalNumbers(a, b, tol) {
   return a === b || (tol > 0 && Math.abs(a - b) <= tol);
 }
 
+/** Merge pair lists `--canon` compares as sets of unordered slot pairs. */
+const MERGE_PAIR_LISTS = new Set(['station_merges', 'merges', 'removed_merges', 'replacement_merges']);
+
+function slotOf(ref) {
+  return isObject(ref) && 'line_id' in ref && 'station_index' in ref
+    ? `${ref.line_id}:${ref.station_index}`
+    : null;
+}
+
+/** `pair L:I~L:I` (ends sorted) per element, or null when any element is not a slot pair. */
+function pairKeys(items) {
+  const keys = [];
+  for (const item of items) {
+    if (!isObject(item) || Object.keys(item).some((k) => !['station_a', 'station_b', 'merged_at'].includes(k))) {
+      return null;
+    }
+    const ends = [slotOf(item.station_a), slotOf(item.station_b)];
+    if (ends.includes(null)) return null;
+    ends.sort();
+    keys.push(`pair ${ends[0]}~${ends[1]}`);
+  }
+  return keys;
+}
+
+/** `--canon`: a merge pair list as a set of unordered pairs (see the header). */
+function diffPairs(a, b, at, out) {
+  const ka = pairKeys(a);
+  const kb = pairKeys(b);
+  if (!ka || !kb) return false;
+  const sa = new Set(ka);
+  const sb = new Set(kb);
+  let differ = sa.size !== ka.length || sb.size !== kb.length;
+  for (const key of [...sa].sort()) {
+    if (!sb.has(key)) {
+      out.push({ path: `${at}[${key}]`, kind: 'removed', old: a[ka.indexOf(key)] });
+      differ = true;
+    }
+  }
+  for (const key of [...sb].sort()) {
+    if (!sa.has(key)) {
+      out.push({ path: `${at}[${key}]`, kind: 'added', new: b[kb.indexOf(key)] });
+      differ = true;
+    }
+  }
+  if (!differ && JSON.stringify(a) !== JSON.stringify(b)) {
+    out.push({ path: at, kind: 'note', text: 'same unordered pairs, in another order or orientation' });
+  }
+  return true;
+}
+
 /** Push one `{ path, kind, old, new }` per difference between `a` and `b`. */
-function diffJson(a, b, at, tol, out) {
+function diffJson(a, b, at, tol, out, canon = false) {
   if (typeof a === 'number' && typeof b === 'number') {
     if (!equalNumbers(a, b, tol)) out.push({ path: at, kind: 'changed', old: a, new: b });
     return;
   }
   if (Array.isArray(a) && Array.isArray(b)) {
+    const name = at.split('.').pop();
+    if (canon && MERGE_PAIR_LISTS.has(name) && diffPairs(a, b, at, out)) return;
     const ka = keyed(a);
     const kb = keyed(b);
     if (ka && kb && (a.length > 0 || b.length > 0)) {
       for (const [id, item] of ka) {
-        if (kb.has(id)) diffJson(item, kb.get(id), `${at}[${id}]`, tol, out);
+        if (kb.has(id)) diffJson(item, kb.get(id), `${at}[${id}]`, tol, out, canon);
         else out.push({ path: `${at}[${id}]`, kind: 'removed', old: item });
       }
       for (const [id, item] of kb) {
@@ -121,7 +191,7 @@ function diffJson(a, b, at, tol, out) {
       return;
     }
     const n = Math.min(a.length, b.length);
-    for (let i = 0; i < n; i++) diffJson(a[i], b[i], `${at}[${i}]`, tol, out);
+    for (let i = 0; i < n; i++) diffJson(a[i], b[i], `${at}[${i}]`, tol, out, canon);
     for (let i = n; i < a.length; i++) out.push({ path: `${at}[${i}]`, kind: 'removed', old: a[i] });
     for (let i = n; i < b.length; i++) out.push({ path: `${at}[${i}]`, kind: 'added', new: b[i] });
     return;
@@ -132,7 +202,7 @@ function diffJson(a, b, at, tol, out) {
       const sub = at ? `${at}.${key}` : key;
       if (!(key in b)) out.push({ path: sub, kind: 'removed', old: a[key] });
       else if (!(key in a)) out.push({ path: sub, kind: 'added', new: b[key] });
-      else diffJson(a[key], b[key], sub, tol, out);
+      else diffJson(a[key], b[key], sub, tol, out, canon);
     }
     return;
   }
@@ -141,6 +211,7 @@ function diffJson(a, b, at, tol, out) {
 
 function describeJsonChange(change) {
   const where = change.path || '(root)';
+  if (change.kind === 'note') return `note ${where}: ${change.text}`;
   if (change.kind === 'added') return `+ ${where}: ${short(change.new)}`;
   if (change.kind === 'removed') return `- ${where}: ${short(change.old)}`;
   return `~ ${where}: ${short(change.old)} -> ${short(change.new)}`;
@@ -230,6 +301,26 @@ function stepKeys(files) {
   return map;
 }
 
+/**
+ * `--canon`: an Ariane export with its ids renumbered by first appearance:
+ * each row's `ID` in row order, then a from or closure id as it is met.
+ */
+function renumberAriane(text) {
+  const tags = text.includes('<SurveyData>') ? ['ID', 'FromID', 'ClosureToID'] : ['ID', 'FRID', 'CID'];
+  const order = new Map();
+  const num = (v) => {
+    if (v === '-1') return v;
+    if (!order.has(v)) order.set(v, String(order.size));
+    return order.get(v);
+  };
+  for (const row of text.match(/<SRVD>[\s\S]*?<\/SRVD>|<SurveyData>[\s\S]*?<\/SurveyData>/g) ?? []) {
+    const id = row.match(/<ID>(-?\d+)<\/ID>/);
+    if (id) num(id[1]);
+  }
+  const pattern = new RegExp(`<(${tags.join('|')})>(-?\\d+)</(?:${tags.join('|')})>`, 'g');
+  return text.replace(pattern, (_, tag, value) => `<${tag}>${num(value)}</${tag}>`);
+}
+
 function compareFile(oldPath, newPath, options) {
   const a = fs.readFileSync(oldPath, 'utf8');
   const b = fs.readFileSync(newPath, 'utf8');
@@ -244,8 +335,19 @@ function compareFile(oldPath, newPath, options) {
       return { changes: [], lines: lineDiff(a.split('\n'), b.split('\n')), note: `not JSON (${e.message})` };
     }
     const changes = [];
-    diffJson(ja, jb, '', options.tol, changes);
+    diffJson(ja, jb, '', options.tol, changes, options.canon);
     return { changes, lines: [] };
+  }
+  if (options.canon && (oldPath.endsWith('.tmlu') || oldPath.endsWith('.tml.xml'))) {
+    const ra = renumberAriane(a);
+    const rb = renumberAriane(b);
+    if (ra === rb) {
+      return { changes: [{ path: '(ids)', kind: 'note', text: 'equal after renumbering Ariane ids in row order' }], lines: [] };
+    }
+    return {
+      changes: [{ path: '(ids)', kind: 'note', text: 'Ariane ids renumbered in row order before the line diff' }],
+      lines: lineDiff(ra.split('\n'), rb.split('\n')),
+    };
   }
   return { changes: [], lines: lineDiff(a.split('\n'), b.split('\n')) };
 }
