@@ -97,7 +97,11 @@ impl Project {
             return Err(OpError::AlreadyMerged);
         }
         let topology = self.topology();
-        if topology.connected(a, b) || self.rigidly_tied(a, b) {
+        if topology.connected(a, b)
+            || self
+                .rigid_groups(&self.closure_alignment(&self.raw_positions()))
+                .tied(a, b)
+        {
             return Err(OpError::AlreadyConnected);
         }
         for line in topology.lines_of(b) {

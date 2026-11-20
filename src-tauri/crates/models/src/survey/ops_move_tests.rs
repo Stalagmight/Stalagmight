@@ -253,14 +253,16 @@ fn tied_survey() -> (Project, [LineId; 3]) {
 #[test]
 fn rigid_groups_follow_aligned_closures_and_anchored_lines_every_datum() {
     let (p, [a, d, b]) = tied_survey();
-    assert_eq!(p.rigid_group_lines(a), vec![a, d], "the Tie joins A and D");
-    assert_eq!(p.rigid_group_lines(b), vec![b]);
-    assert!(p.rigid_group_holds_datum(d));
-    assert!(!p.rigid_group_holds_datum(b));
-    assert!(p.rigidly_tied(at(&p, a, 2), at(&p, d, 2)));
-    assert!(!p.rigidly_tied(at(&p, a, 2), at(&p, b, 2)));
     let aligned = p.closure_alignment(&p.raw_positions());
-    assert_eq!(p.anchored_lines(&p.rigid_groups(&aligned)), vec![a, d]);
+    let groups = p.rigid_groups(&aligned);
+    assert_eq!(p.rigid_lines_of(a, &groups), vec![a, d], "the Tie joins A and D");
+    assert_eq!(p.rigid_lines_of(b, &groups), vec![b]);
+    let group_of_line = |line| groups.group_of(at(&p, line, 0)).unwrap();
+    assert!(groups.has_datum(group_of_line(d)));
+    assert!(!groups.has_datum(group_of_line(b)));
+    assert!(groups.tied(at(&p, a, 2), at(&p, d, 2)));
+    assert!(!groups.tied(at(&p, a, 2), at(&p, b, 2)));
+    assert_eq!(p.anchored_lines(&groups), vec![a, d]);
 }
 
 #[test]
@@ -273,16 +275,18 @@ fn colocated_and_immovable_stations_follow_aligned_closures() {
         at(&p, b, 0),
         at(&p, b, 4),
     );
-    assert_eq!(p.colocated_stations(b0), vec![b0, b4]);
-    assert_eq!(p.colocated_stations(at(&p, b, 2)), vec![at(&p, b, 2)]);
     let aligned = p.closure_alignment(&p.raw_positions());
+    let ties = p.tie_groups(&aligned);
+    assert_eq!(ties.group(b0), [b0, b4]);
+    assert_eq!(ties.group(at(&p, b, 2)), [at(&p, b, 2)]);
     assert_eq!(
-        p.immovable_stations(&p.tie_groups(&aligned)),
+        p.immovable_stations(&ties),
         vec![a0, d0, d1],
         "datum stations and what aligned closures tie to them"
     );
     // Tear the snap (move B:4 2 cm away): it is no longer co-located.
     ok(p.move_station(b4, [0.02, 0.0, 0.0]));
-    assert_eq!(p.colocated_stations(b0), vec![b0]);
+    let aligned = p.closure_alignment(&p.raw_positions());
+    assert_eq!(p.tie_groups(&aligned).group(b0), [b0]);
     near(xy(&p, b0), [100.0, 100.0], 1e-9, "B:0 stays");
 }

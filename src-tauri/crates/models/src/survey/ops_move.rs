@@ -1,14 +1,9 @@
-//! Placements and the move tools (plan 4.4), plus the derived sets the
-//! frontend's move tools read: rigid groups, anchored lines, co-located
-//! stations and immovable stations.
+//! Placements and the move tools (plan 4.4).
 //!
-//! - **Rigid group** of a line: its piece, plus every piece tied to it by an
-//!   aligned closure (a `Tie`, or a snap within 1 cm that does not
-//!   double-anchor), transitively. A junction is one station, so merges need
-//!   no walk any more.
 //! - **Move Segment / Move Line** translates the piece's `Placement` (every
-//!   placement in the rigid group); refused, for a non-zero offset, when the
-//!   rigid group holds any datum, placement or fix (as today).
+//!   placement in the rigid group, [`Project::rigid_groups`]); refused, for a
+//!   non-zero offset, when the rigid group holds any datum, placement or fix
+//!   (as today).
 //! - **Move Station** rewrites every shot incident to the station, on every
 //!   line through it, so the station lands at its position plus the offset
 //!   and every neighbour stays: the shot into it gets `v + hand + offset`, the
@@ -18,17 +13,15 @@
 //!   station is its free piece's placement station, the placement moves with
 //!   it (today's station-0 case). Refused on a station holding a datum, and
 //!   when a rewritten shot would have no length.
-//! - **Co-located stations**: a station and every station tied to it by
-//!   aligned closures, transitively (the drag preview's set; one Move Station
-//!   per member).
-//! - **Immovable stations**: the co-located sets of every datum station.
-//! - **Anchored lines**: the rigid groups of every datum's piece.
+//!
+//! The sets the frontend's move tools read (rigid groups, anchored lines,
+//! co-located and immovable stations) are derived views (`rigid.rs`,
+//! `closures.rs`).
 
 use crate::{average_azimuth_of, normalize_azimuth, LineId, StationId};
 
 use super::ops::{OpError, OpOutcome, Sweep};
-use super::ops_merge::find;
-use super::{ClosureStrategy, EditContext, Project};
+use super::{EditContext, Project};
 
 /// An offset smaller than this on every axis is no move (today's guard).
 const NO_MOVE_M: f64 = 1e-9;
@@ -82,26 +75,18 @@ impl Project {
             return Err(OpError::NonFiniteOffset);
         }
         let start = self.line(line).ok_or(OpError::UnknownLine(line))?.start;
-        let components = self.rigid_group_components(start);
-        let topology = self.topology_arc();
-        let held = self.placement_datums();
+        let groups = self.rigid_groups(&self.closure_alignment(&self.raw_positions()));
+        let group = groups.group_of(start);
         let moves = offset.iter().any(|v| v.abs() > NO_MOVE_M);
-        if moves && components.iter().any(|&c| held[c].is_some()) {
+        if moves && group.is_some_and(|g| groups.has_datum(g)) {
             return Err(OpError::SegmentHoldsDatum);
         }
-        let mut lines: Vec<LineId> = components
-            .iter()
-            .filter_map(|&c| topology.component(c))
-            .flat_map(|component| component.lines.iter().copied())
-            .collect();
-        lines.sort_unstable();
+        let lines = group.map_or_else(Vec::new, |g| groups.lines(g).to_vec());
         self.run_op(Sweep::Skip, |p| {
             let mut ctx = EditContext::none();
             let mut placements = Vec::new();
             for placement in &mut p.placements {
-                let in_group = topology
-                    .component_of(placement.station)
-                    .is_some_and(|c| components.contains(&c));
+                let in_group = group.is_some() && groups.group_of(placement.station) == group;
                 if in_group {
                     placement.x += offset[0];
                     placement.y += offset[1];
@@ -252,126 +237,6 @@ impl Project {
         }
         Ok(rewrites)
     }
-
-    /// The component indices of `station`'s rigid group (its piece plus the
-    /// pieces tied to it by aligned closures), ascending.
-    pub fn rigid_group_components(&self, station: StationId) -> Vec<usize> {
-        let roots = self.rigid_roots();
-        let Some(own) = self.topology().component_of(station) else {
-            return Vec::new();
-        };
-        (0..roots.len())
-            .filter(|&c| roots[c] == roots[own])
-            .collect()
-    }
-
-    /// The lines of `line`'s rigid group, ascending (today's
-    /// `get_rigid_connected_line_ids`).
-    pub fn rigid_group_lines(&self, line: LineId) -> Vec<LineId> {
-        let Some(start) = self.line(line).map(|l| l.start) else {
-            return Vec::new();
-        };
-        let topology = self.topology();
-        let mut lines: Vec<LineId> = self
-            .rigid_group_components(start)
-            .into_iter()
-            .filter_map(|c| topology.component(c))
-            .flat_map(|component| component.lines.iter().copied())
-            .collect();
-        lines.sort_unstable();
-        lines
-    }
-
-    /// Whether `line`'s rigid group holds a datum (placement or fix).
-    pub fn rigid_group_holds_datum(&self, line: LineId) -> bool {
-        let Some(start) = self.line(line).map(|l| l.start) else {
-            return false;
-        };
-        let held = self.placement_datums();
-        self.rigid_group_components(start)
-            .into_iter()
-            .any(|c| held[c].is_some())
-    }
-
-    /// Whether `a` and `b` are in one rigid group.
-    pub fn rigidly_tied(&self, a: StationId, b: StationId) -> bool {
-        let topology = self.topology();
-        let (Some(ca), Some(cb)) = (topology.component_of(a), topology.component_of(b)) else {
-            return false;
-        };
-        let roots = self.rigid_roots();
-        roots[ca] == roots[cb]
-    }
-
-    /// `station` and every station tied to it by aligned closures,
-    /// transitively, ascending: the stations a drag of `station` moves.
-    pub fn colocated_stations(&self, station: StationId) -> Vec<StationId> {
-        let topology = self.topology();
-        let Some(own) = topology.dense(station) else {
-            return Vec::new();
-        };
-        let mut parent = self.aligned_station_roots();
-        let root = find(&mut parent, own);
-        topology
-            .stations()
-            .iter()
-            .enumerate()
-            .filter(|&(d, _)| find(&mut parent, d) == root)
-            .map(|(_, &s)| s)
-            .collect()
-    }
-
-    /// Union-find parents over dense stations joined by aligned closures.
-    fn aligned_station_roots(&self) -> Vec<usize> {
-        let topology = self.topology();
-        let positions = self.raw_positions();
-        let mut parent: Vec<usize> = (0..topology.stations().len()).collect();
-        for closure in &self.closures {
-            if !may_align(closure) || !self.closure_is_aligned(&positions, closure) {
-                continue;
-            }
-            if let (Some(a), Some(b)) = (topology.dense(closure.a), topology.dense(closure.b)) {
-                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                if ra != rb {
-                    parent[ra.max(rb)] = ra.min(rb);
-                }
-            }
-        }
-        parent
-    }
-
-    /// For each component, the root of its rigid group (components joined by
-    /// aligned closures).
-    fn rigid_roots(&self) -> Vec<usize> {
-        let topology = self.topology();
-        let positions = self.raw_positions();
-        let mut parent: Vec<usize> = (0..topology.components().len()).collect();
-        for closure in &self.closures {
-            if !may_align(closure) || !self.closure_is_aligned(&positions, closure) {
-                continue;
-            }
-            if let (Some(a), Some(b)) = (
-                topology.component_of(closure.a),
-                topology.component_of(closure.b),
-            ) {
-                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                if ra != rb {
-                    parent[ra.max(rb)] = ra.min(rb);
-                }
-            }
-        }
-        (0..parent.len()).map(|c| find(&mut parent, c)).collect()
-    }
-}
-
-/// Whether a closure can be aligned at all (a `Tie`, or a `Move` snap):
-/// every other strategy is never a rigid tie, so its alignment is not
-/// measured (the measurement is what costs).
-fn may_align(closure: &super::LoopClosure) -> bool {
-    matches!(
-        closure.strategy,
-        ClosureStrategy::Tie | ClosureStrategy::Move
-    )
 }
 
 /// A shot's new `(length, measured azimuth, pitch)` for horizontal vector

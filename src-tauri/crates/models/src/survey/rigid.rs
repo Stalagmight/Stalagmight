@@ -16,7 +16,8 @@
 //! - **Co-located stations** of one station: its tie group
 //!   ([`super::TieGroups`]); a Move Station moves them together.
 //!
-//! If stream M2 also provides these, the integrator keeps one copy.
+//! The Move tools (`ops_move.rs`) and the Merge refusal (`ops_merge.rs`)
+//! read these; nothing else computes them.
 
 use std::collections::BTreeSet;
 
@@ -53,6 +54,14 @@ impl RigidGroups {
     /// Whether group `group` holds a datum.
     pub fn has_datum(&self, group: usize) -> bool {
         self.has_datum.get(group).copied().unwrap_or(false)
+    }
+
+    /// Whether `a` and `b` are in one rigid group (both on a line).
+    pub fn tied(&self, a: StationId, b: StationId) -> bool {
+        match (self.group_of(a), self.group_of(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
     }
 
     /// Number of groups.
