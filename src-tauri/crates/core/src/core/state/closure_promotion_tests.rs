@@ -241,10 +241,6 @@ fn the_delete_dialog_promises_what_the_delete_does() {
     assert_eq!(preview.promoted_closures.len(), 1);
     assert_eq!(preview.promoted_closures[0].closure.id, first);
     assert!(impact.removed_closures.is_empty(), "{impact:?}");
-    assert!(
-        impact.replacement_closure_updates.is_empty(),
-        "nothing is re-anchored: the closure stays on the junction"
-    );
     assert!(!impact.shift_blocked);
 
     // The delete does exactly that: the promoted pair is the one junction,

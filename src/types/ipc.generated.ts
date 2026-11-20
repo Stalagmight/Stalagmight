@@ -102,7 +102,6 @@ export * from './ipc/GpsBounds';
 export * from './ipc/LineRelationships';
 export * from './ipc/StationPair';
 export * from './ipc/ClosurePair';
-export * from './ipc/ClosureUpdate';
 export * from './ipc/DeleteShotImpact';
 export * from './ipc/RangeDeleteKind';
 export * from './ipc/DeleteShotRangeImpact';

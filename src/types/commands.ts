@@ -33,7 +33,6 @@ export type {
   LineRelationships,
   StationPair,
   ClosurePair,
-  ClosureUpdate,
   DeleteShotImpact,
   DeleteShotRangeImpact,
   RangeDeleteKind,

@@ -52,7 +52,7 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
-    ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
+    ClosurePreview, ClosureRef, ClosureStrategy, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
     CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
     CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
@@ -307,7 +307,6 @@ fn main() {
     export::<LineRelationships>(&out_dir);
     export::<StationPair>(&out_dir);
     export::<ClosurePair>(&out_dir);
-    export::<ClosureUpdate>(&out_dir);
     export::<DeleteShotImpact>(&out_dir);
     export::<RangeDeleteKind>(&out_dir);
     export::<DeleteShotRangeImpact>(&out_dir);
@@ -630,7 +629,6 @@ fn main() {
         "LineRelationships",
         "StationPair",
         "ClosurePair",
-        "ClosureUpdate",
         "DeleteShotImpact",
         "RangeDeleteKind",
         "DeleteShotRangeImpact",
