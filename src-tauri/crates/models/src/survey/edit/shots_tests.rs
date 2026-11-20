@@ -734,3 +734,68 @@ fn a_range_delete_at_a_junction_follows_the_member_rules() {
     assert_still(&before, &p.raw_positions(), TOL, &[]);
     assert_valid(&p);
 }
+
+/// Review finding UX-5: the delete preview says what Split would weld. A
+/// shot inside a loop closed by a Batch closure: splitting there leaves the
+/// closure the only connection, so it becomes a junction and the far piece
+/// moves by the misclosure (0.6.0's Delete Shot + Split did the same; the
+/// parity test is in persistence's migrate_tests). A plain line welds nothing.
+#[test]
+fn the_delete_preview_says_what_split_would_weld() {
+    // Main east 0..4, held by a datum at 0; Loop north from Main:1 round to
+    // 1 m north of Main:3.
+    let mut p = empty();
+    let main = line(&mut p, "Main", run("m", 90.0, 10.0, 4));
+    let m0 = st(&p, main, 0);
+    add_datum(&mut p, m0, gps(10.0, 20.0));
+    let m1 = st(&p, main, 1);
+    let looped = line_from(
+        &mut p,
+        "Loop",
+        m1,
+        vec![
+            flat_u(0.0, 10.0, "l0"),
+            flat_u(90.0, 20.0, "l1"),
+            flat_u(180.0, 9.0, "l2"),
+        ],
+    );
+    let (tip, m3) = (st(&p, looped, 3), st(&p, main, 3));
+    p.push_closure(tip, Some(looped), m3, Some(main), ClosureStrategy::Batch);
+    assert_valid(&p);
+    let preview = p.preview_delete_shot(main, shot_id(&p, main, 2)).unwrap();
+    let weld = preview.split_weld.expect("an interior shot has a split preview");
+    assert_eq!(weld.promoted.len(), 1, "the closure becomes a junction");
+    assert!((weld.max_move_m - 1.0).abs() < 1e-9, "{}", weld.max_move_m);
+
+    // The edit does what the preview said.
+    let before = p.raw_positions();
+    let edited = p
+        .delete_shot_range(
+            main,
+            shot_id(&p, main, 2),
+            shot_id(&p, main, 2),
+            &super::RangeDeleteMode::Split {
+                name_a: "Main A".to_string(),
+                name_b: "Main B".to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(edited.report.sweep.promoted, weld.promoted);
+    let m4 = st(&p, edited.value.new_line.unwrap(), 1);
+    near(
+        xy(&p.raw_positions(), m4),
+        [xy(&before, m4)[0], xy(&before, m4)[1] + 1.0],
+        1e-9,
+        "the far piece moves onto the closure's end",
+    );
+
+    // Off the loop: nothing welds, nothing moves; edge shots have no split.
+    let mut q = empty();
+    let plain = line(&mut q, "Plain", run("p", 90.0, 10.0, 3));
+    let preview = q.preview_delete_shot(plain, shot_id(&q, plain, 1)).unwrap();
+    let weld = preview.split_weld.unwrap();
+    assert!(weld.promoted.is_empty());
+    assert_eq!(weld.max_move_m, 0.0);
+    let edge = q.preview_delete_shot(plain, shot_id(&q, plain, 0)).unwrap();
+    assert!(edge.split_weld.is_none());
+}

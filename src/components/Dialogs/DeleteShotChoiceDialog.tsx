@@ -5,6 +5,7 @@ import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import SplitWeldNotice from './SplitWeldNotice';
 import type { DeleteShotImpact } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
@@ -113,6 +114,10 @@ export default function DeleteShotChoiceDialog() {
             title="If you choose Shift Geometry, these relationships will update:"
           />
         )}
+
+        {/* What Split Line welds: a loop closure left as the only connection
+            becomes a junction and the piece past it moves (UX-5). */}
+        <SplitWeldNotice impact={impact} prefix="If you choose Split Line, " />
 
         <div className="flex justify-end gap-2">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="delete-shot-choice-cancel">

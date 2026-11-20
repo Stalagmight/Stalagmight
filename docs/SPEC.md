@@ -1923,7 +1923,12 @@ hub of three or more lines only the chosen line leaves.
 3. On Split Line, the line splits into two, named "<line> A" and
    "<line> B" by default, each made unique against the other lines (both
    editable; an empty name, another line's name or the two names equal is
-   refused inline and disables the button)
+   refused inline and disables the button). When the split leaves a loop
+   closure as the only connection between the two halves' pieces, that closure
+   becomes a junction and the piece past it moves onto it by the misclosure (as
+   in 0.6.0); the Delete Shot dialog ("If you choose Split Line, ...") and the
+   Delete & Split dialog say so first: "The loop closure A / 3 - B / 5 becomes
+   a junction; the stations past it move by up to 2.2 m."
 4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
    shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
    after shots 1..2 are gap-closed - removes that closure with the delete. The

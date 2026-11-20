@@ -52,6 +52,12 @@ impl Project {
             closure_to_merge: self.promoted_pairs(&preview.promoted_closures),
             shift_blocked: preview.shift_blocked,
             shift_blocked_reasons: preview.shift_blocked_reasons.clone(),
+            split_closure_to_merge: preview
+                .split_weld
+                .as_ref()
+                .map(|weld| self.promoted_pairs(&weld.promoted))
+                .unwrap_or_default(),
+            split_max_move_m: preview.split_weld.as_ref().map_or(0.0, |w| w.max_move_m),
         }
     }
 

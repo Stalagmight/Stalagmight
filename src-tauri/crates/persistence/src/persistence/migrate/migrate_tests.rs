@@ -632,3 +632,171 @@ fn a_drift_the_old_load_never_resolved_is_collapsed_and_reported_as_a_move() {
     assert_eq!(moved.slots, 2, "both stations of C");
     assert!((moved.max_displacement_m - 5.0).abs() < 1e-9);
 }
+
+/// 0.6.0's Delete Shot + Split on the frozen model, step for step as
+/// release/0.6.0's `execute_delete_shot_and_split` ran it: truncate the line
+/// before the shot, a new line from the shots after it at the deleted shot's
+/// end, re-key every reference into the second half, hold the components'
+/// gauges, the orphan-closure sweep, the datum layout, then the geometry
+/// reconcile. Returns the sweep's conversions and the new line.
+fn legacy_delete_shot_and_split(p: &mut m::Project, line: LineId, pos: usize) -> (usize, LineId) {
+    let datums_before = p.datum_layout();
+    let l = p.get_line(line).unwrap();
+    let shot_id = l.shots[pos].id;
+    let (pos, before, after) = l.split_shots_at(shot_id).unwrap();
+    let deleted = l.shots[pos].to_shot_data();
+    let (color, direction, quality) = (l.color.clone(), l.direction, l.quality);
+    let azimuth_reference = l.azimuth_reference;
+    let orientation = p.cut_orientation(line);
+    let gauges = p.hold_component_gauges(&[line]);
+    let reference = p.azimuth_reference_for_id(line);
+    let split_station = (pos + 1) as u32;
+    let original_count = l.shots.len() as u32 + 1;
+    let old_refs: Vec<Option<StationRef>> = {
+        let mut out = Vec::new();
+        p.for_each_station_ref(|_, key| out.push(p.resolve_key(&key)));
+        out
+    };
+    p.get_line_mut(line).unwrap().shots.truncate(pos);
+    let (mut bx, mut by) = (0.0, 0.0);
+    for data in before.iter().chain(std::iter::once(&deleted)) {
+        let shot = m::Shot::new(0, data.clone());
+        let azimuth = shot.average_azimuth_true_rad(reference);
+        bx += shot.horizontal_length() * azimuth.sin();
+        by += shot.horizontal_length() * azimuth.cos();
+    }
+    let (ox, oy) = p.line_offset(line);
+    let second = p
+        .add_line(LineData {
+            name: Some("Main B".to_string()),
+            surveyor: None,
+            date: None,
+            color,
+            direction: Some(direction),
+            quality,
+            shots: after,
+        })
+        .id;
+    p.get_line_mut(second).unwrap().azimuth_reference = azimuth_reference;
+    if let Some(orientation) = &orientation {
+        p.settle_cut_halves(line, second, orientation, pos, pos + 1);
+    }
+    p.set_line_offset(second, (ox + bx, oy + by));
+    let new_keys: Vec<_> = old_refs
+        .iter()
+        .map(|old| {
+            let sr = (*old)?;
+            let moved = sr.line_id == line
+                && sr.station_index >= split_station
+                && sr.station_index < original_count;
+            let sr = if moved {
+                StationRef::new(second, sr.station_index - split_station)
+            } else {
+                sr
+            };
+            p.key_for_ref(sr)
+        })
+        .collect();
+    let mut i = 0;
+    p.map_station_refs(|old| {
+        let next = new_keys.get(i).cloned().flatten();
+        i += 1;
+        next.unwrap_or(old)
+    });
+    p.restore_component_gauges(&gauges);
+    let sweep = p.sweep_orphan_closures();
+    p.settle_datum_layout(&datums_before);
+    p.remeasure_closure_alignment();
+    p.realign_merges();
+    p.remeasure_closure_alignment();
+    (sweep.converted, second)
+}
+
+/// Review finding UX-5: Delete Shot + Split on a shot inside a loop turns the
+/// loop closure that is left as the only connection into a junction and moves
+/// the stranded piece onto it by the misclosure. 0.6.0 did the same
+/// (`sweep_orphan_closures` made the closure a merge, issue #8), so the port
+/// keeps it, and the delete dialog says so from the preview. The survey: Main
+/// east 0..6 with a zero datum at 0; Side from Main 3; Loop from Main 1 round
+/// to a Batch closure at Main 5 (about 2.2 m short); Far Room from Main 6. The
+/// deleted shot is Main 2 -> 3.
+#[test]
+fn delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did() {
+    let mut p = project();
+    let main = line(&mut p, "Main", &[(90.0, 10.0); 6]);
+    let side = line(&mut p, "Side", &[(0.0, 8.0), (10.0, 8.0)]);
+    let looped = line(&mut p, "Loop", &[(0.0, 10.0), (90.0, 38.0), (180.0, 9.0)]);
+    let far = line(&mut p, "Far Room", &[(90.0, 5.0)]);
+    p.merge_stations(at(side, 0), at(main, 3)).unwrap();
+    p.merge_stations(at(looped, 0), at(main, 1)).unwrap();
+    p.merge_stations(at(far, 0), at(main, 6)).unwrap();
+    p.set_zero_datum(at(main, 0), GpsCoordinates::new(20.5, -87.3, 0.0).unwrap())
+        .unwrap();
+    p.create_loop_closure(at(looped, 3), at(main, 5), OldStrategy::Batch)
+        .unwrap();
+    let (legacy, out) = migrated(&p);
+
+    // 0.6.0.
+    let mut old = legacy.project.clone();
+    let (converted, old_b) = legacy_delete_shot_and_split(&mut old, main, 2);
+    assert_eq!(converted, 1, "0.6.0 turned the stranded loop closure into a merge");
+    assert!(old.loop_closures.is_empty());
+    let today: BTreeMap<(LineId, u32), [f64; 2]> = old
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| {
+            let r = s.station_ref;
+            ((r.line_id, r.station_index), [s.coordinates.x, s.coordinates.y])
+        })
+        .collect();
+
+    // The station graph, through the model operation the command runs.
+    let mut new = out.project;
+    let before = new.raw_positions();
+    let gap = {
+        let [ax, ay] = before.xy(station(&new, looped, 3)).unwrap();
+        let [bx, by] = before.xy(station(&new, main, 5)).unwrap();
+        (ax - bx).hypot(ay - by)
+    };
+    assert!(gap > 2.0, "a real misclosure: {gap}");
+    let shot = new.line(main).unwrap().shots[2].id;
+    // The delete dialog's preview says what Split would weld, from a dry run.
+    let weld = new.preview_delete_shot(main, shot).unwrap().split_weld.unwrap();
+    assert_eq!(weld.promoted.len(), 1);
+    assert!((weld.max_move_m - gap).abs() < 1e-6, "{} vs {gap}", weld.max_move_m);
+    let edited = new
+        .delete_shot_range(
+            main,
+            shot,
+            shot,
+            &crate::models::survey::RangeDeleteMode::Split {
+                name_a: "Main A".to_string(),
+                name_b: "Main B".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(new.closures.is_empty(), "the closure is now a junction");
+    assert_eq!(edited.report.sweep.promoted.len(), 1);
+    let new_b = edited.value.new_line.unwrap();
+    let loop_end = station(&new, looped, 3);
+    assert_eq!(loop_end, station(&new, new_b, 2), "Loop's end is Main 5 now");
+    let after = new.raw_positions();
+    let mut moved_most = 0.0_f64;
+    for slot in after.slots(&new) {
+        let key = (slot.slot.line_id, slot.slot.station_index);
+        let old_key = if key.0 == new_b { (old_b, key.1) } else { key };
+        let [x, y] = today[&old_key];
+        assert!(
+            (slot.x - x).hypot(slot.y - y) < 1e-6,
+            "{key:?} at ({}, {}), 0.6.0 ({x}, {y})",
+            slot.x,
+            slot.y
+        );
+        let s = new.station_at(slot.slot).unwrap();
+        if let (Some([bx, by]), Some([ax, ay])) = (before.xy(s), after.xy(s)) {
+            moved_most = moved_most.max((ax - bx).hypot(ay - by));
+        }
+    }
+    // The stranded piece moved by the whole misclosure, as in 0.6.0.
+    assert!((moved_most - gap).abs() < 1e-6, "{moved_most} vs {gap}");
+}

@@ -262,7 +262,7 @@ pub use edit::{
 pub use edit::{
     CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange, DeletedShot,
     EditError, EditReport, Edited, RangeDeleteMode, ShotEditRun, ShotPlace, SplitLinePreview,
-    SplitOptions, SplitShot,
+    SplitOptions, SplitShot, SplitWeld,
 };
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;

@@ -130,6 +130,8 @@ pub struct DeleteShotPreview {
     pub shift_blocked: bool,
     /// Today's reasons, in today's words.
     pub shift_blocked_reasons: Vec<String>,
+    /// What choosing Split instead would weld (interior shots only).
+    pub split_weld: Option<super::SplitWeld>,
 }
 
 /// What a split at distance made.
@@ -662,6 +664,7 @@ impl Project {
             removed_across_one_shot: edited.report.removed_across_one_shot,
             shift_blocked: !reasons.is_empty(),
             shift_blocked_reasons: reasons,
+            split_weld: self.split_delete_weld(line, index),
         })
     }
 

@@ -147,7 +147,7 @@ pub use combine::{
     TornTie, TornTieKind, TornTieReason,
 };
 pub use lines::DeletedLine;
-pub use ranges::{DeleteRangePreview, DeletedRange, RangeDeleteMode};
+pub use ranges::{DeleteRangePreview, DeletedRange, RangeDeleteMode, SplitWeld};
 pub use shot_run::ShotEditRun;
 pub use shots::{CreatedShot, DeleteShotPreview, DeletedShot, ShotPlace, SplitShot};
 

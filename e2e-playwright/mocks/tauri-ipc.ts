@@ -5768,6 +5768,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               closure_to_merge: [],
               shift_blocked: false,
               shift_blocked_reasons: [],
+              split_closure_to_merge: [],
+              split_max_move_m: 0,
             };
           }
 

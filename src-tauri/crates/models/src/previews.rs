@@ -57,6 +57,14 @@ pub struct DeleteShotImpact {
     pub shift_blocked: bool,
     #[serde(default)]
     pub shift_blocked_reasons: Vec<String>,
+    /// If the user picks Split instead: the loop closures that become a
+    /// junction because the split leaves each the only connection (0.6.0 did
+    /// the same), by their two slots before the delete (review finding UX-5).
+    #[serde(default)]
+    pub split_closure_to_merge: Vec<StationPair>,
+    /// If the user picks Split: the largest move of a station, metres.
+    #[serde(default)]
+    pub split_max_move_m: f64,
 }
 
 /// Which structural case a contiguous shot-range deletion falls into. Computed
