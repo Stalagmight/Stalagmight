@@ -18,30 +18,33 @@
 //!
 //! # The pipeline, as measured
 //!
-//! `AppState::save_project` (`core/state/project_io.rs:46`), with the line that
+//! `AppState::save_project_at_generation` (`core/state/project_io.rs:572`), with the line that
 //! performs each step. Only the steps that TOUCH THE DISK are listed; the heals
 //! and snapshots before them are in-memory:
 //!
 //! ```text
-//!  :213  temp_path = save_path.with_extension("stalx.tmp")   <- the name, exactly
-//!  :482  remove a leftover <stem>.stalx.tmp from a previous failed save
-//!  :487  Database::open(&temp_path)          - creates the temp database
-//!  :496  db.save_project(project)            - the survey, in one transaction
-//!  :509  display settings, one row at a time
-//!  :521  resolved warnings
-//!  :542  speleo_link / undo chain / watermark
-//!  :584  the undo and redo stacks
-//!  :611  drop(db)                            - the temp database is closed
-//!  :652  close the LIVE handle on the destination (Windows rename hazard)
-//!  :660  std::fs::rename(&temp_path, &save_path)   <- the atomic moment
-//!  :704  Database::open(&save_path)          - reopen for continued editing
-//!  :748  note_recent_project(&save_path)
+//!  :719   temp_path = save_path.with_extension("stalx.tmp")   <- the name, exactly
+//!  :1053  remove a leftover <stem>.stalx.tmp from a previous failed save
+//!  :1059  Database::open_staging(&temp_path)  - creates the temp database,
+//!                                               SQLite's per-commit syncs off
+//!  :1068  db.save_project(project)            - the survey, in one transaction
+//!  :1086  display settings, one row at a time
+//!  :1098  resolved warnings
+//!  :1120  speleo_link / undo chain / watermark
+//!  :1160  the undo and redo stacks
+//!  :1187  drop(db)                            - the temp database is closed
+//!  :1195  sync_staged_save(&temp_path)        - the save's one sync of the file
+//!  :1247  close the LIVE handle on the destination (Windows rename hazard)
+//!  :1255  std::fs::rename(&temp_path, &save_path)   <- the atomic moment
+//!  :1280  sync_dir(&save_path)                - the folder, so the rename lasts
+//!  :1307  Database::open(&save_path)          - reopen for continued editing
+//!  :1352  note_recent_project(&save_path)
 //! ```
 //!
 //! Two facts fall out of it and shape everything below.
 //!
 //! **The destination is only ever touched by the rename.** Every write before
-//! `:660` goes into `<stem>.stalx.tmp`. So for every pre-rename boundary the
+//! `:1255` goes into `<stem>.stalx.tmp`. So for every pre-rename boundary the
 //! destination still holds the OLD file, BYTE for byte - which is why the
 //! expectation for those is not "old or new" but the strictly stronger "exactly
 //! old".
@@ -51,6 +54,21 @@
 //! in progress is accompanied by `<file>-journal`, deleted on commit. That is
 //! what makes two of the injected states possible at all (below), and it is why
 //! there is no `-wal`/`-shm` case here - the pipeline cannot produce one.
+//!
+//! **The temp is written without syncs, then synced once.** The staging
+//! connection runs with `synchronous = OFF` (`Database::open_staging`), and
+//! `:1195` syncs the closed file before the rename. Neither changes what a KILL
+//! leaves: a killed process's writes are already in the OS, synced or not, so
+//! every state below is reachable exactly as before. What `synchronous = OFF`
+//! does change is the journal HEADER a staging write lays down, so the temp's
+//! interrupted writes are built through a staging connection
+//! ([`Writer::Staging`]) and replayed by the oracle like any other.
+//!
+//! A POWER LOSS before `:1195` can leave the temp in states a kill cannot (a
+//! journal that never reached the disk beside pages that did). Those are not
+//! injected: the destination is untouched in all of them, and the temp is the
+//! scratch file the torn-temp sweep below already treats as such. The sync is
+//! what keeps that true at the rename: the file is on disk before its name is.
 //!
 //! # Simulated artifacts, not killed processes
 //!
@@ -71,16 +89,16 @@
 //!
 //! | injected state | the kill lands |
 //! |---|---|
-//! | destination only | before `:487`, or after any failure cleanup (`:491`, `:499`, `:588`, `:661`) |
-//! | destination + temp truncated to N bytes | inside `:496`-`:608` |
-//! | destination + temp mid-transaction + its hot journal | inside `:509`-`:608`, after the survey committed |
-//! | destination + whole temp | between `:611` and `:660` |
-//! | new destination | between `:660` and `:704`/`:748` |
+//! | destination only | before `:1059`, or after any failure cleanup (`:1063`, `:1071`, `:1164`, `:1171`, `:1196`, `:1214`, `:1256`) |
+//! | destination + temp truncated to N bytes | inside `:1068`-`:1184` |
+//! | destination + temp mid-transaction + its hot journal | inside `:1086`-`:1184`, after the survey committed |
+//! | destination + whole temp | between `:1187` and `:1255` (before or after the sync: a kill leaves the same bytes) |
+//! | new destination | between `:1255` and `:1307`/`:1352` |
 //! | new destination + an orphaned `<stem>.stalx.tmp-journal` | see below |
-//! | destination mid-transaction + its hot journal | inside a write through the handle reopened at `:704` |
+//! | destination mid-transaction + its hot journal | inside a write through the handle reopened at `:1307` |
 //!
 //! The orphaned-journal row is the one that is not obvious, and it is the reason
-//! the journal cases are here at all. `:482` removes a leftover
+//! the journal cases are here at all. `:1053` removes a leftover
 //! `<stem>.stalx.tmp` before the next save starts - but NOT that temp's
 //! `-journal`. So a save killed mid-transaction leaves two files; the next save
 //! deletes one of them, creates a fresh temp database at that same name, and
@@ -114,7 +132,7 @@
 //!    or recoverable by SQLite's own journal replay, so a clean refusal is NOT
 //!    an acceptable answer: it would mean a crash cost the user their file.
 //! 4. **Recovery forward.** The reopened project is saved again. That save must
-//!    succeed, and it must leave NO `.stalx.tmp` behind - `:482` promises the
+//!    succeed, and it must leave NO `.stalx.tmp` behind - `:1053` promises the
 //!    leftover is removed, and this is what walks the fresh temp into the
 //!    orphaned journal described above.
 //! 5. **The leftover staging file.** A temp cannot BE the project by accident -
@@ -154,6 +172,13 @@
 //! exists", so the bucket sizes are the honest measure of what that button can
 //! install.
 //!
+//! Re-measured 2026-11-20 on `release/0.6.0` at 745946507, the same 60 seeds: 300 refused,
+//! 60 opened with content of their own, none as exactly the interrupted save -
+//! identical with and without the one-sync staging (which writes the same
+//! bytes). The figures and the per-shape explanation above predate compact
+//! undo (#808), which changed what the file's tail holds; they were not
+//! re-derived.
+//!
 //! # What is deliberately NOT injected
 //!
 //! **A truncated destination.** `rename(2)` is atomic, so no kill can produce
@@ -168,7 +193,7 @@
 //! be an artifact of the injection rather than a defect. The INTACT hot journal
 //! is the faithful case and is injected.
 //!
-//! **The recent-projects config write.** `:748` is the pipeline's one write to a
+//! **The recent-projects config write.** `:1352` is the pipeline's one write to a
 //! file that is not the `.stalx`, and it has its own atomic-write scheme with its
 //! own abandoned-temp sweep and its own tests (`config/atomic_write.rs:239`,
 //! `config/tests.rs:3049-3361`). Duplicating that here would test the same code
@@ -219,6 +244,7 @@ use super::fuzz_undo_tests::Rng;
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::persistence::Database;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -238,7 +264,7 @@ struct Reference {
 }
 
 /// Where the pipeline stages its write: `save_path.with_extension("stalx.tmp")`
-/// (`project_io.rs:213`). Spelled the same way here on purpose, and pinned by
+/// (`project_io.rs:719`). Spelled the same way here on purpose, and pinned by
 /// `the_engine_injects_at_the_temp_path_the_pipeline_uses` - an engine that
 /// injected at a name the pipeline does not use would pass vacuously forever.
 fn temp_path_of(save_path: &Path) -> PathBuf {
@@ -380,16 +406,16 @@ enum Shape {
     /// The new destination, alone.
     Renamed,
     /// The new destination, plus the `-journal` of a temp two saves ago that
-    /// `:482`'s cleanup does not remove.
+    /// `:1053`'s cleanup does not remove.
     RenamedWithOrphanedJournal,
     /// The destination caught mid-transaction with its own hot journal - a kill
-    /// during a write through the handle reopened at `:704`.
+    /// during a write through the handle reopened at `:1307`.
     HotJournal,
 }
 
 /// Where to truncate the temp file, for a database of `len` bytes.
 ///
-/// Not arbitrary: 0 is a temp the `Database::open` at `:487` created and nothing
+/// Not arbitrary: 0 is a temp the `Database::open_staging` at `:1059` created and nothing
 /// was written to; 1 is a single byte of the magic string; 100 is exactly
 /// SQLite's file header, so the header is complete and every page is missing;
 /// 4096 is one default page; then the midpoint and one byte short of the whole
@@ -406,48 +432,49 @@ fn truncation_points(len: usize) -> Vec<usize> {
 fn crashes(reference: &Reference) -> Vec<Crash> {
     let mut out = vec![Crash {
         id: "destination-only".to_string(),
-        after: "before the temp database is created (project_io.rs:487), or after any of the \
-                failure cleanups removed it (:491, :499, :588, :661)",
+        after: "before the temp database is created (project_io.rs:1059), or after any of \
+                the failure cleanups removed it (:1063, :1071, :1164, :1171, :1196, :1214, :1256)",
         shape: Shape::Untouched,
         expect: Expect::Old,
     }];
     for bytes in truncation_points(reference.new.len()) {
         out.push(Crash {
             id: format!("temp-truncated-at-{bytes}"),
-            after: "part-way through writing the staged file (project_io.rs:496-:608)",
+            after: "part-way through writing the staged file (project_io.rs:1068-:1184)",
             shape: Shape::TornTemp { bytes },
             expect: Expect::Old,
         });
     }
     out.push(Crash {
         id: "temp-mid-transaction-with-a-hot-journal".to_string(),
-        after: "a write into the already-committed staged file (project_io.rs:509-:608)",
+        after: "a write into the already-committed staged file (project_io.rs:1086-:1184)",
         shape: Shape::TempMidTransaction,
         expect: Expect::Old,
     });
     out.push(Crash {
         id: "temp-complete-but-not-renamed".to_string(),
-        after: "the staged database was closed (project_io.rs:611) and before the rename (:660)",
+        after: "the staged database was closed (project_io.rs:1187), synced or not yet (:1195), \
+                and before the rename (:1255)",
         shape: Shape::StagedTemp,
         expect: Expect::Old,
     });
     out.push(Crash {
         id: "renamed".to_string(),
-        after: "the rename (project_io.rs:660), before the reopen (:704) or the recents update \
-                (:748)",
+        after: "the rename (project_io.rs:1255), before the reopen (:1307) or the recents \
+                update (:1352)",
         shape: Shape::Renamed,
         expect: Expect::New,
     });
     out.push(Crash {
         id: "renamed-over-an-orphaned-temp-journal".to_string(),
-        after: "a save that followed an interrupted one: :482 removed the leftover temp but not \
-                its -journal, and :660 renamed the fresh temp over the destination",
+        after: "a save that followed an interrupted one: :1053 removed the leftover temp but \
+                not its -journal, and :1255 renamed the fresh temp over the destination",
         shape: Shape::RenamedWithOrphanedJournal,
         expect: Expect::New,
     });
     out.push(Crash {
         id: "destination-mid-transaction-with-a-hot-journal".to_string(),
-        after: "a write through the handle the save reopened at project_io.rs:704",
+        after: "a write through the handle the save reopened at project_io.rs:1307",
         shape: Shape::HotJournal,
         expect: Expect::Old,
     });
@@ -464,14 +491,22 @@ fn crashes(reference: &Reference) -> Vec<Crash> {
 /// page, the transaction SPILLS its dirty pages into the database file, which is
 /// precisely the state a kill has to be recoverable from.
 ///
+/// `writer` is the connection kind whose write is interrupted: the staging
+/// file is written with SQLite's syncs off (`Database::open_staging`), which
+/// changes how its journal header is laid down, so a temp's journal is made
+/// that way and the destination's the way the reopened handle makes it.
+///
 /// Returns `(database bytes, journal bytes)`, or `None` if the scratch write
 /// could not be staged. The scratch transaction is rolled back afterwards; the
 /// captured bytes keep the interrupted state.
-fn mid_transaction(bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+fn mid_transaction(bytes: &[u8], writer: Writer) -> Option<(Vec<u8>, Vec<u8>)> {
     let scratch = TempDir::new().ok()?;
     let path = scratch.path().join("interrupted.stalx");
     std::fs::write(&path, bytes).ok()?;
     let connection = Connection::open(&path).ok()?;
+    if writer == Writer::Staging {
+        connection.execute_batch(Database::STAGING_PRAGMAS).ok()?;
+    }
     connection.execute_batch("PRAGMA cache_size = 1;").ok()?;
     connection
         .execute_batch(
@@ -488,6 +523,15 @@ fn mid_transaction(bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((interrupted, journal))
 }
 
+/// Which connection an interrupted write went through.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Writer {
+    /// The save's staging connection, syncs off.
+    Staging,
+    /// A connection on the project file itself, SQLite's default syncs.
+    Project,
+}
+
 /// Materialize one crash state in `dir` and return the destination path.
 fn stage(dir: &Path, reference: &Reference, shape: &Shape) -> Option<PathBuf> {
     let destination = dir.join("cave.stalx");
@@ -499,7 +543,7 @@ fn stage(dir: &Path, reference: &Reference, shape: &Shape) -> Option<PathBuf> {
             std::fs::write(&temp, &reference.new[..*bytes]).ok()?;
         }
         Shape::TempMidTransaction => {
-            let (interrupted, journal) = mid_transaction(&reference.new)?;
+            let (interrupted, journal) = mid_transaction(&reference.new, Writer::Staging)?;
             std::fs::write(&destination, &reference.old).ok()?;
             std::fs::write(&temp, interrupted).ok()?;
             std::fs::write(journal_path_of(&temp), journal).ok()?;
@@ -510,12 +554,12 @@ fn stage(dir: &Path, reference: &Reference, shape: &Shape) -> Option<PathBuf> {
         }
         Shape::Renamed => std::fs::write(&destination, &reference.new).ok()?,
         Shape::RenamedWithOrphanedJournal => {
-            let (_, journal) = mid_transaction(&reference.old)?;
+            let (_, journal) = mid_transaction(&reference.old, Writer::Staging)?;
             std::fs::write(&destination, &reference.new).ok()?;
             std::fs::write(journal_path_of(&temp), journal).ok()?;
         }
         Shape::HotJournal => {
-            let (interrupted, journal) = mid_transaction(&reference.old)?;
+            let (interrupted, journal) = mid_transaction(&reference.old, Writer::Project)?;
             std::fs::write(&destination, interrupted).ok()?;
             std::fs::write(journal_path_of(&destination), journal).ok()?;
         }
@@ -762,14 +806,14 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
     }
 
     // ORACLE 4: recovery forward. Saving again must work, and must clear the
-    // leftover temp `:482` promises to remove.
+    // leftover temp `:1053` promises to remove.
     let saved = state.save_project(None);
     if saved.success {
         let strays = stray_temps(dir);
         if !strays.is_empty() {
             problems.push(label(&format!(
                 "the recovery save succeeded but left a staging file behind: {strays:?} \
-                 (project_io.rs:482 removes a leftover temp before starting, and :660 renames its \
+                 (project_io.rs:1053 removes a leftover temp before starting, and :1255 renames its \
                  own away)"
             )));
         }
@@ -780,7 +824,7 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
             ));
         }
         // Measured, not asserted: what became of the orphaned journal. Nothing
-        // promises it is cleaned up - `:482` removes the temp and says nothing
+        // promises it is cleaned up - `:1053` removes the temp and says nothing
         // about its journal - so a survivor would be a leak rather than a broken
         // promise. Both outcomes are counted, so the summary distinguishes
         // "measured, and it is cleaned up" from "never looked".
@@ -982,17 +1026,36 @@ fn the_hot_journal_injection_is_a_real_interrupted_write() {
     let committed = std::fs::read(&path).expect("could not read the saved file");
     drop(state);
 
-    let (interrupted, journal) =
-        mid_transaction(&committed).expect("the interrupted write could not be staged");
-    assert!(
-        !journal.is_empty(),
-        "the interrupted transaction left an EMPTY rollback journal, so the injected hot-journal \
-         states carry nothing for SQLite to recover from"
+    let mut record_counts = Vec::new();
+    for writer in [Writer::Staging, Writer::Project] {
+        let (interrupted, journal) =
+            mid_transaction(&committed, writer).expect("the interrupted write could not be staged");
+        // Bytes 8..12 of a rollback journal's header: its record count.
+        record_counts.push(journal.get(8..12).map(<[u8]>::to_vec));
+        assert!(
+            !journal.is_empty(),
+            "the interrupted {writer:?} transaction left an EMPTY rollback journal, so the \
+             injected hot-journal states carry nothing for SQLite to recover from"
+        );
+        assert_ne!(
+            interrupted, committed,
+            "the interrupted {writer:?} transaction never reached the database file, so the \
+             injected hot-journal states are byte-identical to the committed file and the \
+             recovery oracle is vacuous"
+        );
+    }
+    // The writer has to change what is staged, or the temp's states would be a
+    // project-file journal under another name. With syncs off SQLite writes the
+    // record count as 0xffffffff up front (replay counts the records from the
+    // file's size); a synced write fills in the real count.
+    assert_eq!(
+        record_counts[0].as_deref(),
+        Some(&[0xff_u8; 4][..]),
+        "a staging journal's record count"
     );
     assert_ne!(
-        interrupted, committed,
-        "the interrupted transaction never reached the database file, so the injected hot-journal \
-         states are byte-identical to the committed file and the recovery oracle is vacuous"
+        record_counts[0], record_counts[1],
+        "the staging and project-file writers staged the same journal header"
     );
 }
 

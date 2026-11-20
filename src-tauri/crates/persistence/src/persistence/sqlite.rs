@@ -689,6 +689,13 @@ mod station_ids_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod staging_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
