@@ -330,7 +330,7 @@ Project (Cave System)
 │   └── external: Option<String> (an imported identity, attribute only)
 ├── Lines[]   (display order = list order)
 │   ├── id: u32 (internal, immutable, never shown)
-│   ├── name: String (required, unique in the project; seeded `Line N`)
+│   ├── name: Option<String> (every line the app makes has one, unique in the project; seeded `Line N`)
 │   ├── color, direction, quality, azimuth_reference: Option<AzimuthReference>
 │   ├── section_id: Option<SectionId> (its Section)
 │   ├── legacy_surveyor / legacy_date (the line-level credit fallback; credit is per shot)
@@ -703,7 +703,8 @@ These are derived from the model, never stored, and recomputed after every edit
 ### 4.5 What changed with the station graph
 
 Declared behaviour changes of the switch from the 0.6.0 model (plan 12.2 and
-its Deviations sections), visible to users:
+its Deviations sections), visible to users. The complete list, each change
+with its reason, is the plan's "Status (final)" section:
 
 - **Junctions share one Station ID, name and comment.** Merging two stations
   makes one: the surviving station keeps its id and name; the retired one's
@@ -724,6 +725,12 @@ its Deviations sections), visible to users:
 - **Set Zero Datum on a junction slot** edits the station's datum when it has
   one; a station can hold two datums only after merging two placed pieces or
   from a migration.
+- **A loop closure from a junction to a station a closure already ties it to**
+  is refused as a duplicate (0.6.0 made a second closure from the merged twin).
+- **Migrated merge loops are `Tie` closures** (shown as aligned `Batch`): the
+  Closures Computed View now adjusts a piece 0.6.0 showed as measured, and a
+  demoted merge across one shot is skipped and listed in the Warnings tab
+  instead of failing its piece.
 - **Closure figures are recomputed** from the current geometry, and the path
   length counts shots only (closures and merges no longer count as
   zero-length edges).
@@ -738,7 +745,9 @@ its Deviations sections), visible to users:
   its first save, its original kept in Recovery; its undo history is not kept.
   A file with moved stations shows a one-time conversion notice. A file made
   with a newer Stalagmight opens read-only. A save refuses a file another
-  program changed since it was opened and asks which version to keep.
+  program changed since it was opened and asks which version to keep. An older
+  Stalagmight cannot open a file this version saved, and SpeleoDB pushes send
+  the new file, which needs the updated server.
 
 ---
 

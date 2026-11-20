@@ -31,7 +31,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | Doc | Contents |
 |-----|----------|
 | [project-structure.md](project-structure.md) | Directory tree and tech stack. |
-| [architecture.md](architecture.md) | The workspace layout (the app and ten member crates), state flow (Zustand -> IPC -> Rust command executor), `AppState` and the open file, the execute pipeline, derived views and lock order, key files, backend idioms. |
+| [architecture.md](architecture.md) | The workspace layout (the app and nine member crates), state flow (Zustand -> IPC -> Rust command executor), `AppState` and the open file, the execute pipeline, derived views and lock order, key files, backend idioms. |
 | [SPEC.md](SPEC.md) | Data model, UI, workflows, file formats, validation rules. Defers to code for the enums, schema, and config keys. |
 | [roadmap.md](roadmap.md) | Historical record of the v1.0 scope; live work is in the issue tracker. |
 
@@ -95,7 +95,9 @@ in determines how you write it, and picking wrong is the most common rework.
 
 `plans/` holds dated design docs written before or during a feature's
 implementation; they are snapshots of intent, not maintained afterwards, so
-trust the pages above over a plan. One exception is kept current while its work
-lands: [the station-graph plan](plans/2026-11-20_station-graph-model.md), whose
+trust the pages above over a plan. One exception is kept current:
+[the station-graph plan](plans/2026-11-20_station-graph-model.md), whose
+"Status (final)" section lists what shipped, every declared behaviour change
+with its reason, what is open and the rollout prerequisites, and whose
 Deviations sections record what each stream built differently from the text. `branding/` is the brand pack - logos,
 social image, and design tokens.

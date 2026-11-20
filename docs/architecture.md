@@ -7,7 +7,7 @@
 ## Workspace layout
 
 The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
-hybrid root: the `stalagmight` app package lives there too). Ten library
+hybrid root: the `stalagmight` app package lives there too). Nine library
 crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
