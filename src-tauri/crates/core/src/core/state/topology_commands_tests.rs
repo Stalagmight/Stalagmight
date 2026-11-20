@@ -153,13 +153,16 @@ fn a_merge_of_connected_stations_routes_to_the_closure_dialog() {
         error,
         "Stations are already connected. Use Create Loop Closure instead."
     );
-    // A slot that names no station is refused too.
-    refused(
-        state,
-        Command::MergeStations {
-            station_a: slot(c, 9),
-            station_b: slot(a, 0),
-        },
+    // A slot that names no station is refused too, in 0.6.0's words.
+    assert_eq!(
+        refused(
+            state,
+            Command::MergeStations {
+                station_a: slot(c, 9),
+                station_b: slot(a, 0),
+            },
+        ),
+        "One or both stations do not exist"
     );
 }
 
@@ -225,6 +228,14 @@ fn removing_a_datum_a_station_does_not_hold_is_refused() {
         },
     );
     assert_eq!(error, "Station is not a zero datum");
+    // As 0.6.0, a slot that names no station reads the same.
+    let error = refused(
+        &opened.state,
+        Command::RemoveZeroDatum {
+            station_ref: slot(line, 9),
+        },
+    );
+    assert_eq!(error, "Station is not a zero datum");
 }
 
 #[test]
@@ -255,14 +266,17 @@ fn an_invalid_gps_or_accuracy_is_refused_and_changes_nothing() {
             entrance: None,
         },
     );
-    refused(
-        state,
-        Command::SetZeroDatum {
-            station_ref: slot(line, 7),
-            coordinates: origin(),
-            accuracy_m: None,
-            entrance: None,
-        },
+    assert_eq!(
+        refused(
+            state,
+            Command::SetZeroDatum {
+                station_ref: slot(line, 7),
+                coordinates: origin(),
+                accuracy_m: None,
+                entrance: None,
+            },
+        ),
+        "Station does not exist"
     );
 }
 
@@ -357,6 +371,10 @@ fn create_loop_closure_refuses_in_0_6_0_order_and_words() {
         closure_strategy: WireStrategy::Batch,
     };
     assert_eq!(
+        refused(state, create(slot(a, 0), slot(b, 5))),
+        "One or both stations do not exist"
+    );
+    assert_eq!(
         refused(state, create(slot(a, 1), slot(b, 0))),
         "These stations are already merged. Closures are for unmerged station pairs."
     );
@@ -446,6 +464,15 @@ fn unmerge_on_a_station_off_a_junction_is_a_no_op_that_keeps_redo() {
     assert_same(&snapshot(state), &before, "nothing changed");
     assert!(state.can_redo(), "a provable no-op keeps the redo branch");
     assert!(state.get_undo_stack().is_empty(), "and records nothing");
+    // As 0.6.0, a slot that names no station is the same no-op.
+    run(
+        state,
+        Command::UnmergeStations {
+            station_ref: slot(a, 9),
+        },
+    );
+    assert_same(&snapshot(state), &before, "nothing changed");
+    assert!(state.can_redo());
 }
 
 #[test]

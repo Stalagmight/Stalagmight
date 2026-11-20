@@ -5,10 +5,11 @@
 //! The survey operations settle anchors, run the orphan-closure sweep
 //! (merge, detach, datum removal) and validate; this layer adds what is the
 //! command's, not the model's: 0.6.0's refusals that the model does not word
-//! (a merge on one line, a datum removal on a station without one), the
-//! entrance answer that rides Set Zero Datum, and the warnings that name the
-//! loop closures a sweep removed because their ends became one station
-//! (#738), each named by the stations it had BEFORE the command (E2).
+//! (a merge on one line, a datum removal on a station without one, a slot
+//! that names no station), the entrance answer that rides Set Zero Datum, and
+//! the warnings that name the loop closures a sweep removed because their
+//! ends became one station (#738), each named by the stations it had BEFORE
+//! the command (E2).
 
 use std::collections::BTreeMap;
 
@@ -20,8 +21,15 @@ use crate::models::{StationRef, CLOSURE_REMOVED_MERGED_ENDS};
 /// 0.6.0's refusal of a merge between two stations of one line.
 const MERGE_SAME_LINE: &str = "Cannot merge stations from the same line";
 
-/// 0.6.0's refusal of a datum removal on a station that holds none.
+/// 0.6.0's refusal of a datum removal on a station that holds none (a slot
+/// that names no station included).
 const NOT_A_ZERO_DATUM: &str = "Station is not a zero datum";
+
+/// 0.6.0's refusal of a merge or a closure at a slot that names no station.
+const NO_SUCH_STATIONS: &str = "One or both stations do not exist";
+
+/// 0.6.0's refusal of Set Zero Datum at a slot that names no station.
+const NO_SUCH_STATION: &str = "Station does not exist";
 
 /// Why a closure the sweep after a user merge removed has one point for its
 /// two ends (0.6.0's `OnePointCause::Merge`).
@@ -121,6 +129,14 @@ fn text(error: OpError) -> String {
     error.to_string()
 }
 
+/// [`text`], with 0.6.0's words for a slot that names no station.
+fn text_or(missing: &'static str) -> impl Fn(OpError) -> String {
+    move |error| match error {
+        OpError::UnknownSlot(_) => missing.to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The execute pipeline's mutation for the station topology family
 /// (`commands.rs` dispatches here; plan 9.1). Runs inside `run_recorded`,
 /// which snapshots, validates, captures and records around it; `record` is
@@ -130,66 +146,16 @@ pub(super) fn apply(
     record: &mut Record,
     cmd: &Command,
 ) -> Result<Applied, String> {
-    let names = ClosureNames::of(project);
     match cmd {
         Command::MergeStations {
             station_a,
             station_b,
-        } => merge(project, &names, *station_a, *station_b),
-        Command::UnmergeStations { station_ref } => {
-            let outcome = project.unmerge_station(*station_ref).map_err(text)?;
-            if let Some(detached) = &outcome.value {
-                tracing::info!(
-                    station = detached.station,
-                    line = detached.line,
-                    new_station = detached.new_station,
-                    purpose = "disconnect merged stations",
-                    "Line detached from its junction"
-                );
-                record.refs.stations.push(detached.new_station);
-            }
-            Ok(Applied {
-                warnings: swept_closure_warnings(
-                    &names,
-                    project,
-                    &outcome.sweep,
-                    ONE_POINT_BY_PROMOTION,
-                    "unmerge",
-                ),
-                ..Applied::default()
-            })
-        }
+        } => merge(project, *station_a, *station_b),
+        Command::UnmergeStations { station_ref } => unmerge(project, record, *station_ref),
         Command::UnmergeStationPair {
             station_a,
             station_b,
-        } => {
-            // 0.6.0 answered one refusal for any pair it found no direct
-            // merge for, a slot that names nothing included.
-            if project.resolve_slot_pair(*station_a, *station_b).is_err() {
-                return Err(OpError::NotDirectlyMerged.to_string());
-            }
-            let outcome = project
-                .unmerge_station_pair(*station_a, *station_b)
-                .map_err(text)?;
-            tracing::info!(
-                station = outcome.value.station,
-                line = outcome.value.line,
-                new_station = outcome.value.new_station,
-                purpose = "disconnect selected merged station pair",
-                "Line detached from its junction"
-            );
-            record.refs.stations.push(outcome.value.new_station);
-            Ok(Applied {
-                warnings: swept_closure_warnings(
-                    &names,
-                    project,
-                    &outcome.sweep,
-                    ONE_POINT_BY_PROMOTION,
-                    "unmerge pair",
-                ),
-                ..Applied::default()
-            })
-        }
+        } => unmerge_pair(project, record, *station_a, *station_b),
         Command::CreateLoopClosure {
             station_a,
             station_b,
@@ -197,7 +163,7 @@ pub(super) fn apply(
         } => {
             let outcome = project
                 .create_closure_at(*station_a, *station_b, (*closure_strategy).into())
-                .map_err(text)?;
+                .map_err(text_or(NO_SUCH_STATIONS))?;
             let closure = outcome.value.closure;
             tracing::debug!(
                 closure_id = closure.id,
@@ -228,7 +194,7 @@ pub(super) fn apply(
         } => {
             let outcome = project
                 .set_datum_at(*station_ref, *coordinates, *accuracy_m)
-                .map_err(text)?;
+                .map_err(text_or(NO_SUCH_STATION))?;
             // `None` keeps the stored answer (the default rule for a new
             // datum); the flag moves nothing (#741).
             if entrance.is_some() {
@@ -245,27 +211,7 @@ pub(super) fn apply(
             );
             Ok(Applied::default())
         }
-        Command::RemoveZeroDatum { station_ref } => {
-            let Some(outcome) = project.remove_datum_at(*station_ref).map_err(text)? else {
-                return Err(NOT_A_ZERO_DATUM.to_string());
-            };
-            tracing::debug!(
-                ?station_ref,
-                remaining_zero_datums = project.datums.len(),
-                purpose = "remove GPS anchor",
-                "Zero datum removed"
-            );
-            Ok(Applied {
-                warnings: swept_closure_warnings(
-                    &names,
-                    project,
-                    &outcome.sweep,
-                    ONE_POINT_BY_PROMOTION,
-                    "remove zero datum",
-                ),
-                ..Applied::default()
-            })
-        }
+        Command::RemoveZeroDatum { station_ref } => remove_datum(project, *station_ref),
         _ => Err(format!(
             "{} is not a station topology command",
             crate::core::command_kind(cmd)
@@ -278,7 +224,6 @@ pub(super) fn apply(
 /// first, in 0.6.0's words.
 fn merge(
     project: &mut Project,
-    names: &ClosureNames,
     station_a: StationRef,
     station_b: StationRef,
 ) -> Result<Applied, String> {
@@ -287,7 +232,8 @@ fn merge(
     }
     let (a, b) = project
         .resolve_slot_pair(station_a, station_b)
-        .map_err(text)?;
+        .map_err(text_or(NO_SUCH_STATIONS))?;
+    let names = ClosureNames::of(project);
     let outcome = project.merge_stations(a.station, b.station).map_err(|e| {
         tracing::warn!(
             ?station_a,
@@ -308,11 +254,109 @@ fn merge(
     );
     Ok(Applied {
         warnings: swept_closure_warnings(
-            names,
+            &names,
             project,
             &outcome.sweep,
             ONE_POINT_BY_MERGE,
             "merge",
+        ),
+        ..Applied::default()
+    })
+}
+
+/// Unmerge Stations (plan 5.2): detach the slot's line from its junction.
+/// A no-op off a junction, and (as 0.6.0) at a slot that names no station.
+fn unmerge(
+    project: &mut Project,
+    record: &mut Record,
+    station_ref: StationRef,
+) -> Result<Applied, String> {
+    if project.resolve_slot(station_ref).is_err() {
+        return Ok(Applied::default());
+    }
+    let names = ClosureNames::of(project);
+    let outcome = project.unmerge_station(station_ref).map_err(text)?;
+    if let Some(detached) = &outcome.value {
+        tracing::info!(
+            station = detached.station,
+            line = detached.line,
+            new_station = detached.new_station,
+            purpose = "disconnect merged stations",
+            "Line detached from its junction"
+        );
+        record.refs.stations.push(detached.new_station);
+    }
+    Ok(Applied {
+        warnings: swept_closure_warnings(
+            &names,
+            project,
+            &outcome.sweep,
+            ONE_POINT_BY_PROMOTION,
+            "unmerge",
+        ),
+        ..Applied::default()
+    })
+}
+
+/// Unmerge Station Pair (plan 5.2, E6): the two slots must be one station on
+/// two lines; `b`'s line is detached from it. 0.6.0 answered one refusal for
+/// any pair it found no direct merge for, a slot that names nothing included.
+fn unmerge_pair(
+    project: &mut Project,
+    record: &mut Record,
+    station_a: StationRef,
+    station_b: StationRef,
+) -> Result<Applied, String> {
+    if project.resolve_slot_pair(station_a, station_b).is_err() {
+        return Err(OpError::NotDirectlyMerged.to_string());
+    }
+    let names = ClosureNames::of(project);
+    let outcome = project
+        .unmerge_station_pair(station_a, station_b)
+        .map_err(text)?;
+    tracing::info!(
+        station = outcome.value.station,
+        line = outcome.value.line,
+        new_station = outcome.value.new_station,
+        purpose = "disconnect selected merged station pair",
+        "Line detached from its junction"
+    );
+    record.refs.stations.push(outcome.value.new_station);
+    Ok(Applied {
+        warnings: swept_closure_warnings(
+            &names,
+            project,
+            &outcome.sweep,
+            ONE_POINT_BY_PROMOTION,
+            "unmerge pair",
+        ),
+        ..Applied::default()
+    })
+}
+
+/// Remove Zero Datum (plan 5.7, E1): the datum the slot has; refused, in
+/// 0.6.0's words, when it has none or names no station.
+fn remove_datum(project: &mut Project, station_ref: StationRef) -> Result<Applied, String> {
+    if project.resolve_slot(station_ref).is_err() {
+        return Err(NOT_A_ZERO_DATUM.to_string());
+    }
+    let names = ClosureNames::of(project);
+    let Some(outcome) = project.remove_datum_at(station_ref).map_err(text)? else {
+        return Err(NOT_A_ZERO_DATUM.to_string());
+    };
+    tracing::debug!(
+        ?station_ref,
+        remaining_zero_datums = project.datums.len(),
+        purpose = "remove GPS anchor",
+        "Zero datum removed"
+    );
+    Ok(Applied {
+        warnings: swept_closure_warnings(
+            &names,
+            project,
+            &outcome.sweep,
+            ONE_POINT_BY_PROMOTION,
+            "remove zero datum",
         ),
         ..Applied::default()
     })
