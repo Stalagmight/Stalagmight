@@ -482,6 +482,42 @@ fn a_station_move_shows_in_its_coordinates() {
     );
 }
 
+#[test]
+fn a_station_move_folds_a_legacy_hand_move_into_the_shots() {
+    // 0.6.0 cleared the station offset it folded into the shots ("Station
+    // offset should be cleared"); a migrated file keeps one per line as a
+    // hand move, and Move Station folds it the same way.
+    let state = new_state();
+    let line = add_line(&state, "A", vec![level(90.0, 10.0), level(90.0, 10.0)]);
+    edit(&state, |p| {
+        let s = p.station_at(at(line, 1)).unwrap();
+        p.line_mut(line)
+            .unwrap()
+            .hand_moves
+            .insert(s, [0.5, 1.0, 0.25]);
+    });
+    let shown = position(&state, line, 1);
+    let before = project(&state);
+    ok(move_station(&state, at(line, 1), [1.0, 0.0, 0.0]));
+    assert!(project(&state).line(line).unwrap().hand_moves.is_empty());
+    assert_close(
+        position(&state, line, 1),
+        plus(shown, [1.0, 0.0, 0.0]),
+        "where it was shown, plus the offset",
+    );
+    assert_close(
+        position(&state, line, 2),
+        [20.0, 0.0, 0.0],
+        "its neighbour stays",
+    );
+    ok(state.undo());
+    assert_eq!(
+        canonical(&project(&state)),
+        canonical(&before),
+        "undo puts the hand move back"
+    );
+}
+
 // === Move Station edge cases ===
 
 #[test]
