@@ -634,19 +634,6 @@ fn summarize(commands: &[Command], names: &NameBook<'_>) -> String {
     )
 }
 
-/// The label of a batch from its sub-commands and the names `project` holds
-/// before it runs: one kind of command says what they did together (`Update
-/// 5 shots in line "Main"`, `Reverse lines "A" and "B"`); several kinds are
-/// named by the one that stands for the rest (a merge, a closure, a line
-/// delete, a metadata edit, a reverse), or by the first and a count
-/// (0.6.0's `history_batch::summarize`). A batch with its own `label` is
-/// labelled by [`entry_label`], not here. Test-only: [`entry_label`] and the
-/// recipes call `summarize` directly.
-#[cfg(test)]
-pub(crate) fn batch_summary(project: &Project, commands: &[Command]) -> String {
-    bounded(summarize(commands, &NameBook::of(project)))
-}
-
 /// `Insert station Main Line / 4a`: Insert Station (a shot split at a
 /// distance), worded AFTER the split; `station` is the station it made.
 pub(crate) fn insert_station_label(
@@ -1214,4 +1201,17 @@ pub(crate) fn batch_preview(project: &Project, commands: &[Command]) -> Recorded
         rows,
         more: commands.len().saturating_sub(BATCH_PREVIEW_ROWS) as u64,
     }
+}
+
+/// The label of a batch from its sub-commands and the names `project` holds
+/// before it runs: one kind of command says what they did together (`Update
+/// 5 shots in line "Main"`, `Reverse lines "A" and "B"`); several kinds are
+/// named by the one that stands for the rest (a merge, a closure, a line
+/// delete, a metadata edit, a reverse), or by the first and a count
+/// (0.6.0's `history_batch::summarize`). A batch with its own `label` is
+/// labelled by [`entry_label`], not here. Test-only: [`entry_label`] and the
+/// recipes call `summarize` directly.
+#[cfg(test)]
+pub(crate) fn batch_summary(project: &Project, commands: &[Command]) -> String {
+    bounded(summarize(commands, &NameBook::of(project)))
 }

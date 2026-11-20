@@ -265,32 +265,6 @@ impl AppState {
         self.with_file(|file| file.extras.local.speleodb.unwound_from.clone())
     }
 
-    /// [#303] Record (or clear) that watermark.
-    ///
-    /// Best-effort on the way in, like the chain pointer - but the two failures are not
-    /// symmetric. Losing the chain pointer costs a walk its position; losing this lets a
-    /// loaded revision's history ride into the next commit as though it were authored
-    /// here, which is the duplication this exists to stop. Hence the louder log.
-    #[cfg(test)]
-    pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
-        let parsed = instant.and_then(|ts| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .ok()
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-        });
-        self.with_file(|file| file.extras.local.speleodb.inherited_through = parsed);
-        if let Err(e) = self.persist_local_state() {
-            tracing::warn!(
-                error = %e,
-                purpose = "record the inherited-history watermark (#303)",
-                "could not persist the undo watermark; it is set in memory"
-            );
-        }
-        if let Ok(mut stack) = self.undo_stack.lock() {
-            stack.set_inherited_through(parsed);
-        }
-    }
-
     /// [#303] The watermark for a stack that has just been loaded by a chain step.
     ///
     /// `now` would almost always do, but not quite: the entries came off another machine,
@@ -558,6 +532,34 @@ impl AppState {
             read_only: None,
             other_owner: None,
         })
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// [#303] Record (or clear) that watermark.
+    ///
+    /// Best-effort on the way in, like the chain pointer - but the two failures are not
+    /// symmetric. Losing the chain pointer costs a walk its position; losing this lets a
+    /// loaded revision's history ride into the next commit as though it were authored
+    /// here, which is the duplication this exists to stop. Hence the louder log.
+    pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
+        let parsed = instant.and_then(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+        self.with_file(|file| file.extras.local.speleodb.inherited_through = parsed);
+        if let Err(e) = self.persist_local_state() {
+            tracing::warn!(
+                error = %e,
+                purpose = "record the inherited-history watermark (#303)",
+                "could not persist the undo watermark; it is set in memory"
+            );
+        }
+        if let Ok(mut stack) = self.undo_stack.lock() {
+            stack.set_inherited_through(parsed);
+        }
     }
 }
 

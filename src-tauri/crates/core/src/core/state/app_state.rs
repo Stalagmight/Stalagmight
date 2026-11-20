@@ -461,28 +461,6 @@ impl AppState {
         }
     }
 
-    /// Lock the project mutex and pass a mutable reference to the callback.
-    /// Returns the callback's result, or an error if the lock fails or no project is open.
-    /// Bumps the revision (whatever the callback did): a caller that only
-    /// reads uses [`Self::with_project`]. Test-only: production edits go
-    /// through the execute pipeline (`run_recorded`).
-    #[cfg(test)]
-    pub(super) fn with_project_mut<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut Project) -> R,
-        R: FromProjectLockError,
-    {
-        let Ok(mut guard) = self.project.lock() else {
-            return R::lock_failed();
-        };
-        let Some(project) = guard.as_mut() else {
-            return R::no_project();
-        };
-        let result = f(project);
-        self.bump_revision();
-        result
-    }
-
     /// Lock the project mutex and pass an immutable reference to the callback.
     /// Returns the callback's result, or an error if the lock fails or no project is open.
     pub(super) fn with_project<F, R>(&self, f: F) -> R
@@ -712,5 +690,29 @@ impl AppState {
     /// business, exactly as it is for the integrity banner.
     pub fn history_discarded(&self) -> bool {
         self.history_discarded.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Lock the project mutex and pass a mutable reference to the callback.
+    /// Returns the callback's result, or an error if the lock fails or no project is open.
+    /// Bumps the revision (whatever the callback did): a caller that only
+    /// reads uses [`Self::with_project`]. Test-only: production edits go
+    /// through the execute pipeline (`run_recorded`).
+    pub(super) fn with_project_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Project) -> R,
+        R: FromProjectLockError,
+    {
+        let Ok(mut guard) = self.project.lock() else {
+            return R::lock_failed();
+        };
+        let Some(project) = guard.as_mut() else {
+            return R::no_project();
+        };
+        let result = f(project);
+        self.bump_revision();
+        result
     }
 }
