@@ -15,6 +15,7 @@ members = [
     "crates/core",
     "crates/export",
     "crates/legacy",
+    "crates/legacy-fidelity",
     "crates/models",
     "crates/parsers",
     "crates/persistence",

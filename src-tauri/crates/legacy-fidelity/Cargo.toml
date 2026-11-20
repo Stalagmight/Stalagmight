@@ -1,0 +1,19 @@
+[package]
+name = "stalagmight-legacy-fidelity"
+version = "0.0.0"
+description = "Test-only: proves stalagmight-legacy opens files exactly as the live 0.6.0 app does. Delete once the live crates move to the station-graph model."
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Everything is in tests/fidelity.rs; the live crates are dev-dependencies, so
+# the frozen `stalagmight-legacy` never depends on them, even in tests.
+[dev-dependencies]
+stalagmight-legacy = { path = "../legacy" }
+stalagmight-core = { path = "../core", features = ["test-support"] }
+stalagmight-models = { path = "../models" }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+tempfile = { workspace = true }
