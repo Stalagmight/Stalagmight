@@ -226,11 +226,16 @@ instead of slots:
   measured shots.
 - Depths are the raw ones, except that the ends of every closure a successful
   solve adjusted share their tie group's mean depth (D12).
-- Solved with a sparse Jacobi-preconditioned Conjugate Gradient per axis (see
-  [performance.md](performance.md)). Everything iterates in sorted order, so
-  reordering lines or closures changes no bit; results match 0.6.0's within
-  1e-6 m (D13), except where 0.6.0's own solve was degenerate or imprecise
-  (the sigma floor below, and kilometre-scale shots; plan Deviations G9).
+- Solved per axis for each group's correction from its raw position (exact
+  sparse elimination, a conjugate gradient on whatever dense core is left, and
+  two refinement passes; see [performance.md](performance.md)), never for
+  absolute coordinates: with weights 1e14 apart (a zero-length connector next
+  to a 100 km shot) the absolute solve's rounding moved a part of the survey
+  held by one weak shot hundreds of metres (plan Deviations D21). Everything
+  iterates in sorted order, so reordering lines or closures changes no bit;
+  results match 0.6.0's within 1e-6 m (D13), except where 0.6.0's own solve
+  was degenerate or imprecise (the sigma floor below, and kilometre-scale
+  shots; plan Deviations G9, G11).
 
 **The sigma floor (G9).** A shot's per-axis variance is first order:
 `(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin
