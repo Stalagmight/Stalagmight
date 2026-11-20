@@ -73,9 +73,14 @@ pub fn export_value_histogram(
     let topology = project.topology();
     let ((min, max), counts) = match kind {
         ExportValueKind::Depth => {
-            let slots = sketch(project, None, positions).stations;
+            // The render's extent: every slot's depth (its line's hand z
+            // included) and every shot reading.
+            let slot_depths = project.lines().iter().flat_map(|line| {
+                line.stations()
+                    .filter_map(|s| Some(positions.station_z(s)? + line.hand(s)[2]))
+            });
             let extent = depth_extent(
-                slots.iter().map(|s| s.coordinates.z),
+                slot_depths,
                 project
                     .lines()
                     .iter()
