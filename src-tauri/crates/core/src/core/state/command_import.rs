@@ -9,9 +9,7 @@
 use std::collections::HashMap;
 
 use super::commands::Record;
-use super::import_funnel::{
-    self, ImportOutcome, ImportRequest, LineBuilder, LineError,
-};
+use super::import_funnel::{self, ImportOutcome, ImportRequest, LineBuilder, LineError};
 use super::AppState;
 use crate::core::command::ImportReceipt;
 use crate::core::{CommandResult, ValidationWarning};

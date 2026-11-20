@@ -1786,7 +1786,10 @@ mod tests {
             body.find(needle)
                 .unwrap_or_else(|| panic!("commit_opened_locked {what} (`{needle}`)"))
         };
-        let guard = at("proj_guard: &mut Option<Project>", "runs on the caller's guard");
+        let guard = at(
+            "proj_guard: &mut Option<Project>",
+            "runs on the caller's guard",
+        );
         let slot = at(" = Some(project);", "commits the project slot");
         let file_state = at(" = file;", "commits the file state");
         let undo = at("load_persisted(", "commits the undo stack");
@@ -1802,7 +1805,8 @@ mod tests {
         // Every caller takes the guard, commits, and releases it once, after.
         let callers = ["fn commit_opened(", "fn open_project_download("];
         assert_eq!(
-            src.matches("self.commit_opened_locked(&mut proj_guard").count(),
+            src.matches("self.commit_opened_locked(&mut proj_guard")
+                .count(),
             callers.len(),
             "a new caller of commit_opened_locked: add it here once it holds one guard span"
         );
@@ -1829,50 +1833,38 @@ mod tests {
                 "{func}: one release, at the end of the finalization"
             );
         }
-        for (file, func, guard_name, slot_commit, file_commit, undo_commit, release) in [
-            (
-                "project_create.rs",
-                "fn commit_new_project(",
-                "let mut proj",
-                "*proj = Some(project);",
-                "*file = FileState::default();",
-                "undo_stack.clear();",
-                "drop(proj)",
-            ),
-        ] {
-            let src = state_source(file);
-            assert_eq!(
-                src.matches(slot_commit).count(),
-                1,
-                "{file}: the slot is committed in {func} and nowhere else"
-            );
-            let start = src
-                .find(func)
-                .unwrap_or_else(|| panic!("{func} is present in {file}"));
-            let body = &src[start..];
-            let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-            let at = |needle: &str, what: &str| {
-                body.find(needle)
-                    .unwrap_or_else(|| panic!("{func} {what} (`{needle}`)"))
-            };
-            let guard = at(guard_name, "takes the project guard by name");
-            let slot = at(slot_commit, "commits the project slot");
-            let file_state = at(file_commit, "commits the file state");
-            let undo = at(undo_commit, "commits the undo stack");
-            let released = at(release, "releases the guard explicitly");
-            assert!(
-                guard < slot && slot < file_state && file_state < undo && undo < released,
-                "{func} must commit slot, file state and undo history inside one \
-                 project-guard span (guard at {guard}, slot {slot}, file state \
-                 {file_state}, undo {undo}, drop {released})"
-            );
-            assert_eq!(
-                body.matches(release).count(),
-                1,
-                "{func}: one release, at the end of the finalization"
-            );
-        }
+        // The create commits in one function that takes and releases the guard.
+        let src = state_source("project_create.rs");
+        assert_eq!(
+            src.matches("*proj = Some(project);").count(),
+            1,
+            "project_create.rs: the slot is committed in commit_new_project and nowhere else"
+        );
+        let start = src
+            .find("fn commit_new_project(")
+            .expect("commit_new_project is present in project_create.rs");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let at = |needle: &str, what: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("commit_new_project {what} (`{needle}`)"))
+        };
+        let guard = at("let mut proj", "takes the project guard by name");
+        let slot = at("*proj = Some(project);", "commits the project slot");
+        let file_state = at("*file = FileState::default();", "commits the file state");
+        let undo = at("undo_stack.clear();", "commits the undo stack");
+        let released = at("drop(proj)", "releases the guard explicitly");
+        assert!(
+            guard < slot && slot < file_state && file_state < undo && undo < released,
+            "commit_new_project must commit slot, file state and undo history inside one \
+             project-guard span (guard at {guard}, slot {slot}, file state {file_state}, \
+             undo {undo}, drop {released})"
+        );
+        assert_eq!(
+            body.matches("drop(proj)").count(),
+            1,
+            "commit_new_project: one release, at the end of the finalization"
+        );
     }
 
     #[test]

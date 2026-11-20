@@ -426,6 +426,20 @@ impl AppState {
             purpose = "persist project",
             "Saved project"
         );
+        // A migrated project's 0.6.0 dive-plan pins can only be read right
+        // while its record parity is in memory, and this save is the last
+        // moment it is (the reopened file is version 2). A no-op without one,
+        // so it runs after every save (a migrated SpeleoDB download is saved
+        // as version 2 without being an upgrade here). Never fails the save.
+        match self.upgrade_dive_plan_anchors() {
+            Ok(0) => {}
+            Ok(plans) => tracing::info!(plans, "Rewrote the dive plans' 0.6.0 anchors"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                purpose = "upgrade dive-plan anchors on the upgrading save",
+                "Could not rewrite the dive plans' 0.6.0 anchors; they keep the 0.6.0 form"
+            ),
+        }
         let mut result = CommandResult::success();
         result.saved_path = Some(target.display().to_string());
         result

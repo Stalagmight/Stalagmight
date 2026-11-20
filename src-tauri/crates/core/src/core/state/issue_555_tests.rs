@@ -379,4 +379,3 @@ fn a_merge_past_the_id_space_is_refused_and_writes_no_output() {
         "nor a temp file"
     );
 }
-

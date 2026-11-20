@@ -2377,4 +2377,64 @@ mod legacy {
         assert_eq!(reopened.list_dive_plans().unwrap().len(), 1);
         check(&reopened, "reopened as version 2");
     }
+
+    /// The save that upgrades a migrated project runs the anchor upgrade itself
+    /// (`save_with`): a 0.6.0 one-neighbour pin on a line reversed after the
+    /// plan was saved still lands on its station once the version 2 file is
+    /// reopened without any record parity.
+    #[test]
+    fn the_upgrading_save_rewrites_0_6_0_pins() {
+        crate::app_dirs::init_for_test();
+        let dir = TempDir::new().unwrap();
+        let w = write_legacy(&dir);
+        let plan = PersistedDivePlanSnapshot {
+            origin: Some(w.before[0].0.clone()),
+            endpoint: Some(w.before[5].0.clone()),
+            waypoints: Vec::new(),
+            diver: default_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: Vec::new(),
+        };
+        let plnx = dir.path().join("cave.plnx");
+        let id = {
+            let store = PlnxStore::open(&plnx).unwrap();
+            store.ensure_identity(&w.created_at, "Legacy").unwrap();
+            store
+                .insert(
+                    "Old plan",
+                    "2026-01-02T03:04:05+00:00",
+                    2,
+                    &to_disk_string(&plan).unwrap(),
+                )
+                .unwrap()
+                .id
+        };
+        let state = open(&w.path);
+        let saved = state.execute(Command::SaveProject { path: None });
+        assert!(saved.success, "{:?}", saved.error);
+        assert!(
+            state.with_file(|f| f.legacy_parity.is_none()),
+            "the upgrade ran and dropped the parity"
+        );
+        let row = PlnxStore::open(&plnx).unwrap().get(id).unwrap().unwrap();
+        let upgraded: PersistedDivePlanSnapshot = from_disk_str(&row.snapshot_json).unwrap();
+        assert!(upgraded.anchors().all(|a| !written_by_legacy(a)));
+
+        let reopened = open(&w.path);
+        let loaded = reopened.load_dive_plan(id).unwrap();
+        assert_eq!(loaded.stale_ref_count, 0);
+        let project = project_of(&reopened);
+        let s = &loaded.snapshot;
+        assert!(
+            near(xy(&project, s.origin.unwrap()), w.before[0].1),
+            "origin"
+        );
+        assert!(
+            near(xy(&project, s.endpoint.unwrap()), w.before[5].1),
+            "endpoint"
+        );
+    }
 }
