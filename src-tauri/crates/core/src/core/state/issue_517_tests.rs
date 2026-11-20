@@ -1,33 +1,38 @@
 //! [#517] A save must not turn "I could not read the ignore list" into "there
-//! are no ignores".
+//! are no ignores", and write-protected media must not cost the user their
+//! work.
 //!
-//! `save_project` (`project_io.rs`, "carry resolved warnings across save")
-//! snapshots `resolved_warnings` off the live handle and re-applies it to the
-//! fresh `.stalx.tmp` it renames over the destination, so that snapshot IS the
-//! saved file's ignore list. #485 closed the migration-skip that made the read
-//! fail; this pins the amplifier behind it, which survived that fix, and the
-//! split it turns on:
+//! In 0.6.0 every save re-read `resolved_warnings` off the live SQLite handle,
+//! so a table the current SELECT could not name (a forged stamp over pre-v8
+//! tables), hostile cell values, or a read that failed outright decided what
+//! the saved file held. The station-graph core reads a legacy file once,
+//! through the frozen 0.6.0 open (with #517's lenient reader) and the
+//! conversion, and the ignores are in memory from then on: no save reads them
+//! back from disk. What #517 pinned is pinned here on that route:
 //!
-//! * a SHAPE the current SELECT cannot name (a pre-v8 table with no
-//!   `shot_uuid`, reachable with a FORGED `PRAGMA user_version` claiming the
-//!   chain already ran) is read verbatim and carried - on the display path too,
-//!   or the user would be shown ignores the save is quietly preserving;
-//! * a hostile VALUE (SQLite columns are untyped, so any cell can be a BLOB) is
-//!   coerced and carried inert, because refusing on one poisoned row would make
-//!   a file the user merely opened permanently unsaveable;
-//! * only a STRUCTURAL failure - a missing key column, a table that cannot be
-//!   read at all - refuses the save, instead of writing a file with zero
-//!   ignores over the one that had them.
+//! * a forged current stamp over pre-v8 tables keeps the ignore;
+//! * hostile values never make a legacy project unopenable or unsaveable (a
+//!   coerced row is carried inert, as 0.6.0 carried it);
+//! * the #516 route: a write-protected legacy file opens, and Save As to a
+//!   writable place carries its ignores, keyed by uuid;
+//! * on write-protected media a save is refused and changes nothing, a
+//!   local-only durable save (a display toggle) keeps the change in memory, and
+//!   Save As elsewhere writes all of it.
+//!
+//! The display half of the forged-stamp case (the warning shown as ignored) is
+//! the warnings package's (`compute_project_warnings`).
 //!
 //! All data here is synthetic: a project built in memory, saved by this build,
 //! then hand-narrowed. No fixture is read or written.
-#![cfg(sg_unported)] // C13: being ported; removed when the port lands
+
+use std::path::Path;
 
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::core::loading::IGNORES_UNREADABLE_CODE;
+use crate::core::Command;
 use crate::models::{LineData, Project, ShotData};
+use crate::persistence::stalx_v2::{self, Extras, IgnoredWarning, Mode};
 use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
@@ -42,20 +47,9 @@ const PRE_V8_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      resolved_comment TEXT, \
      UNIQUE(section_id, shot_id, warning_code)";
 
-/// A table whose rows do not say WHICH warning was ignored - no amount of
-/// leniency recovers that.
-const UNREADABLE_COLUMNS: &str = "section_id INTEGER NOT NULL, \
-     shot_id INTEGER NOT NULL, \
-     resolved_at TEXT NOT NULL";
-
 /// The hostile-values shape: `shot_id` and `warning_code` are declared with NO
-/// type, so the cells keep whatever the file put in them.
-///
-/// This matters, and it is not a detail. A column declared `INTEGER` has
-/// INTEGER AFFINITY, and SQLite silently CONVERTS a numeric-looking TEXT into
-/// an integer on insert - so a fixture that stores a text id in a declared
-/// INTEGER column is not testing a text id at all. The tests below assert
-/// `typeof()` afterwards rather than trusting this.
+/// type, so the cells keep whatever the file put in them (a declared INTEGER
+/// column would convert a numeric-looking TEXT on insert).
 const UNTYPED_ID_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      shot_id, \
      warning_code, \
@@ -69,14 +63,8 @@ struct Seeded {
     shot_uuid: String,
 }
 
-/// Two shots that both trip `SHORT_SHOT` (under the default 0.3 m minimum) and
-/// that the v12 pitch-flip migration cannot vote on, so no arm of the migration
-/// chain can be what an assertion below is measuring (the reasoning is spelled
-/// out in `issue_485_tests::synthetic_project`).
-///
-/// The first shot is the one the fixtures ignore; the second is the control that
-/// must KEEP its warning, so "suppressed" is never confused with "the warning
-/// list came back empty".
+/// Two short shots that the v12 pitch-flip migration cannot vote on (no
+/// pitch, no depth change); the first is the one the fixtures ignore.
 fn synthetic_project() -> Project {
     let unflippable = |length: f64| ShotData {
         length,
@@ -95,8 +83,8 @@ fn synthetic_project() -> Project {
     project
 }
 
-/// Write a `.stalx` this build considers current, and report the ids it chose.
-fn seed_current_file(path: &std::path::Path) -> Seeded {
+/// Write a legacy `.stalx` this build's SQLite writer considers current.
+fn seed_current_file(path: &Path) -> Seeded {
     let mut db = Database::open(path).unwrap();
     db.save_project(&synthetic_project()).unwrap();
     let saved = db.load_project().unwrap();
@@ -108,15 +96,9 @@ fn seed_current_file(path: &std::path::Path) -> Seeded {
 }
 
 /// Replace `resolved_warnings` with `ddl` holding `values_rows`, WITHOUT
-/// touching the stamp `Database::open` wrote.
-///
-/// That is the hostile shape: `PRAGMA user_version` says the whole migration
-/// chain ran - so `ensure_schema_version` fast-paths and no `ALTER` ever fires
-/// (#516 closed the ACCIDENTAL route into that state, not a deliberate one) -
-/// while the table underneath is whatever `ddl` says. The stamp is read back
-/// from the file rather than hard-coded, so this keeps meaning "the CURRENT
-/// version" after the next schema bump.
-fn forge_ignore_table(path: &std::path::Path, ddl: &str, columns: &str, values_rows: &[String]) {
+/// touching the stamp the writer wrote: the file claims the whole migration
+/// chain ran while the table underneath is whatever `ddl` says.
+fn forge_ignore_table(path: &Path, ddl: &str, columns: &str, values_rows: &[String]) {
     let conn = rusqlite::Connection::open(path).unwrap();
     let stamped: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -136,20 +118,7 @@ fn forge_ignore_table(path: &std::path::Path, ddl: &str, columns: &str, values_r
          {inserts}"
     ))
     .unwrap();
-
-    // The fixture must really be the shape under test, or every assertion in
-    // the tests below could pass vacuously.
-    assert!(
-        stamped >= 8,
-        "the current schema must be past the v8 shot_uuid migration, got {stamped}"
-    );
-    let still_stamped: i64 = conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        still_stamped, stamped,
-        "the forged file must still CLAIM the current schema"
-    );
+    assert!(stamped >= 8, "the stamp must be past the v8 migration");
     let has_uuid_column: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
@@ -158,43 +127,78 @@ fn forge_ignore_table(path: &std::path::Path, ddl: &str, columns: &str, values_r
         )
         .unwrap();
     assert_eq!(has_uuid_column, 0, "the forged table must be pre-v8");
-    let rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM resolved_warnings", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        rows,
-        values_rows.len() as i64,
-        "the forged file must hold every row the fixture asked for"
-    );
 }
 
-/// How many rows the file at `path` holds, read WITHOUT this crate's loaders so
-/// a bug in them cannot make an assertion pass.
-fn raw_row_count(path: &std::path::Path) -> i64 {
-    rusqlite::Connection::open(path)
-        .unwrap()
-        .query_row("SELECT COUNT(*) FROM resolved_warnings", [], |r| r.get(0))
-        .unwrap()
+fn open(path: &Path) -> AppState {
+    let state = AppState::new().unwrap();
+    let opened = state.execute(Command::OpenProject {
+        path: path.to_path_buf(),
+    });
+    assert!(opened.success, "open failed: {:?}", opened.error);
+    state
 }
 
-/// THE forged-stamp regression guard, on BOTH sides of the file.
-///
-/// A hostile (or merely hand-edited) file can stamp the current `user_version`
-/// over pre-v8 tables, which sends `ensure_schema_version` down its fast path
-/// and leaves `shot_uuid` missing forever. The save must carry the ignore, and
-/// the warning list the user is looking at must AGREE - a save that quietly
-/// preserves rows the display says are not there is its own defect.
-///
-/// Red before the fix: swap `load_resolved_warnings_verbatim` back to
-/// `load_resolved_warnings` in `project_io.rs` and the save arm fails; swap it
-/// back in `core::state::warnings` and the `is_resolved` assertion fails, with
-/// the save assertions still green.
+fn ignores_in_memory(state: &AppState) -> Vec<IgnoredWarning> {
+    state.with_file(|file| file.ignored_warnings().to_vec())
+}
+
+fn ignores_on_disk(path: &Path) -> Vec<IgnoredWarning> {
+    stalx_v2::decode(&std::fs::read(path).unwrap(), &Default::default())
+        .unwrap()
+        .extras
+        .ignored_warnings
+}
+
+/// A file name no other test shares (the upgrade backups folder is shared).
+fn unique(dir: &Path, what: &str) -> std::path::PathBuf {
+    dir.join(format!("{what}-{}.stalx", uuid::Uuid::new_v4()))
+}
+
+fn forget_backups_of(path: &Path) {
+    let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+    if let Some(folder) = super::project_io::upgrade_backup_dir() {
+        for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&stem) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// Make `path` read-only, or say why it cannot be (root ignores mode bits,
+/// and CI's check job runs as root): `false` means skip, not pass.
+#[cfg(unix)]
+fn make_read_only(path: &Path, mode: u32, test: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    let probe = if path.is_dir() {
+        let probe = path.join(".write-probe");
+        let wrote = std::fs::write(&probe, b"x").is_ok();
+        let _ = std::fs::remove_file(probe);
+        wrote
+    } else {
+        std::fs::OpenOptions::new().write(true).open(path).is_ok()
+    };
+    if probe {
+        let writable = if path.is_dir() { 0o755 } else { 0o644 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(writable)).unwrap();
+        eprintln!(
+            "skipping {test}: this user can write a read-only path (root?), so there is no \
+             write-protected medium to test"
+        );
+        return false;
+    }
+    true
+}
+
+/// THE forged-stamp regression guard: the ignore is read on open and written
+/// by the save that upgrades the file, naming the same shot.
 #[test]
 fn a_forged_current_stamp_over_pre_v8_tables_does_not_erase_the_ignore_list() {
-    // open_project records the path in recent projects (global config).
+    crate::app_dirs::init_for_test();
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("forged.stalx");
+    let path = unique(temp.path(), "forged");
     let seeded = seed_current_file(&path);
     forge_ignore_table(
         &path,
@@ -206,434 +210,75 @@ fn a_forged_current_stamp_over_pre_v8_tables_does_not_erase_the_ignore_list() {
         )],
     );
 
-    let state = AppState::new().unwrap();
-    let opened = state.open_project(path.clone());
-    assert!(opened.success, "open failed: {:?}", opened.error);
+    let state = open(&path);
+    let live = ignores_in_memory(&state);
+    assert_eq!(live.len(), 1, "the open must keep the ignore");
+    assert_eq!(live[0].shot, seeded.shot_uuid);
+    assert_eq!(live[0].code, IGNORED_CODE);
 
-    // The DISPLAY path, before any save: the ignored shot's warning must come
-    // back suppressed, and the OTHER short shot's must not - otherwise this
-    // would also pass on an empty warning list.
-    let project = state.get_project_state().unwrap();
-    let warnings = state.compute_project_warnings(&project, None);
-    let short: Vec<_> = warnings.iter().filter(|w| w.code == IGNORED_CODE).collect();
-    assert_eq!(
-        short.len(),
-        2,
-        "both short shots must still be REPORTED, ignored or not"
-    );
-    assert!(
-        short
-            .iter()
-            .find(|w| w.shot_index == 0)
-            .unwrap()
-            .is_resolved,
-        "the recorded ignore must suppress the warning the user is looking at"
-    );
-    assert!(
-        !short
-            .iter()
-            .find(|w| w.shot_index == 1)
-            .unwrap()
-            .is_resolved,
-        "and must suppress ONLY the shot it was recorded against"
-    );
-
-    let saved = state.save_project(Some(path.clone()));
+    let saved = state.execute(Command::SaveProject { path: None });
+    forget_backups_of(&path);
     assert!(saved.success, "save failed: {:?}", saved.error);
-
-    let rows = Database::open_existing(&path)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap();
-    assert_eq!(
-        rows.len(),
-        1,
-        "the ignore must survive a save through a forged-stamp pre-v8 file"
-    );
-    assert_eq!(rows[0].warning_code, IGNORED_CODE);
-    assert_eq!(
-        rows[0].shot_uuid.as_deref(),
-        Some(seeded.shot_uuid.as_str()),
-        "and must still name the shot it was recorded against"
-    );
+    assert_eq!(ignores_on_disk(&path), live);
 }
 
 /// SQLite columns are untyped, so a hand-written file can put a BLOB in any of
-/// them. That must not cost the user their SAVE: one poisoned row would
-/// otherwise fail the carry-over read, hit the refusal, and leave the project
-/// unsaveable for good - turning #517's silent data loss into an availability
-/// denial from a file that was merely opened.
-///
-/// Red before the fix: drop the `coerce_*` helpers (read the cells with
-/// `row.get::<String>` / `row.get::<u32>`) and the save is refused, so the
-/// `success` assertion fails. Red again if `MAX_ID_TEXT_BYTES` is removed from
-/// `coerce_id`: the padded-id row below then parses and is carried, so the
-/// carried count is 3.
+/// them. One poisoned row must not make the project unopenable or unsaveable:
+/// the well-formed row is carried, and so is a row the reader could key to a
+/// shot (its coerced code inert); one with no readable shot is not.
 #[test]
-fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveable() {
+fn hostile_ignore_values_never_make_a_legacy_project_unsaveable() {
+    crate::app_dirs::init_for_test();
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("hostile.stalx");
+    let path = unique(temp.path(), "hostile");
     let seeded = seed_current_file(&path);
     forge_ignore_table(
         &path,
         UNTYPED_ID_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
+        "section_id, shot_id, warning_code, resolved_at, resolved_comment",
         &[
-            // Readable, and the row whose survival is the point.
             format!(
-                "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
+                "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}', NULL",
                 seeded.line_id, seeded.shot_id
             ),
-            // A code and a timestamp that are not text at all, and not even
-            // valid UTF-8. Carried inert: it suppresses nothing, but it is the
-            // user's row and the save has no business dropping it.
-            format!("{}, {}, X'FFFE', X'FFFE'", seeded.line_id, seeded.shot_id),
-            // Names no shot, so it can never suppress anything on any project.
-            // Dropped - the one case where dropping loses nothing.
-            format!("{}, X'FFFE', 'LONG_SHOT', '{RESOLVED_AT}'", seeded.line_id),
-            // A multi-megabyte TEXT id. Rejected on LENGTH before it is decoded
-            // or parsed: an id is at most 10 digits, so validating megabytes of
-            // UTF-8 to reach that answer is work a hostile file must not be able
-            // to buy, once per row per save.
             format!(
-                "{}, printf('%.*c', 4000000, '7'), 'AZIMUTH_DEVIATION', '{RESOLVED_AT}'",
+                "{}, X'DEADBEEF', '{IGNORED_CODE}', '{RESOLVED_AT}', NULL",
                 seeded.line_id
             ),
-            // The same guard, made observable: 65 characters of zero-padding in
-            // front of a LIVE shot id. Without the byte cap this parses happily
-            // and the row is carried; with it, the cell is refused for its
-            // length before `parse` ever runs. No file a user made looks like
-            // this, which is exactly why the cheap check is safe.
             format!(
-                "{}, printf('%065d', {}), 'DEPTH_MISMATCH', '{RESOLVED_AT}'",
+                "{}, {}, X'00FF', '{RESOLVED_AT}', X'01'",
                 seeded.line_id, seeded.shot_id
             ),
         ],
     );
 
-    // The cells really are the types this test is about. Without this the
-    // padded id would be silently converted to an INTEGER by column affinity
-    // and the byte guard below would never be what decides its fate - the
-    // fixture would look like it was testing the guard while testing nothing.
-    let stored_types: Vec<String> = {
-        let conn = rusqlite::Connection::open(&path).unwrap();
-        let mut stmt = conn
-            .prepare("SELECT typeof(shot_id) FROM resolved_warnings ORDER BY id")
-            .unwrap();
-        let types = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        types
-    };
-    assert_eq!(
-        stored_types,
-        vec!["integer", "integer", "blob", "text", "text"],
-        "the fixture's cell types must be the ones under test"
+    let state = open(&path);
+    let live = ignores_in_memory(&state);
+    assert!(
+        live.iter()
+            .any(|w| w.shot == seeded.shot_uuid && w.code == IGNORED_CODE),
+        "the readable row is kept: {live:?}"
     );
 
-    let state = AppState::new().unwrap();
-    let opened = state.open_project(path.clone());
-    assert!(opened.success, "open failed: {:?}", opened.error);
-
-    let saved = state.save_project(Some(path.clone()));
+    let saved = state.execute(Command::SaveProject { path: None });
+    forget_backups_of(&path);
     assert!(
         saved.success,
-        "one nonsense row must not make the project unsaveable: {:?}",
+        "a poisoned row must not refuse the save: {:?}",
         saved.error
     );
-
-    let rows = Database::open_existing(&path)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap();
-    assert!(
-        rows.iter().any(|r| r.warning_code == IGNORED_CODE),
-        "the readable ignore must survive alongside the nonsense one"
-    );
-    assert_eq!(
-        rows.len(),
-        2,
-        "the two rows that name a shot are carried; none of the three that name none is"
-    );
-}
-
-/// The cap has to bound the WORK, not just the output. Counted over rows KEPT it
-/// would never trip on a table of pure junk - nothing is kept - so every save and
-/// every autosave would scan the whole thing.
-///
-/// The observable is deliberate: the usable rows sit BEHIND the wall of junk, so
-/// a reader that stops at the cap never reaches them and carries nothing, while
-/// one that scans the whole table carries them. That difference is the presence
-/// or absence of the bound.
-///
-/// Red before the fix: count the cap over `resolved.len()` instead of rows
-/// examined, and the reader walks past the junk to the usable rows at the end -
-/// the `is_empty` assertion fails.
-#[test]
-fn the_row_cap_bounds_the_scan_even_when_no_row_is_usable() {
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("flooded.stalx");
-    let seeded = seed_current_file(&path);
-
-    // Build the wall with SQLite itself: a recursive CTE inserts the rows far
-    // faster than round-tripping them, and keeps the fixture synthetic.
-    let junk = crate::persistence::MAX_CARRIED_RESOLVED_WARNINGS;
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(&format!(
-        "DROP TABLE resolved_warnings;
-         CREATE TABLE resolved_warnings (
-            id INTEGER PRIMARY KEY,
-            section_id INTEGER NOT NULL,
-            shot_id,
-            warning_code TEXT NOT NULL,
-            resolved_at TEXT NOT NULL,
-            resolved_comment TEXT,
-            FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
-         );
-         WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < {junk})
-         INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
-            SELECT {}, X'FFFE', 'JUNK_' || n, '{RESOLVED_AT}' FROM seq;
-         INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
-            VALUES ({}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}');",
-        seeded.line_id, seeded.line_id, seeded.shot_id
-    ))
-    .unwrap();
-    let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM resolved_warnings", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        total,
-        junk as i64 + 1,
-        "the fixture must hold one usable row behind exactly the cap's worth of junk"
-    );
-    drop(conn);
-
-    let state = AppState::new().unwrap();
-    let opened = state.open_project(path.clone());
-    assert!(opened.success, "open failed: {:?}", opened.error);
-
-    let saved = state.save_project(Some(path.clone()));
-    assert!(
-        saved.success,
-        "a flooded table must still save, not refuse: {:?}",
-        saved.error
-    );
-
-    let rows = Database::open_existing(&path)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap();
-    assert!(
-        rows.is_empty(),
-        "the read must stop at the cap, so nothing behind the junk is reached (got {} rows)",
-        rows.len()
-    );
-}
-
-/// A table this build cannot make sense of AT ALL - here one whose rows do not
-/// say which warning was ignored. The save rebuilds the file's ignore list from
-/// what it reads, so guessing "empty" would destroy the rows on disk; it
-/// refuses instead, and the file is left as it was.
-///
-/// Red before the fix: restore the `Vec::new()` arm and the save reports
-/// success, failing both the `!success` assertion and (because the rebuilt file
-/// carries no ignores) the "the file still holds its row" one.
-#[test]
-fn a_save_is_refused_when_the_ignore_list_cannot_be_read_at_all() {
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("unreadable.stalx");
-    let seeded = seed_current_file(&path);
-    forge_ignore_table(
-        &path,
-        UNREADABLE_COLUMNS,
-        "section_id, shot_id, resolved_at",
-        &[format!(
-            "{}, {}, '{RESOLVED_AT}'",
-            seeded.line_id, seeded.shot_id
-        )],
-    );
-    let has_code_column: i64 = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE \
-             name='warning_code'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        has_code_column, 0,
-        "the fixture must be missing the column that makes a row readable"
-    );
-
-    let state = AppState::new().unwrap();
-    let opened = state.open_project(path.clone());
-    assert!(opened.success, "open failed: {:?}", opened.error);
-
-    let saved = state.save_project(Some(path.clone()));
-    assert!(
-        !saved.success,
-        "a save that cannot read the ignore list it is about to rewrite must be refused"
-    );
-    let error = saved.error.unwrap_or_default();
-    // The marker is what keeps the refusal out of the Review & Repair route,
-    // which cannot fix this (`surfaceSaveFailure`).
-    assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
-    );
-    // ...and it must be the STRUCTURAL refusal, naming the missing column - not
-    // a row-level complaint, which no longer refuses anything.
-    assert!(
-        error.contains("no warning_code column"),
-        "the refusal must say what is structurally wrong, got: {error}"
-    );
-
-    // The refusal lands before the temp file is created, so the destination is
-    // untouched: the row is still there, and no debris was left beside it.
-    assert_eq!(
-        raw_row_count(&path),
-        1,
-        "the refused save must leave the old rows in place"
-    );
-    assert!(
-        !path.with_extension("stalx.tmp").exists(),
-        "a refused save must not leave a temp file behind"
-    );
-}
-
-/// The probe itself failing is the other structural arm, and it is not
-/// hypothetical: a second connection holding the file blocks the read outright.
-/// The save must refuse, not carry an empty list - "I could not look" is not
-/// "there is nothing there", however briefly it is true.
-///
-/// Red before the fix: restore the `Vec::new()` arm and the save succeeds,
-/// rebuilding the file with no ignores because another process happened to hold
-/// the database for a moment.
-#[test]
-fn a_save_refuses_while_the_ignore_list_cannot_be_reached() {
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("locked.stalx");
-    let seeded = seed_current_file(&path);
-    forge_ignore_table(
-        &path,
-        PRE_V8_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
-        &[format!(
-            "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
-            seeded.line_id, seeded.shot_id
-        )],
-    );
-
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success);
-
-    // A rollback-journal database (this build sets no WAL) refuses every other
-    // connection's read while one holds EXCLUSIVE, and no busy timeout is
-    // installed - so this is deterministic, not a race.
-    let blocker = rusqlite::Connection::open(&path).unwrap();
-    blocker.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-    let saved = state.save_project(Some(path.clone()));
-    blocker.execute_batch("ROLLBACK;").unwrap();
-    drop(blocker);
-
-    assert!(
-        !saved.success,
-        "a save that cannot reach the ignore list must be refused, not carried empty"
-    );
-    let error = saved.error.unwrap_or_default();
-    assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
-    );
-    assert_eq!(
-        raw_row_count(&path),
-        1,
-        "the refused save must leave the old rows in place"
-    );
-}
-
-/// The other half of the distinction: genuinely EMPTY still saves clean. Two
-/// spellings of empty - a table with no rows, and (the pre-#57 file) no table
-/// at all - because a fix that answered "cannot tell" to both would refuse
-/// every save of every legacy project.
-///
-/// Red if `load_resolved_warnings_verbatim` reported a missing table as an
-/// error: the second save would be refused.
-#[test]
-fn an_absent_or_empty_ignore_list_still_saves_clean() {
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("empty.stalx");
-    seed_current_file(&path);
-
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success);
-    let saved = state.save_project(Some(path.clone()));
-    assert!(
-        saved.success,
-        "an empty ignore list must save: {:?}",
-        saved.error
-    );
-    assert!(Database::open_existing(&path)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap()
-        .is_empty());
-    state.close_project();
-
-    // Now the pre-#57 shape: no resolved_warnings table at all. The save above
-    // left the stamp current, so no migration recreates it before the next save
-    // reads it.
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute_batch("DROP TABLE resolved_warnings;")
-        .unwrap();
-
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success);
-    // Re-assert AFTER the open: if some path recreated the table on the way in,
-    // the save below would be testing the ordinary empty case again and this
-    // half would pass vacuously.
-    let table_gone: i64 = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='resolved_warnings'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        table_gone, 0,
-        "the open must not have recreated the ignore table"
-    );
-
-    let saved = state.save_project(Some(path));
-    assert!(
-        saved.success,
-        "a file with no ignore table must save: {:?}",
-        saved.error
-    );
+    // The file keeps them sorted by shot then code (the canonical order);
+    // a coerced row is carried inert, as 0.6.0 carried it.
+    let mut expected = live;
+    expected.sort_by(|a, b| (&a.shot, &a.code).cmp(&(&b.shot, &b.code)));
+    assert_eq!(ignores_on_disk(&path), expected);
 }
 
 /// The #516 route, end to end: an UNSTAMPED pre-v8 file on write-protected
-/// media opens un-migrated by design (running the chain would need a write it
-/// cannot make), so its `resolved_warnings` still has no `shot_uuid` on the
-/// very handle a Save As then reads through.
-///
-/// Before this fix that Save As silently produced a copy with zero ignores -
-/// stated as the accepted cost in `ensure_schema_version`'s comment. It is not
-/// the cost any more, and this is what says so.
-///
-/// Red before the fix: with the strict loader, the read fails and the copy is
-/// written with no ignores (or the save is refused) - either way the
-/// destination does not come back holding the row.
+/// media opens (the frozen reader migrates a private copy; nothing is written
+/// to the original), and Save As to a writable place carries its ignore,
+/// keyed by uuid, as version 2.
 #[test]
 #[cfg(unix)]
 fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
@@ -652,75 +297,142 @@ fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
             seeded.line_id, seeded.shot_id
         )],
     );
-    // UNSTAMPED, unlike the forged fixtures: this is the file whose project row
-    // is the only thing claiming the current version, which is exactly what
-    // `ensure_schema_version`'s read-only bypass keys on.
     rusqlite::Connection::open(&source)
         .unwrap()
         .execute_batch("PRAGMA user_version = 0;")
         .unwrap();
-    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444)).unwrap();
-
-    // Mode bits are advice, not a guarantee: root ignores them, and CI's check
-    // job runs as root in a container. Confirm the protection took before
-    // asserting anything about it (the #485 pattern) - otherwise a failure here
-    // would report the guard, when what really happened is that the fixture
-    // could not be built.
-    if std::fs::OpenOptions::new()
-        .write(true)
-        .open(&source)
-        .is_ok()
-    {
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
-        eprintln!(
-            "skipping an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as: \
-             this user can write a 0444 file (root?), so there is no read-only database to test"
-        );
+    let before = std::fs::read(&source).unwrap();
+    if !make_read_only(
+        &source,
+        0o444,
+        "an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as",
+    ) {
         return;
     }
 
-    let state = AppState::new().unwrap();
-    let opened = state.open_project(source.clone());
-    assert!(
-        opened.success,
-        "a write-protected project must still open: {:?}",
-        opened.error
-    );
-    // The migration really did not run - if it had, this would be testing the
-    // ordinary migrated path.
-    let still_pre_v8: i64 = rusqlite::Connection::open(&source)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(still_pre_v8, 0, "nothing was written to a read-only file");
-
+    let state = open(&source);
     let dest = temp.path().join("copy.stalx");
-    let saved = state.save_project(Some(dest.clone()));
-    // Restore before asserting so a failure cannot leave TempDir unable to clean up.
+    let saved = state.execute(Command::SaveProject {
+        path: Some(dest.clone()),
+    });
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+
     assert!(
         saved.success,
         "Save As off write-protected media must work: {:?}",
         saved.error
     );
-
-    let rows = Database::open_existing(&dest)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap();
+    assert_eq!(
+        std::fs::read(&source).unwrap(),
+        before,
+        "nothing was written to the source"
+    );
+    let rows = ignores_on_disk(&dest);
     assert_eq!(
         rows.len(),
         1,
         "the ignore must ride along to the writable copy"
     );
-    assert_eq!(rows[0].warning_code, IGNORED_CODE);
+    assert_eq!(rows[0].code, IGNORED_CODE);
+    assert_eq!(rows[0].shot, seeded.shot_uuid, "keyed by the shot's uuid");
+}
+
+/// A version 2 project in a write-protected folder: a save is refused with
+/// the permission marker and changes nothing (the edit stays unsaved); a
+/// display toggle cannot be made durable but stays in memory; Save As to a
+/// writable place writes the edit and the toggle.
+#[test]
+#[cfg(unix)]
+fn on_write_protected_media_saves_are_refused_and_nothing_is_lost() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let media = temp.path().join("media");
+    std::fs::create_dir(&media).unwrap();
+    let path = media.join("cave.stalx");
+    let mut project = crate::models::survey::Project::new("Media", None);
+    let line = project
+        .add_line(
+            crate::models::survey::LineMeta::default(),
+            crate::models::survey::StartAt::New,
+            vec![ShotData {
+                length: 3.0,
+                ..ShotData::default()
+            }],
+        )
+        .unwrap();
+    let start = project.line(line).unwrap().start;
+    project.set_placement(start, 0.0, 0.0).unwrap();
+    std::fs::write(
+        &path,
+        stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap(),
+    )
+    .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let state = open(&path);
+    let (line_id, shot_id) = {
+        let p = state.get_project_state().unwrap();
+        (p.lines()[0].id, p.lines()[0].shots[0].id)
+    };
+    let edit = state.execute(Command::UpdateShot {
+        line_id,
+        shot_id,
+        updates: crate::models::ShotUpdates {
+            length: Some(3.5),
+            ..Default::default()
+        },
+    });
+    assert!(edit.success, "{:?}", edit.error);
+    if !make_read_only(
+        &media,
+        0o555,
+        "on_write_protected_media_saves_are_refused_and_nothing_is_lost",
+    ) {
+        return;
+    }
+
+    let saved = state.execute(Command::SaveProject { path: None });
+    let toggled = state.save_display_setting("showGrid", "true");
+    std::fs::set_permissions(&media, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = saved.error.unwrap_or_default();
+    assert!(!saved.success);
+    assert!(
+        error.starts_with(crate::core::loading::PERMISSION_DENIED_CODE),
+        "the refusal routes to the permission remediation: {error}"
+    );
+    assert!(toggled.is_err(), "the toggle could not be made durable");
     assert_eq!(
-        rows[0].shot_uuid.as_deref(),
-        Some(seeded.shot_uuid.as_str()),
-        "and the copy, which IS writable, gets it UUID-keyed"
+        std::fs::read(&path).unwrap(),
+        before,
+        "nothing changed on disk"
+    );
+    assert_eq!(
+        std::fs::read_dir(&media).unwrap().count(),
+        1,
+        "no temp left behind"
+    );
+    assert!(state.has_unsaved_changes());
+    assert_eq!(
+        state.get_display_setting("showGrid").unwrap().as_deref(),
+        Some("true"),
+        "the toggle stays in memory"
+    );
+
+    let dest = temp.path().join("copy.stalx");
+    let saved = state.execute(Command::SaveProject {
+        path: Some(dest.clone()),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    let copy = stalx_v2::decode(&std::fs::read(&dest).unwrap(), &Default::default()).unwrap();
+    assert_eq!(copy.project.lines()[0].shots[0].length, 3.5);
+    assert_eq!(
+        copy.extras
+            .local
+            .display
+            .get("showGrid")
+            .map(String::as_str),
+        Some("true")
     );
 }
