@@ -73,6 +73,14 @@ export default function SaveConflictDialog() {
       }
       const path = filePath;
       if (!path) return;
+      // The path is the open one, so a plain load would be refused as already
+      // open and change nothing. Close the session first: the user chose to
+      // lose the unsaved changes, and the close drops them without saving.
+      const closed = await useProjectStore.getState().closeProject();
+      if (!closed.success) {
+        setError(t('dialogs.saveConflict.failed', { error: closed.error ?? '' }));
+        return;
+      }
       finish();
       await useProjectStore.getState().loadProject(path);
     } catch (e) {

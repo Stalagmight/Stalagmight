@@ -20,6 +20,7 @@ import SaveConflictDialog from '../SaveConflictDialog';
 
 const saveProjectOverwriting = vi.fn();
 const loadProject = vi.fn();
+const closeProject = vi.fn();
 const closeDialog = vi.fn();
 const openDialog = vi.fn();
 
@@ -27,10 +28,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   saveProjectOverwriting.mockResolvedValue({ success: true });
   loadProject.mockResolvedValue({ success: true });
+  closeProject.mockResolvedValue({ success: true });
   useProjectStore.setState({
     project: { file_path: '/caves/Main Sump.stalx', lines: [] },
     saveProjectOverwriting,
     loadProject,
+    closeProject,
   } as never);
   useUIStore.setState({ closeDialog, openDialog } as never);
   useSpeleoStore.setState({ link: null } as never);
@@ -72,6 +75,19 @@ describe('SaveConflictDialog', () => {
     render(<SaveConflictDialog />);
     fireEvent.click(screen.getByTestId('save-conflict-reload'));
     await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx'));
+    // The open path would be refused as already open: the session closes first,
+    // dropping the unsaved changes, and only then is the file read again.
+    expect(closeProject).toHaveBeenCalledOnce();
+    expect(closeProject.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(loadProject.mock.invocationCallOrder[0] ?? -Infinity);
+  });
+
+  it('keeps the prompt and reads nothing when the close fails', async () => {
+    closeProject.mockResolvedValue({ success: false, error: 'Already closing' });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() => expect(screen.getByTestId('save-conflict-error')).toHaveTextContent('Already closing'));
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
   });
 
   it('offers only the overwrite for a SpeleoDB copy, whose reload is the sync\'s', () => {
