@@ -13,8 +13,10 @@ import { exportScaleInputsFrom, withColorScales, withHiddenLines } from '../util
 import { useColorScaleStore } from './colorScaleStore';
 import {
   isEditDisabledError,
+  isReadOnlyFileError,
   isReverifyDivergedError,
   READ_ONLY_EDIT_NOTICE,
+  READ_ONLY_FILE_NOTICE,
 } from '../utils/editErrors';
 import { hasAdjustmentInputs } from '../utils/closures';
 import { notifyRemovedClosures } from '../utils/closureRemovalToast';
@@ -700,6 +702,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (isReadOnlyFileError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_FILE_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
@@ -799,6 +803,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (isReadOnlyFileError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_FILE_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }

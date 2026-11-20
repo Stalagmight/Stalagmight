@@ -2842,6 +2842,7 @@
   },
   "editGate": {
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
+    "readOnlyFileNotice": "This project was made with a newer version of Stalagmight, so it is open read-only. Update Stalagmight to change it.",
     "commandFailed": "The change could not be applied."
   },
   "importGate": {

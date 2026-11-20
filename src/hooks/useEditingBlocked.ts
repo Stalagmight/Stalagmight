@@ -40,7 +40,8 @@ import { useProjectStore } from '../store/projectStore';
  * term has a server backstop like the SpeleoDB one; gating on it here keeps the
  * controls from offering edits that can only fail. It reports as `'project'`.
  */
-const selectFileReadOnly = (s: { fileReadOnlyReason: string | null }): boolean => s.fileReadOnlyReason !== null;
+export const selectFileReadOnly = (s: { fileReadOnlyReason?: string | null }): boolean =>
+  (s.fileReadOnlyReason ?? null) !== null;
 
 /** React-hook form: subscribes to both stores and recomposes on change. */
 export function useEditingBlocked(): boolean {

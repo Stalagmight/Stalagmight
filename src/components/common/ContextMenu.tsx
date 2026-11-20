@@ -174,7 +174,9 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, removeLoopClosure, fileReadOnlyReason } = useProjectStore();
+  // A file made with a newer Stalagmight refuses every edit (plan 6.4).
+  const fileReadOnly = (fileReadOnlyReason ?? null) !== null;
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -997,7 +999,7 @@ export default function ContextMenu() {
   } else {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
-    const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
+    const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly || fileReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', ...CAVE_SECTION_VIEW_LABEL_KEYS.map((k) => t(k))]);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;

@@ -38,3 +38,20 @@ export function isReverifyDivergedError(error?: string | null): boolean {
 export function READ_ONLY_EDIT_NOTICE(): string {
   return i18n.t('editGate.readOnlyNotice');
 }
+
+/**
+ * Marker the backend prefixes when the open file was made with a newer
+ * Stalagmight and is read-only (`READ_ONLY_FILE_CODE`, plan 6.4): every edit,
+ * undo and save is refused. Its notice replaces the raw coded string.
+ */
+export const READ_ONLY_FILE = 'READ_ONLY_FILE';
+
+/** True if a `CommandResult.error` carries the read-only file marker. */
+export function isReadOnlyFileError(error?: string | null): boolean {
+  return !!error && error.startsWith(READ_ONLY_FILE);
+}
+
+/** User-facing toast when a read-only (newer-version) file refuses an edit. */
+export function READ_ONLY_FILE_NOTICE(): string {
+  return i18n.t('editGate.readOnlyFileNotice');
+}

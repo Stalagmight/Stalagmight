@@ -18,7 +18,7 @@ import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useEditingBlocked, selectFileReadOnly } from '../../hooks/useEditingBlocked';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
 import { isMutatingTool, navigationToolsEnabled } from '../../utils/toolUtils';
@@ -251,6 +251,8 @@ export default function Toolbar({
   // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
   // backend edit gate is the real enforcement; this is the visual parity.
   const editingBlocked = useEditingBlocked();
+  // A file made with a newer Stalagmight refuses undo and redo too (plan 6.4).
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   // On top of that, the navigate group (Pan/Zoom) is hidden unless the user opted
   // in (#409) - the map pans on a plain drag and zooms on the wheel under every
@@ -469,7 +471,7 @@ export default function Toolbar({
             <div className={`w-px h-6 bg-border ${tight ? 'mx-1' : 'mx-2'}`} />
             <UndoHistoryDropdown
               mode="undo"
-              disabled={placementModeActive || !canUndo}
+              disabled={placementModeActive || fileReadOnly || !canUndo}
               // [#303] An empty undo stack still has something to show on a linked
               // project: the Unwind entry that continues the walk past the commit
               // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
@@ -496,7 +498,7 @@ export default function Toolbar({
             </UndoHistoryDropdown>
             <UndoHistoryDropdown
               mode="redo"
-              disabled={placementModeActive || !canRedo}
+              disabled={placementModeActive || fileReadOnly || !canRedo}
               // [#303] The same reason as the undo side, in the other direction: an empty
               // redo stack still has the forward chain step to show ("Redo into next
               // SpeleoDB version"), and hover is the only way to reach it while the button
