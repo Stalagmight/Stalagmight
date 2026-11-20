@@ -465,12 +465,7 @@ mod topology_commands_tests;
     reason = "test kit: panics on a failed assumption are the point"
 )]
 mod topology_kit;
-#[cfg(sg_unported)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test module: panics on a failed assumption are the point"
-)]
+#[cfg(test)]
 mod undo_after_reopen_tests;
 #[cfg(sg_unported)]
 mod undo_size_gate_tests;
