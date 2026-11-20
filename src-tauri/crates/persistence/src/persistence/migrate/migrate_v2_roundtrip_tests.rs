@@ -58,7 +58,7 @@ fn round_trip(bytes: &[u8], what: &str) {
         decoded.project, migrated.project,
         "{what}: the decoded model"
     );
-    let mut ignores = extras.ignored_warnings.clone();
+    let mut ignores = extras.ignored_warnings;
     ignores.sort_by(|a, b| (&a.shot, &a.code).cmp(&(&b.shot, &b.code)));
     assert_eq!(
         decoded.extras.ignored_warnings, ignores,

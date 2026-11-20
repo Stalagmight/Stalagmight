@@ -545,7 +545,7 @@ fn solve_hold_names_the_station_the_least_squares_holds() {
         );
     }
 
-    let mut p = base.clone();
+    let mut p = base;
     p.placements.clear();
     p.push_datum(ZeroDatum::new(s2, gps(20.0, -87.0)));
     p.push_closure(b, Some(l1), s2, Some(l0), ClosureStrategy::Batch);

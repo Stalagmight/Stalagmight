@@ -263,7 +263,7 @@ fn verify_adjusted(
     // demoted merge behind a translation failure (D11); else both must fail.
     for (k, lines) in legacy_failed_lines {
         let f = &facts[k];
-        if !f.new_failed && !(f.merge_tie && f.legacy_translation_failed) {
+        if !(f.new_failed || f.merge_tie && f.legacy_translation_failed) {
             v.failure_mismatches.push(lines);
         }
     }

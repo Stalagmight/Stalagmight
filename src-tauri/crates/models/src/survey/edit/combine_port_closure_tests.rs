@@ -132,7 +132,7 @@ fn solved_at(p: &Project, at: Option<StationId>) -> bool {
     let inside =
         |s: StationId| at.is_none_or(|a| topology.component_of(a) == topology.component_of(s));
     let placement: BTreeSet<usize> = p.placement_datums().into_iter().flatten().collect();
-    let skipped = skipped_ids(&p);
+    let skipped = skipped_ids(p);
     let fix = p
         .datums
         .iter()
@@ -1453,8 +1453,8 @@ fn check_combine(
     // ones are gone; a replacement is one the solve takes (#749), which can
     // then go as across one shot (legacy order too); no snap inside the
     // combined line.
-    let skipped = skipped_ids(&before);
-    for id in skipped_ids(&after) {
+    let skipped = skipped_ids(before);
+    for id in skipped_ids(after) {
         assert!(
             skipped.contains(&id),
             "{what}: closure {id} left across one shot"
