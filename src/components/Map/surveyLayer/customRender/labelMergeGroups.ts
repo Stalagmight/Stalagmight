@@ -31,6 +31,38 @@ export interface MergedStationLabels {
 }
 
 /**
+ * The junctions of one SoA: the global indices of the slots of every Station
+ * ID two or more slots carry, slot order. Built once per `stationIds` array
+ * (the SoA is rebuilt, never written in place, as `stationIdentity` relies on
+ * too), so a label rebuild on pan or zoom does no per-station work here and a
+ * survey with no junction costs nothing (H-frontend-wire-10).
+ */
+const junctionCache = new WeakMap<Uint32Array, number[][]>();
+
+function junctionsOf(data: SurveyData): number[][] {
+  const cached = junctionCache.get(data.stationIds);
+  if (cached) return cached;
+  // The first slot of each id; a group array only for an id seen twice.
+  const firstSlot = new Map<number, number>();
+  const byId = new Map<number, number[]>();
+  for (let g = 0; g < data.stationCount; g++) {
+    const id = data.stationIds[g];
+    if (id === undefined) continue;
+    const first = firstSlot.get(id);
+    if (first === undefined) {
+      firstSlot.set(id, g);
+      continue;
+    }
+    const slots = byId.get(id);
+    if (slots) slots.push(g);
+    else byId.set(id, [first, g]);
+  }
+  const junctions = [...byId.values()];
+  junctionCache.set(data.stationIds, junctions);
+  return junctions;
+}
+
+/**
  * The representative of every merge group. `lineFirst` / `lineLast` give each
  * line's first and last station index in the SoA (the FIRST_IN_LINE predicate
  * and its counterpart); `hasLabel(g)` says whether a station has text to draw
@@ -43,21 +75,9 @@ export function mergedStationLabels(
   lineLast: ReadonlyMap<number, number>,
   hasLabel: (g: number) => boolean,
 ): MergedStationLabels | null {
+  const junctions = junctionsOf(data);
+  if (junctions.length === 0) return null;
   const n = data.stationCount;
-  const byId = new Map<number, number[]>();
-  let anyJunction = false;
-  for (let g = 0; g < n; g++) {
-    const id = data.stationIds[g];
-    if (id === undefined) continue;
-    const slots = byId.get(id);
-    if (slots) {
-      slots.push(g);
-      anyJunction = true;
-    } else {
-      byId.set(id, [g]);
-    }
-  }
-  if (!anyJunction) return null;
   const lineOrder = new Map<number, number>();
   data.lines.forEach((line, order) => lineOrder.set(line.id, order));
   const representative = new Int32Array(n);
@@ -82,8 +102,7 @@ export function mergedStationLabels(
     }
     return false;
   };
-  for (const group of byId.values()) {
-    if (group.length < 2) continue;
+  for (const group of junctions) {
     let best = -1;
     for (const m of group) {
       if (hasLabel(m) && (best < 0 || better(m, best))) best = m;
