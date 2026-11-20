@@ -56,9 +56,8 @@ use crate::config::GasConfig;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::survey::{Project, ShotLocation};
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, LineId, MarkedPoint,
-    PlanAnchorSet, PlanSegment, StationAnchor, StationId, StationKey, StationRef,
-    DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, LineId, MarkedPoint, PlanAnchorSet,
+    PlanSegment, StationAnchor, StationId, StationKey, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::migrate::LegacyParity;
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
@@ -330,7 +329,8 @@ impl<'p> Resolver<'p> {
     /// stored outside the project, `live_shot_uuid_for_stored`).
     fn locate(&self, line_id: LineId, uuid: &str) -> Option<ShotLocation> {
         let index = self.project.shot_uuids();
-        let live = crate::models::live_shot_uuid_for_stored(line_id, uuid, |id| index.contains(id))?;
+        let live =
+            crate::models::live_shot_uuid_for_stored(line_id, uuid, |id| index.contains(id))?;
         index.get(&live)
     }
 
@@ -383,8 +383,14 @@ impl<'p> Resolver<'p> {
     }
 
     fn place_pair(&self, anchor: &PlanAnchor) -> Option<StationRef> {
-        let a = anchor.a.as_deref().and_then(|u| self.locate(anchor.line_id, u));
-        let b = anchor.b.as_deref().and_then(|u| self.locate(anchor.line_id, u));
+        let a = anchor
+            .a
+            .as_deref()
+            .and_then(|u| self.locate(anchor.line_id, u));
+        let b = anchor
+            .b
+            .as_deref()
+            .and_then(|u| self.locate(anchor.line_id, u));
         let line = self.anchor_line(anchor, a, b);
         // (1) The station itself, while it exists.
         if let Some(station) = anchor.station.and_then(|id| self.live_station(id)) {
@@ -416,25 +422,33 @@ impl<'p> Resolver<'p> {
     ) -> Option<StationRef> {
         let line = self.project.line(line_id)?;
         let n = line.shots.len();
-        let on_line = |loc: Option<ShotLocation>| loc.filter(|l| l.line == line_id).map(|l| l.index);
+        let on_line =
+            |loc: Option<ShotLocation>| loc.filter(|l| l.line == line_id).map(|l| l.index);
         let (pa, pb) = (on_line(a), on_line(b));
         let flipped_a = self.flipped(anchor, anchor.parity, line_id, pa);
-        let flipped_b = self.flipped(anchor, anchor.parity_b.unwrap_or(anchor.parity), line_id, pb);
+        let flipped_b = self.flipped(
+            anchor,
+            anchor.parity_b.unwrap_or(anchor.parity),
+            line_id,
+            pb,
+        );
         let index = match (pa, pb) {
             (Some(pa), Some(pb)) if pa < pb => pa + 1,
             (Some(pa), Some(_)) => pa,
+            // The saved side of `a` (after it), or the other side once its record flipped.
             (Some(p), None) => {
-                if anchor.after_a != flipped_a {
-                    p + 1
-                } else {
+                if anchor.after_a == flipped_a {
                     p
+                } else {
+                    p + 1
                 }
             }
+            // The side of `b` the station sat on (before it), likewise.
             (None, Some(p)) => {
-                if anchor.after_a != flipped_b {
-                    p
-                } else {
+                if anchor.after_a == flipped_b {
                     p + 1
+                } else {
+                    p
                 }
             }
             // Recorded with no neighbours at all: a shot-less line's single station, which
@@ -474,7 +488,11 @@ impl<'p> Resolver<'p> {
         let (Some(legacy), None, Some(position)) = (self.legacy, anchor.station, position) else {
             return false;
         };
-        let Some(shot) = self.project.line(line_id).and_then(|l| l.shots.get(position)) else {
+        let Some(shot) = self
+            .project
+            .line(line_id)
+            .and_then(|l| l.shots.get(position))
+        else {
             return false;
         };
         let parity = legacy.reversed_lines.contains(&line_id)
@@ -535,7 +553,6 @@ impl<'p> Resolver<'p> {
         anchor.and_then(|a| self.place_counting(a, stale))
     }
 }
-
 
 /// A span the diver never gave a speed of its own: it flies at the plan speed, off the scooter.
 fn inherited_segment() -> PlanSegment {
@@ -710,7 +727,6 @@ fn truncate_chars(s: String, max: usize) -> String {
     }
     s.chars().take(max).collect()
 }
-
 
 /// Whether a stored anchor was written by 0.6.0 (no station id), so that only the record
 /// parity the migration carried in memory can place it reliably.
