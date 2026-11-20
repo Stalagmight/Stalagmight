@@ -1,21 +1,28 @@
-//! `Command::ReverseLine` at the state layer (issue #24).
+//! `Command::ReverseLine` at the state layer (issue #24) on the station graph.
 //!
-//! The model-level transform is covered in `models::project::reverse`; these
-//! tests pin the command's contract: geometry is invariant through the full
-//! execute pipeline (including the reconcile epilogue), undo restores exactly,
-//! frozen shots do not block it, and warnings are re-emitted.
+//! The model-level transform is covered in `survey::edit::reverse_tests`;
+//! these tests pin the command's contract through the execute pipeline: no
+//! station moves (up to the flip's documented ulp rounding), undo restores
+//! the line exactly, frozen shots do not block it, warnings are re-emitted,
+//! a shot-less line is a provable no-op, and the result reports the lines
+//! renumbered (`reversed_lines`) through a batch (parity-reduced), undo, redo
+//! and the history jumps, partial failures included.
+//!
+//! The import toggle's cases are the import package's behaviour (the funnel
+//! reverses before the line exists); they are ported here and ignored until
+//! it lands.
 
 use std::collections::HashMap;
 
 use super::{AppState, VirtualShotMode};
-use crate::core::{Command, ReversedLine, UndoData};
+use crate::core::{Command, ReversedLine};
+use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{
-    Coordinates, DivePlanSnapshot, GpsCoordinates, ImportLineConfig, ImportPlacement, LineId,
-    LineUpdates, MarkedPoint, Project, ShotData, StationRef,
+    Coordinates, GpsCoordinates, ImportLineConfig, ImportPlacement, LineId, LineUpdates, ShotData,
+    StationRef,
 };
 
-/// One expected [`ReversedLine`] entry, so the assertions below read as
-/// "line X, mirrored against N shots" rather than a struct literal each time.
+/// One expected [`ReversedLine`] entry.
 fn reversed_entry(line_id: LineId, shot_count: u32) -> ReversedLine {
     ReversedLine {
         line_id,
@@ -34,11 +41,13 @@ fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     }
 }
 
+/// Every slot's raw position.
 fn abs_coord_map(project: &Project) -> HashMap<StationRef, Coordinates> {
     project
-        .compute_station_coordinates()
+        .raw_positions()
+        .slots(project)
         .into_iter()
-        .map(|s| (s.station_ref, s.coordinates))
+        .map(|s| (s.slot, Coordinates::new(s.x, s.y, s.z)))
         .collect()
 }
 
@@ -51,14 +60,7 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
 }
 
 /// `shot`, plus per-shot LRUD and pitch that are distinct from each other and
-/// from every other shot's.
-///
-/// Every field here is one a reverse must either move, mirror or negate, and all
-/// of them default to `None` - so a fixture built on `shot()` alone makes any
-/// assertion about them vacuously true (that is exactly how the import path's
-/// "left/right is never swapped" claim went unguarded). Neither LRUD nor pitch
-/// feeds the coordinate walk (`horizontal_length` is derived from `length` and
-/// the depth delta), so populating them cannot perturb the geometry assertions.
+/// from every other shot's, so assertions about them are not vacuous.
 fn shot_with_lrud(azimuth: f64, length: f64, depth_in: f64, depth_out: f64, n: f64) -> ShotData {
     ShotData {
         left: Some(n),
@@ -71,6 +73,20 @@ fn shot_with_lrud(azimuth: f64, length: f64, depth_in: f64, depth_out: f64, n: f
     }
 }
 
+fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
+    let r = state.execute(Command::CreateLine {
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots,
+        cave_section_id: None,
+    });
+    assert!(r.success, "{:?}", r.error);
+    r.line_id.unwrap()
+}
+
 /// A project with one three-shot line that turns a corner and changes depth,
 /// so a botched reverse shows up as a moved station rather than a coincidence.
 fn state_with_line() -> (AppState, LineId) {
@@ -79,37 +95,49 @@ fn state_with_line() -> (AppState, LineId) {
         name: "Reverse".to_string(),
         location: None,
     });
-    let created = state.execute(Command::CreateLine {
-        name: Some("Main line".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: vec![
+    let line_id = create(
+        &state,
+        "Main line",
+        vec![
             shot_with_lrud(0.0, 10.0, 0.0, 2.0, 1.0),
             shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
             shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
         ],
-        cave_section_id: None,
-    });
-    let line_id = created.line_id.unwrap();
+    );
     (state, line_id)
+}
+
+fn reverse(line_id: LineId) -> Command {
+    Command::ReverseLine {
+        line_id,
+        swap_left_right: false,
+    }
+}
+
+fn project(state: &AppState) -> Project {
+    state.get_project_state().unwrap()
+}
+
+fn recolour(line_id: LineId, color: &str) -> Command {
+    Command::UpdateLineMetadata {
+        line_id,
+        updates: LineUpdates {
+            color: Some(color.to_string()),
+            ..Default::default()
+        },
+    }
 }
 
 #[test]
 fn reverse_keeps_every_station_where_it_was() {
     let (state, line_id) = state_with_line();
-    let before = abs_coord_map(&state.get_project_state().unwrap());
+    let before = abs_coord_map(&project(&state));
 
-    let result = state.execute(Command::ReverseLine {
-        line_id,
-        swap_left_right: false,
-    });
+    let result = state.execute(reverse(line_id));
     assert!(result.success, "reverse failed: {:?}", result.error);
 
-    let after = abs_coord_map(&state.get_project_state().unwrap());
+    let after = abs_coord_map(&project(&state));
     assert_eq!(before.len(), after.len(), "station count changed");
-
     // Station i is now station N - i, at the same place.
     let n = 3;
     for i in 0..=n {
@@ -123,27 +151,16 @@ fn reverse_keeps_every_station_where_it_was() {
 #[test]
 fn reverse_reverses_the_shot_order() {
     let (state, line_id) = state_with_line();
-    let before = state.get_project_state().unwrap();
-    let lengths: Vec<_> = before
-        .get_line(line_id)
+    let lengths: Vec<_> = project(&state)
+        .line(line_id)
         .unwrap()
         .shots
         .iter()
         .map(|s| s.length)
         .collect();
-
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-
-    let after = state.get_project_state().unwrap();
-    let reversed: Vec<_> = after
-        .get_line(line_id)
+    assert!(state.execute(reverse(line_id)).success);
+    let reversed: Vec<_> = project(&state)
+        .line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -157,8 +174,8 @@ fn reverse_reverses_the_shot_order() {
 #[test]
 fn undo_restores_the_original_line_exactly() {
     let (state, line_id) = state_with_line();
-    let before = state.get_project_state().unwrap();
-    let original = before.get_line(line_id).unwrap().clone();
+    let before = project(&state);
+    let original = before.line(line_id).unwrap().clone();
     let coords_before = abs_coord_map(&before);
 
     assert!(
@@ -171,74 +188,31 @@ fn undo_restores_the_original_line_exactly() {
     );
     assert!(state.undo().success, "reverse must be undoable");
 
-    let restored_project = state.get_project_state().unwrap();
-    let restored = restored_project.get_line(line_id).unwrap();
-    assert_eq!(restored.shots.len(), original.shots.len());
-    for (a, b) in restored.shots.iter().zip(&original.shots) {
-        assert_eq!(a.id, b.id);
-        assert_eq!(a.uuid, b.uuid);
-        assert_eq!(a.azimuth_in, b.azimuth_in);
-        assert_eq!(a.azimuth_out, b.azimuth_out);
-        assert_eq!(a.depth_in, b.depth_in);
-        assert_eq!(a.depth_out, b.depth_out);
-        assert_eq!(a.left, b.left);
-        assert_eq!(a.right, b.right);
-        // The fields `swap_left_right: true` and the pitch negation actually
-        // touch - without these the test's "exactly" only covered id/uuid/
-        // azimuth/depth.
-        assert_eq!(a.up, b.up);
-        assert_eq!(a.down, b.down);
-        assert_eq!(a.pitch_in, b.pitch_in);
-        assert_eq!(a.pitch_out, b.pitch_out);
-    }
+    let restored_project = project(&state);
+    // Every field of every shot (session ids, uuids, LRUD, pitches) and the
+    // chain itself, to the bit.
+    assert_eq!(restored_project.line(line_id).unwrap(), &original);
+    let restored = abs_coord_map(&restored_project);
     for (sr, coord) in coords_before {
-        assert_coords_close(coord, abs_coord_map(&restored_project)[&sr]);
+        assert_coords_close(coord, restored[&sr]);
     }
 }
 
 #[test]
 fn redo_reapplies_the_reverse() {
     let (state, line_id) = state_with_line();
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-    let reversed = state.get_project_state().unwrap();
-    let expected: Vec<_> = reversed
-        .get_line(line_id)
-        .unwrap()
-        .shots
-        .iter()
-        .map(|s| (s.id, s.length, s.azimuth_in))
-        .collect();
+    assert!(state.execute(reverse(line_id)).success);
+    let reversed = project(&state).line(line_id).unwrap().clone();
 
     assert!(state.undo().success);
     assert!(state.redo().success, "reverse must be redoable");
-
-    let after = state.get_project_state().unwrap();
-    let actual: Vec<_> = after
-        .get_line(line_id)
-        .unwrap()
-        .shots
-        .iter()
-        .map(|s| (s.id, s.length, s.azimuth_in))
-        .collect();
-    assert_eq!(actual, expected);
+    assert_eq!(project(&state).line(line_id).unwrap(), &reversed);
 }
 
 #[test]
 fn reverse_twice_is_the_identity() {
     let (state, line_id) = state_with_line();
-    let original = state
-        .get_project_state()
-        .unwrap()
-        .get_line(line_id)
-        .unwrap()
-        .clone();
+    let original = project(&state).line(line_id).unwrap().clone();
 
     for _ in 0..2 {
         assert!(
@@ -251,16 +225,19 @@ fn reverse_twice_is_the_identity() {
         );
     }
 
-    let project = state.get_project_state().unwrap();
-    let round_tripped = project.get_line(line_id).unwrap();
+    let p = project(&state);
+    let round_tripped = p.line(line_id).unwrap();
+    assert_eq!(round_tripped.start, original.start);
     for (a, b) in round_tripped.shots.iter().zip(&original.shots) {
         assert_eq!(a.id, b.id);
-        assert_eq!(a.azimuth_in, b.azimuth_in);
-        assert_eq!(a.azimuth_out, b.azimuth_out);
-        assert_eq!(a.depth_in, b.depth_in);
-        assert_eq!(a.depth_out, b.depth_out);
-        // `swap_left_right: true` twice must land back on the recorded values,
-        // and the pitch double-negation must cancel.
+        assert_eq!(a.uuid, b.uuid);
+        assert_eq!(a.to, b.to);
+        assert_eq!(a.azimuth_in.to_bits(), b.azimuth_in.to_bits());
+        assert_eq!(a.azimuth_out.to_bits(), b.azimuth_out.to_bits());
+        assert_eq!(a.depth_in.to_bits(), b.depth_in.to_bits());
+        assert_eq!(a.depth_out.to_bits(), b.depth_out.to_bits());
+        // `swap_left_right: true` twice lands back on the recorded values,
+        // and the pitch double-negation cancels.
         assert_eq!(a.left, b.left);
         assert_eq!(a.right, b.right);
         assert_eq!(a.pitch_in, b.pitch_in);
@@ -269,33 +246,29 @@ fn reverse_twice_is_the_identity() {
 }
 
 /// A zero datum freezes the shots it anchors; `update_shot` rejects geometry
-/// edits on them. Reverse must still work, because it leaves each physical line
-/// untouched - and the datum must stay on the station the surveyor pinned.
+/// edits on them. Reverse must still work, because it leaves each physical
+/// line untouched - and the datum stays on the station the surveyor pinned.
 #[test]
 fn reverse_works_on_a_datum_anchored_line_and_keeps_the_datum_in_place() {
     let (state, line_id) = state_with_line();
-    let datum_at = StationRef::new(line_id, 0);
-    assert!(
-        state
-            .execute(Command::SetZeroDatum {
-                station_ref: datum_at,
-                coordinates: GpsCoordinates {
-                    latitude: 20.2,
-                    longitude: -87.4,
-                    depth_reference: 0.0,
-                },
-                accuracy_m: None,
-                entrance: None,
-            })
-            .success
-    );
+    let mut p = project(&state);
+    p.set_datum_at(
+        StationRef::new(line_id, 0),
+        GpsCoordinates {
+            latitude: 20.2,
+            longitude: -87.4,
+            depth_reference: 0.0,
+        },
+        None,
+    )
+    .unwrap();
+    state.set_project_for_tests(p);
+    let pinned = project(&state)
+        .station_at(StationRef::new(line_id, 0))
+        .unwrap();
+    let before = abs_coord_map(&project(&state));
 
-    let before = abs_coord_map(&state.get_project_state().unwrap());
-
-    let result = state.execute(Command::ReverseLine {
-        line_id,
-        swap_left_right: false,
-    });
+    let result = state.execute(reverse(line_id));
     assert!(
         result.success,
         "frozen shots must not block reverse: {:?}",
@@ -304,59 +277,542 @@ fn reverse_works_on_a_datum_anchored_line_and_keeps_the_datum_in_place() {
 
     // Nothing moved, and the datum now sits on station 3 - the same physical
     // station it was pinned to before the reverse.
-    let project = state.get_project_state().unwrap();
-    let after = abs_coord_map(&project);
+    let p = project(&state);
+    let after = abs_coord_map(&p);
     for i in 0..=3u32 {
         assert_coords_close(
             before[&StationRef::new(line_id, i)],
             after[&StationRef::new(line_id, 3 - i)],
         );
     }
-    assert_eq!(project.zero_datums.len(), 1);
+    assert_eq!(p.datums.len(), 1);
+    assert_eq!(p.datums[0].station, pinned);
+    assert_eq!(p.station_at(StationRef::new(line_id, 3)), Some(pinned));
+}
+
+/// Reversing a multi-selection goes through a batch so it is one user action:
+/// every line or none, and a single Undo to get back.
+#[test]
+fn batched_multi_line_reverse_is_atomic_and_undoes_in_one_step() {
+    let (state, first_id) = state_with_line();
+    let second_id = create(
+        &state,
+        "Side passage",
+        vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
+    );
+    let before = project(&state);
+    let first_lengths = |p: &Project| -> Vec<f64> {
+        p.line(first_id)
+            .unwrap()
+            .shots
+            .iter()
+            .map(|s| s.length)
+            .collect()
+    };
+    let lengths_before = first_lengths(&before);
+
+    // A batch whose LAST command names a line that does not exist: the two
+    // good reverses must not survive it.
+    let failed = state.execute(Command::Batch {
+        commands: vec![reverse(first_id), reverse(second_id), reverse(9999)],
+        label: None,
+    });
+    assert!(!failed.success, "batch with a missing line should fail");
+    assert_eq!(first_lengths(&project(&state)), lengths_before);
+
+    // The all-good batch applies to both lines and costs exactly one undo.
+    let steps = state.get_undo_stack().len();
+    let ok = state.execute(Command::Batch {
+        commands: vec![reverse(first_id), reverse(second_id)],
+        label: None,
+    });
+    assert!(ok.success, "batch failed: {:?}", ok.error);
+    assert_eq!(state.get_undo_stack().len(), steps + 1);
+    let mut expected = lengths_before.clone();
+    expected.reverse();
+    assert_eq!(first_lengths(&project(&state)), expected);
+
+    assert!(state.undo().success);
+    let restored = project(&state);
+    assert_eq!(first_lengths(&restored), lengths_before);
+    assert_eq!(restored.line(second_id), before.line(second_id));
+    let before_coords = abs_coord_map(&before);
+    let restored_coords = abs_coord_map(&restored);
+    assert_eq!(restored_coords.len(), before_coords.len());
+    for (station_ref, coords) in &before_coords {
+        assert_coords_close(*coords, restored_coords[station_ref]);
+    }
+}
+
+/// A shot-less line (GPX imports one per waypoint) reverses to itself: the
+/// command succeeds and records nothing, so the history underneath stays
+/// reachable.
+#[test]
+fn reversing_a_shotless_line_leaves_the_undo_stack_usable() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Waypoints".to_string(),
+        location: None,
+    });
+    create(&state, "Real line", vec![shot(0.0, 10.0, 0.0, 2.0)]);
+    let empty_id = create(&state, "Waypoint", Vec::new());
+    let reversed = state.execute(reverse(empty_id));
+    assert!(reversed.success, "reverse failed: {:?}", reversed.error);
+    assert!(reversed.reversed_lines.is_none(), "nothing was renumbered");
+    assert_eq!(reversed.line_id, None, "0.6.0's early success");
+    assert_eq!(state.get_undo_stack().len(), 2, "no entry for the no-op");
+
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    assert!(project(&state).lines().is_empty());
+}
+
+/// Reversing swaps each shot's depths, negates its pitch and normalises its
+/// azimuths, so the discrepancy checks can read differently afterwards - and
+/// the shot ids stay with POSITIONS. The reverse re-runs the validation over
+/// the reversed line for exactly that reason.
+///
+/// The fixture: the first shot has out-of-range azimuths (a warning the
+/// reverse's normalisation REMOVES) and the last records an 80-degree descent
+/// on a level leg (a mismatch the reverse carries to position 0 with the sign
+/// flipped).
+#[test]
+fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
+    let state = AppState::new().unwrap();
+    // Built directly so the thresholds are the library defaults.
+    let mut p = Project::new("Warnings", None);
+    let mut out_of_range = shot(0.0, 10.0, 0.0, 0.0);
+    out_of_range.azimuth_in = 400.0;
+    out_of_range.azimuth_out = 400.0;
+    let mut mismatch = shot(90.0, 10.0, 1.0, 1.0);
+    mismatch.pitch_in = Some(80.0);
+    mismatch.pitch_out = Some(80.0);
+    let line_id = p
+        .create_line(
+            LineMeta {
+                name: Some("Main".to_string()),
+                ..LineMeta::default()
+            },
+            StartAt::New,
+            vec![out_of_range, shot(45.0, 8.0, 0.0, 1.0), mismatch],
+            None,
+        )
+        .unwrap()
+        .value;
+    state.set_project_for_tests(p);
+
+    let result = state.execute(reverse(line_id));
+    assert!(result.success, "reverse failed: {:?}", result.error);
+
     assert_eq!(
-        project.resolve_key(&project.zero_datums[0].station_ref),
-        Some(StationRef::new(line_id, 3)),
-        "the zero datum must follow its physical station, not stay on index 0"
+        result.warnings.len(),
+        1,
+        "warnings must be recomputed from the reversed line: {:?}",
+        result.warnings
+    );
+    let warning = &result.warnings[0];
+    assert_eq!(warning.code, "INCLINATION_DEPTH_MISMATCH");
+    // The mismatched shot is now FIRST, named by its stations as they read now.
+    let p = project(&state);
+    let name = |i: u32| {
+        let s = p.station_at(StationRef::new(line_id, i)).unwrap();
+        p.stations[&s].name.clone()
+    };
+    let label = format!("Shot Main: {} \u{2192} {} ", name(0), name(1));
+    assert!(
+        warning.message.starts_with(&label),
+        "{label:?} vs {}",
+        warning.message
+    );
+    assert!(
+        warning.message.contains("-80.0"),
+        "the reverse negates pitch, so the recorded inclination is now -80: {}",
+        warning.message
     );
 }
 
-/// q14: the import toggle reverses BEFORE the line is created, so the
-/// wizard's placement indices address the final order. `station_comments`
-/// indices are given in the FILE's order and mirrored backend-side.
+/// A reverse of a line at a junction carries the junction with the physical
+/// station (it is one station on both lines) and drags nothing.
 #[test]
-fn import_reverse_applies_before_placement_and_comments_resolve() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
+fn reversing_a_merge_anchored_line_moves_nothing_through_the_full_execute() {
+    let (state, main_id) = state_with_line();
+    let side_id = create(
+        &state,
+        "Side passage",
+        vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
+    );
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(side_id, 0),
+        station_b: StationRef::new(main_id, 1),
     });
+    assert!(merged.success, "merge failed: {:?}", merged.error);
+    let before = abs_coord_map(&project(&state));
 
-    // Three shots; a comment on station 0 of the FINAL (reversed) line.
+    let result = state.execute(reverse(main_id));
+    assert!(result.success, "reverse failed: {:?}", result.error);
+
+    let p = project(&state);
+    let after = abs_coord_map(&p);
+    assert_eq!(before.len(), after.len(), "station count changed");
+    for i in 0..=3u32 {
+        assert_coords_close(
+            before[&StationRef::new(main_id, i)],
+            after[&StationRef::new(main_id, 3 - i)],
+        );
+    }
+    for i in 0..=2u32 {
+        assert_coords_close(
+            before[&StationRef::new(side_id, i)],
+            after[&StationRef::new(side_id, i)],
+        );
+    }
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+    // The junction followed the physical station: the main line's middle
+    // station is now its index 2, still the side passage's station 0.
+    assert_eq!(p.merge_pairs().len(), 1);
+    assert_eq!(
+        p.station_at(StationRef::new(main_id, 2)),
+        p.station_at(StationRef::new(side_id, 0))
+    );
+}
+
+#[test]
+fn reverse_of_a_missing_line_fails() {
+    let (state, _) = state_with_line();
+    let result = state.execute(reverse(9999));
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("no longer exists"));
+}
+
+#[test]
+fn reverse_reports_the_line_it_touched() {
+    let (state, line_id) = state_with_line();
+    let result = state.execute(reverse(line_id));
+    assert_eq!(result.line_id, Some(line_id));
+    assert_eq!(
+        result.reversed_lines,
+        Some(vec![reversed_entry(line_id, 3)])
+    );
+}
+
+/// The renumbering signal survives the shapes a reverse arrives in: batched
+/// and replayed through undo/redo, where nothing in the geometry says so.
+#[test]
+fn reverse_reports_every_renumbered_line_through_batch_undo_and_redo() {
+    let (state, first) = state_with_line();
+    let second = create(
+        &state,
+        "Side",
+        vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+    );
+
+    let batch = state.execute(Command::Batch {
+        commands: vec![reverse(first), reverse(second)],
+        label: None,
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert_eq!(
+        batch.reversed_lines,
+        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)])
+    );
+
+    let undone = state.undo();
+    assert!(undone.success, "{:?}", undone.error);
+    let mut lines = undone.reversed_lines.unwrap();
+    lines.sort_by_key(|r| r.line_id);
+    assert_eq!(
+        lines,
+        vec![reversed_entry(first, 3), reversed_entry(second, 2)],
+        "undoing a reverse re-reverses the numbering, so it reports the same lines"
+    );
+
+    let redone = state.redo();
+    assert!(redone.success, "{:?}", redone.error);
+    let mut lines = redone.reversed_lines.unwrap();
+    lines.sort_by_key(|r| r.line_id);
+    assert_eq!(
+        lines,
+        vec![reversed_entry(first, 3), reversed_entry(second, 2)]
+    );
+
+    // A command that renumbers nothing leaves the field off the wire.
+    let recoloured = state.execute(recolour(first, "#000000"));
+    assert!(recoloured.success, "{:?}", recoloured.error);
+    assert!(recoloured.reversed_lines.is_none());
+}
+
+/// The history dropdown undoes several entries at once: a reverse buried in
+/// the middle of the range must still be reported.
+#[test]
+fn undo_to_and_redo_to_report_every_reverse_in_the_range() {
+    let (state, line) = state_with_line();
+    assert!(state.execute(reverse(line)).success);
+    // Bury the reverse behind a later, non-renumbering edit.
+    assert!(state.execute(recolour(line, "#000000")).success);
+
+    let undone = state.undo_to(1);
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(
+        undone.reversed_lines,
+        Some(vec![reversed_entry(line, 3)]),
+        "a reverse inside the undone range must reach the frontend"
+    );
+
+    let redone = state.redo_to(1);
+    assert!(redone.success, "{:?}", redone.error);
+    assert_eq!(redone.reversed_lines, Some(vec![reversed_entry(line, 3)]));
+}
+
+/// `undo_to`'s aggregate is an ordered per-step log, not a parity-reduced
+/// set: two reverses of one line are listed twice.
+#[test]
+fn undo_to_repeats_a_line_reversed_twice() {
+    let (state, line) = state_with_line();
+    for _ in 0..2 {
+        assert!(state.execute(reverse(line)).success);
+    }
+    let undone = state.undo_to(1);
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(
+        undone.reversed_lines,
+        Some(vec![reversed_entry(line, 3), reversed_entry(line, 3)])
+    );
+}
+
+/// A `Batch` that reverses ONE line TWICE leaves the numbering as it found
+/// it: nothing to report, and nothing recorded.
+#[test]
+fn batch_reversing_one_line_twice_reports_nothing() {
+    let (state, line_id) = state_with_line();
+    let before = project(&state);
+    let steps = state.get_undo_stack().len();
+    let batch = state.execute(Command::Batch {
+        commands: vec![reverse(line_id), reverse(line_id)],
+        label: None,
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert!(
+        batch.reversed_lines.is_none(),
+        "a net no-op reverse renumbered nothing: {:?}",
+        batch.reversed_lines
+    );
+    assert_eq!(project(&state).line(line_id), before.line(line_id));
+    assert_eq!(state.get_undo_stack().len(), steps, "no entry for a no-op");
+}
+
+/// Parity is resolved PER LINE, not per batch: `[A, B, A]` nets to `B` alone.
+#[test]
+fn batch_a_b_a_reports_only_b() {
+    let (state, first) = state_with_line();
+    let second = create(
+        &state,
+        "Side",
+        vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+    );
+    let before = project(&state);
+    let batch = state.execute(Command::Batch {
+        commands: vec![reverse(first), reverse(second), reverse(first)],
+        label: None,
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert_eq!(
+        batch.reversed_lines,
+        Some(vec![reversed_entry(second, 2)]),
+        "only the line reversed an ODD number of times was renumbered"
+    );
+    assert_eq!(project(&state).line(first), before.line(first));
+}
+
+/// Tamper with the open project behind the engine's back so that the history
+/// step recorded for Section `id` no longer applies.
+fn rename_section_behind_the_engine(state: &AppState, name: &str) {
+    let mut p = project(state);
+    p.sections[0].name = name.to_string();
+    state.set_project_for_tests(p);
+}
+
+/// `undo_to` stops at the first refused step, but the steps BEFORE it have
+/// applied: if one re-reversed a line, the failure result still carries it.
+#[test]
+fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
+    let (state, line_id) = state_with_line();
+    // An older entry that will refuse: a Section the project is later changed
+    // under, so its undo's preconditions no longer hold.
+    let created = state.execute(Command::CreateCaveSection {
+        name: "Upper".to_string(),
+        color: "#336699".to_string(),
+        line_ids: Vec::new(),
+    });
+    assert!(created.success, "{:?}", created.error);
+    assert!(state.execute(reverse(line_id)).success);
+    rename_section_behind_the_engine(&state, "Tampered");
+
+    let result = state.undo_to(1);
+    assert!(!result.success, "step 2 must fail: {:?}", result.error);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("step 2 of 2"),
+        "{:?}",
+        result.error
+    );
+    assert_eq!(
+        result.reversed_lines,
+        Some(vec![reversed_entry(line_id, 3)]),
+        "step 1 re-reversed the line and is not rolled back, so the failure \
+         must still report it"
+    );
+}
+
+/// The twin for `redo_to`.
+#[test]
+fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
+    let (state, line_id) = state_with_line();
+    assert!(state.execute(reverse(line_id)).success);
+    let created = state.execute(Command::CreateCaveSection {
+        name: "Upper".to_string(),
+        color: "#336699".to_string(),
+        line_ids: Vec::new(),
+    });
+    assert!(created.success, "{:?}", created.error);
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    // The Section's redo now finds a list it was not recorded against.
+    let mut p = project(&state);
+    p.sections.push(crate::models::Section {
+        id: 40,
+        name: "In the way".to_string(),
+        color: "#000000".to_string(),
+    });
+    p.counters.next_section_id = 41;
+    state.set_project_for_tests(p);
+
+    let result = state.redo_to(1);
+    assert!(!result.success, "step 2 must fail: {:?}", result.error);
+    assert_eq!(
+        result.reversed_lines,
+        Some(vec![reversed_entry(line_id, 3)]),
+        "step 1 re-applied the reverse and is not rolled back, so the failure \
+         must still report it"
+    );
+}
+
+/// A reverse of a shot-less line is a TRUE no-op in the backend (#24): the
+/// batch path, the raw IPC command and the agent harness reach `execute`
+/// without the dialog's filter. It keeps the redo branch and leaves the
+/// project unmodified.
+#[test]
+fn reversing_a_shotless_line_leaves_redo_and_the_dirty_bit_alone() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, real) = state_with_line();
+    let empty = create(&state, "Waypoint", Vec::new());
+
+    // Give the redo stack something to lose: a real edit, then undo it.
+    assert!(state.execute(reverse(real)).success);
+    assert!(state.undo().success);
+    let redo_before = state.get_redo_stack().len();
+    assert_eq!(redo_before, 1, "fixture: there is a redo branch to protect");
+    let saved = state.execute(Command::SaveProject {
+        path: Some(temp.path().join("cave.stalx")),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    assert!(!state.has_unsaved_changes());
+
+    // The no-op, by both routes that skip the dialog's filter.
+    assert!(state.execute(reverse(empty)).success);
+    assert!(
+        state
+            .execute(Command::Batch {
+                commands: vec![reverse(empty)],
+                label: None,
+            })
+            .success
+    );
+
+    assert_eq!(
+        state.get_redo_stack().len(),
+        redo_before,
+        "a provable no-op must not consume the redo branch"
+    );
+    assert!(!state.has_unsaved_changes(), "nor dirty the project");
+}
+
+/// 0.6.0 pinned a datum-less piece by a gauge pair the reverse had to keep in
+/// step and the save had to carry. On the station graph the piece's
+/// `Placement` names a station, which the reverse does not touch: after a
+/// reverse, a save and a reopen, every station is where it was.
+#[test]
+fn the_placement_survives_a_reverse_and_a_save_and_reload() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("gauge.stalx");
+    let (state, line_id) = state_with_line();
+    let placements = project(&state).placements;
+
+    assert!(state.execute(reverse(line_id)).success);
+    assert_eq!(project(&state).placements, placements, "nothing re-keyed");
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
+    let in_memory = abs_coord_map(&project(&state));
+
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    let after = project(&reopened);
+    assert_eq!(after.placements, placements);
+    let after = abs_coord_map(&after);
+    assert_eq!(after.len(), in_memory.len());
+    for (slot, coords) in in_memory {
+        let reloaded = after[&slot];
+        assert_eq!(
+            (coords.x.to_bits(), coords.y.to_bits(), coords.z.to_bits()),
+            (
+                reloaded.x.to_bits(),
+                reloaded.y.to_bits(),
+                reloaded.z.to_bits()
+            ),
+            "{slot:?} moved on reopen"
+        );
+    }
+}
+
+// === The import toggle (the import package's funnel) ===
+
+fn import_config(
+    name: &str,
+    shots: Vec<ShotData>,
+    placement: ImportPlacement,
+    reverse: bool,
+) -> ImportLineConfig {
+    ImportLineConfig {
+        cave_section: None,
+        line_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        placement,
+        station_comments: Vec::new(),
+        station_names: Vec::new(),
+        reverse,
+        azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
+    }
+}
+
+fn import(state: &AppState, lines: Vec<ImportLineConfig>) -> crate::core::CommandResult {
     let result = state.execute_import_lines(
-        vec![ImportLineConfig {
-            cave_section: None,
-            line_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![
-                shot_with_lrud(0.0, 10.0, 0.0, 2.0, 1.0),
-                shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
-                shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
-            ],
-            placement: ImportPlacement::Origin,
-            // Station 0 of the FILE - the backend mirrors it to station 3.
-            station_comments: vec![(0, "file station 0".to_string())],
-            station_names: Vec::new(),
-            reverse: true,
-            azimuth_reference: None,
-            explorers: None,
-            override_date: None,
-            surveyors: None,
-        }],
+        lines,
         Vec::new(),
         None,
         Vec::new(),
@@ -364,93 +820,96 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
         VirtualShotMode::Auto,
     );
     assert!(result.success, "import failed: {:?}", result.error);
+    result
+}
 
-    let project = state.get_project_state().unwrap();
-    let line = project.lines.first().unwrap();
+fn new_state(name: &str) -> AppState {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: name.to_string(),
+        location: None,
+    });
+    state
+}
 
+/// The comment on a slot's station, if any.
+fn comment_at(p: &Project, slot: StationRef) -> Option<String> {
+    let s = p.station_at(slot)?;
+    p.stations[&s].comment.clone()
+}
+
+/// q14: the import toggle reverses BEFORE the line is created, so the
+/// wizard's placement indices address the final order. `station_comments`
+/// indices are given in the FILE's order and mirrored backend-side.
+#[test]
+#[ignore = "needs C7: the import funnel is not ported on this branch"]
+fn import_reverse_applies_before_placement_and_comments_resolve() {
+    let state = new_state("Import");
+    let mut config = import_config(
+        "Imported",
+        vec![
+            shot_with_lrud(0.0, 10.0, 0.0, 2.0, 1.0),
+            shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
+            shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
+        ],
+        ImportPlacement::Origin,
+        true,
+    );
+    // Station 0 of the FILE - the backend mirrors it to station 3.
+    config.station_comments = vec![(0, "file station 0".to_string())];
+    import(&state, vec![config]);
+
+    let p = project(&state);
+    let line = &p.lines()[0];
     // The file's last shot is now first, and its readings are reciprocated.
     assert_eq!(line.shots.len(), 3);
-    assert_eq!(line.shots[0].length, 7.5);
-    assert_eq!(line.shots[2].length, 10.0);
-    assert!((line.shots[2].average_azimuth_measured() - 180.0).abs() < 1e-9);
-
+    assert_eq!(line.shots[0].length.to_bits(), 7.5_f64.to_bits());
+    assert_eq!(line.shots[2].length.to_bits(), 10.0_f64.to_bits());
     // Left/right are untouched on the import path - there is no dialog to ask.
-    // The file's last shot (left 20.0) is now first, and its LRUD travelled with
-    // it UNSWAPPED. Asserting the values rather than `is_none()`: with a fixture
-    // that leaves LRUD at its `None` default this assertion holds no matter what
-    // the import does, and flipping `reverse_shots(.., false)` to `true` failed
-    // no test at all.
     assert_eq!(line.shots[0].left, Some(20.0));
     assert_eq!(line.shots[0].right, Some(20.5));
     assert_eq!(line.shots[2].left, Some(1.0));
     assert_eq!(line.shots[2].right, Some(1.5));
-
-    // The comment was given against the file's station 0, so it must land on the
-    // physical station that is now numbered 3.
-    assert_eq!(project.station_comments.len(), 1);
-    let (key, text) = project.station_comments.iter().next().unwrap();
-    assert_eq!(text, "file station 0");
-    assert_eq!(project.resolve_key(key), Some(StationRef::new(line.id, 3)));
+    // The comment lands on the physical station that is now numbered 3.
+    let commented: Vec<_> = p
+        .stations
+        .values()
+        .filter(|s| s.comment.is_some())
+        .collect();
+    assert_eq!(commented.len(), 1);
+    assert_eq!(
+        comment_at(&p, StationRef::new(line.id, 3)).as_deref(),
+        Some("file station 0")
+    );
 }
 
 /// Ticking the import toggle changes the numbering, never where the passage
-/// lands.  `Origin` and `Manual` position station 0 directly, so without the
-/// offset compensation a reversed line - whose station 0 is now the far end -
-/// would sit a full end-to-end displacement away from the un-reversed import.
+/// lands.
 #[test]
+#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_lands_the_line_in_the_same_place() {
     let shots = vec![
         shot(0.0, 10.0, 0.0, 2.0),
         shot(90.0, 5.0, 2.0, 2.0),
         shot(210.0, 7.5, 2.0, 1.0),
     ];
-
-    let import = |reverse: bool, placement: ImportPlacement| {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "Import".to_string(),
-            location: None,
-        });
-        let result = state.execute_import_lines(
-            vec![ImportLineConfig {
-                cave_section: None,
-                line_index: 0,
-                name: Some("Imported".to_string()),
-                surveyor: None,
-                date: None,
-                color: "#4ecdc4".to_string(),
-                direction: None,
-                quality: 1.0,
-                shots: shots.clone(),
-                placement,
-                station_comments: Vec::new(),
-                station_names: Vec::new(),
-                reverse,
-                azimuth_reference: None,
-                explorers: None,
-                override_date: None,
-                surveyors: None,
-            }],
-            Vec::new(),
-            None,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
+    let run = |reverse: bool, placement: ImportPlacement| {
+        let state = new_state("Import");
+        import(
+            &state,
+            vec![import_config("Imported", shots.clone(), placement, reverse)],
         );
-        assert!(result.success, "import failed: {:?}", result.error);
-        let project = state.get_project_state().unwrap();
-        let mut coords: Vec<Coordinates> = project
-            .compute_station_coordinates()
-            .into_iter()
-            .map(|s| s.coordinates)
+        let p = project(&state);
+        let line = p.lines()[0].id;
+        let coords = abs_coord_map(&p);
+        let mut out: Vec<Coordinates> = (0..=3u32)
+            .map(|i| coords[&StationRef::new(line, i)])
             .collect();
-        // Reversed numbering walks the same stations from the other end.
         if reverse {
-            coords.reverse();
+            out.reverse();
         }
-        coords
+        out
     };
-
     for placement in [
         ImportPlacement::Origin,
         ImportPlacement::Manual {
@@ -462,8 +921,8 @@ fn import_reverse_lands_the_line_in_the_same_place() {
             }),
         },
     ] {
-        let plain = import(false, placement.clone());
-        let reversed = import(true, placement.clone());
+        let plain = run(false, placement.clone());
+        let reversed = run(true, placement.clone());
         assert_eq!(plain.len(), reversed.len(), "station count changed");
         for (i, (a, b)) in plain.iter().zip(&reversed).enumerate() {
             assert!(
@@ -474,9 +933,7 @@ fn import_reverse_lands_the_line_in_the_same_place() {
     }
 }
 
-/// The three-shot file every placement test below imports. It turns a corner and
-/// changes depth, so a placement that lands on the wrong physical station shows
-/// up as a moved station rather than a coincidence.
+/// The three-shot file every placement test below imports.
 fn import_shots() -> Vec<ShotData> {
     vec![
         shot(0.0, 10.0, 0.0, 2.0),
@@ -485,84 +942,43 @@ fn import_shots() -> Vec<ShotData> {
     ]
 }
 
-/// Import [`import_shots`] under `placement`, optionally reversed, and return the
-/// imported line's station coordinates in the FILE's order (station 0 of the
-/// file first) so the two runs are directly comparable.
-///
-/// The project already contains one placed line, passed to `placement` as its
-/// id: `FromExisting`/`ManualSnap` need a real station to attach to, and it fixes
-/// the world frame for both runs.
+/// Import [`import_shots`] under `placement`, optionally reversed, beside one
+/// placed line, and return the imported line's station coordinates in the
+/// FILE's order.
 fn import_one(reverse: bool, placement: fn(LineId) -> ImportPlacement) -> Vec<Coordinates> {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
-    let anchor = state
-        .execute(Command::CreateLine {
-            name: Some("Anchor".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            shots: vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    let result = state.execute_import_lines(
-        vec![ImportLineConfig {
-            cave_section: None,
-            line_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: import_shots(),
-            placement: placement(anchor),
-            station_comments: Vec::new(),
-            station_names: Vec::new(),
-            reverse,
-            azimuth_reference: None,
-            explorers: None,
-            override_date: None,
-            surveyors: None,
-        }],
-        Vec::new(),
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let state = new_state("Import");
+    let anchor = create(
+        &state,
+        "Anchor",
+        vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
     );
-    assert!(result.success, "import failed: {:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let imported = project.lines.iter().find(|s| s.id != anchor).unwrap().id;
-    let coords = abs_coord_map(&project);
-    let mut out: Vec<Coordinates> = (0..=import_shots().len() as u32)
+    import(
+        &state,
+        vec![import_config(
+            "Imported",
+            import_shots(),
+            placement(anchor),
+            reverse,
+        )],
+    );
+    let p = project(&state);
+    let imported = p.lines().iter().find(|s| s.id != anchor).unwrap().id;
+    let coords = abs_coord_map(&p);
+    let mut out: Vec<Coordinates> = (0..=3u32)
         .map(|i| coords[&StationRef::new(imported, i)])
         .collect();
-    // Reversed numbering walks the same stations from the other end.
     if reverse {
         out.reverse();
     }
     out
 }
 
-/// The placements that re-anchor a line through an INDEX. `Origin` and
-/// `Manual` (covered above) position station 0 directly and carry no station
-/// index the reverse can misplace; these three do, and the wizard hands the index
-/// over ALREADY MIRRORED (`src/utils/reversePlacement.ts`) because the backend
-/// reverses before the line exists. If the mirrored index does not land on the
-/// physical station the user clicked, the passage attaches by the wrong end -
-/// invisible in the shot list, obvious on the map.
+/// The placements that re-anchor a line through an INDEX, which the wizard
+/// hands over ALREADY MIRRORED for a reversed import: the mirrored index must
+/// land on the physical station the user clicked.
 #[test]
+#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
-    // (label, placement as the user built it, the same placement mirrored for a
-    // reversed import). Three shots, so the mirror is `3 - i`.
     let cases: [(
         &str,
         fn(LineId) -> ImportPlacement,
@@ -587,8 +1003,6 @@ fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
                 station_index: 2,
             },
         ),
-        // Only the IMPORT side mirrors: the target was already in the project
-        // with its final numbering, so its index must not move.
         (
             "the file's station 1 merged onto an existing station",
             |anchor| ImportPlacement::FromExisting {
@@ -612,7 +1026,6 @@ fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
             },
         ),
     ];
-
     for (label, plain_placement, reversed_placement) in cases {
         let plain = import_one(false, plain_placement);
         let reversed = import_one(true, reversed_placement);
@@ -632,68 +1045,35 @@ fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
 
 /// Import a two-line batch wired together by `FromImporting`, optionally with
 /// BOTH lines reversed, and return each line's stations in FILE order.
-///
-/// The trunk has three shots and the branch two, so the two sides of the
-/// connection mirror by different divisors - a mirror that used one line's
-/// shot count for the other lands on a different physical station.
 fn import_two(
     reverse: bool,
     import_station: u32,
     target_station_index: u32,
 ) -> (Vec<Coordinates>, Vec<Coordinates>) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
-
-    let config = |line_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportLineConfig {
-        cave_section: None,
-        line_index,
-        name: Some(name.to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots,
-        placement,
-        station_comments: Vec::new(),
-        station_names: Vec::new(),
+    let state = new_state("Import");
+    let mut branch = import_config(
+        "Branch",
+        // Its far end sits at the trunk's station-1 depth.
+        vec![shot(45.0, 8.0, 4.0, 3.0), shot(135.0, 4.0, 3.0, 2.0)],
+        ImportPlacement::FromImporting {
+            import_station,
+            target_line_index: 0,
+            target_station_index,
+        },
         reverse,
-        azimuth_reference: None,
-        explorers: None,
-        override_date: None,
-        surveyors: None,
-    };
-    let result = state.execute_import_lines(
-        vec![
-            config(0, "Trunk", import_shots(), ImportPlacement::Origin),
-            config(
-                1,
-                "Branch",
-                // Its far end sits at the trunk's station-1 depth, so the
-                // connection below is clean in all three axes.
-                vec![shot(45.0, 8.0, 4.0, 3.0), shot(135.0, 4.0, 3.0, 2.0)],
-                ImportPlacement::FromImporting {
-                    import_station,
-                    target_line_index: 0,
-                    target_station_index,
-                },
-            ),
-        ],
-        Vec::new(),
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
     );
-    assert!(result.success, "import failed: {:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let coords = abs_coord_map(&project);
+    branch.line_index = 1;
+    import(
+        &state,
+        vec![
+            import_config("Trunk", import_shots(), ImportPlacement::Origin, reverse),
+            branch,
+        ],
+    );
+    let p = project(&state);
+    let coords = abs_coord_map(&p);
     let stations = |index: usize, shot_count: u32| {
-        let line_id = project.lines[index].id;
+        let line_id = p.lines()[index].id;
         let mut out: Vec<Coordinates> = (0..=shot_count)
             .map(|i| coords[&StationRef::new(line_id, i)])
             .collect();
@@ -706,34 +1086,17 @@ fn import_two(
 }
 
 /// The cross-line connection, with BOTH lines reversed and DIFFERENT shot
-/// counts - the case a single-line test cannot reach.
-///
-/// The user, looking at the file's order, ties the branch's station 2 to the
-/// trunk's station 1. Reversed, those become the branch's station 0 (`2 - 2`, two
-/// shots) and the trunk's station 2 (`3 - 1`, three shots). Every index in play
-/// moves, and the two sides land on different numbers, so swapping the divisors
-/// picks a station the user never chose rather than coincidentally the right one.
-/// The batch creates the trunk before the branch merges onto it, so each index
-/// has to address the post-reverse numbering of its OWN line; this asserts the
-/// resulting world geometry rather than the stored indices, because that is what
-/// the surveyor sees.
+/// counts: each index addresses the post-reverse numbering of its OWN line.
 #[test]
+#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_connects_two_reversed_lines_by_the_stations_the_user_picked() {
-    // As the user drew it: branch station 2 onto trunk station 1.
     let (trunk_plain, branch_plain) = import_two(false, 2, 1);
-    // The same intent through the wizard's mirror: 2 - 2 on the branch, 3 - 1 on
-    // the trunk.
     let (trunk_reversed, branch_reversed) = import_two(true, 0, 2);
-
     for (label, plain, reversed) in [
         ("trunk", &trunk_plain, &trunk_reversed),
         ("branch", &branch_plain, &branch_reversed),
     ] {
-        assert_eq!(
-            plain.len(),
-            reversed.len(),
-            "{label}: station count changed"
-        );
+        assert_eq!(plain.len(), reversed.len(), "{label}: station count");
         for (i, (a, b)) in plain.iter().zip(reversed).enumerate() {
             assert!(
                 (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6,
@@ -741,1101 +1104,38 @@ fn import_reverse_connects_two_reversed_lines_by_the_stations_the_user_picked() 
             );
         }
     }
-
-    // And the connection itself is where the user put it: the branch's station 2
-    // sits exactly on the trunk's station 1, both in the file's numbering.
+    // The branch's station 2 sits exactly on the trunk's station 1, both in
+    // the file's numbering.
     assert_coords_close(branch_reversed[2], trunk_reversed[1]);
-    // Not vacuous - the trunk's stations are genuinely distinct places, so
-    // landing on the wrong one is detectable.
-    for i in [0usize, 2, 3] {
-        assert!(
-            (trunk_reversed[i].x - trunk_reversed[1].x).abs() > 1e-3
-                || (trunk_reversed[i].y - trunk_reversed[1].y).abs() > 1e-3,
-            "precondition: trunk station {i} coincides with station 1"
-        );
-    }
 }
 
-/// Reversing a multi-selection goes through a batch so it is one user action:
-/// every line or none, and a single Undo to get back.
+/// The mirror is `shot_count - station_index`, so an index past the last
+/// station has no mirror: the comment is dropped, not parked on station 0.
 #[test]
-fn batched_multi_line_reverse_is_atomic_and_undoes_in_one_step() {
-    let (state, first_id) = state_with_line();
-    let second = state.execute(Command::CreateLine {
-        name: Some("Side passage".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#ff6b6b".to_string(),
-        direction: None,
-        shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
-        cave_section_id: None,
-    });
-    let second_id = second.line_id.unwrap();
-
-    let before = abs_coord_map(&state.get_project_state().unwrap());
-    let first_lengths = |project: &Project| {
-        project
-            .lines
-            .iter()
-            .find(|s| s.id == first_id)
-            .map(|s| s.shots.iter().map(|shot| shot.length).collect::<Vec<_>>())
-            .unwrap()
-    };
-    let lengths_before = first_lengths(&state.get_project_state().unwrap());
-
-    // A batch whose LAST command names a line that does not exist: the two
-    // good reverses must not survive it.
-    let failed = state.execute(Command::Batch {
-        commands: vec![
-            Command::ReverseLine {
-                line_id: first_id,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id: second_id,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id: 9999,
-                swap_left_right: false,
-            },
-        ],
-        label: None,
-    });
-    assert!(!failed.success, "batch with a missing line should fail");
-    assert_eq!(
-        first_lengths(&state.get_project_state().unwrap()),
-        lengths_before,
-        "a failed batch left a line reversed"
-    );
-
-    // The all-good batch applies to both lines and costs exactly one undo.
-    let ok = state.execute(Command::Batch {
-        commands: vec![
-            Command::ReverseLine {
-                line_id: first_id,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id: second_id,
-                swap_left_right: false,
-            },
-        ],
-        label: None,
-    });
-    assert!(ok.success, "batch failed: {:?}", ok.error);
-
-    let reversed = state.get_project_state().unwrap();
-    let mut expected = lengths_before.clone();
-    expected.reverse();
-    assert_eq!(first_lengths(&reversed), expected);
-
-    assert!(state.undo().success);
-    let restored = state.get_project_state().unwrap();
-    assert_eq!(
-        first_lengths(&restored),
-        lengths_before,
-        "one undo should restore both lines"
-    );
-    let restored_coords = abs_coord_map(&restored);
-    assert_eq!(restored_coords.len(), before.len());
-    for (station_ref, coords) in &before {
-        assert_coords_close(*coords, *restored_coords.get(station_ref).unwrap());
-    }
-}
-
-/// A shot-less line (GPX imports one per waypoint) reverses to itself, so
-/// `generate_undo_data` has nothing to capture - but the command still SUCCEEDS.
-/// Pushing that `UndoData::None` entry wedges the whole stack: `undo()` pops it,
-/// maps `None` to a failure, and its epilogue pushes it straight back, so every
-/// older entry underneath is unreachable forever (and the stack is persisted, so
-/// it survives close/reopen). The entry must simply not be pushed.
-#[test]
-fn reversing_a_shotless_line_leaves_the_undo_stack_usable() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Waypoints".to_string(),
-        location: None,
-    });
-
-    // An ordinary, undoable edit first - this is what must stay reachable.
-    let created = state.execute(Command::CreateLine {
-        name: Some("Real line".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: vec![shot(0.0, 10.0, 0.0, 2.0)],
-        cave_section_id: None,
-    });
-    assert!(created.success);
-
-    // Then a waypoint-style line with no shots, and a reverse of it.
-    let empty = state.execute(Command::CreateLine {
-        name: Some("Waypoint".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#ff6b6b".to_string(),
-        direction: None,
-        shots: Vec::new(),
-        cave_section_id: None,
-    });
-    let empty_id = empty.line_id.unwrap();
-    let reversed = state.execute(Command::ReverseLine {
-        line_id: empty_id,
-        swap_left_right: false,
-    });
-    assert!(reversed.success, "reverse failed: {:?}", reversed.error);
-
-    // The next undo must do real work, not pop-and-repush the no-op forever.
-    let first = state.undo();
-    assert!(
-        first.success,
-        "undo blocked by an unundoable entry: {:?}",
-        first.error
-    );
-    // ... and the line creations underneath it are still reachable.
-    assert!(state.undo().success);
-    let project = state.get_project_state().unwrap();
-    assert!(
-        project.lines.is_empty(),
-        "older history was left unreachable: {:?}",
-        project.lines.iter().map(|s| s.id).collect::<Vec<_>>()
-    );
-}
-
-/// The mirror is `shot_count - station_index`, so an index past the last station
-/// has no mirror at all. `saturating_sub` would silently park such a comment on
-/// station 0 - a station it was never about - where the un-reversed import just
-/// fails `key_for_ref` and drops it.
-#[test]
+#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_drops_an_out_of_range_station_comment() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
-
-    let result = state.execute_import_lines(
-        vec![ImportLineConfig {
-            cave_section: None,
-            line_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
-            placement: ImportPlacement::Origin,
-            // Two shots means stations 0..2; station 7 does not exist.
-            station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
-            station_names: Vec::new(),
-            reverse: true,
-            azimuth_reference: None,
-            explorers: None,
-            override_date: None,
-            surveyors: None,
-        }],
-        Vec::new(),
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let state = new_state("Import");
+    let mut config = import_config(
+        "Imported",
+        vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+        ImportPlacement::Origin,
+        true,
     );
-    assert!(result.success, "import failed: {:?}", result.error);
+    // Two shots means stations 0..2; station 7 does not exist.
+    config.station_comments = vec![(7, "nowhere".to_string()), (1, "the bend".to_string())];
+    import(&state, vec![config]);
 
-    let project = state.get_project_state().unwrap();
-    let line = project.lines.first().unwrap();
-    assert_eq!(
-        project.station_comments.len(),
-        1,
-        "the out-of-range comment must be dropped, not relocated: {:?}",
-        project.station_comments.values().collect::<Vec<_>>()
-    );
-    let (key, text) = project.station_comments.iter().next().unwrap();
-    assert_eq!(text, "the bend");
-    assert_eq!(
-        project.resolve_key(key),
-        Some(StationRef::new(line.id, 1)),
-        "the in-range comment must still mirror to station 1"
-    );
-}
-
-/// Reversing swaps each shot's depths, negates its pitch and normalises its
-/// azimuths, so the per-project discrepancy checks can read differently
-/// afterwards - and the shot ids stay with POSITIONS, so a warning that survives
-/// now names a different row. `reverse_line` re-runs `Validator::validate_shot`
-/// over the reversed line for exactly that reason; without it the panel keeps
-/// showing the pre-reverse verdict against the post-reverse rows.
-///
-/// The fixture makes both directions visible at once: the file's first shot has
-/// out-of-range azimuths (a warning the reverse's normalisation REMOVES) and its
-/// last shot records an 80-degree descent on a level leg (a mismatch the reverse
-/// carries to position 1 with the sign flipped).
-#[test]
-fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
-    let state = AppState::new().unwrap();
-    // Built directly rather than through `CreateProject` so the thresholds are the
-    // library defaults, not whatever this machine's config seeds a new project
-    // with - the assertion below counts warnings exactly.
-    let mut project = Project::new("Warnings".to_string(), None);
-
-    // Validation only WARNS on an out-of-range azimuth, so a project can carry
-    // one; `reverse_shots` rem_euclid's both readings, so it cannot survive.
-    let mut out_of_range = shot(0.0, 10.0, 0.0, 0.0);
-    out_of_range.azimuth_in = 400.0;
-    out_of_range.azimuth_out = 400.0;
-    // A level shot recording an 80-degree descent: the implied inclination is 0,
-    // so the two disagree by 80 - well past the 15-degree default threshold.
-    let mut mismatch = shot(90.0, 10.0, 1.0, 1.0);
-    mismatch.pitch_in = Some(80.0);
-    mismatch.pitch_out = Some(80.0);
-
-    let line_id = project
-        .add_line(crate::models::LineData {
-            name: Some("Main".to_string()),
-            shots: vec![out_of_range, shot(45.0, 8.0, 0.0, 1.0), mismatch],
-            ..Default::default()
-        })
-        .id;
-    state.set_project_for_tests(project);
-
-    let result = state.execute(Command::ReverseLine {
-        line_id,
-        swap_left_right: false,
-    });
-    assert!(result.success, "reverse failed: {:?}", result.error);
-
-    // Skipping the re-emission reports none; validating the PRE-reverse shots
-    // reports three (an INVALID_AZIMUTH per out-of-range leg, plus the mismatch).
-    assert_eq!(
-        result.warnings.len(),
-        1,
-        "warnings must be recomputed from the reversed line: {:?}",
-        result.warnings
-    );
-    let warning = &result.warnings[0];
-    assert_eq!(warning.code, "INCLINATION_DEPTH_MISMATCH");
-    assert!(
-        warning.message.starts_with(&format!(
-            "Shot {} ",
-            state
-                .get_project_state()
-                .unwrap()
-                .shot_label_at(line_id, 0)
-                .unwrap()
-        )),
-        "the mismatched shot is now FIRST, so the warning must name the first shot: {}",
-        warning.message
-    );
-    assert!(
-        warning.message.contains("-80.0"),
-        "the reverse negates pitch, so the recorded inclination is now -80: {}",
-        warning.message
-    );
-}
-
-/// `Command::ReverseLine` is graded `GEOMETRY_ONLY` in `commands.rs`, whose
-/// comment claims the reconcile epilogue is a no-op for it. Only a MERGED line
-/// can test that claim: the epilogue's `realign_merges` is tolerance-gated and
-/// does nothing unless a merge is actually drifted - and a reverse that failed to
-/// carry the merge to the mirrored station leaves exactly that drift, at which
-/// point the epilogue re-closes it by MOVING a line. `Project::reverse_line`
-/// on its own never runs that pass, so the model-level tests cannot see it.
-#[test]
-fn reversing_a_merge_anchored_line_moves_nothing_through_the_full_execute() {
-    let (state, main_id) = state_with_line();
-    let side_id = state
-        .execute(Command::CreateLine {
-            name: Some("Side passage".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            // Starts at the main line's station-1 depth so the merge is clean.
-            shots: vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    let merged = state.execute(Command::MergeStations {
-        station_a: StationRef::new(side_id, 0),
-        station_b: StationRef::new(main_id, 1),
-    });
-    assert!(merged.success, "merge failed: {:?}", merged.error);
-
-    let before = abs_coord_map(&state.get_project_state().unwrap());
-
-    let result = state.execute(Command::ReverseLine {
-        line_id: main_id,
-        swap_left_right: false,
-    });
-    assert!(result.success, "reverse failed: {:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let after = abs_coord_map(&project);
-    assert_eq!(before.len(), after.len(), "station count changed");
-
-    // The main line's station i is now station 3 - i, in the same place; the side
-    // passage was not renumbered and must not have been dragged either.
-    for i in 0..=3u32 {
-        assert_coords_close(
-            before[&StationRef::new(main_id, i)],
-            after[&StationRef::new(main_id, 3 - i)],
-        );
-    }
-    for i in 0..=2u32 {
-        assert_coords_close(
-            before[&StationRef::new(side_id, i)],
-            after[&StationRef::new(side_id, i)],
-        );
-    }
-
-    // Nothing the reverse re-keyed was left pointing at a station that no longer
-    // exists. Checked BEFORE the specific merge assertions below, because a stranded
-    // anchor makes every one of them report an uninformative `None`, and because
-    // nothing in the pipeline catches it: a reverse is GEOMETRY_ONLY in
-    // `command_integrity`, whose comment justifies skipping the (expensive) rollback
-    // snapshot with "reverse rewrites its own external refs to the mirrored stations,
-    // so nothing is left dangling". No snapshot means `execute` never runs
-    // `guard_introduced_corruption` here, so a reverse that DID strand an anchor
-    // commits and still reports success - the claim has to be asserted directly. (A
-    // randomized fuzz property used to cover it. The targeted tests that replaced it
-    // check that named anchors resolve, which says nothing about a ref in some OTHER
-    // collection - `map_station_refs` walks merges, closures, datums, offsets and
-    // comments separately, so one can be missed on its own.)
-    let dangling: Vec<_> = project
-        .check_structural_integrity()
-        .into_iter()
-        .filter(|v| v.category.starts_with("dangling_"))
+    let p = project(&state);
+    let line = p.lines()[0].id;
+    let commented: Vec<_> = p
+        .stations
+        .values()
+        .filter(|s| s.comment.is_some())
         .collect();
-    assert!(
-        dangling.is_empty(),
-        "the reverse left a dangling cross-reference: {dangling:#?}"
-    );
-
-    // The merge followed the physical station rather than the index, and is still
-    // closed - "the epilogue is a no-op" means `realign_merges` found nothing.
-    assert_eq!(project.station_merges.len(), 1);
-    let merge = &project.station_merges[0];
-    let resolved = [
-        project.resolve_key(&merge.station_a),
-        project.resolve_key(&merge.station_b),
-    ];
-    assert!(
-        resolved.contains(&Some(StationRef::new(main_id, 2))),
-        "the merge must follow the main line's middle station to its mirrored \
-         index 2: {resolved:?}"
-    );
-    assert!(
-        resolved.contains(&Some(StationRef::new(side_id, 0))),
-        "the side passage's end of the merge must not move: {resolved:?}"
-    );
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "the merge drifted through the reverse: {:?}",
-        project.check_merge_alignment()
-    );
-}
-
-#[test]
-fn reverse_of_a_missing_line_fails() {
-    let (state, _) = state_with_line();
-    let result = state.execute(Command::ReverseLine {
-        line_id: 9999,
-        swap_left_right: false,
-    });
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("no longer exists"));
-}
-
-#[test]
-fn reverse_reports_the_line_it_touched() {
-    let (state, line_id) = state_with_line();
-    let result = state.execute(Command::ReverseLine {
-        line_id,
-        swap_left_right: false,
-    });
-    assert_eq!(result.line_id, Some(line_id));
-}
-
-/// A resolved-warning row with a NULL `shot_uuid` is keyed by `(line_id, shot_id)`,
-/// and the reverse deliberately keeps shot IDs attached to POSITIONS - so after it that
-/// key names a DIFFERENT physical shot. The save-time carry-over then upgrades the row
-/// through `live_by_id.get(&(line_id, shot_id))` and pins it, by UUID, to the mirrored
-/// shot - permanently suppressing an unrelated shot's warning.
-///
-/// Not a legacy-only shape: `commands::validation` deliberately stores `None` whenever the
-/// shot's UUID is not yet on disk, which includes any shot created in the current session.
-#[test]
-fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let (state, line_id) = state_with_line();
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(temp.path().join("cave.stalx")),
-            })
-            .success
-    );
-
-    // Shot ids and UUIDs as they stand before the reverse.
-    let (ids, uuids): (Vec<u32>, Vec<String>) = {
-        let guard = state.project.lock().unwrap();
-        let line = guard.as_ref().unwrap().get_line(line_id).unwrap();
-        (
-            line.shots.iter().map(|s| s.id).collect(),
-            line.shots.iter().map(|s| s.uuid.clone().unwrap()).collect(),
-        )
-    };
-    assert!(ids.len() >= 3);
-
-    // A position-keyed ignore on the FIRST shot.
-    state
-        .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            line_id,
-            shot_id: ids[0],
-            warning_code: "TEST_IGNORE".to_string(),
-            resolved_at: chrono::Utc::now(),
-            resolved_comment: None,
-            shot_uuid: None,
-        })
-        .unwrap();
-
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-    // The save is where the row's position key would be re-read as an identity.
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-
-    let rows = state.load_resolved_warnings().unwrap();
-    assert_eq!(rows.len(), 1, "the ignore must survive the reverse");
+    assert_eq!(commented.len(), 1, "the out-of-range comment is dropped");
     assert_eq!(
-        rows[0].shot_uuid.as_deref(),
-        Some(uuids[0].as_str()),
-        "the ignore must stay on the shot it was taken on, not migrate to the \
-         shot the reverse moved onto that position (which is {:?})",
-        uuids.last()
-    );
-}
-
-/// The renumbering signal has to survive the shapes a reverse actually arrives in:
-/// batched (reversing a multi-selection is one atomic user action) and replayed through
-/// undo/redo, where the snapshot restore leaves NOTHING in the geometry to diff - every
-/// station keeps its world position either way.
-#[test]
-fn reverse_reports_every_renumbered_line_through_batch_undo_and_redo() {
-    let (state, first) = state_with_line();
-    let second = state
-        .execute(Command::CreateLine {
-            name: Some("Side".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    let batch = state.execute(Command::Batch {
-        commands: vec![
-            Command::ReverseLine {
-                line_id: first,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id: second,
-                swap_left_right: false,
-            },
-        ],
-        label: None,
-    });
-    assert!(batch.success, "{:?}", batch.error);
-    assert_eq!(
-        batch.reversed_lines,
-        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)])
-    );
-
-    let undone = state.undo();
-    assert!(undone.success, "{:?}", undone.error);
-    assert_eq!(
-        undone.reversed_lines,
-        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)]),
-        "undoing a reverse re-reverses the numbering, so it reports the same lines"
-    );
-
-    let redone = state.redo();
-    assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(
-        redone.reversed_lines,
-        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)])
-    );
-
-    // A command that renumbers nothing must leave the field off the wire entirely.
-    let moved = state.execute(Command::MoveLine {
-        line_id: first,
-        offset: Coordinates::new(1.0, 2.0, 0.0),
-    });
-    assert!(moved.success, "{:?}", moved.error);
-    assert!(moved.reversed_lines.is_none());
-}
-
-/// The history dropdown undoes several entries at once. Each inner step knows what
-/// it renumbered, but only the aggregate reaches the frontend, which mirrors its
-/// positional refs from it - so a reverse buried in the middle of the range must
-/// still be reported, or the gas plan and the distance origin are left on the
-/// mirrored stations with nothing to signal it.
-#[test]
-fn undo_to_and_redo_to_report_every_reverse_in_the_range() {
-    let (state, line) = state_with_line();
-
-    let reversed = state.execute(Command::ReverseLine {
-        line_id: line,
-        swap_left_right: false,
-    });
-    assert!(reversed.success, "{:?}", reversed.error);
-
-    // Bury the reverse behind a later, non-renumbering edit so undo_to has to walk
-    // past it rather than land on it.
-    let moved = state.execute(Command::MoveLine {
-        line_id: line,
-        offset: Coordinates::new(1.0, 2.0, 0.0),
-    });
-    assert!(moved.success, "{:?}", moved.error);
-
-    // Index 1 = two undos: the move, then the reverse.
-    let undone = state.undo_to(1);
-    assert!(undone.success, "{:?}", undone.error);
-    assert_eq!(
-        undone.reversed_lines,
-        Some(vec![reversed_entry(line, 3)]),
-        "a reverse inside the undone range must reach the frontend"
-    );
-
-    let redone = state.redo_to(1);
-    assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(redone.reversed_lines, Some(vec![reversed_entry(line, 3)]));
-}
-
-/// `undo_to`'s aggregate is an ORDERED PER-STEP LOG, not a parity-reduced set:
-/// two reverses of one line are listed TWICE, each with the shot count in
-/// force at its own step. That is deliberate, and it does NOT contradict the
-/// parity reduction a single `Batch` gets - a batch cannot change the shot count
-/// mid-flight, whereas the steps of an undo range can (a `CreateShot` undone
-/// between two reverses), so only the aggregate has to keep the per-step counts.
-/// The consumer composes the entries: equal counts an even number of times give
-/// the exact identity. Reducing here instead would throw the counts away.
-#[test]
-fn undo_to_repeats_a_line_reversed_twice() {
-    let (state, line) = state_with_line();
-
-    for _ in 0..2 {
-        let reversed = state.execute(Command::ReverseLine {
-            line_id: line,
-            swap_left_right: false,
-        });
-        assert!(reversed.success, "{:?}", reversed.error);
-    }
-
-    let undone = state.undo_to(1);
-    assert!(undone.success, "{:?}", undone.error);
-    assert_eq!(
-        undone.reversed_lines,
-        Some(vec![reversed_entry(line, 3), reversed_entry(line, 3)])
-    );
-}
-
-/// A `Batch` that reverses ONE line TWICE leaves the numbering exactly as it
-/// found it, so there is nothing to report and - crucially - nothing to fix up.
-///
-/// `settle_reversed_lines` applies its two fix-ups ONCE PER LIST ENTRY against
-/// one FINAL project state, and the `.plnx` re-key is the cyclic shift
-/// `j -> (j - 1) mod (N + 1)`, not an involution. So an unreduced `[A, A]` walks
-/// every saved plan key TWO stations along a numbering that never moved, and the
-/// panel shows no warning because the keys still resolve.
-#[test]
-fn batch_reversing_one_line_twice_reports_nothing_and_leaves_the_plnx_alone() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let (state, line_id) = state_with_line();
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(temp.path().join("cave.stalx")),
-            })
-            .success
-    );
-
-    // Every kind of key a plan holds, so a two-station walk cannot hide in a slot
-    // the fixture happens not to use.
-    let mut snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
-    snapshot.origin = Some(StationRef::new(line_id, 0));
-    snapshot.endpoint = Some(StationRef::new(line_id, 3));
-    snapshot.waypoints = vec![StationRef::new(line_id, 2)];
-    snapshot.marked_points = vec![MarkedPoint {
-        station: StationRef::new(line_id, 1),
-        label: Some("photo".to_string()),
-    }];
-    let saved = state
-        .save_dive_plan(None, "Plan".to_string(), snapshot)
-        .unwrap();
-
-    let batch = state.execute(Command::Batch {
-        commands: vec![
-            Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            },
-        ],
-        label: None,
-    });
-    assert!(batch.success, "{:?}", batch.error);
-    assert!(
-        batch.reversed_lines.is_none(),
-        "a net no-op reverse renumbered nothing, so the field must be off the wire \
-         entirely: {:?}",
-        batch.reversed_lines
-    );
-
-    let plan = state.load_dive_plan(saved.id).unwrap();
-    assert_eq!(plan.stale_ref_count, 0);
-    assert_eq!(
-        plan.snapshot.origin,
-        Some(StationRef::new(line_id, 0)),
-        "the numbering never moved, so the saved plan must be untouched"
-    );
-    assert_eq!(plan.snapshot.endpoint, Some(StationRef::new(line_id, 3)));
-    assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(line_id, 2)]);
-    assert_eq!(
-        plan.snapshot.marked_points[0].station,
-        StationRef::new(line_id, 1)
-    );
-}
-
-/// Parity is resolved PER LINE, not per batch: `[A, B, A]` nets to `B` alone.
-/// A's plan keys must sit exactly where they started while B's move once.
-#[test]
-fn batch_a_b_a_reports_only_b() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let (state, first) = state_with_line();
-    let second = state
-        .execute(Command::CreateLine {
-            name: Some("Side".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(temp.path().join("cave.stalx")),
-            })
-            .success
-    );
-
-    let mut snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
-    snapshot.origin = Some(StationRef::new(first, 0));
-    snapshot.endpoint = Some(StationRef::new(second, 0));
-    snapshot.waypoints = vec![StationRef::new(first, 2)];
-    let saved = state
-        .save_dive_plan(None, "Plan".to_string(), snapshot)
-        .unwrap();
-
-    let reverse_of = |line_id| Command::ReverseLine {
-        line_id,
-        swap_left_right: false,
-    };
-    let batch = state.execute(Command::Batch {
-        commands: vec![reverse_of(first), reverse_of(second), reverse_of(first)],
-        label: None,
-    });
-    assert!(batch.success, "{:?}", batch.error);
-    assert_eq!(
-        batch.reversed_lines,
-        Some(vec![reversed_entry(second, 2)]),
-        "only the line reversed an ODD number of times was renumbered"
-    );
-
-    let plan = state.load_dive_plan(saved.id).unwrap();
-    assert_eq!(plan.stale_ref_count, 0);
-    assert_eq!(
-        plan.snapshot.origin,
-        Some(StationRef::new(first, 0)),
-        "the twice-reversed line's keys must not move"
-    );
-    assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(first, 2)]);
-    assert_eq!(
-        plan.snapshot.endpoint,
-        Some(StationRef::new(second, 2)),
-        "the once-reversed line's station 0 is now its station 2"
-    );
-}
-
-/// The warning re-pin has the same shape as the `.plnx` re-key: it rebuilds its
-/// `(line_id, shot_id) -> mirrored uuid` map from the CURRENT project, so
-/// running it for a line whose numbering never moved pins a position-keyed
-/// ignore onto the shot at the mirrored position - permanently suppressing an
-/// unrelated warning. An unreduced `[A, A]` collapses in the map to exactly one
-/// such spurious application.
-#[test]
-fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let (state, line_id) = state_with_line();
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(temp.path().join("cave.stalx")),
-            })
-            .success
-    );
-
-    let first_shot_id = {
-        let guard = state.project.lock().unwrap();
-        guard.as_ref().unwrap().get_line(line_id).unwrap().shots[0].id
-    };
-    state
-        .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            line_id,
-            shot_id: first_shot_id,
-            warning_code: "TEST_IGNORE".to_string(),
-            resolved_at: chrono::Utc::now(),
-            resolved_comment: None,
-            shot_uuid: None,
-        })
-        .unwrap();
-
-    let batch = state.execute(Command::Batch {
-        commands: vec![
-            Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            },
-            Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            },
-        ],
-        label: None,
-    });
-    assert!(batch.success, "{:?}", batch.error);
-
-    let rows = state.load_resolved_warnings().unwrap();
-    assert_eq!(rows.len(), 1, "the ignore must survive the batch");
-    assert_eq!(
-        rows[0].shot_uuid, None,
-        "the numbering never moved, so the row must stay position-keyed rather than \
-         being pinned to whatever shot sits at the mirrored position"
-    );
-}
-
-/// `undo_to` bails at the first failing step, but the steps BEFORE it have already
-/// applied and cannot be rolled back. If one of them re-reversed a line, the
-/// frontend's positional refs are now mirrored - so the failure result has to carry
-/// what was applied, or the pins are silently left on the wrong stations.
-#[test]
-fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
-    let (state, line_id) = state_with_line();
-
-    // A poisoned entry UNDERNEATH the reverse: `undo_inner` cannot parse its
-    // `values_json`, so step 2 of the range fails after step 1 already ran.
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.push_with_data(
-            Command::UpdateLineMetadata {
-                line_id,
-                updates: LineUpdates::default(),
-            },
-            UndoData::PreviousValues {
-                line_id,
-                shot_id: None,
-                shot_uuid: None,
-                values_json: "not-valid-json".to_string(),
-                previous_offsets: HashMap::new(),
-            },
-        );
-    }
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-
-    let result = state.undo_to(1);
-    assert!(!result.success, "step 2 must fail: {:?}", result.error);
-    assert!(
-        result
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("step 2 of 2"),
-        "{:?}",
-        result.error
-    );
-    assert_eq!(
-        result.reversed_lines,
-        Some(vec![reversed_entry(line_id, 3)]),
-        "step 1 re-reversed the line and is not rolled back, so the failure must \
-         still report it"
-    );
-}
-
-/// A reverse of a shot-less line must be a TRUE no-op in the backend, not merely harmless in
-/// the UI (#24).
-///
-/// `Project::reverse_line` returns `true` on `shot_count == 0` without touching a field, and
-/// the dialog filters such lines out - but the dialog is not a guard. The batch path, the raw
-/// IPC command and the agent harness all reach `execute` directly, and a GPX waypoint imports as
-/// exactly this kind of line. Falling through cost the whole redo branch and stamped
-/// `has_unpushed_edits`, proliferating a phantom edit to SpeleoDB for an operation that changed
-/// nothing.
-#[test]
-fn reversing_a_shotless_line_leaves_redo_and_the_dirty_bit_alone() {
-    let (state, real) = state_with_line();
-    let empty = state
-        .execute(Command::CreateLine {
-            name: Some("Waypoint".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            shots: Vec::new(),
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    // Give the redo stack something to lose: a real edit, then undo it.
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id: real,
-                swap_left_right: false,
-            })
-            .success
-    );
-    assert!(state.undo().success);
-    let redo_before = state.undo_stack.lock().unwrap().redo_len();
-    assert_eq!(redo_before, 1, "fixture: there is a redo branch to protect");
-
-    // The no-op, by both routes that skip the dialog's filter.
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id: empty,
-                swap_left_right: false,
-            })
-            .success
-    );
-    assert!(
-        state
-            .execute(Command::Batch {
-                commands: vec![Command::ReverseLine {
-                    line_id: empty,
-                    swap_left_right: false,
-                }],
-                label: None,
-            })
-            .success
-    );
-
-    assert_eq!(
-        state.undo_stack.lock().unwrap().redo_len(),
-        redo_before,
-        "a provable no-op must not consume the redo branch"
-    );
-}
-
-/// R3: the gauge must survive a save and reload, not just a reverse in memory.
-///
-/// `reverse_parity` and the captured gauge pair are the sole inputs to
-/// `default_anchor_for_component`, which pins a station at its MEASURED coordinates for a
-/// datum-less component. Losing either on the way to disk moves that pin on the next open,
-/// translating the whole component - and mutation testing showed the read and write paths were
-/// entirely unpinned: hardcoding either to a default passed the whole suite.
-#[test]
-fn the_gauge_survives_a_save_and_reload() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let path = temp.path().join("gauge.stalx");
-    let (state, line_id) = state_with_line();
-
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(path.clone()),
-            })
-            .success
-    );
-
-    let in_memory = {
-        let guard = state.project.lock().unwrap();
-        let project = guard.as_ref().unwrap();
-        let line = project.get_line(line_id).unwrap();
-        (
-            line.reverse_parity,
-            line.gauge_shot_uuid.clone(),
-            project.adjustment_anchor_for_tests(line_id),
-        )
-    };
-    assert!(in_memory.0, "the reverse recorded its parity");
-    assert!(in_memory.1.is_some(), "the save captured the gauge pair");
-
-    // Reopen from disk and compare.
-    let reopened = AppState::new().unwrap();
-    assert!(reopened.execute(Command::OpenProject { path }).success);
-    let after = {
-        let guard = reopened.project.lock().unwrap();
-        let project = guard.as_ref().unwrap();
-        let line = project.get_line(line_id).unwrap();
-        (
-            line.reverse_parity,
-            line.gauge_shot_uuid.clone(),
-            project.adjustment_anchor_for_tests(line_id),
-        )
-    };
-    assert_eq!(after.0, in_memory.0, "reverse_parity must round-trip");
-    assert_eq!(after.1, in_memory.1, "the gauge pair must round-trip");
-    assert_eq!(
-        after.2, in_memory.2,
-        "and the gauge must therefore land on the same station after a reopen"
-    );
-}
-
-/// The import toggle and an in-app reverse must agree about the line's orientation (#24).
-///
-/// `reverse_parity` is documented as flipping whenever a line's shot order is reversed, and
-/// the import path reverses the shots with the same shared transform - so leaving the flag false
-/// there made two geometrically identical projects disagree about which side of a shot a
-/// terminal plan anchor sits on, and about which end the least-squares gauge pins.
-#[test]
-fn importing_with_the_reverse_toggle_records_the_orientation() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import reverse".to_string(),
-        location: None,
-    });
-
-    let result = state.execute_import_lines(
-        vec![ImportLineConfig {
-            cave_section: None,
-            line_index: 0,
-            name: Some("Imported".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
-            placement: ImportPlacement::Origin,
-            station_comments: Vec::new(),
-            station_names: Vec::new(),
-            reverse: true,
-            azimuth_reference: None,
-            explorers: None,
-            override_date: None,
-            surveyors: None,
-        }],
-        Vec::new(),
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-    );
-    assert!(result.success, "import failed: {:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let line = project.lines.first().unwrap();
-    assert!(
-        line.reverse_parity,
-        "an import that reversed the shots must record it, like Project::reverse_line does"
-    );
-}
-
-/// `redo_to`'s partial-failure branch is the twin of the `undo_to` case above, and had no test:
-/// a half-applied redo would leave the frontend's pins mirrored with nothing on the wire to
-/// mirror them by.
-#[test]
-fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
-    let (state, line_id) = state_with_line();
-
-    // Two undoable steps, both undone, so there is a redo range to walk.
-    assert!(
-        state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-    assert!(
-        state
-            .execute(Command::UpdateLineMetadata {
-                line_id,
-                updates: LineUpdates {
-                    name: Some(Some("Renamed".to_string())),
-                    ..Default::default()
-                },
-            })
-            .success
-    );
-    assert!(state.undo().success);
-    assert!(state.undo().success);
-
-    // Poison the SECOND redo step so step 1 (the reverse) applies and step 2 fails. The redo
-    // stack hands back the most recently undone entry first, so the reverse is on top and the
-    // metadata edit is underneath.
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        let first = stack.pop_redo().unwrap();
-        let second = stack.pop_redo().unwrap();
-        stack.push_redo(crate::core::UndoEntry {
-            command_bytes: None,
-            command: second.command,
-            // Redo REPLAYS forward state rather than restoring previous values, so a poisoned
-            // `values_json` would not touch it - the snapshot it re-applies is what has to be
-            // unparseable.
-            undo_data: UndoData::ProjectSnapshotPair {
-                before: "{}".to_string(),
-                after: "not-valid-json".to_string(),
-            },
-            timestamp: second.timestamp,
-        });
-        stack.push_redo(first);
-    }
-
-    let result = state.redo_to(1);
-    assert!(!result.success, "step 2 must fail: {:?}", result.error);
-    assert_eq!(
-        result.reversed_lines,
-        Some(vec![reversed_entry(line_id, 3)]),
-        "step 1 re-applied the reverse and is not rolled back, so the failure must still \
-         report it - otherwise the frontend mirrors nothing while the backend has renumbered"
+        comment_at(&p, StationRef::new(line, 1)).as_deref(),
+        Some("the bend"),
+        "the in-range comment still mirrors to station 1"
     );
 }

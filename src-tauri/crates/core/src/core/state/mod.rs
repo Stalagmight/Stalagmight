@@ -59,12 +59,11 @@ mod warnings;
 
 #[cfg(sg_unported)]
 mod adversarial_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod azimuth_reference_tests;
@@ -81,10 +80,10 @@ mod batch_label_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod c0_foundation_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::unwrap_in_result,
+    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod cave_sections_tests;
@@ -107,10 +106,9 @@ mod combine_lines_tests;
 mod concurrency_tests;
 #[cfg(sg_unported)]
 mod crash_property_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -208,6 +206,13 @@ mod issue_756_tests;
     reason = "on-demand vector dump: fails loudly, and says where it wrote"
 )]
 mod legacy_disk_vectors_dump_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod line_commands_tests;
 #[cfg(sg_unported)]
 mod metamorphic_undo_tests;
 #[cfg(sg_unported)]
@@ -244,13 +249,6 @@ mod name_rules_tests;
 mod open_undo_bugs_tests;
 #[cfg(sg_unported)]
 #[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod pre_line_rename_disk_tests;
-#[cfg(sg_unported)]
-#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
@@ -283,11 +281,10 @@ mod project_unique_uuid_tests;
 mod raw_data_tests;
 #[cfg(test)]
 mod recents_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
