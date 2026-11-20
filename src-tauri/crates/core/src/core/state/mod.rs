@@ -276,11 +276,10 @@ mod project_restore_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_unique_uuid_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
