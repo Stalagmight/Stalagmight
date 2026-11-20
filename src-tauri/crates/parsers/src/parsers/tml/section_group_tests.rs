@@ -70,3 +70,32 @@ fn a_lone_surviving_branch_is_not_grouped() {
     assert_eq!(configs[0].name.as_deref(), Some("Gallery"));
     assert_eq!(configs[0].cave_section, None);
 }
+
+/// Each imported station carries its Ariane station ID as its external id
+/// (plan 10.5): the end of every row, and the start of a line that hangs off
+/// another row; the cave's start (`FromID` -1) has none.
+#[test]
+fn every_station_carries_its_ariane_id() {
+    let shots = [
+        tml_shot_xml_az_len(1, -1, "Sump", 90.0, 2.0),
+        tml_shot_xml_az_len(2, 1, "Sump", 90.0, 30.0),
+        tml_shot_xml_az_len(3, 2, "Sump", 90.0, 30.0),
+        tml_shot_xml_az_len(4, 2, "Side", 0.0, 10.0),
+        tml_shot_xml_az_len(5, 4, "Side", 0.0, 10.0),
+    ]
+    .join("\n");
+    let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+    let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+    let ids = |name: &str| -> Vec<(u32, String)> {
+        configs
+            .iter()
+            .find(|c| c.name.as_deref() == Some(name))
+            .map(|c| c.station_external.clone())
+            .unwrap()
+    };
+    let pairs = |v: &[(u32, &str)]| -> Vec<(u32, String)> {
+        v.iter().map(|(i, s)| (*i, (*s).to_string())).collect()
+    };
+    assert_eq!(ids("Sump"), pairs(&[(1, "1"), (2, "2"), (3, "3")]));
+    assert_eq!(ids("Side"), pairs(&[(0, "2"), (1, "4"), (2, "5")]));
+}

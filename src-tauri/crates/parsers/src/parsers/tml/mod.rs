@@ -1432,6 +1432,7 @@ pub fn convert_tml_with_options(
             placement,
             station_comments,
             station_names: Vec::new(),
+            station_external: ariane_station_ids(&line.shots, include_excluded),
             azimuth_reference: Some(azimuth_reference),
             explorers: None,
             override_date: None,
@@ -1973,6 +1974,28 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
 /// two nodes they tie, so `Length` is only zero on a loop that closes perfectly);
 /// their topology is captured in `TmlClosure`. Excluded rows are dropped unless
 /// the user asked for them.
+/// The Ariane station ID of every station of an imported line, by station
+/// index, as the stations' external ids (plan 10.5): station 0 is where the
+/// first imported row starts (its `FromID`; none for a negative one, the
+/// cave's start), station `i` where the `i`-th one ends (its `ID`). Rows are
+/// the ones [`convert_shots_to_shot_data`] imports, so the indices line up
+/// with the line's shots.
+fn ariane_station_ids(shots: &[TmlShot], include_excluded: bool) -> Vec<(u32, String)> {
+    let rows: Vec<&TmlShot> = shots
+        .iter()
+        .filter(|s| is_imported_row(s, include_excluded))
+        .collect();
+    let Some(first) = rows.first() else {
+        return Vec::new();
+    };
+    std::iter::once(first.from_id)
+        .chain(rows.iter().map(|s| s.id))
+        .enumerate()
+        .filter(|(_, id)| *id >= 0)
+        .map(|(i, id)| (u32::try_from(i).unwrap_or(u32::MAX), id.to_string()))
+        .collect()
+}
+
 fn is_imported_row(shot: &TmlShot, include_excluded: bool) -> bool {
     shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded)
 }

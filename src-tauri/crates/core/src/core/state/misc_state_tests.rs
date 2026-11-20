@@ -1261,6 +1261,7 @@ fn import_config(name: &str) -> crate::models::ImportLineConfig {
         shots: vec![shot(0.0, 3.0)],
         station_comments: Vec::new(),
         station_names: Vec::new(),
+        station_external: Vec::new(),
         placement: crate::models::ImportPlacement::Origin,
         azimuth_reference: None,
         explorers: None,

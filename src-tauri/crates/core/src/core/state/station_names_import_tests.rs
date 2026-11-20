@@ -37,6 +37,7 @@ fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> Imp
         placement: ImportPlacement::Origin,
         station_comments: pairs(comments),
         station_names: pairs(names),
+        station_external: Vec::new(),
         reverse,
         azimuth_reference: None,
         explorers: None,
@@ -181,4 +182,87 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     // The file's name for the junction is not the junction's; the branch's own
     // stations take the seed rule around it.
     assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
+}
+
+// ----- external ids (plan 10.5) ---------------------------------------------------
+
+/// The external id of each station of the (single) imported line.
+fn externals(project: &Project) -> Vec<Option<String>> {
+    let line = project.lines().first().unwrap();
+    line.stations()
+        .map(|s| project.station(s).unwrap().external.clone())
+        .collect()
+}
+
+#[test]
+fn imported_external_ids_land_on_their_stations_mirrored_and_undo_with_the_import() {
+    let mut forward = config(false, &[], &[]);
+    forward.station_external = vec![
+        (0, "A1".to_string()),
+        (1, "A2".to_string()),
+        (3, "A4".to_string()),
+    ];
+    let state = import(forward);
+    let some = |v: &str| Some(v.to_string());
+    assert_eq!(
+        externals(&state.get_project_state().unwrap()),
+        vec![some("A1"), some("A2"), None, some("A4")]
+    );
+    assert!(state.undo().success);
+    assert!(state.get_project_state().unwrap().stations.is_empty());
+    assert!(state.redo().success);
+    assert_eq!(
+        externals(&state.get_project_state().unwrap()),
+        vec![some("A1"), some("A2"), None, some("A4")],
+        "redo brings them back"
+    );
+
+    // Indexes are the file's: a reversed import puts them on the same points.
+    let mut reversed = config(true, &[], &[]);
+    reversed.station_external = vec![(0, "A1".to_string()), (3, "A4".to_string())];
+    let state = import(reversed);
+    assert_eq!(
+        externals(&state.get_project_state().unwrap()),
+        vec![some("A4"), None, None, some("A1")]
+    );
+}
+
+/// A line placed onto a station of an earlier line of the batch: the
+/// junction keeps the id its own line gave it.
+#[test]
+fn a_joined_station_keeps_the_external_id_it_already_has() {
+    let mut first = config(false, &[], &[]);
+    first.station_external = vec![(0, "A1".to_string()), (3, "A4".to_string())];
+    let mut second = config(false, &[], &[]);
+    second.line_index = 1;
+    second.name = Some("B01".to_string());
+    second.placement = ImportPlacement::FromImporting {
+        import_station: 0,
+        target_line_index: 0,
+        target_station_index: 3,
+    };
+    second.station_external = vec![(0, "B1".to_string()), (1, "B2".to_string())];
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Externals".to_string(),
+        location: None,
+    });
+    let result = state.execute_import_lines(
+        vec![first, second],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    let b = &project.lines()[1];
+    let ext = |s| project.station(s).unwrap().external.clone();
+    assert_eq!(
+        ext(b.start),
+        Some("A4".to_string()),
+        "the junction keeps A4"
+    );
+    assert_eq!(ext(b.station(1).unwrap()), Some("B2".to_string()));
 }

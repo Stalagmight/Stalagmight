@@ -335,6 +335,7 @@ impl LineBuilder {
         self.next_line_id = id.saturating_add(1);
 
         apply_station_comments(project, config, &chain, junction);
+        apply_external_ids(project, config, &chain);
         steps.push(ImportStep::CreateLine { line: id });
         match plan {
             Plan::Free { offset } => {
@@ -750,6 +751,32 @@ fn apply_station_comments(
             Some(own) if on_junction && !own.is_empty() => Some(own),
             _ => Some(text.clone()),
         };
+    }
+}
+
+/// The file's station identities (a Compass or Walls name, an Ariane ID) on
+/// the new line's stations (mirrored), as their `external` attribute (plan
+/// 10.5). A station that holds one already keeps it: the junction this line
+/// joins, or a station an earlier line of the batch named (plan E7's merge
+/// rule).
+fn apply_external_ids(project: &mut Project, config: &ImportLineConfig, chain: &[StationId]) {
+    let n = chain.len().saturating_sub(1);
+    for (index, id) in &config.station_external {
+        if id.trim().is_empty() {
+            continue;
+        }
+        let Some(position) = mirrored(config, *index, n) else {
+            continue;
+        };
+        let Some(station) = chain
+            .get(position)
+            .and_then(|s| project.stations.get_mut(s))
+        else {
+            continue;
+        };
+        if station.external.is_none() {
+            station.external = Some(id.clone());
+        }
     }
 }
 

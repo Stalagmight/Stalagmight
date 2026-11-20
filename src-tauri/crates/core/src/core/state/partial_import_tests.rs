@@ -42,6 +42,7 @@ fn line(index: u32, name: &str, length: f64, placement: ImportPlacement) -> Impo
         shots: vec![shot(10.0), shot(length)],
         station_comments: Vec::new(),
         station_names: Vec::new(),
+        station_external: Vec::new(),
         placement,
         azimuth_reference: None,
         explorers: None,

@@ -802,6 +802,7 @@ fn import_config(
         placement,
         station_comments: Vec::new(),
         station_names: Vec::new(),
+        station_external: Vec::new(),
         reverse,
         azimuth_reference: None,
         explorers: None,

@@ -217,6 +217,16 @@ pub struct ImportLineConfig {
     /// as `station_comments` (see `reverse` below).
     #[serde(default)]
     pub station_names: Vec<(u32, String)>,
+    /// The identity the source file gives each station, as (station_index,
+    /// id): a Compass or Walls station name, an Ariane station ID. Stored as
+    /// the station's `external` attribute (plan 10.5); nothing resolves
+    /// through it. Same index convention as `station_names`. Filled by the
+    /// importers that run in the backend (Compass, Walls, Ariane), so it is
+    /// not part of the TS shape; a station that already holds one (a
+    /// junction this line joins) keeps it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub station_external: Vec<(u32, String)>,
     /// Reverse this line end-to-end as it is imported (#24), so the file's
     /// last station becomes station 0.
     ///
@@ -224,7 +234,8 @@ pub struct ImportLineConfig {
     /// shots *before* creating the line.
     ///
     /// Index conventions, which differ by field:
-    /// * `station_comments` and `station_names` indices are given in the FILE's
+    /// * `station_comments`, `station_names` and `station_external` indices are
+    ///   given in the FILE's
     ///   original order - the backend mirrors them itself
     ///   (`execute_import_lines`), so an importer never has to think about it.
     /// * `placement` indices must already address the final (reversed) order.

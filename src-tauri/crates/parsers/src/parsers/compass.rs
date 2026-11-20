@@ -1753,6 +1753,7 @@ pub fn convert_compass_to_import_configs(
             placement: p,
             station_comments: chain.station_comments.clone(),
             station_names: Vec::new(),
+            station_external: external_names(&chain.names),
             azimuth_reference: Some(chain.azimuth_reference),
             explorers: None,
             override_date: None,
@@ -1763,6 +1764,17 @@ pub fn convert_compass_to_import_configs(
     topological_sort_configs(&mut configs);
 
     Ok((configs, closures, warnings))
+}
+
+/// A chain's station names as the stations' external ids, by chain index
+/// (plan 10.5): the identity the Compass file gives each station.
+fn external_names(names: &[String]) -> Vec<(u32, String)> {
+    names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| !name.is_empty())
+        .map(|(i, name)| (u32::try_from(i).unwrap_or(u32::MAX), name.clone()))
+        .collect()
 }
 
 fn line_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
@@ -2698,6 +2710,23 @@ mod tests {
         assert!((shots[0].pitch_in.unwrap() - 30.0).abs() < 1e-9);
         // A real back-inclination is still carried (+down, same as pitch_in).
         assert!((shots[1].pitch_out.unwrap() - 30.0).abs() < 1e-9);
+    }
+
+    /// Each station carries its Compass name as its external id (plan 10.5).
+    #[test]
+    fn every_station_carries_its_compass_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("names.dat");
+        std::fs::write(&path, synthetic_dat("Synthetic Cave")).unwrap();
+        let parsed = parse_compass(&path).unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let names: Vec<(u32, &str)> = configs[0]
+            .station_external
+            .iter()
+            .map(|(i, name)| (*i, name.as_str()))
+            .collect();
+        assert_eq!(names, [(0, "A1"), (1, "A2")]);
     }
 
     /// One survey record - cave name first line - in the smallest shape the

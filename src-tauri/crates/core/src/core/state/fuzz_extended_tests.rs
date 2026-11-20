@@ -750,6 +750,7 @@ fn import_configs(
             shots,
             station_comments,
             station_names,
+            station_external: Vec::new(),
             placement,
             azimuth_reference: None,
             explorers: None,

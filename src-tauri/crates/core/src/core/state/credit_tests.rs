@@ -587,6 +587,7 @@ fn import_config(shots: Vec<ShotData>, surveyors: Option<Vec<Person>>) -> Import
         placement: ImportPlacement::Origin,
         station_comments: Vec::new(),
         station_names: Vec::new(),
+        station_external: Vec::new(),
         reverse: false,
         azimuth_reference: None,
     }

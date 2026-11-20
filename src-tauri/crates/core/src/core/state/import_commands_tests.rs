@@ -62,6 +62,7 @@ fn config(
         shots,
         station_comments: Vec::new(),
         station_names: Vec::new(),
+        station_external: Vec::new(),
         placement,
         azimuth_reference: None,
         explorers: None,
