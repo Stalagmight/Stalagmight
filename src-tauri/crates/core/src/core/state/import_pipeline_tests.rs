@@ -2,21 +2,77 @@
 //! crate split: they drive the REAL import path through [`AppState`], so they
 //! live with the state they construct. `core` depends on `parsers` and
 //! `export` non-test, which keeps every import below downward.
+//!
+//! Ported to the station graph (C7): the exports are `export::survey`'s, the
+//! projects are `models::survey` ones, and the edits the tests make between
+//! the import and the export go through the model where their command is
+//! another package's (a credit edit, a loop closure made by the import).
 
+use crate::core::state::{AppState, VirtualShotMode};
+use crate::core::Command;
+use crate::models::survey::{LineMeta, Project, StartAt, ZeroDatum};
+use crate::models::{GpsCoordinates, ShotData, ShotKind, StationId};
 use crate::parsers::tml::test_helpers::{
     parse_synthetic_tmlu, tml_shot_xml_depth, tml_shot_xml_gps, wrap_xml_with,
 };
-use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
+use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml, TmlFile};
 use crate::parsers::walls::test_support::{convert_one, parse_srv};
 
+/// A fresh state with an empty project named `name`.
+fn new_state(name: &str) -> AppState {
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: name.to_string(),
+                location: None,
+            })
+            .success
+    );
+    state
+}
+
+/// Import `tml` (comments on shots unless `comments_on_stations`) into
+/// `state` with `elevation`; returns the result.
+fn import_tml_into(
+    state: &AppState,
+    tml: &TmlFile,
+    comments_on_stations: bool,
+    elevation: Option<f64>,
+) -> crate::core::CommandResult {
+    let (lines, closures, _) =
+        convert_tml_to_import_configs(tml, false, comments_on_stations).unwrap();
+    state.execute_tml_import_sections(
+        lines,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        elevation,
+    )
+}
+
+/// Import `tml` into a fresh project named `name` and return the state.
+fn import_tml(name: &str, tml: &TmlFile) -> AppState {
+    let state = new_state(name);
+    let result = import_tml_into(&state, tml, false, None);
+    assert!(result.success, "{name}: import failed: {:?}", result.error);
+    state
+}
+
+/// Export `project` to `<dir>/<label>.tmlu` and parse it back.
+fn round_trip(project: &Project, dir: &std::path::Path, label: &str) -> TmlFile {
+    let path = dir.join(format!("{label}.tmlu"));
+    crate::export::survey::export_tml(project, &path).unwrap();
+    parse_tml(&path).unwrap()
+}
+
 /// #431: a round elevation in metres (100.0) stated in feet (328.084)
-/// lands in `Project.surface_elevation` correctly converted, not just on
+/// lands in the project's `surface_elevation` correctly converted, not just on
 /// the intermediate `TmlFile`/`TmlGeoCoding` structs.
 #[test]
 fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
@@ -25,38 +81,23 @@ fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
     let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
     assert!((tml.first_start_absolute_elevation - 100.0).abs() < 1e-3);
 
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Elevation Units".to_string(),
-        location: None,
-    });
+    let state = new_state("Elevation Units");
     let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-        elevation,
-    );
+    let result = import_tml_into(&state, &tml, false, elevation);
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
-    let got = project.surface_elevation.expect("elevation must be set");
+    let got = project
+        .settings
+        .surface_elevation
+        .expect("elevation must be set");
     assert!((got - 100.0).abs() < 1e-3, "got {got}, want 100.0 +/- 1e-3");
 }
 
 /// #431 round trip: a synthetic `.tmlu` carrying
 /// `firstStartAbsoluteElevation = 123.5` survives import into a fresh
-/// project and back out through export unchanged. Red before #431 (import
-/// dropped it on the floor, the TODO(#411) this test replaces); red again
-/// if the export side reverts to reading a zero datum's `depth_reference`.
+/// project and back out through export unchanged.
 #[test]
 fn entrance_elevation_round_trips_through_import_and_export() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
@@ -64,30 +105,15 @@ fn entrance_elevation_round_trips_through_import_and_export() {
     .join("\n");
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 123.5, &shots));
 
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Round Trip".to_string(),
-        location: None,
-    });
+    let state = new_state("Round Trip");
     let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-        elevation,
-    );
+    let result = import_tml_into(&state, &tml, false, elevation);
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.surface_elevation, Some(123.5));
+    assert_eq!(project.settings.surface_elevation, Some(123.5));
 
     let out_dir = tempfile::tempdir().unwrap();
-    let out_path = out_dir.path().join("roundtrip.tmlu");
-    crate::export::tml::export_tml(&project, &out_path).unwrap();
-    let round_tripped = parse_tml(&out_path).unwrap();
+    let round_tripped = round_trip(&project, out_dir.path(), "roundtrip");
     assert!(
         (round_tripped.first_start_absolute_elevation - 123.5).abs() < 1e-6,
         "got {}, want 123.5",
@@ -101,51 +127,44 @@ fn entrance_elevation_round_trips_through_import_and_export() {
 /// rather than silently overwriting it.
 #[test]
 fn entrance_elevation_import_does_not_clobber_an_existing_value() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
     ]
     .join("\n");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "No Clobber".to_string(),
-        location: None,
-    });
+    let state = new_state("No Clobber");
 
     let first_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 50.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&first_tml, false, false).unwrap();
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let result = import_tml_into(
+        &state,
+        &first_tml,
+        false,
         Some(first_tml.first_start_absolute_elevation),
     );
     assert!(result.success, "first import failed: {:?}", result.error);
     assert_eq!(
-        state.get_project_state().unwrap().surface_elevation,
+        state
+            .get_project_state()
+            .unwrap()
+            .settings
+            .surface_elevation,
         Some(50.0)
     );
 
     let second_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 75.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&second_tml, false, false).unwrap();
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let result = import_tml_into(
+        &state,
+        &second_tml,
+        false,
         Some(second_tml.first_start_absolute_elevation),
     );
     assert!(result.success, "second import failed: {:?}", result.error);
     assert_eq!(
-        state.get_project_state().unwrap().surface_elevation,
+        state
+            .get_project_state()
+            .unwrap()
+            .settings
+            .surface_elevation,
         Some(50.0),
         "the existing elevation must survive a conflicting import"
     );
@@ -156,62 +175,46 @@ fn entrance_elevation_import_does_not_clobber_an_existing_value() {
         .unwrap_or_default();
     assert!(
         warnings.iter().any(|w| w.contains("kept 50.00")),
-        "the clobber must be surfaced naming the KEPT value explicitly \
-         (not just both numbers, which a reversed message would also \
-         contain), got {warnings:?}"
+        "the clobber must be surfaced naming the KEPT value explicitly, got {warnings:?}"
     );
 }
 
-/// #431 tolerance: re-importing the SAME cave via its metric and
-/// imperial twins (100.0 m vs 328.084 ft, which converts to
-/// 100.00003... m) must not fire the no-clobber "differs" warning - the
-/// unit round-trip's residue is far below `f64::EPSILON` (2.2e-16) but
-/// well inside the message's own `{:.2}` precision. Red on
-/// `f64::EPSILON` used as the tolerance, which reads this pair as
-/// different and prints a warning naming "100.00 m" against "100.00 m".
+/// #431 tolerance: re-importing the SAME cave via its metric and imperial
+/// twins (100.0 m vs 328.084 ft) must not fire the no-clobber "differs"
+/// warning: the unit round trip's residue is inside the message's own
+/// `{:.2}` precision.
 #[test]
 fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
     ]
     .join("\n");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Unit Twins".to_string(),
-        location: None,
-    });
+    let state = new_state("Unit Twins");
 
     let metric_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&metric_tml, false, false).unwrap();
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let result = import_tml_into(
+        &state,
+        &metric_tml,
+        false,
         Some(metric_tml.first_start_absolute_elevation),
     );
     assert!(result.success, "metric import failed: {:?}", result.error);
 
     let imperial_tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&imperial_tml, false, false).unwrap();
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let result = import_tml_into(
+        &state,
+        &imperial_tml,
+        false,
         Some(imperial_tml.first_start_absolute_elevation),
     );
     assert!(result.success, "imperial import failed: {:?}", result.error);
     assert_eq!(
-        state.get_project_state().unwrap().surface_elevation,
+        state
+            .get_project_state()
+            .unwrap()
+            .settings
+            .surface_elevation,
         Some(100.0),
         "the original metric value must survive unchanged"
     );
@@ -228,19 +231,12 @@ fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
 
 #[test]
 fn end_to_end_import_respects_datum_invariants() {
-    // Runs the REAL import (execute_import_lines enforces
-    // `multiple_datums_per_merge_component`), so a successful result proves
-    // the placement respects the model's one-datum-per-component invariant.
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
+    // Runs the REAL import (the pipeline validates the model), so a
+    // successful result proves the placement respects the one-anchor-per-
+    // piece invariant.
     let run = |srv: &str| -> (bool, Option<String>, usize) {
         let (lines, closures, _w) = convert_one(parse_srv(srv));
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "T".to_string(),
-            location: None,
-        });
+        let state = new_state("T");
         let result = state.execute_import_lines(
             lines,
             closures,
@@ -251,7 +247,7 @@ fn end_to_end_import_respects_datum_invariants() {
         );
         let datums = state
             .get_project_state()
-            .map(|p| p.zero_datums.len())
+            .map(|p| p.datums.len())
             .unwrap_or(0);
         (result.success, result.error, datums)
     };
@@ -266,7 +262,7 @@ fn end_to_end_import_respects_datum_invariants() {
     assert_eq!(d2, 2);
 
     // Two #Fix in ONE connected component -> exactly 1 datum, import still
-    // succeeds (no multiple_datums_per_merge_component violation).
+    // succeeds.
     let (ok1, err1, d1) = run("#UNITS meters order=DAV\n\
          #FIX A0 W90:00:00 N30:00:00 0\n\
          #FIX B0 W91:00:00 N31:00:00 0\n\
@@ -279,75 +275,79 @@ fn end_to_end_import_respects_datum_invariants() {
     );
     assert_eq!(
         d1, 1,
-        "exactly one datum survives in a single merge component"
+        "exactly one datum survives in a single connected component"
     );
+}
+
+/// Shots of `length` metres east, `count` of them.
+fn east(count: usize, length: f64) -> Vec<ShotData> {
+    (0..count)
+        .map(|_| ShotData {
+            length,
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// A survey of two lines, North (one shot) and South (two shots), as two
+/// pieces; `datums` are `(line, station index, latitude, longitude)`; a piece
+/// without a datum sits at the origin.
+fn two_entrance_project(datums: &[(usize, usize, f64, f64)]) -> Project {
+    let mut project = Project::new("Cycle", None);
+    let mut ids = Vec::new();
+    for (name, count) in [("North", 1), ("South", 2)] {
+        let id = project
+            .add_line(
+                LineMeta {
+                    name: Some(name.to_string()),
+                    color: "#ff0000".to_string(),
+                    ..LineMeta::default()
+                },
+                StartAt::New,
+                east(count, 5.0),
+            )
+            .unwrap();
+        ids.push(id);
+    }
+    for &(line, index, latitude, longitude) in datums {
+        let station = project
+            .line(ids[line])
+            .unwrap()
+            .stations()
+            .nth(index)
+            .unwrap();
+        project.push_datum(ZeroDatum {
+            via: Some(ids[line]),
+            ..ZeroDatum::new(
+                station,
+                GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
+            )
+        });
+    }
+    for &id in &ids {
+        let start = project.line(id).unwrap().start;
+        if project.placement_datum_of(start).is_none() {
+            project.set_placement(start, 0.0, 0.0).unwrap();
+        }
+    }
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    project
 }
 
 /// #378 item (d): export -> import -> export must not let GPS anchors drift.
 /// Since the exporter writes one START per entrance, an import of that file
 /// creates one zero datum per GPS-tagged START - so a survey's anchor set has
 /// to be STABLE across cycles, and each anchor has to keep its own
-/// coordinates. Decision recorded here: several anchors are accepted as
-/// legitimate (one per merge component - the model's own invariant), NOT
-/// suppressed on import; the second entrance's datum is exactly what keeps
-/// its component placed on re-import, so dropping it would collapse the
-/// survey onto one anchor again.
+/// coordinates. Several anchors are legitimate (one per piece), NOT
+/// suppressed on import.
 #[test]
 fn zero_datums_are_stable_across_export_import_cycles() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-    use crate::models::{GpsCoordinates, LineData, Project, ShotData, StationRef, ZeroDatum};
-
-    fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
-        let mut project = Project::new("Cycle".to_string(), None);
-        for (name, shot_count) in [("North", 1), ("South", 2)] {
-            project.add_line(LineData {
-                name: Some(name.to_string()),
-                color: "#ff0000".to_string(),
-                shots: (0..shot_count)
-                    .map(|_| ShotData {
-                        length: 5.0,
-                        azimuth_in: 90.0,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            });
-        }
-        for &(line_id, latitude, longitude) in datums {
-            project.zero_datums.push(ZeroDatum {
-                station_ref: StationRef {
-                    line_id,
-                    station_index: 0,
-                }
-                .into(),
-                gps: GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
-                accuracy_m: None,
-                entrance: None,
-            });
-        }
-        project
-    }
-
     fn import_cycle(project: &Project, dir: &std::path::Path, label: &str) -> Project {
-        let path = dir.join(format!("{label}.tmlu"));
-        crate::export::tml::export_tml(project, &path).unwrap();
-        let tml = parse_tml(&path).unwrap();
-        let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: label.to_string(),
-            location: None,
-        });
-        let result = state.execute_tml_import_sections(
-            lines,
-            closures,
-            None,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-            None,
-        );
+        let tml = round_trip(project, dir, label);
+        let state = new_state(label);
+        let result = import_tml_into(&state, &tml, false, None);
         assert!(result.success, "{label}: import failed: {:?}", result.error);
         state.get_project_state().unwrap()
     }
@@ -356,7 +356,7 @@ fn zero_datums_are_stable_across_export_import_cycles() {
         // Coordinates as written-precision integers so f64 noise and datum
         // order cannot flake the comparison.
         let mut set: Vec<(i64, i64)> = project
-            .zero_datums
+            .datums
             .iter()
             .map(|d| {
                 (
@@ -372,9 +372,8 @@ fn zero_datums_are_stable_across_export_import_cycles() {
     let dir = tempfile::tempdir().unwrap();
 
     // Two entrances, each with its own anchor: the set survives verbatim, and
-    // stays put on a second cycle. Red before #378(e): both STARTs carried the
-    // first datum's GPS, so the second anchor's coordinates were lost.
-    let original = two_entrance_project(&[(0, 20.25, -87.5), (1, 20.31, -87.42)]);
+    // stays put on a second cycle.
+    let original = two_entrance_project(&[(0, 0, 20.25, -87.5), (1, 0, 20.31, -87.42)]);
     let expected = anchor_set(&original);
     let once = import_cycle(&original, dir.path(), "two-anchors-once");
     assert_eq!(anchor_set(&once), expected, "anchors changed on import");
@@ -383,9 +382,9 @@ fn zero_datums_are_stable_across_export_import_cycles() {
 
     // One anchor, two entrances: the export stamps the frame datum's GPS onto
     // the unanchored entrance (better than null island), so the FIRST cycle
-    // legitimately gains one datum for that component - and from then on the
-    // set must hold still. This pins the drift to that single, understood step.
-    let original = two_entrance_project(&[(0, 20.25, -87.5)]);
+    // legitimately gains one datum for that piece - and from then on the set
+    // must hold still.
+    let original = two_entrance_project(&[(0, 0, 20.25, -87.5)]);
     let once = import_cycle(&original, dir.path(), "one-anchor-once");
     let after_first = anchor_set(&once);
     assert_eq!(
@@ -402,23 +401,9 @@ fn zero_datums_are_stable_across_export_import_cycles() {
         "the anchor set must be stable from the first re-import onward"
     );
 
-    // A mid-line datum on a detached entrance: the export SPLITS that
-    // line at the datum (forward + pre-zero-datum legs), so the first cycle
-    // legitimately turns 2 datums into 3 lines/3 datums - all at the two
-    // original coordinates - and from then on the set holds still. Splitting is
-    // structurally lossy (the root's datum split always was); what this pins is
-    // that the COORDINATES never drift and the growth stops after one cycle.
-    let mut original = two_entrance_project(&[(0, 20.25, -87.5)]);
-    original.zero_datums.push(ZeroDatum {
-        station_ref: StationRef {
-            line_id: 1,
-            station_index: 1,
-        }
-        .into(),
-        gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
-        accuracy_m: None,
-        entrance: None,
-    });
+    // A mid-line datum on a detached entrance: the coordinates never drift
+    // and the shape is stable from the first re-import onward.
+    let original = two_entrance_project(&[(0, 0, 20.25, -87.5), (1, 1, 20.31, -87.42)]);
     let once = import_cycle(&original, dir.path(), "mid-datum-once");
     let after_first = anchor_set(&once);
     for anchor in &after_first {
@@ -435,115 +420,100 @@ fn zero_datums_are_stable_across_export_import_cycles() {
     );
 }
 
+/// The comment of each station of `line`'s chain that has one, by chain
+/// index.
+fn station_comments(project: &Project, line: crate::models::LineId) -> Vec<(usize, String)> {
+    project
+        .line(line)
+        .unwrap()
+        .stations()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            project
+                .station(s)
+                .and_then(|st| st.comment.clone())
+                .map(|c| (i, c))
+        })
+        .collect()
+}
+
 /// #564: a shot comment with no station comment beside it used to export
 /// UNMARKED, and the default import routes unmarked lines to the station -
 /// so the text silently changed side on every default round trip. Cover the
 /// three shapes: shot comment alone, station comment alone, and both on one
-/// shot (the shape that always worked, which is why the bug hid).
+/// shot.
 #[test]
 fn comments_keep_their_side_across_a_default_reimport() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-    use crate::models::{LineData, Project, ShotData, StationRef};
-
-    let mut original = Project::new("Comments".to_string(), None);
-    original.add_line(LineData {
-        name: Some("Main".to_string()),
-        color: "#ff0000".to_string(),
-        shots: (0..3)
-            .map(|i| ShotData {
-                length: 5.0,
-                azimuth_in: 90.0,
-                comment: match i {
-                    0 => Some("broken tape".to_string()),
-                    2 => Some("silty here".to_string()),
-                    _ => None,
-                },
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    });
+    let mut original = Project::new("Comments", None);
+    let shots: Vec<ShotData> = (0..3)
+        .map(|i| ShotData {
+            comment: match i {
+                0 => Some("broken tape".to_string()),
+                2 => Some("silty here".to_string()),
+                _ => None,
+            },
+            ..east(1, 5.0).remove(0)
+        })
+        .collect();
+    let line = original
+        .add_line(
+            LineMeta {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                ..LineMeta::default()
+            },
+            StartAt::New,
+            shots,
+        )
+        .unwrap();
+    let chain: Vec<StationId> = original.line(line).unwrap().stations().collect();
+    original.set_placement(chain[0], 0.0, 0.0).unwrap();
     // Station comments away from station 0 (the START alias documentedly
     // drops a comment there): shot 1's to-station carries one alone, shot 2's
     // to-station rides beside that shot's own comment.
-    original.station_comments.insert(
-        StationRef {
-            line_id: 0,
-            station_index: 2,
-        }
-        .into(),
-        "junction with main".to_string(),
-    );
-    original.station_comments.insert(
-        StationRef {
-            line_id: 0,
-            station_index: 3,
-        }
-        .into(),
-        "beware silt".to_string(),
-    );
+    original.station_mut(chain[2]).unwrap().comment = Some("junction with main".to_string());
+    original.station_mut(chain[3]).unwrap().comment = Some("beware silt".to_string());
 
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("comments.tmlu");
-    crate::export::tml::export_tml(&original, &path).unwrap();
-    let tml = parse_tml(&path).unwrap();
+    let tml = round_trip(&original, dir.path(), "comments");
     // `true` = comments-on-stations, the import dialog's default - the exact
     // setting under which the missing marker moved shot comments.
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, true).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "comments-reimport".to_string(),
-        location: None,
-    });
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-        None,
-    );
+    let state = new_state("comments-reimport");
+    let result = import_tml_into(&state, &tml, true, None);
     assert!(result.success, "import failed: {:?}", result.error);
     let reimported = state.get_project_state().unwrap();
 
-    assert_eq!(reimported.lines.len(), 1, "one line must come back");
-    let line = &reimported.lines[0];
-    let shot_comments: Vec<Option<&str>> =
-        line.shots.iter().map(|s| s.comment.as_deref()).collect();
+    assert_eq!(reimported.lines().len(), 1, "one line must come back");
+    let line = &reimported.lines()[0];
+    let shot_comments: Vec<Option<String>> = line.shots.iter().map(|s| s.comment.clone()).collect();
     assert_eq!(
         shot_comments,
-        vec![Some("broken tape"), None, Some("silty here")],
+        vec![
+            Some("broken tape".to_string()),
+            None,
+            Some("silty here".to_string())
+        ],
         "shot comments must come back on their shots, not move to stations"
     );
-
-    let mut station_comments: Vec<(u32, &str)> = reimported
-        .station_comments
-        .iter()
-        .filter_map(|(k, v)| {
-            reimported
-                .resolve_key(k)
-                .map(|sr| (sr.station_index, v.as_str()))
-        })
-        .collect();
-    station_comments.sort_unstable();
     assert_eq!(
-        station_comments,
-        vec![(2, "junction with main"), (3, "beware silt")],
+        station_comments(&reimported, line.id),
+        vec![
+            (2, "junction with main".to_string()),
+            (3, "beware silt".to_string())
+        ],
         "station comments must come back on their stations and nowhere else"
     );
 }
 
 /// Every shot in the project, cross-checked with the real validator - the
-/// same call `command_shot.rs` makes.
-fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
+/// same call the create path makes.
+fn inclination_depth_mismatch_count(project: &Project) -> usize {
     use crate::config::ValidationConfig;
     use crate::core::Validator;
 
     let config = ValidationConfig::default();
     project
-        .lines
+        .lines()
         .iter()
         .flat_map(|line| {
             line.shots.iter().flat_map(|shot| {
@@ -555,23 +525,15 @@ fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
 }
 
 /// #482: a clean TML export/import cycle must not fabricate
-/// `INCLINATION_DEPTH_MISMATCH` warnings for depth-only surveys. Red on
-/// master: export collapses `pitch_in: None` to a wire `0.0` inclination,
-/// and import used to read every wire inclination back as `Some`, so the
-/// re-imported shot's fabricated `Some(0.0)` disagreed with its real depth
-/// change on every one of these depth-only shots.
+/// `INCLINATION_DEPTH_MISMATCH` warnings for depth-only surveys (export
+/// collapses `pitch_in: None` to a wire `0.0` inclination, which import reads
+/// back as "not sighted").
 #[test]
 fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
     // Five depth-only shots (Inclination 0.0, i.e. never sighted), each with
     // a real depth change steep enough to fabricate a mismatch under the old
-    // logic - the shape issue #482 reports. `tml_shot_xml_depth` hardcodes
-    // `Length` at 10.0, so every |dz| below stays under that (never taking
-    // the LENGTH_BELOW_DEPTH_CHANGE branch instead) while still exceeding
-    // the default 15-degree threshold (dz > 10*sin(15deg) =~ 2.59m). Chain
-    // starts from the START shot's hardcoded Depth=5.0.
+    // logic. `tml_shot_xml_depth` hardcodes `Length` at 10.0. Chain starts
+    // from the START shot's hardcoded Depth=5.0.
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
         tml_shot_xml_depth(1, 0, "REAL", "Main", 13.0, -1.0), // dz +8
@@ -583,20 +545,11 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
     .join("\n");
 
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Depth Only".to_string(),
-        location: None,
-    });
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let state = new_state("Depth Only");
+    let result = import_tml_into(
+        &state,
+        &tml,
+        false,
         Some(tml.first_start_absolute_elevation),
     );
     assert!(result.success, "import failed: {:?}", result.error);
@@ -608,113 +561,74 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
         "first import must not fabricate a mismatch for a never-sighted inclination"
     );
 
-    // Export and re-import to complete the round trip the issue describes.
     let out_dir = tempfile::tempdir().unwrap();
-    let out_path = out_dir.path().join("depth_only.tmlu");
-    crate::export::tml::export_tml(&project, &out_path).unwrap();
-    let round_tripped = parse_tml(&out_path).unwrap();
-    let (lines, closures, _) = convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
-
-    let state2 = AppState::new().unwrap();
-    state2.execute(Command::CreateProject {
-        name: "Depth Only Round Trip".to_string(),
-        location: None,
-    });
-    let result2 = state2.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
+    let round_tripped = round_trip(&project, out_dir.path(), "depth_only");
+    let state2 = new_state("Depth Only Round Trip");
+    let result2 = import_tml_into(
+        &state2,
+        &round_tripped,
+        false,
         Some(round_tripped.first_start_absolute_elevation),
     );
     assert!(result2.success, "re-import failed: {:?}", result2.error);
-
-    let project2 = state2.get_project_state().unwrap();
     assert_eq!(
-        inclination_depth_mismatch_count(&project2),
+        inclination_depth_mismatch_count(&state2.get_project_state().unwrap()),
         0,
         "a clean export/import round trip must not fabricate inclination-depth \
          mismatch warnings for a depth-only survey"
     );
 }
 
-/// #482 deliberate residual loss (a), pinned as chosen behavior rather than
-/// left as an unexamined side effect: a shot with a GENUINELY recorded
-/// `Some(0.0)` pitch on a STEEP depth-only geometry is erased to `None` by
-/// one export/import round trip. `export::tml::pitch_to_inclination` writes
-/// both `None` and `Some(0.0)` as the same wire `0.0`
-/// (`export/tml.rs::pitch_to_inclination`), so the importer cannot recover
-/// which one it was; it resolves the ambiguity toward `None` specifically
-/// because the alternative - keeping `Some(0.0)` - would have re-fabricated
-/// #482's warning on every ordinary depth-only survey. The warning this
-/// erased `Some(0.0)` WOULD have produced (mismatch against a steep implied
-/// pitch) was never earnable back from a lossy wire `0.0` in the first
-/// place, so nothing observable is lost beyond the raw pitch value itself.
+/// #482 deliberate residual loss (a), pinned as chosen behaviour: a shot
+/// with a GENUINELY recorded `Some(0.0)` pitch on a STEEP depth-only geometry
+/// is erased to `None` by one export/import round trip (the wire `0.0` is
+/// ambiguous, and keeping `Some(0.0)` would re-fabricate #482's warning).
 #[test]
 fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip() {
-    use crate::core::state::AppState;
-    use crate::core::Command;
-    use crate::models::ShotData;
-
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Erasure Pin".to_string(),
-        location: None,
-    });
-    let create = state.execute(Command::CreateLine {
-        name: Some("Main".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#abcdef".to_string(),
-        direction: None,
-        shots: vec![ShotData {
-            azimuth_in: 90.0,
-            azimuth_out: 90.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 8.0, // implied ~53 deg, well past the 15 deg default threshold
-            pitch_in: Some(0.0),
-            pitch_out: Some(0.0),
-            ..Default::default()
-        }],
-        cave_section_id: None,
-    });
-    assert!(create.success, "line create failed: {:?}", create.error);
-
-    let project = state.get_project_state().unwrap();
+    let mut project = Project::new("Erasure Pin", None);
+    let line = project
+        .add_line(
+            LineMeta {
+                name: Some("Main".to_string()),
+                color: "#abcdef".to_string(),
+                ..LineMeta::default()
+            },
+            StartAt::New,
+            vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 8.0, // implied ~53 deg, well past the 15 deg default
+                pitch_in: Some(0.0),
+                pitch_out: Some(0.0),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+    let start = project.line(line).unwrap().start;
+    project.set_placement(start, 0.0, 0.0).unwrap();
     assert_eq!(
-        project.lines[0].shots[0].pitch_in,
+        project.lines()[0].shots[0].pitch_in,
         Some(0.0),
         "the recorded reading survives until export"
     );
 
     let out_dir = tempfile::tempdir().unwrap();
-    let out_path = out_dir.path().join("erasure.tmlu");
-    crate::export::tml::export_tml(&project, &out_path).unwrap();
-    let round_tripped = parse_tml(&out_path).unwrap();
-    let (lines, closures, _) = convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
-
-    let state2 = AppState::new().unwrap();
-    state2.execute(Command::CreateProject {
-        name: "Erasure Pin Round Trip".to_string(),
-        location: None,
-    });
-    let result2 = state2.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        crate::core::state::VirtualShotMode::Auto,
+    let round_tripped = round_trip(&project, out_dir.path(), "erasure");
+    let state2 = new_state("Erasure Pin Round Trip");
+    let result2 = import_tml_into(
+        &state2,
+        &round_tripped,
+        false,
         Some(round_tripped.first_start_absolute_elevation),
     );
     assert!(result2.success, "re-import failed: {:?}", result2.error);
 
     let project2 = state2.get_project_state().unwrap();
     assert_eq!(
-        project2.lines[0].shots[0].pitch_in, None,
+        project2.lines()[0].shots[0].pitch_in,
+        None,
         "a genuinely-recorded 0deg pitch on a steep shot is erased, not \
          preserved - this is the chosen tradeoff, not a bug"
     );
@@ -727,20 +641,13 @@ fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip()
 
 /// #482 closure interaction: a depth-only TML import (steep shots, `pitch_in:
 /// None`) closed into a loop must not surface `INCLINATION_DEPTH_MISMATCH`
-/// afterward. The closure solve (`Project::apply_station_move_internal`,
-/// `models/project/closure.rs:265,290`) overwrites `pitch_in`/`pitch_out`
-/// with `Some(pitch)` computed from the shot's OWN post-adjust geometry on
-/// every shot it touches, so a touched shot's recorded and implied pitch
-/// agree exactly regardless of what `pitch_in` held before (`None` or
-/// otherwise); an untouched shot keeps `None`, which the validator already
-/// treats as nothing to cross-check. If this assertion fails, that is a
-/// genuine design question (a closure-adjusted shot disagreeing with its own
-/// freshly-written pitch) - report it, do not tune the threshold to hide it.
+/// afterwards. On the station graph the Closures Computed View is derived and
+/// never rewrites a shot, so the measured shots are what the validator sees;
+/// the loop is made by an import (a bridge line on the chain's tail and a
+/// closure back to its start), the funnel's own closure path.
 #[test]
 fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-    use crate::models::{ClosureStrategy, ShotData, StationRef};
+    use crate::models::{ImportClosure, ImportLineConfig, ImportPlacement};
 
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
@@ -750,14 +657,43 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
     ]
     .join("\n");
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Closure Interaction".to_string(),
-        location: None,
+    let (mut lines, _, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+    assert_eq!(lines.len(), 1);
+    let main = &lines[0];
+    assert!(
+        main.shots.iter().any(|s| s.pitch_in.is_none()),
+        "fixture must actually exercise the None-pitch shape #482 fixed"
+    );
+    let tail = main.shots.len() as u32;
+    // A short bridging line on the chain's tail, left with pitch at its None
+    // default so it cannot itself contribute a mismatch.
+    lines.push(ImportLineConfig {
+        line_index: 1,
+        name: Some("Bridge".to_string()),
+        color: "#222222".to_string(),
+        shots: vec![ShotData {
+            azimuth_in: 270.0,
+            azimuth_out: 270.0,
+            length: 5.0,
+            depth_in: 100.0,
+            depth_out: 100.0,
+            ..Default::default()
+        }],
+        placement: ImportPlacement::FromImporting {
+            import_station: 0,
+            target_line_index: 0,
+            target_station_index: tail,
+        },
+        ..main.clone()
     });
-    let import_result = state.execute_tml_import_sections(
+    let closures = vec![ImportClosure {
+        from_line_index: 0,
+        from_station_index: 0,
+        to_line_index: 1,
+        to_station_index: 1,
+    }];
+    let state = new_state("Closure Interaction");
+    let result = state.execute_tml_import_sections(
         lines,
         closures,
         None,
@@ -766,79 +702,36 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
         VirtualShotMode::Auto,
         Some(tml.first_start_absolute_elevation),
     );
-    assert!(
-        import_result.success,
-        "import failed: {:?}",
-        import_result.error
-    );
-    let main_id = state.get_project_state().unwrap().lines[0].id;
-    assert!(
-        state.get_project_state().unwrap().lines[0]
-            .shots
-            .iter()
-            .any(|s| s.pitch_in.is_none()),
-        "fixture must actually exercise the None-pitch shape #482 fixed"
-    );
-
-    // A short bridging line, left with pitch_in/out at their None default
-    // so it cannot itself contribute a mismatch independent of the closure.
-    let bridge_id = state
-        .execute(Command::CreateLine {
-            name: Some("Bridge".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#222222".to_string(),
-            direction: None,
-            shots: vec![ShotData {
-                azimuth_in: 270.0,
-                azimuth_out: 270.0,
-                length: 5.0,
-                depth_in: 100.0,
-                depth_out: 100.0,
-                ..Default::default()
-            }],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    // Merge one end of the bridge to the tail of the imported chain, leaving
-    // the other end - and the imported chain's own start - as the loop's two
-    // loose ends for CreateLoopClosure to tie together.
-    state.execute(Command::MergeStations {
-        station_a: StationRef::new(main_id, 3),
-        station_b: StationRef::new(bridge_id, 0),
-    });
-    let closure = state.execute(Command::CreateLoopClosure {
-        station_a: StationRef::new(main_id, 0),
-        station_b: StationRef::new(bridge_id, 1),
-        closure_strategy: ClosureStrategy::default(),
-    });
-    assert!(closure.success, "loop closure failed: {:?}", closure.error);
-
-    let project = state.get_project_state().unwrap();
-    let count = inclination_depth_mismatch_count(&project);
+    assert!(result.success, "import failed: {:?}", result.error);
+    let receipt = result.import_receipt.unwrap();
     assert_eq!(
-        count, 0,
-        "a closure-adjusted depth-only loop must not surface \
-         INCLINATION_DEPTH_MISMATCH - if this fires, it is a real finding, \
-         not something to paper over"
+        (receipt.closures_requested, receipt.closures_created),
+        (1, 1)
     );
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.closures.len(), 1, "the loop is closed");
+    assert_eq!(
+        inclination_depth_mismatch_count(&project),
+        0,
+        "a closed depth-only loop must not surface INCLINATION_DEPTH_MISMATCH"
+    );
+}
+
+/// The distinct surveyor names of every shot of `line`, joined.
+fn surveyors_of(line: &crate::models::survey::Line) -> Option<String> {
+    let summary = crate::models::LineCreditSummary::from_credits(
+        line.shots
+            .iter()
+            .map(|s| s.credit.as_deref().unwrap_or(&crate::models::EMPTY_CREDIT)),
+    );
+    crate::models::join_names(&summary.surveyor_people())
 }
 
 /// #427 end to end: a chain that changes COLOUR mid-run imports as one line
 /// per colour, and a full export/re-import round trip returns the SAME line
 /// names and trips - no second cut, no second suffix.
-///
-/// The export writes each line's name into every one of its shot rows, so a
-/// re-import sees two DECLARED names rather than one run to cut; the join then
-/// has to refuse to sew them back together, which it does on the colour.
-/// Anything that broke either half would show up here as a name like
-/// "A (trip 2) (trip 2)", a re-merged "A", or a lost surveyor.
 #[test]
 fn per_trip_lines_survive_an_export_and_re_import_unchanged() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
     use crate::parsers::tml::test_helpers::TripShot;
 
     let second = TripShot {
@@ -882,42 +775,16 @@ fn per_trip_lines_survive_an_export_and_re_import_unchanged() {
     ]
     .join("\n");
 
-    let import_into = |name: &str, tml: &crate::parsers::tml::TmlFile| {
-        let (lines, closures, _) = convert_tml_to_import_configs(tml, false, false).unwrap();
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: name.to_string(),
-            location: None,
-        });
-        let result = state.execute_tml_import_sections(
-            lines,
-            closures,
-            None,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-            None,
-        );
-        assert!(result.success, "import failed: {:?}", result.error);
-        state.get_project_state().unwrap()
-    };
-    let trips = |project: &crate::models::Project| -> Vec<(String, Option<String>)> {
+    let trips = |project: &Project| -> Vec<(String, Option<String>)> {
         project
-            .lines
+            .lines()
             .iter()
-            .map(|s| {
-                // A plain single Ariane value is the shot's SURVEYORS, as in
-                // a .stalx legacy column (#719).
-                (
-                    s.name.clone().unwrap_or_default(),
-                    crate::models::join_names(&s.credit_summary().surveyor_people()),
-                )
-            })
+            .map(|s| (s.name.clone().unwrap_or_default(), surveyors_of(s)))
             .collect()
     };
 
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots));
-    let project = import_into("Trips", &tml);
+    let project = import_tml("Trips", &tml).get_project_state().unwrap();
     let expected = vec![
         ("A".to_string(), Some("Tester".to_string())),
         ("A (trip 2)".to_string(), Some("Ada Lovelace".to_string())),
@@ -925,9 +792,7 @@ fn per_trip_lines_survive_an_export_and_re_import_unchanged() {
     assert_eq!(trips(&project), expected, "the cut lands in the project");
 
     let out_dir = tempfile::tempdir().unwrap();
-    let out_path = out_dir.path().join("trips.tmlu");
-    crate::export::tml::export_tml(&project, &out_path).unwrap();
-    let reparsed = parse_tml(&out_path).unwrap();
+    let reparsed = round_trip(&project, out_dir.path(), "trips");
     assert_eq!(
         reparsed
             .lines
@@ -938,7 +803,9 @@ fn per_trip_lines_survive_an_export_and_re_import_unchanged() {
         "the round trip must not cut again, re-merge, or double the suffix"
     );
 
-    let round_tripped = import_into("Trips Again", &reparsed);
+    let round_tripped = import_tml("Trips Again", &reparsed)
+        .get_project_state()
+        .unwrap();
     assert_eq!(
         trips(&round_tripped),
         expected,
@@ -948,14 +815,12 @@ fn per_trip_lines_survive_an_export_and_re_import_unchanged() {
 
 /// The round trip the trip cut broke (#329): ONE line whose shots carry
 /// different people and dates - entered per shot in the app, one colour -
-/// exported to Ariane and imported again. Credit is per shot, so it comes back
-/// as one line with every shot's credit exactly as it left, instead of one
-/// "(trip N)" line per credit change.
+/// exported to Ariane and imported again comes back as one line with every
+/// shot's credit exactly as it left. (The per-shot credit is set on the
+/// model here: the credit command is another package's.)
 #[test]
 fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-    use crate::models::{CreditEdit, CreditTargets, Person, SurveyCredit};
+    use crate::models::{Person, SurveyCredit};
     use crate::parsers::tml::test_helpers::TripShot;
 
     let shots: Vec<String> = (1..=4)
@@ -970,31 +835,12 @@ fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
             .xml()
         })
         .collect();
-    let import_into = |name: &str, tml: &crate::parsers::tml::TmlFile| {
-        let (lines, closures, _) = convert_tml_to_import_configs(tml, false, false).unwrap();
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: name.to_string(),
-            location: None,
-        });
-        let result = state.execute_tml_import_sections(
-            lines,
-            closures,
-            None,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-            None,
-        );
-        assert!(result.success, "import failed: {:?}", result.error);
-        state
-    };
-    let state = import_into(
+    let state = import_tml(
         "Mixed",
         &parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots.join("\n"))),
     );
-    let line = state.get_project_state().unwrap().lines[0].clone();
-    assert_eq!(line.shots.len(), 4);
+    let mut project = state.get_project_state().unwrap();
+    assert_eq!(project.lines()[0].shots.len(), 4);
 
     // Three teams on three days over the one line, as the Detail panel does it.
     let person = |name: &str| Person::named(name).unwrap();
@@ -1003,34 +849,42 @@ fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
         (person("Bo Lead"), "2026-04-11"),
         (person("Cy Cave"), "2026-05-20"),
     ];
-    for (index, shot) in line.shots.iter().enumerate().skip(1) {
+    let line_id = project.lines()[0].id;
+    for (index, shot) in project
+        .line_mut(line_id)
+        .unwrap()
+        .shots
+        .iter_mut()
+        .enumerate()
+        .skip(1)
+    {
         let (who, day) = &teams[(index - 1).min(2)];
-        let result = state.execute(Command::EditShotCredit {
-            targets: CreditTargets::Shots {
-                shots: vec![(line.id, shot.id)],
-            },
-            edit: CreditEdit {
-                set_surveyors: Some(vec![who.clone()]),
-                set_date: Some(day.parse().ok()),
-                ..CreditEdit::default()
-            },
-        });
-        assert!(result.success, "{:?}", result.error);
+        let mut credit = shot.credit.as_deref().cloned().unwrap_or_default();
+        credit = crate::models::CreditEdit {
+            set_surveyors: Some(vec![who.clone()]),
+            set_date: Some(day.parse().ok()),
+            ..crate::models::CreditEdit::default()
+        }
+        .apply(&credit);
+        shot.credit = credit.into_storable().stored().map(std::sync::Arc::new);
     }
-    let credits = |project: &crate::models::Project| -> Vec<Vec<SurveyCredit>> {
+    let credits = |project: &Project| -> Vec<Vec<SurveyCredit>> {
         project
-            .lines
+            .lines()
             .iter()
-            .map(|s| s.shots.iter().map(|shot| shot.credit().clone()).collect())
+            .map(|s| {
+                s.shots
+                    .iter()
+                    .map(|shot| shot.credit.as_deref().cloned().unwrap_or_default())
+                    .collect()
+            })
             .collect()
     };
-    let before = credits(&state.get_project_state().unwrap());
+    let before = credits(&project);
     assert_eq!(before.len(), 1);
 
     let out_dir = tempfile::tempdir().unwrap();
-    let out_path = out_dir.path().join("mixed.tmlu");
-    crate::export::tml::export_tml(&state.get_project_state().unwrap(), &out_path).unwrap();
-    let reparsed = parse_tml(&out_path).unwrap();
+    let reparsed = round_trip(&project, out_dir.path(), "mixed");
     assert_eq!(
         reparsed
             .lines
@@ -1041,7 +895,7 @@ fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
         "credit changes must not cut the line"
     );
 
-    let again = import_into("Mixed Again", &reparsed);
+    let again = import_tml("Mixed Again", &reparsed);
     assert_eq!(
         credits(&again.get_project_state().unwrap()),
         before,
@@ -1051,14 +905,10 @@ fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
 
 /// Review of #719, item 1: one name with no `" / "` in Ariane's `Explorer`
 /// field - the common form, e.g. `Tester` - is a SURVEYOR: in the app after
-/// the import, in the saved file's legacy `sections.surveyor`, and again after
-/// the file is reopened and saved. That is the role a `.stalx` legacy column
-/// (and SpeleoDB's reader) has always given the same text, so a file imported
-/// before and after #714 no longer disagrees.
+/// the import, in the saved `.stalx`, and again after the file is reopened
+/// and saved.
 #[test]
 fn a_single_ariane_name_is_a_surveyor_in_the_app_and_in_the_saved_file() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
     use crate::parsers::tml::test_helpers::TripShot;
 
     let shots: Vec<String> = (1..=3)
@@ -1075,60 +925,37 @@ fn a_single_ariane_name_is_a_surveyor_in_the_app_and_in_the_saved_file() {
         })
         .collect();
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots.join("\n")));
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Single".to_string(),
-        location: None,
-    });
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-        None,
-    );
-    assert!(result.success, "import failed: {:?}", result.error);
+    let state = import_tml("Single", &tml);
 
-    let roles = |project: &crate::models::Project| -> Vec<(Vec<String>, Vec<String>)> {
+    let roles = |project: &Project| -> Vec<(Vec<String>, Vec<String>)> {
         let names = |people: &[crate::models::Person]| {
             people.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
         };
-        project.lines[0]
+        project.lines()[0]
             .shots
             .iter()
             .map(|shot| {
-                (
-                    names(&shot.credit().explorers),
-                    names(&shot.credit().surveyors),
-                )
+                let credit = shot.credit.as_deref().cloned().unwrap_or_default();
+                (names(&credit.explorers), names(&credit.surveyors))
             })
             .collect()
     };
     let surveyor_only = (Vec::new(), vec!["Tester".to_string()]);
     let imported = state.get_project_state().unwrap();
-    assert!(!imported.lines[0].shots.is_empty());
+    assert!(!imported.lines()[0].shots.is_empty());
     assert!(
         roles(&imported).iter().all(|r| r == &surveyor_only),
         "{:?}",
         roles(&imported)
     );
 
-    let column = |path: &std::path::Path| -> Option<String> {
-        rusqlite::Connection::open(path)
-            .unwrap()
-            .query_row("SELECT surveyor FROM sections", [], |r| r.get(0))
-            .unwrap()
-    };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("single.stalx");
     let saved = state.execute(Command::SaveProject {
         path: Some(path.clone()),
     });
     assert!(saved.success, "{:?}", saved.error);
-    assert_eq!(column(&path).as_deref(), Some("Tester"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("Tester"));
 
     let reopened = AppState::new().unwrap();
     assert!(
@@ -1141,20 +968,17 @@ fn a_single_ariane_name_is_a_surveyor_in_the_app_and_in_the_saved_file() {
         .all(|r| r == &surveyor_only));
     let resaved = reopened.execute(Command::SaveProject { path: None });
     assert!(resaved.success, "{:?}", resaved.error);
-    assert_eq!(column(&path).as_deref(), Some("Tester"));
+    let again = AppState::new().unwrap();
+    assert!(again.execute(Command::OpenProject { path }).success);
+    assert!(roles(&again.get_project_state().unwrap())
+        .iter()
+        .all(|r| r == &surveyor_only));
 }
 
-/// Review of #719, item 5c: the TML import preview's length leaves out the
-/// virtual shots the import makes References, using the import's own chain
-/// rule (`src/utils/tmlImportStats.ts` `jumpShots`). This pins the backend
-/// side of the case its vitest pins: a virtual shot between two real shots of
-/// a run is a Jump, one dangling off the end a Reference.
+/// Review of #719, item 5c: a virtual shot between two real shots of a run is
+/// a Jump, one dangling off the end a Reference (the import's chain rule).
 #[test]
 fn a_bounded_virtual_shot_imports_as_a_jump_and_a_dangling_one_as_a_reference() {
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-    use crate::models::ShotKind;
-
     let shots = [
         tml_shot_xml_depth(1, 0, "REAL", "A", 1.0, -1.0),
         tml_shot_xml_depth(2, 1, "VIRTUAL", "A", 1.0, -1.0),
@@ -1163,25 +987,9 @@ fn a_bounded_virtual_shot_imports_as_a_jump_and_a_dangling_one_as_a_reference() 
     ]
     .join("\n");
     let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots));
-    let (lines, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Kinds".to_string(),
-        location: None,
-    });
-    let result = state.execute_tml_import_sections(
-        lines,
-        closures,
-        None,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-        None,
-    );
-    assert!(result.success, "import failed: {:?}", result.error);
-    let project = state.get_project_state().unwrap();
+    let project = import_tml("Kinds", &tml).get_project_state().unwrap();
     let kinds: Vec<ShotKind> = project
-        .lines
+        .lines()
         .iter()
         .flat_map(|s| s.shots.iter().map(|shot| shot.kind))
         .collect();

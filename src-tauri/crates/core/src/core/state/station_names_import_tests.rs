@@ -1,13 +1,12 @@
 //! `ImportLineConfig::station_names` at the state layer: the names land on
 //! the stations they were given for, mirror with a reversed import exactly like
 //! station comments, and undo/redo of the import takes them away and back.
-
-use tempfile::TempDir;
+//! On the station graph a name is the station's own (`Station::name`).
 
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
-use crate::models::{ImportLineConfig, ImportPlacement, LineData, Project, ShotData, StationRef};
-use crate::persistence::Database;
+use crate::models::survey::Project;
+use crate::models::{ImportLineConfig, ImportPlacement, ShotData};
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
     ShotData {
@@ -65,19 +64,15 @@ fn import(config: ImportLineConfig) -> AppState {
 }
 
 /// The name of each station of the (single) imported line, in station order.
-fn names(project: &Project) -> Vec<Option<String>> {
-    let line = project.lines.first().unwrap();
-    (0..=line.shots.len() as u32)
-        .map(|i| {
-            project
-                .station_name_for_ref(StationRef::new(line.id, i))
-                .cloned()
-        })
+fn names(project: &Project) -> Vec<String> {
+    let line = project.lines().first().unwrap();
+    line.stations()
+        .map(|s| project.station(s).unwrap().name.clone())
         .collect()
 }
 
-fn named(values: &[Option<&str>]) -> Vec<Option<String>> {
-    values.iter().map(|v| v.map(str::to_string)).collect()
+fn named(values: &[&str]) -> Vec<String> {
+    values.iter().map(|v| (*v).to_string()).collect()
 }
 
 #[test]
@@ -88,37 +83,34 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
         &[(2, "restriction")],
     ));
     let project = state.get_project_state().unwrap();
+    assert_eq!(names(&project), named(&["0", "1", "2", "3"]));
+    let line = project.lines().first().unwrap();
+    let middle = line.station(2).unwrap();
     assert_eq!(
-        names(&project),
-        named(&[Some("0"), Some("1"), Some("2"), Some("3")])
-    );
-    let line = project.lines.first().unwrap().id;
-    assert_eq!(
-        project
-            .station_comment_for_ref(StationRef::new(line, 2))
-            .map(String::as_str),
+        project.station(middle).unwrap().comment.as_deref(),
         Some("restriction"),
         "a name and a comment on one station are independent"
     );
 
-    // And the computed station carries both.
-    let stations = project.compute_station_coordinates();
-    let middle = stations
+    // And the wire station carries both.
+    let wire = state.project_state_wire().unwrap();
+    let slot = wire
+        .stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(line, 2))
+        .find(|s| s.station_ref == crate::models::StationRef::new(line.id, 2))
         .unwrap();
-    assert_eq!(middle.name, "2");
-    assert_eq!(middle.comment.as_deref(), Some("restriction"));
+    assert_eq!(slot.name, "2");
+    assert_eq!(slot.comment.as_deref(), Some("restriction"));
 
     assert!(state.undo().success);
     let undone = state.get_project_state().unwrap();
-    assert!(undone.lines.is_empty());
-    assert!(undone.station_names.is_empty(), "undo takes the names away");
+    assert!(undone.lines().is_empty());
+    assert!(undone.stations.is_empty(), "undo takes the stations away");
 
     assert!(state.redo().success);
     assert_eq!(
         names(&state.get_project_state().unwrap()),
-        named(&[Some("0"), Some("1"), Some("2"), Some("3")]),
+        named(&["0", "1", "2", "3"]),
         "redo brings them back on the same stations"
     );
 }
@@ -132,7 +124,7 @@ fn a_reversed_import_mirrors_names_onto_the_same_physical_stations() {
     let state = import(config(true, &[(0, "0"), (1, "1"), (3, "3")], &[]));
     assert_eq!(
         names(&state.get_project_state().unwrap()),
-        named(&[Some("3"), Some("3a"), Some("1"), Some("0")])
+        named(&["3", "3a", "1", "0"])
     );
 }
 
@@ -142,70 +134,51 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
         let state = import(config(reverse, &[(7, "nowhere"), (1, "1")], &[]));
         let project = state.get_project_state().unwrap();
         // The one name that lands, and the rest filled by the creation rules.
-        assert_eq!(project.station_names.len(), 4, "reverse={reverse}");
-        assert!(!project.station_names.values().any(|n| n == "nowhere"));
+        let got = names(&project);
+        assert_eq!(got.len(), 4, "reverse={reverse}");
+        assert!(!got.iter().any(|n| n == "nowhere"), "reverse={reverse}");
+        assert!(got.iter().any(|n| n == "1"), "reverse={reverse}");
     }
 }
 
-/// Merging projects remaps every line id; each source's names must land on
-/// the same station of its line's NEW id, in the merged file.
+/// A comment the file gives the station a line is placed on is joined to the
+/// junction's own (the merge rule), never silently replacing it; the
+/// junction keeps its name and its id.
 #[test]
-fn merged_projects_keep_each_station_name_on_its_station() {
-    let dir = TempDir::new().unwrap();
-    let mut sources = Vec::new();
-    for (label, count) in [("A", 2u32), ("B", 3)] {
-        let mut project = Project::new(label.to_string(), None);
-        let id = project
-            .add_line(LineData {
-                name: Some(format!("Line {label}")),
-                color: "#4ecdc4".to_string(),
-                shots: (0..count).map(|i| shot(f64::from(i) * 40.0, 5.0)).collect(),
-                ..Default::default()
-            })
-            .id;
-        project.ensure_shot_uuids();
-        // Distinct per source, so a name landing in the wrong line shows.
-        for index in 0..=count {
-            let key = project.key_for_ref(StationRef::new(id, index)).unwrap();
-            project.station_names.insert(key, format!("{label}{index}"));
-        }
-        let path = dir.path().join(format!("{label}.stalx"));
-        Database::open(&path)
-            .unwrap()
-            .save_project(&project)
-            .unwrap();
-        sources.push(path);
-    }
-
-    let output = dir.path().join("merged.stalx");
-    let state = AppState::new().unwrap();
-    let result = state.execute(Command::MergeProjects {
-        source_paths: sources,
-        output_path: output.clone(),
-        output_name: "Merged".to_string(),
-        archive_originals: false,
-    });
-    assert!(result.success, "merge failed: {:?}", result.error);
-
-    let merged = Database::open_existing(&output)
-        .unwrap()
-        .load_project()
-        .unwrap();
-    for (label, count) in [("A", 2u32), ("B", 3)] {
-        let line = merged
-            .lines
-            .iter()
-            .find(|s| s.name.as_deref() == Some(&format!("Line {label}")))
-            .unwrap();
-        for index in 0..=count {
-            assert_eq!(
-                merged
-                    .station_name_for_ref(StationRef::new(line.id, index))
-                    .map(String::as_str),
-                Some(format!("{label}{index}").as_str()),
-                "{label}:{index}"
-            );
-        }
-    }
-    assert_eq!(merged.station_names.len(), 3 + 4);
+fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
+    let state = import(config(false, &[], &[(1, "first visit")]));
+    let project = state.get_project_state().unwrap();
+    let main = project.lines()[0].id;
+    let junction = project.lines()[0].station(1).unwrap();
+    let mut branch = config(false, &[(0, "Z9")], &[(0, "second visit")]);
+    branch.name = Some("B01".to_string());
+    branch.placement = ImportPlacement::FromExisting {
+        import_station: 0,
+        existing_station: crate::models::StationRef::new(main, 1),
+    };
+    let result = state.execute_import_lines(
+        vec![branch],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "{:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    let station = project.station(junction).unwrap();
+    assert_eq!(station.name, "1", "the junction keeps its name");
+    assert_eq!(
+        station.comment.as_deref(),
+        Some("first visit\n\nsecond visit")
+    );
+    let branch = &project.lines()[1];
+    assert_eq!(branch.start, junction, "the branch starts ON the station");
+    let branch_names: Vec<String> = branch
+        .stations()
+        .map(|s| project.station(s).unwrap().name.clone())
+        .collect();
+    // The file's name for the junction is not the junction's; the branch's own
+    // stations take the seed rule around it.
+    assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
 }

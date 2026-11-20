@@ -583,11 +583,16 @@ fn station_names(
     junction: Option<Junction>,
 ) -> Vec<String> {
     let mut names: Vec<Option<String>> = vec![None; n + 1];
+    // Whether the file names a station of its own (the junction's name is
+    // the junction's, whatever the file calls it).
     let mut named = false;
     for (index, name) in &config.station_names {
-        if let Some(slot) = mirrored(config, *index, n).and_then(|i| names.get_mut(i)) {
+        let Some(position) = mirrored(config, *index, n) else {
+            continue;
+        };
+        if let Some(slot) = names.get_mut(position) {
             *slot = Some(name.clone());
-            named = true;
+            named |= junction.is_none_or(|j| j.index != position);
         }
     }
     let fixed = junction.and_then(|j| {
