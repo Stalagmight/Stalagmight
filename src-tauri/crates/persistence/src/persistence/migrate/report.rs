@@ -36,6 +36,11 @@ pub struct MigrationReport {
     pub merges_dropped_redundant: usize,
     /// Merges with an end that does not resolve, dropped.
     pub merges_dropped_dangling: usize,
+    /// Collapsed merges whose members 0.6.0 showed apart (beyond the
+    /// cascade's dust), and the largest such gap: the stations behind them
+    /// move by up to it (verification class `TornMergeCollapsed`).
+    pub merges_collapsed_torn: usize,
+    pub merges_collapsed_torn_max_m: f64,
 
     // Station identity.
     /// Retired member ids kept as aliases of their station.
@@ -77,6 +82,14 @@ pub struct MigrationReport {
     pub datums_kept: usize,
     /// Datums whose station does not resolve, dropped.
     pub datums_dropped_dangling: usize,
+    /// Datums whose GPS is not a number, dropped (their piece is held by the
+    /// next datum or a placement where 0.6.0 showed it).
+    pub datums_dropped_invalid: usize,
+    /// Datums whose role changed (a legacy GPS fix now places its piece:
+    /// the legacy merge topology joined pieces through a merge row that does
+    /// not resolve, or the piece's placement datum was dropped). Positions
+    /// are held; the entrance flag follows the new role.
+    pub datum_roles_changed: usize,
     /// Placement datums given a correction (their piece sits off its GPS).
     pub corrections_stored: usize,
     /// Datum-less pieces given a `Placement`, by where its station came from.
@@ -139,6 +152,23 @@ impl Verification {
     /// Whether every difference is explained.
     pub fn is_clean(&self) -> bool {
         self.mismatches.is_empty()
+    }
+
+    /// The slots that moved horizontally beyond the cascade's dust, expected
+    /// (a torn merge collapsed) or not, and the largest move: the "N stations
+    /// moved by up to X m" of the conversion notice (plan 7.2.10). Depth
+    /// differences are not moves and are not counted.
+    pub fn moved(&self) -> ClassStats {
+        let mut moved = self
+            .expected
+            .get(&ExpectedClass::TornMergeCollapsed)
+            .copied()
+            .unwrap_or_default();
+        for m in self.mismatches.iter().filter(|m| m.axis != Axis::Depth) {
+            moved.slots += 1;
+            moved.max_displacement_m = moved.max_displacement_m.max(m.displacement_m);
+        }
+        moved
     }
 }
 
@@ -228,6 +258,7 @@ impl MigrationReport {
         put("merges_dropped_self", self.merges_dropped_self);
         put("merges_dropped_redundant", self.merges_dropped_redundant);
         put("merges_dropped_dangling", self.merges_dropped_dangling);
+        put("merges_collapsed_torn", self.merges_collapsed_torn);
         put("aliases_created", self.aliases_created);
         put("station_ids_dropped", self.station_ids_dropped);
         put("station_ids_minted", self.station_ids_minted);
@@ -251,6 +282,8 @@ impl MigrationReport {
         put("closure_ids_reminted", self.closure_ids_reminted);
         put("datums_kept", self.datums_kept);
         put("datums_dropped_dangling", self.datums_dropped_dangling);
+        put("datums_dropped_invalid", self.datums_dropped_invalid);
+        put("datum_roles_changed", self.datum_roles_changed);
         put("corrections_stored", self.corrections_stored);
         put("placements_held_gauge", self.placements_held_gauge);
         put("placements_default_gauge", self.placements_default_gauge);
@@ -274,6 +307,13 @@ impl MigrationReport {
         put("legacy_healed_offsets", self.legacy_healed_offsets);
         put("legacy_merges_created", self.legacy_merges_created);
         put("legacy_integrity_findings", self.legacy_integrity_findings);
+        if self.merges_collapsed_torn > 0 {
+            let _ = writeln!(
+                out,
+                "merges_collapsed_torn_max_m={:e}",
+                self.merges_collapsed_torn_max_m
+            );
+        }
         let v = &self.verification;
         let _ = writeln!(out, "verify.slots={}", v.slots_checked);
         let _ = writeln!(out, "verify.max_xy_m={:e}", v.max_xy_m);

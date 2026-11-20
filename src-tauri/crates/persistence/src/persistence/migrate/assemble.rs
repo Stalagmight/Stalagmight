@@ -17,6 +17,7 @@ use super::convert::{self, Credits};
 use super::merges::{self, Fate};
 use super::slots::{resolve_map, Slots};
 use super::stations;
+use super::verify::DUST_PER_HOP_M;
 use super::{MigrateError, MigrationReport};
 
 /// What the verification needs to know about how the project was built.
@@ -52,6 +53,7 @@ pub(super) fn build(
     report.merges_dropped_self = merges.count(Fate::DroppedSelf);
     report.merges_dropped_redundant = merges.count(Fate::DroppedRedundant);
     report.merges_dropped_dangling = merges.count(Fate::DroppedDangling);
+    count_torn_collapses(legacy, &slots, &merges, report);
     let station_plan = stations::plan(lp, &slots, &merges, report)?;
     let of_slot = station_plan.of_slot;
 
@@ -113,11 +115,27 @@ pub(super) fn build(
             report.datums_dropped_dangling += 1;
             continue;
         };
+        // A GPS that is not a number places nothing (0.6.0 laid its piece
+        // out from stored offsets, never from the GPS): dropped, and the
+        // piece is held where 0.6.0 showed it by the next datum or a
+        // placement.
+        let g = &datum.gps;
+        if !(g.latitude.is_finite() && g.longitude.is_finite() && g.depth_reference.is_finite()) {
+            report.datums_dropped_invalid += 1;
+            continue;
+        }
+        let accuracy_m = datum.accuracy_m.filter(|a| {
+            let finite = a.is_finite();
+            if !finite {
+                report.numbers_sanitized += 1;
+            }
+            finite
+        });
         project.datums.push(ZeroDatum {
             station: of_slot[dense],
             via: Some(slots.slot(dense).line_id),
             gps: convert::gps(&datum.gps),
-            accuracy_m: datum.accuracy_m,
+            accuracy_m,
             entrance: datum.entrance,
             correction: None,
         });
@@ -155,6 +173,36 @@ pub(super) fn build(
         legacy_snap_alignment,
         final_uuid,
     })
+}
+
+/// The collapsed merges whose two members 0.6.0 showed apart by more than
+/// the cascade's dust: the stations behind them move (verification class
+/// `TornMergeCollapsed`). A settled file holds none; a piece the old load
+/// never re-solved (seeded through a merge row that does not resolve) can.
+fn count_torn_collapses(
+    legacy: &LegacySurvey,
+    slots: &Slots,
+    merges: &merges::MergePlan,
+    report: &mut MigrationReport,
+) {
+    let xy = |dense: usize| {
+        legacy
+            .raw_positions
+            .get(&slots.slot(dense))
+            .filter(|p| p[0].is_finite() && p[1].is_finite())
+    };
+    for (fate, ends) in merges.fates.iter().zip(&merges.ends) {
+        let (Fate::Collapsed, Some((a, b))) = (fate, ends) else {
+            continue;
+        };
+        if let (Some(pa), Some(pb)) = (xy(*a), xy(*b)) {
+            let gap = (pa[0] - pb[0]).hypot(pa[1] - pb[1]);
+            if gap > DUST_PER_HOP_M {
+                report.merges_collapsed_torn += 1;
+                report.merges_collapsed_torn_max_m = report.merges_collapsed_torn_max_m.max(gap);
+            }
+        }
+    }
 }
 
 type BuiltLines = (Vec<Line>, HashMap<(LineId, String), String>);
@@ -459,8 +507,14 @@ fn drop_unanchored_closures(project: &mut Project, report: &mut MigrationReport)
 /// Plan 7.2.6 / 3.8: a placement datum is an entrance; a GPS fix follows its
 /// override, else is an entrance when its station is the first or last of
 /// its `via` line (of its station's first line without one). Where that
-/// differs from what 0.6.0 derived for the datum, write 0.6.0's answer as
-/// an explicit override, so no entrance changes.
+/// differs from what 0.6.0 derived for a fix, write 0.6.0's answer as an
+/// explicit override, so no entrance changes.
+///
+/// A datum's role itself only changes when the legacy merge topology joined
+/// pieces the migration cannot (a merge row whose end does not resolve, or a
+/// datum dropped for a corrupt GPS): a legacy fix then places its own piece.
+/// A placement datum is always an entrance, so no override can keep such a
+/// fix's entrance flag; the change is counted instead.
 fn write_entrance_overrides(
     lp: &old::Project,
     datum_sources: &[usize],
@@ -468,16 +522,23 @@ fn write_entrance_overrides(
     report: &mut MigrationReport,
 ) {
     let legacy = lp.datum_entrances();
+    let roles = lp.datum_roles();
     let topology = project.topology_arc();
     let placement: BTreeSet<usize> = project.placement_datums().into_iter().flatten().collect();
     for (index, &source) in datum_sources.iter().enumerate() {
         let Some(old_value) = legacy.get(source).copied().flatten() else {
             continue;
         };
+        let was_placement = roles.get(source).copied().flatten() == Some(old::DatumRole::Placement);
+        if placement.contains(&index) != was_placement {
+            report.datum_roles_changed += 1;
+            continue;
+        }
+        if was_placement {
+            continue;
+        }
         let datum = project.datums[index];
-        let new_value = if placement.contains(&index) {
-            true
-        } else if let Some(answer) = datum.entrance {
+        let new_value = if let Some(answer) = datum.entrance {
             answer
         } else {
             let line = datum

@@ -10,8 +10,9 @@
 //! line, the legacy gaps between the member the traversal arrived on and the
 //! member of that line: the bound on how far the line can have moved.
 //!
-//! - within `1e-6 m x (hops + 1)` (the cascade leaves up to 1e-6 m of dust
-//!   per hop; `hops` = junctions between the anchor and the line): equal;
+//! - within `DUST_PER_HOP_M x (hops + 1)` (the cascade declines corrections
+//!   up to 1e-6 m per axis per hop, plan 7.2.7; `hops` = junctions between
+//!   the anchor and the line): equal;
 //! - within the accumulated gap and the path holds a gap above the dust: the
 //!   expected class [`ExpectedClass::TornMergeCollapsed`];
 //! - anything else: a mismatch.
@@ -33,8 +34,10 @@ use super::assemble::Built;
 use super::merges::UnionFind;
 use super::report::{AdjustedCheck, Axis, ClassStats, ExpectedClass, Mismatch, Verification};
 
-/// The dust the 0.6.0 cascade leaves per merge hop (`OFFSET_DUST_M`).
-pub const DUST_PER_HOP_M: f64 = 1e-6;
+/// The dust the 0.6.0 cascade leaves per merge hop: it declines a correction
+/// when both `|dx|` and `|dy|` are within `OFFSET_DUST_M` (1e-6 m), so a hop
+/// can keep up to `sqrt(2) * 1e-6` m horizontally.
+pub const DUST_PER_HOP_M: f64 = 1e-6 * std::f64::consts::SQRT_2;
 
 /// Depth tolerance (depths are means of the same readings).
 pub const DEPTH_TOLERANCE_M: f64 = 1e-9;
@@ -114,8 +117,10 @@ pub(super) fn verify(built: &Built, legacy: &LegacySurvey) -> Verification {
 ///   moved), a component whose legacy least-squares component spanned
 ///   several migrated components (closures between two datum pieces: the
 ///   legacy solve held one gauge for both), and a same-line merge demoted to
-///   a `Tie` (the legacy solve refused the inconsistent per-line translation
-///   and fell back to raw; the new solve skips the tie as across one shot);
+///   a `Tie` (the legacy solve united the two stations, found the per-line
+///   translation inconsistent and showed that component raw, with a
+///   CLOSURE_ADJUSTMENT_FAILED; the new solve takes the tie as a one-point
+///   tie, or skips it when it spans exactly one shot, and adjusts);
 /// - anything else is a mismatch, as for the raw view.
 pub(super) fn verify_adjusted(_project: &Project, legacy: &LegacySurvey) -> AdjustedCheck {
     if legacy.adjusted_positions.is_none() {

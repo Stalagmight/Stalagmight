@@ -146,7 +146,15 @@ fn migrate_corpus() {
     for (class, worst) in &expected_max {
         eprintln!("corpus: expected.{}.max_m={worst:e}", class.as_str());
     }
+    // A file the legacy reader opens must migrate: any other error is a
+    // migration bug (or a model limit that loses a file the old app opened).
+    let lost: usize = classes
+        .iter()
+        .filter(|(class, _)| !class.starts_with("legacy-"))
+        .map(|(_, n)| n)
+        .sum();
     assert_eq!(panicked, 0, "a migration panicked");
+    assert_eq!(lost, 0, "files the legacy reader opened failed to migrate");
     assert_eq!(unclean, 0, "unexplained position mismatches");
 }
 

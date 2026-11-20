@@ -518,3 +518,98 @@ fn a_non_finite_reading_in_the_file_is_already_sanitised_by_the_legacy_load() {
     assert_eq!(out.project.line(a).unwrap().shots[1].length, 0.0);
     assert!(out.report.verification.expected.is_empty());
 }
+
+/// A merge row whose A end lies past its line's last station: an older
+/// build could leave one. 0.6.0 still joins the two lines through it for
+/// datum roles (and seeding), but never for geometry.
+fn dangling_merge_row(bytes: &[u8], a: LineId, b: LineId) -> Vec<u8> {
+    edit_sqlite(bytes, |conn| {
+        conn.execute(
+            "INSERT INTO station_merges (station_a_section, station_a_index, \
+             station_b_section, station_b_index, merged_at) \
+             VALUES (?1, 999, ?2, 0, '2023-11-14T22:13:20+00:00')",
+            [a, b],
+        )
+        .unwrap();
+    })
+}
+
+#[test]
+fn a_fix_that_a_dangling_merge_row_held_places_its_own_piece_and_is_counted() {
+    let mut p = project();
+    let a = line(&mut p, "A", &[(90.0, 10.0), (0.0, 10.0)]);
+    let b = line(&mut p, "B", &[(0.0, 10.0), (90.0, 10.0)]);
+    p.set_zero_datum(at(a, 0), GpsCoordinates::new(20.5, -87.3, 0.0).unwrap())
+        .unwrap();
+    p.set_zero_datum(at(b, 1), GpsCoordinates::new(20.501, -87.299, 0.0).unwrap())
+        .unwrap();
+    let bytes = dangling_merge_row(&write_v18(&p, &LegacyExtras::default()).unwrap(), a, b);
+    let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
+    // 0.6.0: datum 1 is a GPS fix mid-line, so not an entrance.
+    assert_eq!(
+        legacy.project.datum_entrances(),
+        vec![Some(true), Some(false)]
+    );
+    let out = migrate(&legacy).unwrap();
+    let r = &out.report;
+    assert_eq!(r.merges_dropped_dangling, 1);
+    // Datum 1 now places B's piece, held where 0.6.0 showed it; as a
+    // placement datum it is an entrance, which no override can undo.
+    assert!(out.project.placement_datums().contains(&Some(1)));
+    assert_eq!(r.datum_roles_changed, 1);
+    assert_eq!(r.entrance_overrides_written, 0);
+    assert_eq!(out.project.datums[1].entrance, None);
+    assert!(r.verification.is_clean(), "{}", r.summary());
+    assert_eq!(r.verification.moved().slots, 0);
+}
+
+#[test]
+fn a_datum_whose_gps_is_not_a_number_is_dropped_and_its_piece_held() {
+    let mut p = project();
+    let a = line(&mut p, "A", &[(90.0, 10.0), (0.0, 10.0)]);
+    p.set_zero_datum(at(a, 0), GpsCoordinates::new(20.5, -87.3, 0.0).unwrap())
+        .unwrap();
+    p.adjust_rigid_group_offsets(a, 4.0, -2.0);
+    let bytes = edit_sqlite(&write_v18(&p, &LegacyExtras::default()).unwrap(), |conn| {
+        // SQLite stores 1e999 as +Inf; the 0.6.0 reader loads it as is.
+        conn.execute("UPDATE zero_datums SET latitude = 1e999", [])
+            .unwrap();
+    });
+    let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
+    assert!(legacy.project.zero_datums[0].gps.latitude.is_infinite());
+    let out = migrate(&legacy).unwrap();
+    assert_eq!(out.report.datums_dropped_invalid, 1);
+    assert!(out.project.datums.is_empty());
+    assert_eq!(out.project.placements.len(), 1);
+    assert!(
+        out.report.verification.is_clean(),
+        "{}",
+        out.report.summary()
+    );
+    assert_eq!(out.report.verification.max_xy_m, 0.0);
+}
+
+#[test]
+fn a_drift_the_old_load_never_resolved_is_collapsed_and_reported_as_a_move() {
+    // C hangs off B; C's stored offset drifted 5 m. A merge row from A that
+    // does not resolve makes A the seed of {A, B, C}, so the 0.6.0 cascade
+    // never reaches B or C and shows the merge torn by 5 m. One station
+    // cannot be in two places: C moves, and the report says so.
+    let mut p = project();
+    let a = line(&mut p, "A", &[(90.0, 10.0)]);
+    let b = line(&mut p, "B", &[(0.0, 10.0), (0.0, 10.0)]);
+    let c = line(&mut p, "C", &[(90.0, 10.0)]);
+    p.merge_stations(at(c, 0), at(b, 1)).unwrap();
+    p.adjust_line_offset(c, 5.0, 0.0);
+    let bytes = dangling_merge_row(&write_v18(&p, &LegacyExtras::default()).unwrap(), a, b);
+    let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
+    let out = migrate(&legacy).unwrap();
+    let r = &out.report;
+    assert_eq!(r.merges_collapsed_torn, 1);
+    assert!((r.merges_collapsed_torn_max_m - 5.0).abs() < 1e-9);
+    let v = &r.verification;
+    assert!(v.is_clean(), "an expected class, not a mismatch");
+    let moved = v.moved();
+    assert_eq!(moved.slots, 2, "both stations of C");
+    assert!((moved.max_displacement_m - 5.0).abs() < 1e-9);
+}

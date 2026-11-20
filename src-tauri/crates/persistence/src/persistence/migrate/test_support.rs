@@ -774,6 +774,21 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
         }
     }
 
+    // A settled legacy file needs none of the repairs for broken references.
+    let repairs = [
+        ("collapsed torn merges", r.merges_collapsed_torn),
+        ("changed datum roles", r.datum_roles_changed),
+        (
+            "dropped datums",
+            r.datums_dropped_dangling + r.datums_dropped_invalid,
+        ),
+        ("dangling merges", r.merges_dropped_dangling),
+        ("dangling station keys", r.station_keys_dangling),
+    ];
+    if let Some((what, n)) = repairs.iter().find(|(_, n)| *n > 0) {
+        return Err(format!("{n} {what} in a settled file"));
+    }
+
     // Positions.
     let v = &r.verification;
     if let Some(m) = v.mismatches.first() {

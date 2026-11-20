@@ -85,7 +85,7 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
 
     // The gate's seeds must reach every conversion rule they are meant to.
     let c = &coverage;
-    let checks: [(&str, usize); 22] = [
+    let checks: [(&str, usize); 21] = [
         ("merges collapsed", c.total(|r| r.merges_collapsed)),
         ("cycle merges demoted", c.total(|r| r.merges_demoted_cycle)),
         (
@@ -127,10 +127,6 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
             c.total(|r| r.placements_default_gauge + r.placements_held_gauge),
         ),
         ("datums", c.total(|r| r.datums_kept)),
-        (
-            "entrance overrides (none expected)",
-            1 + c.total(|r| r.entrance_overrides_written),
-        ),
         ("ignores kept", c.total(|r| r.ignores_kept)),
     ];
     if swept.is_some() {
