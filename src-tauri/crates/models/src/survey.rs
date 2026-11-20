@@ -32,10 +32,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{LineId, Section, StationId};
 
+mod adjust;
 mod anchors;
 mod build;
+mod closures;
 mod gas;
 mod graph;
+mod lsq;
+mod metrics;
 mod naming;
 mod positions;
 mod roles;
@@ -53,6 +57,14 @@ mod test_helpers;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod adjust_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
@@ -63,6 +75,13 @@ mod anchors_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod build_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod gama_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -98,8 +117,10 @@ mod positions_tests;
 )]
 mod validate_tests;
 
+pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
+pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
 pub use gas::{GasProfilePoint, GasReach};
 pub use graph::{AlongLine, RulerPoint, StationDistances, StationPositions};
 pub use naming::NameConflict;

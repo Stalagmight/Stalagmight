@@ -127,11 +127,6 @@ impl StationDistances {
             .fold(0.0_f64, |a, &d| a.max(d))
     }
 
-    /// Per dense station (raw vector).
-    pub(crate) fn dense(&self) -> &[f64] {
-        &self.distance
-    }
-
     /// The wire's per-slot field (today's `DistanceField`): one entry per slot
     /// in slot order, `None` when unreachable.
     pub fn to_distance_field(&self, project: &Project) -> crate::DistanceField {
