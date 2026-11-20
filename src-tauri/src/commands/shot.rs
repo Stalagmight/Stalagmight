@@ -25,39 +25,19 @@ pub(crate) fn create_shot_impl(
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
 ) -> CommandResult {
-    // Identity is not the caller's to name (#423). `ShotData::uuid` exists so a
-    // uuid can travel with its own shot through the transforms that rebuild
-    // shots from their data; it is NOT an input to "create a shot here".
+    // Identity is not the caller's to name (#423). `ShotData::uuid` exists so
+    // a uuid can travel with its own shot through the transforms that rebuild
+    // shots from their data; it is NOT an input to "create a shot here". A
+    // uuid another shot holds would be refused by the survey model, but even a
+    // fresh one is the project's to mint, not the client's.
     //
-    // Left through, a caller could name an EXISTING shot's uuid and insert the
-    // new shot BEFORE it. The first-wins repairs (`Line::new` and the
-    // pre-save `ensure_unique_shot_uuids`) keep the first OCCURRENCE, which is
-    // now the injected record, and re-mint the original - moving every
-    // `AfterShot` anchor on it (merges, closures, zero datums, resolved-warning
-    // ignores) onto the injected shot.
-    //
-    // `execute`'s structural epilogue does catch it on a project that was sound
-    // beforehand: `duplicate_shot_uuid` is Critical, so the whole create is
-    // rolled back (verified - without this line the create returns "Blocked:
-    // this action would corrupt the survey structure"). That is not cover
-    // enough. It fires only on NEWLY introduced criticals, so on a project that
-    // is already critical (`finalize_structural_edit(pre_had_critical)`) the
-    // duplicate is admitted and nothing objects until the pre-save repair
-    // quietly re-mints the original. Clearing here is also the better outcome
-    // for the sound case: a legitimate "add a shot" keeps working instead of
-    // being refused because of a field the client had no business setting.
-    //
-    // The AUTHORITATIVE clear is in the executor (`AppState::create_shot`,
-    // core/state/command_shot.rs) - a wrapper-only clear held only by grace of
-    // the batch allowlist refusing `CreateShot` (pre-PR review, #423); the
-    // executor holds it for every constructor of the command. This one stays
-    // as documentation-plus-belt. `Command::CreateLine` IS batch-allowed
-    // and is stripped at its two dispatch arms instead (core/state/commands.rs,
-    // undo_restore.rs) - its executor is shared with the importers, whose
-    // identities our own parser legitimately adopted. That leaves
-    // `import_lines` and `create_line_and_merge` as the doors that may
-    // carry identities; both rename any the project already holds
-    // (`Project::reassign_repeated_shot_uuids`).
+    // The AUTHORITATIVE clear is in the executor (`command_shot::apply`,
+    // core/state/command_shot.rs), for every constructor of the command; this
+    // one stays as documentation-plus-belt. Undo and redo never replay the
+    // command (they step its recorded changeset), so no identity is lost to
+    // either clear. The import doors (`import_lines`, `create_line_and_merge`)
+    // are the ones that may carry identities, and re-mint any the project
+    // already holds.
     shot.uuid = None;
     state.execute(Command::CreateShot {
         line_id,
