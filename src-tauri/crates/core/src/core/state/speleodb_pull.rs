@@ -325,7 +325,7 @@ impl AppState {
         let _ = latest_commit_sha; // A list hint cannot date an unpinned download.
         let link = crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
-            project_id: project_id.clone(),
+            project_id,
             project_name: project_name.clone(),
             base_commit_sha: base_sha,
             has_unpushed_edits: false,

@@ -1781,15 +1781,12 @@ fn apply_to_link(
     missing: &mut bool,
     f: impl FnOnce(&mut crate::models::SpeleoLink),
 ) -> bool {
-    match link.as_mut() {
-        Some(link) => {
-            f(link);
-            true
-        }
-        None => {
-            *missing = true;
-            false
-        }
+    if let Some(link) = link.as_mut() {
+        f(link);
+        true
+    } else {
+        *missing = true;
+        false
     }
 }
 
@@ -5428,7 +5425,6 @@ mod tests {
     /// see `speleodb_foreign`).
     #[test]
     fn the_push_snapshot_path_refuses_a_crafted_link_id() {
-        let temp = TempDir::new().expect("temp");
         for bad in CRAFTED_IDS {
             let link = SpeleoLink {
                 endpoint: "https://sdb.invalid".to_owned(),

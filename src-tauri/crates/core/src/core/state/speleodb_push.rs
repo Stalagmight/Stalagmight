@@ -747,7 +747,7 @@ impl AppState {
             PushPlan::AdoptThenUpload => {
                 let project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link_locked(project.as_ref(), |l| {
-                    l.base_commit_sha = tip.clone()
+                    l.base_commit_sha = tip.clone();
                 })
                 .map_err(local_dto)?;
             }

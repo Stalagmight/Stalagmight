@@ -105,10 +105,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     let mut request = Vec::new();
     let mut chunk = [0u8; 16 * 1024];
-    loop {
-        let Ok(count) = stream.read(&mut chunk) else {
-            break;
-        };
+    while let Ok(count) = stream.read(&mut chunk) {
         if count == 0 {
             break;
         }
