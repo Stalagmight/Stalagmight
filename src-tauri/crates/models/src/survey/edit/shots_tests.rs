@@ -1,6 +1,8 @@
 //! Shot operations: create (append, insert, prepend), update, kind, delete,
 //! split at distance, and the delete preview.
 
+use stalagmight_legacy::models as old;
+
 use std::sync::Arc;
 
 use crate::{
@@ -455,39 +457,47 @@ fn a_refused_edit_leaves_the_project_as_it_was() {
 
 // ----- a delete at a junction: today's member rules (S13) -------------------
 
+/// The frozen 0.6.0 model (`stalagmight-legacy`).
+type Old = stalagmight_legacy::LegacyProject;
+
 /// 0.6.0's twin of a survey: a line per `shots` list (north or east flat
 /// 10 m shots by azimuth), then each `(moving, onto)` merge.
-fn today(lines: &[Vec<f64>], merges: &[((u32, u32), (u32, u32))]) -> crate::Project {
-    let mut old = crate::Project::new("legacy".to_string(), None);
+fn today(lines: &[Vec<f64>], merges: &[((u32, u32), (u32, u32))]) -> Old {
+    let mut old = Old::new("legacy".to_string(), None);
     for azimuths in lines {
         let shots = azimuths
             .iter()
-            .map(|&azimuth| ShotData {
+            .map(|&azimuth| old::ShotData {
                 azimuth_in: azimuth,
                 azimuth_out: azimuth,
                 length: 10.0,
-                ..ShotData::default()
+                ..old::ShotData::default()
             })
             .collect();
-        old.add_line(crate::LineData {
+        old.add_line(old::LineData {
             shots,
             quality: 1.0,
-            ..crate::LineData::default()
+            ..old::LineData::default()
         });
     }
     for &((la, ia), (lb, ib)) in merges {
-        old.merge_stations(StationRef::new(la, ia), StationRef::new(lb, ib))
+        old.merge_stations(old::StationRef::new(la, ia), old::StationRef::new(lb, ib))
             .unwrap();
     }
     old
 }
 
 /// Every slot of `p` sits where 0.6.0 puts the same slot in `old`.
-fn assert_like_today(p: &Project, old: &crate::Project) {
+fn assert_like_today(p: &Project, old: &Old) {
     let today: std::collections::BTreeMap<StationRef, [f64; 2]> = old
         .compute_station_coordinates()
         .into_iter()
-        .map(|s| (s.station_ref, [s.coordinates.x, s.coordinates.y]))
+        .map(|s| {
+            (
+                StationRef::new(s.station_ref.line_id, s.station_ref.station_index),
+                [s.coordinates.x, s.coordinates.y],
+            )
+        })
         .collect();
     let slots = p.raw_positions().slots(p);
     assert_eq!(slots.len(), today.len(), "slot count");
@@ -665,9 +675,9 @@ fn a_closure_on_the_lines_slot_moves_the_junctions_side_as_today() {
     assert_valid(&p);
     let mut old = today(&[vec![90.0; 3], vec![0.0; 2]], &[((b, 0), (a, 1))]);
     old.create_loop_closure(
-        StationRef::new(b, 0),
-        StationRef::new(b, 2),
-        crate::ClosureStrategy::Batch,
+        old::StationRef::new(b, 0),
+        old::StationRef::new(b, 2),
+        old::ClosureStrategy::Batch,
     )
     .unwrap();
     assert_like_today(&p, &old);

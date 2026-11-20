@@ -1,6 +1,8 @@
 //! Combine Lines on the station graph: the three join kinds, the moving
 //! side, torn junctions, refusals, names and comments.
 
+use stalagmight_legacy::models as old;
+
 use crate::{
     CombineJoinEnds, CombineJoinKind, CombineLinesOptions, CombinePick, KeptMovesReason, LineEnd,
     LineId,
@@ -374,40 +376,43 @@ fn shotless_lines_join_across_a_closure_their_tie_group_reaches() {
     assert!(none.blocked_reason.is_some());
 
     // Today (0.6.0), the same survey offers the same join.
-    let mut old = crate::Project::new("legacy".to_string(), None);
-    let flat = crate::ShotData {
+    let mut old = stalagmight_legacy::LegacyProject::new("legacy".to_string(), None);
+    let flat = old::ShotData {
         azimuth_in: 90.0,
         azimuth_out: 90.0,
         length: 10.0,
-        ..crate::ShotData::default()
+        ..old::ShotData::default()
     };
-    let mut add = |shots: Vec<crate::ShotData>| {
-        old.add_line(crate::LineData {
+    let mut add = |shots: Vec<old::ShotData>| {
+        old.add_line(old::LineData {
             shots,
             quality: 1.0,
-            ..crate::LineData::default()
+            ..old::LineData::default()
         })
         .id
     };
     let (om, o1, o2) = (add(vec![flat; 6]), add(Vec::new()), add(Vec::new()));
-    let at = crate::StationRef::new;
+    let at = old::StationRef::new;
     old.merge_stations(at(o1, 0), at(om, 1)).unwrap();
     old.merge_stations(at(o2, 0), at(om, 6)).unwrap();
-    let key = |old: &crate::Project, slot| old.key_for_ref(slot).unwrap();
-    let same_line = crate::StationMerge {
+    let key = |old: &stalagmight_legacy::LegacyProject, slot| old.key_for_ref(slot).unwrap();
+    let same_line = old::StationMerge {
         station_a: key(&old, at(om, 1)),
         station_b: key(&old, at(om, 3)),
         merged_at: old.created_at,
     };
     old.station_merges.push(same_line);
-    old.create_loop_closure(at(om, 3), at(o2, 0), crate::ClosureStrategy::Batch)
+    old.create_loop_closure(at(om, 3), at(o2, 0), old::ClosureStrategy::Batch)
         .unwrap();
     let legacy = old.combine_candidate_for_lines(o1, o2).unwrap();
-    assert_eq!(legacy.join_kind, CombineJoinKind::Closure);
+    assert_eq!(
+        format!("{:?}", legacy.join_kind),
+        format!("{:?}", CombineJoinKind::Closure)
+    );
     assert_eq!(legacy.blocked_reason, None);
     assert_eq!(
-        (legacy.end_a, legacy.end_b),
-        (candidate.end_a, candidate.end_b)
+        format!("{:?}", (legacy.end_a, legacy.end_b)),
+        format!("{:?}", (candidate.end_a, candidate.end_b))
     );
 }
 

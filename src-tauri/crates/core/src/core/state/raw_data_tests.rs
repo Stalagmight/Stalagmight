@@ -239,10 +239,10 @@ fn a_project_without_a_version_2_file_has_no_raw_data() {
 
     let dir = TempDir::new().unwrap();
     let legacy = dir.path().join("legacy.stalx");
-    let mut db = crate::persistence::Database::open(&legacy).unwrap();
-    db.save_project(&crate::models::Project::new("Legacy".to_string(), None))
-        .unwrap();
-    drop(db);
+    super::legacy_fixture_kit::write_legacy_file(
+        &legacy,
+        &super::legacy_fixture_kit::Legacy::new("Legacy".to_string(), None),
+    );
     let state = AppState::new().unwrap();
     assert!(state.execute(Command::OpenProject { path: legacy }).success);
     let err = state

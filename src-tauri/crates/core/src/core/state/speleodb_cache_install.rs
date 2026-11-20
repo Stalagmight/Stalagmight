@@ -35,7 +35,7 @@ const DOWNLOADED_FILE: &str = "project.stalx";
 fn decode_refusal(error: &DecodeError) -> SpeleoDbError {
     match error {
         DecodeError::NewerVersion { found, supported } => {
-            SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
+            SpeleoDbError::NewerSchema(crate::models::NewerSchema {
                 file: DOWNLOADED_FILE.into(),
                 found: i32::try_from(*found).unwrap_or(i32::MAX),
                 supported: i32::try_from(*supported).unwrap_or(i32::MAX),
@@ -49,7 +49,7 @@ fn decode_refusal(error: &DecodeError) -> SpeleoDbError {
 fn migrate_refusal(error: &MigrateError) -> SpeleoDbError {
     match error {
         MigrateError::Legacy(LegacyError::NewerSchema { found, supported }) => {
-            SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
+            SpeleoDbError::NewerSchema(crate::models::NewerSchema {
                 file: DOWNLOADED_FILE.into(),
                 found: *found,
                 supported: *supported,

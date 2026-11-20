@@ -194,6 +194,7 @@ impl MigrateError {
             Self::Legacy(LegacyError::NotSqlite) => "legacy-not-sqlite",
             Self::Legacy(LegacyError::NewerSchema { .. }) => "legacy-newer-schema",
             Self::Legacy(LegacyError::TooLarge { .. }) => "legacy-too-large",
+            Self::Legacy(LegacyError::RefusedSchema(_)) => "legacy-refused-schema",
             Self::Legacy(LegacyError::Corrupt(_)) => "legacy-corrupt",
             Self::Legacy(LegacyError::Io(_)) => "legacy-io",
             Self::LineIdOutOfRange(_) => "line-id-out-of-range",

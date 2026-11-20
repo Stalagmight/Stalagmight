@@ -11,7 +11,7 @@
 //!
 //! [`Project::gas_reach_field_wire`]: crate::survey::Project::gas_reach_field_wire
 
-use super::super::legacy_convert::convert;
+use super::super::legacy_convert::{convert, frozen};
 use super::budget::{penetration_budget, required_stages, usable_oc_gas};
 use super::physics::{
     air_z_factor, ata, avg_depth, deliverable_gas, edge_gas, edge_gas_basis, gas_rate,
@@ -23,7 +23,10 @@ use crate::gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteProfilePoint,
     TankMaterial, Team,
 };
-use crate::{GpsCoordinates, LineData, Project, ShotData, ShotKind, StationRef, ZeroDatum};
+use crate::StationRef;
+use stalagmight_legacy::models::{
+    GpsCoordinates, LineData, Project, ShotData, ShotKind, ZeroDatum,
+};
 
 const EPS: f64 = 1e-9;
 
@@ -1790,7 +1793,7 @@ fn gas_reach_field_endpoint_selects_the_route_for_drops() {
         })
         .id;
     project
-        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .merge_stations(frozen(StationRef::new(a, 0)), frozen(StationRef::new(b, 0)))
         .unwrap();
     let origin = StationRef::new(a, 0);
     let diver = Diver::new(20.0, None).unwrap();
@@ -1917,13 +1920,13 @@ fn is_swim_leg_distinguishes_shots_from_ties() {
         })
         .id;
     project
-        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .merge_stations(frozen(StationRef::new(a, 1)), frozen(StationRef::new(b, 0)))
         .unwrap();
     project
         .create_loop_closure(
-            StationRef::new(a, 0),
-            StationRef::new(b, 1),
-            crate::ClosureStrategy::Batch,
+            frozen(StationRef::new(a, 0)),
+            frozen(StationRef::new(b, 1)),
+            stalagmight_legacy::models::ClosureStrategy::Batch,
         )
         .unwrap();
     // Adjacent stations within a line = a swum shot (incl. a reference/jump), either direction.
@@ -2177,7 +2180,7 @@ fn gas_reach_field_reaches_across_a_station_merge() {
         .id;
     // Join A's terminal station (index 1) to B's entry station (index 0).
     project
-        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .merge_stations(frozen(StationRef::new(a, 1)), frozen(StationRef::new(b, 0)))
         .unwrap();
 
     let origin = StationRef::new(a, 0);
@@ -2265,7 +2268,7 @@ fn gas_reach_field_turn_frontier_crosses_a_station_merge() {
         })
         .id;
     project
-        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .merge_stations(frozen(StationRef::new(a, 1)), frozen(StationRef::new(b, 0)))
         .unwrap();
 
     let origin = StationRef::new(a, 0);
@@ -2682,7 +2685,7 @@ fn gas_reach_field_unnormalized_config_bails_to_all_unreachable() {
 fn gas_reach_field_none_origin_seeds_from_zero_datums() {
     let (mut project, origin) = linear_descent_project();
     project.zero_datums.push(ZeroDatum {
-        station_ref: origin.into(),
+        station_ref: frozen(origin).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -2710,7 +2713,7 @@ fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
     // field. Without the fallback this returns empty roots → the whole map greys out.
     let (mut project, origin) = linear_descent_project();
     project.zero_datums.push(ZeroDatum {
-        station_ref: origin.into(),
+        station_ref: frozen(origin).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -2765,7 +2768,10 @@ fn branching_project() -> (Project, StationRef, StationRef, StationRef) {
         })
         .id;
     project
-        .merge_stations(StationRef::new(trunk, 0), StationRef::new(side, 0))
+        .merge_stations(
+            frozen(StationRef::new(trunk, 0)),
+            frozen(StationRef::new(side, 0)),
+        )
         .unwrap();
     (
         project,
@@ -3268,7 +3274,10 @@ fn two_branch_project() -> (Project, StationRef, u32, u32, StationRef, StationRe
         })
         .id;
     project
-        .merge_stations(StationRef::new(north, 0), StationRef::new(east, 0))
+        .merge_stations(
+            frozen(StationRef::new(north, 0)),
+            frozen(StationRef::new(east, 0)),
+        )
         .unwrap();
     (
         project,
@@ -3847,7 +3856,11 @@ fn route_profile_is_empty_when_the_whole_route_is_a_zero_distance_tie() {
     let (mut project, entrance, _side_tip, trunk_tip) = branching_project();
     let twin = StationRef::new(trunk_tip.line_id, 2);
     project
-        .create_loop_closure(entrance, twin, crate::ClosureStrategy::Batch)
+        .create_loop_closure(
+            frozen(entrance),
+            frozen(twin),
+            stalagmight_legacy::models::ClosureStrategy::Batch,
+        )
         .unwrap();
     let diver = Diver::new(20.0, None).unwrap();
     let field = sg_with_overrides(
@@ -4084,9 +4097,9 @@ fn route_profile_charges_a_zero_distance_tie_no_distance_time_or_gas() {
     let (mut project, entrance, side_tip, trunk_tip) = branching_project();
     project
         .create_loop_closure(
-            side_tip,
-            StationRef::new(trunk_tip.line_id, 1),
-            crate::ClosureStrategy::Batch,
+            frozen(side_tip),
+            frozen(StationRef::new(trunk_tip.line_id, 1)),
+            stalagmight_legacy::models::ClosureStrategy::Batch,
         )
         .unwrap();
     let diver = Diver::new(20.0, None).unwrap();
@@ -4384,7 +4397,10 @@ fn merged_mid_branch_project() -> (
         })
         .id;
     project
-        .merge_stations(StationRef::new(trunk, 1), StationRef::new(branch, 0))
+        .merge_stations(
+            frozen(StationRef::new(trunk, 1)),
+            frozen(StationRef::new(branch, 0)),
+        )
         .unwrap();
     (
         project,
@@ -5165,20 +5181,20 @@ fn two_entrance_cave() -> (Project, StationRef, StationRef) {
         })
         .id;
     project
-        .merge_stations(StationRef::new(a, 4), StationRef::new(b, 0))
+        .merge_stations(frozen(StationRef::new(a, 4)), frozen(StationRef::new(b, 0)))
         .unwrap();
     let (entrance, fix) = (StationRef::new(a, 0), StationRef::new(b, 2));
     for (sr, lat) in [(entrance, 20.0), (fix, 20.001)] {
         project.zero_datums.push(ZeroDatum::new(
-            sr.into(),
+            frozen(sr).into(),
             GpsCoordinates::new(lat, -87.5, 0.0).unwrap(),
         ));
     }
     assert_eq!(
         project.datum_roles(),
         vec![
-            Some(crate::station::DatumRole::Placement),
-            Some(crate::station::DatumRole::GpsFix)
+            Some(stalagmight_legacy::models::DatumRole::Placement),
+            Some(stalagmight_legacy::models::DatumRole::GpsFix)
         ],
         "fixture rot: the second datum must be a GPS fix, or this proves nothing"
     );
@@ -5282,13 +5298,16 @@ fn closure_twin_project() -> (
         })
         .id;
     project
-        .merge_stations(StationRef::new(trunk, 0), StationRef::new(branch, 0))
+        .merge_stations(
+            frozen(StationRef::new(trunk, 0)),
+            frozen(StationRef::new(branch, 0)),
+        )
         .unwrap();
     project
         .create_loop_closure(
-            StationRef::new(branch, 2),
-            StationRef::new(trunk, 1),
-            crate::ClosureStrategy::Batch,
+            frozen(StationRef::new(branch, 2)),
+            frozen(StationRef::new(trunk, 1)),
+            stalagmight_legacy::models::ClosureStrategy::Batch,
         )
         .unwrap();
     (

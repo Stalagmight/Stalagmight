@@ -21,7 +21,8 @@
 //!   with the repairs listed as warnings.
 //!
 //! A legacy SQLite file keeps 0.6.0's SQLite repair and table-by-table export
-//! (the persistence crate's `Database`), until the SQLite layer is retired.
+//! (`persistence::recovery`); the export's full project comes from the frozen
+//! 0.6.0 reader.
 //!
 //! The open project needs neither: the load refuses an invalid file and every
 //! edit validates before it commits, so [`AppState::repair_open_project_integrity`]
@@ -38,7 +39,7 @@ use crate::persistence::stalx_v2::{
     self, decode_salvage, encode, write_atomic, DecodeOptions, Extras, Fingerprint, Format, Guard,
     History, Mode, SalvageReport,
 };
-use crate::persistence::{Database, RepairResult, SalvagedData};
+use crate::persistence::{recovery, RepairResult, SalvagedData};
 
 /// How many repairs a message lists before it says how many more there are.
 const LISTED: usize = 5;
@@ -94,7 +95,7 @@ impl AppState {
             Format::V2 => Ok(salvage_v2(&bytes)),
             Format::Legacy => {
                 drop(bytes);
-                Database::export_salvageable(path).map_err(|e| format!("Salvage failed: {e}"))
+                recovery::export_salvageable(path).map_err(|e| format!("Salvage failed: {e}"))
             }
             Format::Unknown => {
                 Err("Salvage failed: this is not a Stalagmight project file".to_string())
@@ -232,7 +233,7 @@ fn repair_v2(path: &Path, bytes: &[u8], fingerprint: &Fingerprint) -> Result<Rep
 
 /// 0.6.0's SQLite repair (backup, REINDEX, VACUUM, quick check).
 fn repair_legacy(path: &Path) -> Result<RepairResult, String> {
-    match Database::attempt_repair(path) {
+    match recovery::attempt_repair(path) {
         Ok((backup_path, integrity_ok)) => {
             let message = if integrity_ok {
                 "Repair succeeded - database integrity restored.".to_string()

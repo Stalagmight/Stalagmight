@@ -30,6 +30,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use tempfile::TempDir;
 
+use super::legacy_fixture_kit::{frozen, write_legacy_file_with, Legacy, LegacyExtras};
 use super::robustness_kit::NullSink;
 use super::AppState;
 use crate::core::Command;
@@ -37,7 +38,7 @@ use crate::models::{
     reminted_shot_uuid, ClosureStrategy, LineData, LineId, ShotData, StationRef, FEATURE_ID_STRIDE,
 };
 use crate::persistence::stalx_v2::{self, DecodeOptions, Format};
-use crate::persistence::{Database, ResolvedWarning};
+use crate::persistence::ResolvedWarning;
 
 const X: [&str; 4] = [
     "c0c0c0c0-0000-4000-8000-000000000001",
@@ -85,15 +86,25 @@ fn ignore_on_the_copy() -> ResolvedWarning {
 /// older build wrote it, with the copy's ignore when `ignored`.
 fn legacy_file(dir: &Path, copies: usize, ignored: bool) -> PathBuf {
     let path = dir.join("legacy.stalx");
-    let mut project = crate::models::Project::new("Legacy".to_string(), None);
+    let mut project = Legacy::new("Legacy".to_string(), None);
     for _ in 0..copies {
-        project.add_line(copy());
+        project.add_line(frozen(&copy()));
     }
-    let mut db = Database::open(&path).unwrap();
-    db.save_project(&project).unwrap();
+    let mut extras = LegacyExtras::default();
     if ignored {
-        db.save_resolved_warning(&ignore_on_the_copy()).unwrap();
+        let ignore = ignore_on_the_copy();
+        extras
+            .resolved_warnings
+            .push(stalagmight_legacy::persistence::ResolvedWarning {
+                line_id: ignore.line_id,
+                shot_id: ignore.shot_id,
+                warning_code: ignore.warning_code,
+                resolved_at: ignore.resolved_at,
+                resolved_comment: ignore.resolved_comment,
+                shot_uuid: ignore.shot_uuid,
+            });
     }
+    write_legacy_file_with(&path, &project, &extras);
     path
 }
 

@@ -87,22 +87,22 @@ fn linked() -> Extras {
 
 /// A legacy SQLite project with one 10 m line and a datum at its start.
 fn legacy_file(path: &Path, name: &str) {
-    use crate::models::{LineData, StationRef};
-    let mut legacy = crate::models::Project::new(name.to_string(), None);
+    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
+    let mut legacy = Legacy::new(name.to_string(), None);
+    let shots = [shot(10.0, ShotKind::Normal), shot(4.0, ShotKind::Reference)];
     let line = legacy
-        .add_line(LineData {
-            shots: vec![shot(10.0, ShotKind::Normal), shot(4.0, ShotKind::Reference)],
+        .add_line(old::LineData {
+            shots: shots.iter().map(frozen).collect(),
             ..Default::default()
         })
         .id;
     legacy
         .set_zero_datum(
-            StationRef::new(line, 0),
-            GpsCoordinates::new(-10.0, 30.0, 0.0).unwrap(),
+            slot(line, 0),
+            old::GpsCoordinates::new(-10.0, 30.0, 0.0).unwrap(),
         )
         .unwrap();
-    let mut db = crate::persistence::Database::open(path).unwrap();
-    db.save_project(&legacy).unwrap();
+    write_legacy_file(path, &legacy);
 }
 
 fn recents_of(state: &AppState, paths: &[&Path]) -> Vec<crate::models::ProjectMetadata> {

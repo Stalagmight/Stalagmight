@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use super::legacy_fixture_kit::{read_legacy_file, write_legacy_file, Legacy};
 use super::project_restore::pre_restore_path;
 use super::AppState;
 use crate::core::events::EventSink;
 use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::persistence::stalx_v2::{self, Extras, Format, Mode};
-use crate::persistence::Database;
 
 /// The load needs a sink for its progress events; nothing listens here.
 struct NullSink;
@@ -78,9 +78,7 @@ fn project_file(dir: &Path, file: &str, label: &str) -> PathBuf {
 /// A saved legacy (SQLite) project named `label` at `dir/file`.
 fn legacy_file(dir: &Path, file: &str, label: &str) -> PathBuf {
     let path = dir.join(file);
-    let mut db = Database::open(&path).unwrap();
-    db.save_project(&crate::models::Project::new(label.to_string(), None))
-        .unwrap();
+    write_legacy_file(&path, &Legacy::new(label.to_string(), None));
     path
 }
 
@@ -615,7 +613,11 @@ fn stale_sidecars_never_reach_the_restored_files() {
     // Control: this journal really does replay into a file it lands beside.
     let control = legacy_file(dir.path(), "control.stalx", "Control");
     std::fs::write(dir.path().join("control.stalx-journal"), &journal).unwrap();
-    let replayed = Database::open_existing(&control).map(|_| label(&control));
+    let replayed = rusqlite::Connection::open(&control).and_then(|conn| {
+        conn.query_row("SELECT name FROM project", [], |row| {
+            row.get::<_, String>(0)
+        })
+    });
     assert_ne!(
         replayed.ok().as_deref(),
         Some("Control"),
@@ -652,8 +654,8 @@ fn stale_sidecars_never_reach_the_restored_files() {
         names(dir.path()),
         ["cave.stalx", "cave.stalx.backup", "cave.stalx.pre-restore"]
     );
-    drop(Database::open_existing(&project).unwrap());
-    drop(Database::open_existing(&safety).unwrap());
+    drop(read_legacy_file(&project));
+    drop(read_legacy_file(&safety));
     assert_eq!(label(&project), "Older");
     assert_eq!(label(&safety), "Current");
 }

@@ -313,9 +313,7 @@ fn inspect(copy: &Path, max_value_bytes: i32) -> Result<(i32, HistoryPresence), 
         .map_err(sql)?;
 
     if let Some(refused) = refused_schema_object(&conn).map_err(sql)? {
-        return Err(LegacyError::Corrupt(format!(
-            "refused schema object: {refused}"
-        )));
+        return Err(LegacyError::RefusedSchema(refused));
     }
 
     let history = HistoryPresence {

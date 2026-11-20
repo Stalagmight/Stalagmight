@@ -1,6 +1,6 @@
 //! Test support for the M3 cross-checks: convert a survey built with the
-//! legacy `models::project::Project` into the station-graph model, and read
-//! the legacy derived views per slot.
+//! frozen 0.6.0 model (`stalagmight_legacy::models::Project`) into the
+//! station-graph model, and read the legacy derived views per slot.
 //!
 //! The conversion (a test sketch; the real migration is stream G):
 //! - each legacy merge group becomes one station (ids minted in slot order of
@@ -20,12 +20,35 @@
 
 use std::collections::BTreeMap;
 
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use stalagmight_legacy::models as old;
+
 use crate::config::ClosureAdjustmentConfig;
 use crate::{LineId, ShotData, StationId, StationRef};
 
 use super::{ClosureStrategy, LineMeta, LoopClosure, Project, Station, ZeroDatum};
 
-pub(super) type Old = crate::Project;
+pub(super) type Old = stalagmight_legacy::LegacyProject;
+
+/// A frozen-model value as the live type of the same name: both serialize
+/// identically (the frozen copy only dropped the TS derives).
+pub(super) fn relive<T: Serialize, U: DeserializeOwned>(value: &T) -> U {
+    match serde_json::to_value(value).and_then(serde_json::from_value) {
+        Ok(live) => live,
+        Err(error) => panic!("frozen value does not read as the live type: {error}"),
+    }
+}
+
+/// A frozen-model slot as the live slot.
+pub(super) fn live(slot: old::StationRef) -> StationRef {
+    StationRef::new(slot.line_id, slot.station_index)
+}
+
+/// A live slot as the frozen-model slot.
+pub(super) fn frozen(slot: StationRef) -> old::StationRef {
+    old::StationRef::new(slot.line_id, slot.station_index)
+}
 
 /// A converted project and the slot -> station map.
 pub(super) struct Converted {
@@ -68,7 +91,7 @@ pub(super) fn merge_groups(old: &Old) -> BTreeMap<StationRef, StationRef> {
         else {
             panic!("a legacy merge does not resolve");
         };
-        let (ra, rb) = (find(&parent, a), find(&parent, b));
+        let (ra, rb) = (find(&parent, live(a)), find(&parent, live(b)));
         if ra != rb {
             parent.insert(ra.max(rb), ra.min(rb));
         }
@@ -86,7 +109,7 @@ pub(super) fn old_raw(old: &Old) -> BTreeMap<StationRef, [f64; 3]> {
         .into_iter()
         .map(|s| {
             (
-                s.station_ref,
+                live(s.station_ref),
                 [s.coordinates.x, s.coordinates.y, s.coordinates.z],
             )
         })
@@ -99,18 +122,18 @@ pub(super) fn old_adjusted(
     old: &Old,
     config: &ClosureAdjustmentConfig,
 ) -> (BTreeMap<StationRef, [f64; 3]>, Vec<StationRef>) {
-    let adjusted = old.compute_adjusted_stations(config);
+    let adjusted = old.compute_adjusted_stations(&relive(config));
     let positions = adjusted
         .stations
         .into_iter()
         .map(|s| {
             (
-                s.station_ref,
+                live(s.station_ref),
                 [s.coordinates.x, s.coordinates.y, s.coordinates.z],
             )
         })
         .collect();
-    let failures = adjusted.failures.iter().map(|f| f.anchor).collect();
+    let failures = adjusted.failures.iter().map(|f| live(f.anchor)).collect();
     (positions, failures)
 }
 
@@ -119,7 +142,7 @@ pub(super) fn convert(old: &Old) -> Converted {
     let groups = merge_groups(old);
     let before = old_raw(old);
     let mut p = super::test_helpers::project();
-    p.settings.default_azimuth_reference = old.default_azimuth_reference;
+    p.settings.default_azimuth_reference = old.default_azimuth_reference.as_ref().map(relive);
     let mut station_of_root: BTreeMap<StationRef, StationId> = BTreeMap::new();
     for line in &old.lines {
         for i in 0..=line.shots.len() {
@@ -143,13 +166,17 @@ pub(super) fn convert(old: &Old) -> Converted {
         let chain: Vec<StationId> = (0..=line.shots.len())
             .map(|i| station(StationRef::new(line.id, i as u32)))
             .collect();
-        let shots: Vec<ShotData> = line.shots.iter().map(crate::Shot::to_shot_data).collect();
+        let shots: Vec<ShotData> = line
+            .shots
+            .iter()
+            .map(|shot| relive(&shot.to_shot_data()))
+            .collect();
         let meta = LineMeta {
             name: line.name.clone(),
             color: line.color.clone(),
-            direction: line.direction,
+            direction: relive(&line.direction),
             quality: line.quality,
-            azimuth_reference: line.azimuth_reference,
+            azimuth_reference: line.azimuth_reference.as_ref().map(relive),
             ..LineMeta::default()
         };
         // Legacy test surveys number lines 0, 1, 2, ... in list order, as the
@@ -160,7 +187,7 @@ pub(super) fn convert(old: &Old) -> Converted {
         }
     }
     for (key, &(dx, dy, dz)) in &old.station_offsets {
-        let Some(slot) = old.resolve_key(key) else {
+        let Some(slot) = old.resolve_key(key).map(live) else {
             continue;
         };
         if let Some(line) = p.line_mut(slot.line_id) {
@@ -168,10 +195,10 @@ pub(super) fn convert(old: &Old) -> Converted {
         }
     }
     for old_datum in &old.zero_datums {
-        let Some(slot) = old.resolve_key(&old_datum.station_ref) else {
+        let Some(slot) = old.resolve_key(&old_datum.station_ref).map(live) else {
             continue;
         };
-        let mut datum = ZeroDatum::new(station(slot), old_datum.gps);
+        let mut datum = ZeroDatum::new(station(slot), relive(&old_datum.gps));
         datum.via = Some(slot.line_id);
         datum.accuracy_m = old_datum.accuracy_m;
         datum.entrance = old_datum.entrance;
@@ -187,11 +214,13 @@ pub(super) fn convert(old: &Old) -> Converted {
     }
     let mut max_closure_id = 0;
     for c in &old.loop_closures {
-        let (Some(a), Some(b)) = (old.resolve_key(&c.station_a), old.resolve_key(&c.station_b))
-        else {
+        let (Some(a), Some(b)) = (
+            old.resolve_key(&c.station_a).map(live),
+            old.resolve_key(&c.station_b).map(live),
+        ) else {
             continue;
         };
-        let mut strategy = ClosureStrategy::from(c.strategy);
+        let mut strategy = ClosureStrategy::from(relive::<_, crate::ClosureStrategy>(&c.strategy));
         if c.is_aligned && strategy != ClosureStrategy::Move {
             strategy = ClosureStrategy::Tie;
         }
@@ -216,7 +245,8 @@ pub(super) fn convert(old: &Old) -> Converted {
             continue;
         };
         let gauge = old
-            .adjustment_anchor_for_tests(line)
+            .anchor_for_lines(&old.get_connected_line_ids(line))
+            .map(|(gauge, _)| live(gauge))
             .unwrap_or_else(|| panic!("line {line}: no legacy gauge"));
         let [x, y, _] = before[&gauge];
         if let Err(error) = p.set_placement(station(gauge), x, y) {
@@ -262,29 +292,29 @@ pub(super) fn data(
     length: f64,
     depth_in: f64,
     depth_out: f64,
-) -> ShotData {
-    ShotData {
+) -> old::ShotData {
+    old::ShotData {
         azimuth_in,
         azimuth_out,
         length,
         depth_in,
         depth_out,
-        ..ShotData::default()
+        ..old::ShotData::default()
     }
 }
 
 /// Add a legacy line, returning its id.
-pub(super) fn old_line(old: &mut Old, shots: Vec<ShotData>) -> LineId {
-    old.add_line(crate::LineData {
+pub(super) fn old_line(old: &mut Old, shots: Vec<old::ShotData>) -> LineId {
+    old.add_line(old::LineData {
         shots,
         quality: 1.0,
-        ..crate::LineData::default()
+        ..old::LineData::default()
     })
     .id
 }
 
 /// A random legacy shot list (depths continuous along the line).
-pub(super) fn random_shots(rng: &mut Lcg, count: usize) -> Vec<ShotData> {
+pub(super) fn random_shots(rng: &mut Lcg, count: usize) -> Vec<old::ShotData> {
     let mut depth = rng.unit() * 20.0;
     (0..count)
         .map(|_| {
@@ -332,8 +362,8 @@ impl Default for Mix {
     }
 }
 
-fn gps(latitude: f64, longitude: f64) -> crate::GpsCoordinates {
-    crate::GpsCoordinates {
+fn gps(latitude: f64, longitude: f64) -> old::GpsCoordinates {
+    old::GpsCoordinates {
         latitude,
         longitude,
         depth_reference: 0.0,
@@ -358,8 +388,8 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
         if mix.virtual_shots {
             for shot in &mut shots {
                 match rng.below(14) {
-                    0 => shot.kind = crate::ShotKind::Jump,
-                    1 => shot.kind = crate::ShotKind::Reference,
+                    0 => shot.kind = old::ShotKind::Jump,
+                    1 => shot.kind = old::ShotKind::Reference,
                     _ => {}
                 }
             }
@@ -372,23 +402,23 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
         }
         let len = slot_count(&old, line);
         if rng.below(4) == 0 {
-            let slot = StationRef::new(line, rng.below(len) as u32);
+            let slot = old::StationRef::new(line, rng.below(len) as u32);
             old.station_offsets.insert(
-                crate::StationKey::from(slot),
+                old::StationKey::from(slot),
                 (rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5),
             );
         }
         if old.lines.len() > 1 && rng.below(5) != 0 {
             let target = old.lines[rng.below(old.lines.len() - 1)].id;
-            let a = StationRef::new(line, rng.below(len) as u32);
-            let b = StationRef::new(target, rng.below(slot_count(&old, target)) as u32);
+            let a = old::StationRef::new(line, rng.below(len) as u32);
+            let b = old::StationRef::new(target, rng.below(slot_count(&old, target)) as u32);
             let _ = old.merge_stations(a, b);
         }
     }
     // Twin lines from one station whose ends coincide: a snap.
     for _ in 0..mix.snaps {
         let host = old.lines[rng.below(old.lines.len())].id;
-        let j = StationRef::new(host, rng.below(slot_count(&old, host)) as u32);
+        let j = old::StationRef::new(host, rng.below(slot_count(&old, host)) as u32);
         let v = random_shots(&mut rng, 2);
         let mut swapped = vec![v[1].clone(), v[0].clone()];
         for s in &mut swapped {
@@ -396,29 +426,32 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
         }
         let a = old_line(&mut old, v);
         let b = old_line(&mut old, swapped);
-        if old.merge_stations(StationRef::new(a, 0), j).is_err()
-            || old.merge_stations(StationRef::new(b, 0), j).is_err()
+        if old.merge_stations(old::StationRef::new(a, 0), j).is_err()
+            || old.merge_stations(old::StationRef::new(b, 0), j).is_err()
         {
             continue;
         }
         let _ = old.create_loop_closure(
-            StationRef::new(a, 2),
-            StationRef::new(b, 2),
-            crate::ClosureStrategy::Move,
+            old::StationRef::new(a, 2),
+            old::StationRef::new(b, 2),
+            old::ClosureStrategy::Move,
         );
     }
     let lines: Vec<LineId> = old.lines.iter().map(|l| l.id).collect();
     for k in 0..mix.datums {
         let line = lines[rng.below(lines.len())];
-        let slot = StationRef::new(line, rng.below(slot_count(&old, line)) as u32);
+        let slot = old::StationRef::new(line, rng.below(slot_count(&old, line)) as u32);
         let positions = old_raw(&old);
-        let frame = old.zero_datums.first().map(|d| d.gps);
+        let frame = old.zero_datums.first().map(|d| d.gps.clone());
         let g = match frame {
             None => gps(20.5 + rng.unit() * 0.01, -87.4 + rng.unit() * 0.01),
             Some(frame) => {
-                let [x, y, _] = positions.get(&slot).copied().unwrap_or([0.0, 0.0, 0.0]);
+                let [x, y, _] = positions
+                    .get(&live(slot))
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
                 let (dx, dy) = ((rng.unit() - 0.5) * 30.0, (rng.unit() - 0.5) * 30.0);
-                match crate::local_to_gps(x + dx, y + dy, &frame) {
+                match crate::local_to_gps(x + dx, y + dy, &relive(&frame)) {
                     Some((lat, lon)) => gps(lat, lon),
                     None => continue,
                 }
@@ -460,15 +493,15 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
             break;
         }
         let (la, lb) = (lines[rng.below(lines.len())], lines[rng.below(lines.len())]);
-        let a = StationRef::new(la, rng.below(slot_count(&old, la)) as u32);
-        let b = StationRef::new(lb, rng.below(slot_count(&old, lb)) as u32);
+        let a = old::StationRef::new(la, rng.below(slot_count(&old, la)) as u32);
+        let b = old::StationRef::new(lb, rng.below(slot_count(&old, lb)) as u32);
         let strategy = match rng.below(6) {
-            0 => crate::ClosureStrategy::LeastSquaresWeighted,
-            1 => crate::ClosureStrategy::Move,
-            _ => crate::ClosureStrategy::Batch,
+            0 => old::ClosureStrategy::LeastSquaresWeighted,
+            1 => old::ClosureStrategy::Move,
+            _ => old::ClosureStrategy::Batch,
         };
         if let Ok(closure) = old.create_loop_closure(a, b, strategy) {
-            if strategy == crate::ClosureStrategy::Batch && rng.below(6) == 0 {
+            if strategy == old::ClosureStrategy::Batch && rng.below(6) == 0 {
                 if let Some(c) = old.loop_closures.iter_mut().find(|c| c.id == closure.id) {
                     c.is_aligned = true;
                 }
@@ -483,16 +516,16 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
         }
         let i = rng.below(len - 1) as u32;
         let id = old.loop_closures.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-        old.loop_closures.push(crate::LoopClosure {
+        old.loop_closures.push(old::LoopClosure {
             id,
-            station_a: crate::StationKey::from(StationRef::new(line, i)),
-            station_b: crate::StationKey::from(StationRef::new(line, i + 1)),
+            station_a: old::StationKey::from(old::StationRef::new(line, i)),
+            station_b: old::StationKey::from(old::StationRef::new(line, i + 1)),
             path_length: 0.0,
             misclosure_distance: 0.0,
             error_percentage: 0.0,
             horizontal_misclosure: 0.0,
             vertical_misclosure: 0.0,
-            strategy: crate::ClosureStrategy::Batch,
+            strategy: old::ClosureStrategy::Batch,
             is_aligned: false,
         });
     }

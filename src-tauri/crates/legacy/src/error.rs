@@ -17,9 +17,14 @@ pub enum LegacyError {
     /// file plus its journal sidecar).
     #[error("input is over the {max}-byte limit")]
     TooLarge { max: u64 },
+    /// A schema object that would run its own SQL when read (a view, a
+    /// trigger, a virtual table, an expression index, ...): refused before
+    /// anything reads the file. The app reports it as an unsafe file.
+    #[error("refused schema object: {0}")]
+    RefusedSchema(crate::persistence::RefusedSchemaObject),
     /// SQLite, but not something the 0.6.0 app opened: a failed integrity or
-    /// foreign-key check, a schema that would run its own SQL, no project
-    /// data, or any other refusal of the old load path. The text can quote the
+    /// foreign-key check, no project data, or any other refusal of the old
+    /// load path. The text can quote the
     /// file (SQLite error context): log it, do not show it to other users.
     #[error("not a readable legacy .stalx: {0}")]
     Corrupt(String),
@@ -41,6 +46,12 @@ impl LegacyError {
                 found: newer.found,
                 supported: newer.supported,
             };
+        }
+        if let Some(refused) = e
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<crate::persistence::RefusedSchemaObject>())
+        {
+            return Self::RefusedSchema(refused.clone());
         }
         let sqlite = e
             .chain()

@@ -265,10 +265,10 @@ fn the_open_project_and_newer_files_are_refused() {
 fn a_legacy_file_keeps_the_sqlite_repair() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("legacy.stalx");
-    let mut db = crate::persistence::Database::open(&path).unwrap();
-    db.save_project(&crate::models::Project::new("Legacy".to_string(), None))
-        .unwrap();
-    drop(db);
+    super::legacy_fixture_kit::write_legacy_file(
+        &path,
+        &super::legacy_fixture_kit::Legacy::new("Legacy".to_string(), None),
+    );
 
     let result = state().repair_project_file(&path).unwrap();
 

@@ -11,25 +11,24 @@
 //! What #485 pinned still holds and is pinned here: an ignore in an unstamped
 //! or stamped pre-v8 file survives the upgrading save, naming the same shot.
 //!
-//! All data here is synthetic: a project built in memory, saved by the legacy
-//! writer of this build, then hand-narrowed to the pre-v8 shape. No fixture is
+//! All data here is synthetic: a project built in memory, saved by the frozen
+//! 0.6.0 writer, then hand-narrowed to the pre-v8 shape. No fixture is
 //! read or written.
 
 use tempfile::TempDir;
 
+use super::legacy_fixture_kit::{old, read_legacy_file, write_legacy_file, Legacy};
 use super::AppState;
 use crate::core::Command;
-use crate::models::{LineData, Project, ShotData};
 use crate::persistence::stalx_v2::{self, IgnoredWarning};
-use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
 
 /// Two shots that cannot cast a vote in the v12 pitch-flip migration (no
 /// pitch, no depth change), so an assertion below cannot be measuring the
 /// flip's `INCLINATION_DEPTH_MISMATCH` cleanup instead of the carry-over.
-fn synthetic_project() -> Project {
-    let unflippable = |length: f64| ShotData {
+fn synthetic_project() -> Legacy {
+    let unflippable = |length: f64| old::ShotData {
         length,
         pitch_in: None,
         pitch_out: None,
@@ -37,8 +36,8 @@ fn synthetic_project() -> Project {
         depth_out: 10.0,
         ..Default::default()
     };
-    let mut project = Project::new("Legacy".to_string(), None);
-    project.add_line(LineData {
+    let mut project = Legacy::new("Legacy".to_string(), None);
+    project.add_line(old::LineData {
         color: "#abcdef".to_string(),
         shots: vec![unflippable(5.0), unflippable(7.0)],
         ..Default::default()
@@ -52,13 +51,11 @@ fn synthetic_project() -> Project {
 /// `project.schema_version` that claims the current version. Returns the
 /// ignored shot's uuid as the file stores it.
 fn build_unstamped_pre_v8_file(path: &std::path::Path) -> String {
-    let mut db = Database::open(path).unwrap();
-    db.save_project(&synthetic_project()).unwrap();
-    let saved = db.load_project().unwrap();
+    write_legacy_file(path, &synthetic_project());
+    let saved = read_legacy_file(path);
     let line_id = saved.lines[0].id;
     let shot_id = saved.lines[0].shots[0].id;
     let uuid = saved.lines[0].shots[0].uuid.clone().unwrap();
-    drop(db);
 
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute_batch(&format!(

@@ -83,9 +83,8 @@ mod tests {
         attempt_repair_impl, export_salvageable_data, list_backups, restore_from_backup_impl,
     };
     use crate::core::AppState;
-    use crate::models::Project;
     use crate::persistence::stalx_v2::{self, Extras, Mode};
-    use crate::persistence::{Database, SCHEMA_VERSION};
+    use crate::persistence::SCHEMA_VERSION;
     use std::path::{Path, PathBuf};
 
     /// A version 2 file at `dir/name`: an empty project named `label`, its
@@ -137,12 +136,11 @@ mod tests {
     /// 60..64, big-endian), which is what `PRAGMA user_version` sets.
     fn project_file(dir: &Path, name: &str, version: i32) -> PathBuf {
         let path = dir.join(name);
-        {
-            let mut db = Database::open(&path).unwrap();
-            db.save_project(&Project::new(name.to_string(), None))
-                .unwrap();
-        }
-        let mut bytes = std::fs::read(&path).unwrap();
+        let mut bytes = stalagmight_legacy::write_v18(
+            &stalagmight_legacy::LegacyProject::new(name.to_string(), None),
+            &stalagmight_legacy::LegacyExtras::default(),
+        )
+        .unwrap();
         bytes
             .get_mut(60..64)
             .unwrap()

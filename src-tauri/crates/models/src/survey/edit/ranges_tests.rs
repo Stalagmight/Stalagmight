@@ -1,5 +1,7 @@
 //! Delete a shot range: gap-close, split, prefix, suffix, and the preview.
 
+use stalagmight_legacy::models as old;
+
 use crate::RangeDeleteKind;
 
 use super::super::test_helpers::gps;
@@ -278,32 +280,36 @@ fn a_closure_on_a_station_the_gap_close_deletes_does_not_anchor_a_side() {
     assert_valid(&p);
 
     // Today (0.6.0) the same survey: the same verdict.
-    let mut old = crate::Project::new("legacy".to_string(), None);
-    let flat = |azimuth: f64| crate::ShotData {
+    let mut old = stalagmight_legacy::LegacyProject::new("legacy".to_string(), None);
+    let flat = |azimuth: f64| old::ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
         length: 10.0,
-        ..crate::ShotData::default()
+        ..old::ShotData::default()
     };
     let main = old
-        .add_line(crate::LineData {
+        .add_line(old::LineData {
             shots: vec![flat(90.0); 5],
             quality: 1.0,
-            ..crate::LineData::default()
+            ..old::LineData::default()
         })
         .id;
     let side = old
-        .add_line(crate::LineData {
+        .add_line(old::LineData {
             shots: vec![flat(0.0)],
             quality: 1.0,
-            ..crate::LineData::default()
+            ..old::LineData::default()
         })
         .id;
-    let at = crate::StationRef::new;
-    old.set_zero_datum(at(main, 0), gps(20.5, -87.3)).unwrap();
+    let at = old::StationRef::new;
+    old.set_zero_datum(
+        at(main, 0),
+        old::GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    )
+    .unwrap();
     old.merge_stations(at(side, 0), at(main, 4)).unwrap();
     for (a, b) in [(at(side, 1), at(main, 3)), (at(main, 3), at(main, 0))] {
-        old.create_loop_closure(a, b, crate::ClosureStrategy::Batch)
+        old.create_loop_closure(a, b, old::ClosureStrategy::Batch)
             .unwrap();
     }
     let shots: Vec<u32> = old.lines[0].shots.iter().map(|s| s.id).collect();

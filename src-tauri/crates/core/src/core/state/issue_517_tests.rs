@@ -22,18 +22,18 @@
 //! The display half of the forged-stamp case (the warning shown as ignored) is
 //! the warnings package's (`compute_project_warnings`).
 //!
-//! All data here is synthetic: a project built in memory, saved by this build,
-//! then hand-narrowed. No fixture is read or written.
+//! All data here is synthetic: a project built in memory, saved by the frozen
+//! 0.6.0 writer, then hand-narrowed. No fixture is read or written.
 
 use std::path::Path;
 
 use tempfile::TempDir;
 
+use super::legacy_fixture_kit::{old, read_legacy_file, write_legacy_file, Legacy};
 use super::AppState;
 use crate::core::Command;
-use crate::models::{LineData, Project, ShotData};
+use crate::models::ShotData;
 use crate::persistence::stalx_v2::{self, Extras, IgnoredWarning, Mode};
-use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
 const RESOLVED_AT: &str = "2026-01-01T00:00:00+00:00";
@@ -65,8 +65,8 @@ struct Seeded {
 
 /// Two short shots that the v12 pitch-flip migration cannot vote on (no
 /// pitch, no depth change); the first is the one the fixtures ignore.
-fn synthetic_project() -> Project {
-    let unflippable = |length: f64| ShotData {
+fn synthetic_project() -> Legacy {
+    let unflippable = |length: f64| old::ShotData {
         length,
         pitch_in: None,
         pitch_out: None,
@@ -74,8 +74,8 @@ fn synthetic_project() -> Project {
         depth_out: 10.0,
         ..Default::default()
     };
-    let mut project = Project::new("Forged".to_string(), None);
-    project.add_line(LineData {
+    let mut project = Legacy::new("Forged".to_string(), None);
+    project.add_line(old::LineData {
         color: "#abcdef".to_string(),
         shots: vec![unflippable(0.1), unflippable(0.2)],
         ..Default::default()
@@ -83,11 +83,10 @@ fn synthetic_project() -> Project {
     project
 }
 
-/// Write a legacy `.stalx` this build's SQLite writer considers current.
+/// Write a legacy `.stalx` as the 0.6.0 writer wrote it (current v18 shape).
 fn seed_current_file(path: &Path) -> Seeded {
-    let mut db = Database::open(path).unwrap();
-    db.save_project(&synthetic_project()).unwrap();
-    let saved = db.load_project().unwrap();
+    write_legacy_file(path, &synthetic_project());
+    let saved = read_legacy_file(path);
     Seeded {
         line_id: saved.lines[0].id,
         shot_id: saved.lines[0].shots[0].id,

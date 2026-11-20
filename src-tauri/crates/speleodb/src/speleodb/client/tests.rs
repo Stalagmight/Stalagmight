@@ -668,15 +668,18 @@ fn live_used_api_calls_with_email_and_token() {
                     acquire_lock(&base, &token, false, id)?;
                     let dir = tempfile::tempdir().unwrap();
                     let path = dir.path().join("project.stalx");
-                    {
-                        let mut db =
-                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                        db.save_project(&crate::models::Project::new(
-                            "Synthetic first revision".into(),
-                            None,
-                        ))
-                        .unwrap();
-                    }
+                    std::fs::write(
+                        &path,
+                        stalagmight_legacy::write_v18(
+                            &stalagmight_legacy::LegacyProject::new(
+                                "Synthetic first revision".into(),
+                                None,
+                            ),
+                            &stalagmight_legacy::LegacyExtras::default(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
                     let first_bytes = std::fs::read(&path).unwrap();
                     eprintln!("{label}: uploading first native file");
                     let first =
@@ -692,15 +695,18 @@ fn live_used_api_calls_with_email_and_token() {
                         upload_stalx(&base, &token, false, id, &path, "No changes"),
                         Err(SpeleoDbError::Status { status: 304, .. })
                     ));
-                    {
-                        let mut db =
-                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                        db.save_project(&crate::models::Project::new(
-                            "Synthetic second revision".into(),
-                            None,
-                        ))
-                        .unwrap();
-                    }
+                    std::fs::write(
+                        &path,
+                        stalagmight_legacy::write_v18(
+                            &stalagmight_legacy::LegacyProject::new(
+                                "Synthetic second revision".into(),
+                                None,
+                            ),
+                            &stalagmight_legacy::LegacyExtras::default(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
                     eprintln!("{label}: uploading second native file");
                     let second =
                         upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?

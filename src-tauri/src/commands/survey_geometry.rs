@@ -587,23 +587,32 @@ mod tests {
     /// read) and previewed like any other.
     #[test]
     fn test_get_survey_geometry_for_file_reads_a_legacy_file() {
-        use crate::models::{LineData, StationRef};
+        use stalagmight_legacy::models as old;
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("legacy.stalx");
-        let mut legacy = crate::models::Project::new("Legacy".to_string(), None);
+        let mut legacy = stalagmight_legacy::LegacyProject::new("Legacy".to_string(), None);
         let line = legacy
-            .add_line(LineData {
-                shots: vec![shot(10.0, 90.0, ShotKind::Normal)],
+            .add_line(old::LineData {
+                shots: vec![old::ShotData {
+                    length: 10.0,
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
             })
             .id;
         let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
         legacy
-            .set_zero_datum(StationRef::new(line, 0), gps)
+            .set_zero_datum(
+                old::StationRef::new(line, 0),
+                old::GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+            )
             .unwrap();
-        let mut db = crate::persistence::Database::open(&path).unwrap();
-        db.save_project(&legacy).unwrap();
-        drop(db);
+        let bytes =
+            stalagmight_legacy::write_v18(&legacy, &stalagmight_legacy::LegacyExtras::default())
+                .unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let before = std::fs::read(&path).unwrap();
 
         let geometry = get_survey_geometry_for_file_impl(&path).unwrap();

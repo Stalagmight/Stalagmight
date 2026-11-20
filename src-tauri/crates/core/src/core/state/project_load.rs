@@ -88,6 +88,9 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
                 &path_text(path),
             )
         }
+        MigrateError::Legacy(LegacyError::RefusedSchema(refused)) => {
+            LoadError::unsafe_file(refused, &path_text(path))
+        }
         MigrateError::Legacy(LegacyError::Io(e)) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
                 LoadError::permission(e.to_string(), &path_text(path))

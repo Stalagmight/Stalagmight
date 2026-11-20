@@ -4749,14 +4749,22 @@ mod tests {
     }
 
     /// End-to-end coordinate verification: parse a real TML file, import all
-    /// lines into a Project, compute station coordinates, and compare
-    /// against independently calculated expected values.
+    /// lines into the frozen 0.6.0 model (`stalagmight-legacy`, the coordinate
+    /// oracle), compute station coordinates, and compare against
+    /// independently calculated expected values.
     ///
     /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
     #[test]
     #[ignore]
     fn parse_tml_naharon_coordinates() {
-        use crate::models::{ImportPlacement, LineData, Project, StationRef};
+        use crate::models::ImportPlacement;
+        use stalagmight_legacy::models::{LineData, Project, StationRef};
+
+        // The frozen model's types serialize like the live ones.
+        fn relive<T: Serialize, U: serde::de::DeserializeOwned>(value: &T) -> U {
+            serde_json::from_value(serde_json::to_value(value).expect("serialize"))
+                .expect("the frozen type reads the live value")
+        }
 
         let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
             "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
@@ -4786,9 +4794,9 @@ mod tests {
                 surveyor: config.surveyor.clone(),
                 date: config.date,
                 color: config.color.clone(),
-                direction: config.direction,
+                direction: config.direction.as_ref().map(relive),
                 quality: config.quality,
-                shots: config.shots.clone(),
+                shots: config.shots.iter().map(relive).collect(),
             };
             let line_id = project.add_line(line_data).id;
             created_ids.insert(config.line_index, line_id);

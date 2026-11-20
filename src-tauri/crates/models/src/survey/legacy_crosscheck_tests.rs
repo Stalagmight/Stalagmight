@@ -1,5 +1,5 @@
 //! Cross-check against the legacy model: equivalent surveys built with
-//! today's `models::project::Project` (lines, merges, line offsets, hand
+//! the frozen 0.6.0 `Project` (`stalagmight-legacy`: lines, merges, line offsets, hand
 //! moves, datums) lay out every slot where `compute_station_coordinates` puts
 //! it, within 1e-9 m. This proves the traversal reproduces today's layout.
 //!
@@ -10,47 +10,70 @@
 
 use std::collections::BTreeMap;
 
-use crate::{GpsCoordinates, LineData, LineId, ShotData, StationId, StationKey, StationRef};
+use stalagmight_legacy::models as old;
 
-use super::test_helpers::{gps, meta, project};
+use crate::{LineId, ShotData, StationId, StationRef};
+
+use super::legacy_convert::{live, relive};
+use super::test_helpers::{meta, project};
 use super::{Project, Station, ZeroDatum};
 
-type Old = crate::Project;
+type Old = stalagmight_legacy::LegacyProject;
+
+/// A frozen-model GPS position (depth reference 0).
+fn gps(latitude: f64, longitude: f64) -> old::GpsCoordinates {
+    old::GpsCoordinates {
+        latitude,
+        longitude,
+        depth_reference: 0.0,
+    }
+}
 
 const TOL: f64 = 1e-9;
 
-fn data(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
+fn data(
+    azimuth_in: f64,
+    azimuth_out: f64,
+    length: f64,
+    depth_in: f64,
+    depth_out: f64,
+) -> old::ShotData {
+    old::ShotData {
         azimuth_in,
         azimuth_out,
         length,
         depth_in,
         depth_out,
-        ..ShotData::default()
+        ..old::ShotData::default()
     }
 }
 
-fn old_line(old: &mut Old, shots: Vec<ShotData>) -> LineId {
-    old.add_line(LineData {
+fn old_line(old: &mut Old, shots: Vec<old::ShotData>) -> LineId {
+    old.add_line(old::LineData {
         shots,
         quality: 1.0,
-        ..LineData::default()
+        ..old::LineData::default()
     })
     .id
 }
 
 fn merge(old: &mut Old, a: (LineId, u32), b: (LineId, u32)) {
-    let result = old.merge_stations(StationRef::new(a.0, a.1), StationRef::new(b.0, b.1));
+    let result = old.merge_stations(
+        old::StationRef::new(a.0, a.1),
+        old::StationRef::new(b.0, b.1),
+    );
     assert_eq!(result, Ok(true), "legacy merge {a:?} onto {b:?}");
 }
 
 fn hand(old: &mut Old, slot: (LineId, u32), offset: (f64, f64, f64)) {
-    old.station_offsets
-        .insert(StationKey::from(StationRef::new(slot.0, slot.1)), offset);
+    old.station_offsets.insert(
+        old::StationKey::from(old::StationRef::new(slot.0, slot.1)),
+        offset,
+    );
 }
 
-fn datum(old: &mut Old, slot: (LineId, u32), gps: GpsCoordinates) {
-    let result = old.set_zero_datum(StationRef::new(slot.0, slot.1), gps);
+fn datum(old: &mut Old, slot: (LineId, u32), gps: old::GpsCoordinates) {
+    let result = old.set_zero_datum(old::StationRef::new(slot.0, slot.1), gps);
     assert!(result.is_ok(), "legacy datum at {slot:?}: {result:?}");
 }
 
@@ -78,7 +101,7 @@ fn merge_groups(old: &Old) -> BTreeMap<StationRef, StationRef> {
         else {
             panic!("a legacy merge does not resolve");
         };
-        let (ra, rb) = (find(&parent, a), find(&parent, b));
+        let (ra, rb) = (find(&parent, live(a)), find(&parent, live(b)));
         if ra != rb {
             parent.insert(ra.max(rb), ra.min(rb));
         }
@@ -96,7 +119,7 @@ fn old_positions(old: &Old) -> BTreeMap<StationRef, [f64; 3]> {
         .into_iter()
         .map(|s| {
             (
-                s.station_ref,
+                live(s.station_ref),
                 [s.coordinates.x, s.coordinates.y, s.coordinates.z],
             )
         })
@@ -126,29 +149,33 @@ fn convert(old: &Old) -> Project {
         let chain: Vec<StationId> = (0..=line.shots.len())
             .map(|i| station(StationRef::new(line.id, i as u32)))
             .collect();
-        let shots: Vec<ShotData> = line.shots.iter().map(crate::Shot::to_shot_data).collect();
+        let shots: Vec<ShotData> = line
+            .shots
+            .iter()
+            .map(|shot| relive(&shot.to_shot_data()))
+            .collect();
         let id = p
             .add_line_on_stations(meta(&format!("L{}", line.id)), &chain, shots)
             .unwrap();
         assert_eq!(id, line.id, "line ids line up");
     }
     for (key, &(dx, dy, dz)) in &old.station_offsets {
-        let slot = old.resolve_key(key).unwrap();
+        let slot = live(old.resolve_key(key).unwrap());
         p.line_mut(slot.line_id)
             .unwrap()
             .hand_moves
             .insert(station(slot), [dx, dy, dz]);
     }
     for old_datum in &old.zero_datums {
-        let slot = old.resolve_key(&old_datum.station_ref).unwrap();
-        let mut datum = ZeroDatum::new(station(slot), old_datum.gps);
+        let slot = live(old.resolve_key(&old_datum.station_ref).unwrap());
+        let mut datum = ZeroDatum::new(station(slot), relive(&old_datum.gps));
         datum.via = Some(slot.line_id);
         p.push_datum(datum);
     }
     // Placement datums hold their station where the legacy model shows it.
     let placement_datums = p.placement_datums();
     for &d in placement_datums.iter().flatten() {
-        let slot = old.resolve_key(&old.zero_datums[d].station_ref).unwrap();
+        let slot = live(old.resolve_key(&old.zero_datums[d].station_ref).unwrap());
         let [x, y, _] = before[&slot];
         p.datums[d].correction = p.correction_to_hold(d, [x, y]);
     }
@@ -379,8 +406,8 @@ fn random_legacy(seed: u64) -> Old {
         if old.lines.len() > 1 && rng.below(4) != 0 {
             let target = old.lines[rng.below(old.lines.len() - 1)].id;
             let target_len = old.get_line(target).map_or(0, |l| l.shots.len());
-            let a = StationRef::new(line, rng.below(len + 1) as u32);
-            let b = StationRef::new(target, rng.below(target_len + 1) as u32);
+            let a = old::StationRef::new(line, rng.below(len + 1) as u32);
+            let b = old::StationRef::new(target, rng.below(target_len + 1) as u32);
             // Refused when already connected: then the line stays free.
             let _ = old.merge_stations(a, b);
         }
@@ -391,7 +418,7 @@ fn random_legacy(seed: u64) -> Old {
         let slot = (line, rng.below(len + 1) as u32);
         let lat = 20.0 + rng.unit() * 0.02;
         let lon = -87.0 + rng.unit() * 0.02;
-        let _ = old.set_zero_datum(StationRef::new(slot.0, slot.1), gps(lat, lon));
+        let _ = old.set_zero_datum(old::StationRef::new(slot.0, slot.1), gps(lat, lon));
     }
     // Move unmerged lines by hand (a merged line's offset would tear its
     // junctions, which no legacy command does).
@@ -454,7 +481,7 @@ fn merges_hold(old: &Old) -> bool {
         else {
             return false;
         };
-        let ([ax, ay, _], [bx, by, _]) = (positions[&a], positions[&b]);
+        let ([ax, ay, _], [bx, by, _]) = (positions[&live(a)], positions[&live(b)]);
         if ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt() > TOL {
             return false;
         }

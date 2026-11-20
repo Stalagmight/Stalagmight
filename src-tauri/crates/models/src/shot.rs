@@ -909,6 +909,64 @@ impl Shot {
     }
 }
 
+impl Shot {
+    /// Pure split math for Split Shot at Distance: given a distance from the
+    /// shot's start, validates the distance and returns the new "head" shot's
+    /// data (to insert before this one) plus the [`ShotUpdates`] this
+    /// ("tail") shot needs applied. No mutation happens here: this is the one
+    /// place the split math and its error messages live.
+    pub(crate) fn compute_split(&self, distance: f64) -> Result<(ShotData, ShotUpdates), String> {
+        let shot = self;
+        if !distance.is_finite() {
+            return Err("Distance must be finite".to_string());
+        }
+        if distance <= 0.0 || distance >= shot.length {
+            return Err(format!(
+                "Distance must be strictly between 0 and the shot's length ({:.2}m)",
+                shot.length
+            ));
+        }
+        let tail_length = shot.length - distance;
+        use crate::MIN_SPLIT_CHILD_LENGTH_M;
+        if distance < MIN_SPLIT_CHILD_LENGTH_M || tail_length < MIN_SPLIT_CHILD_LENGTH_M {
+            return Err(format!(
+                "Both sides of the split must be at least {MIN_SPLIT_CHILD_LENGTH_M:.2}m long"
+            ));
+        }
+
+        let t = distance / shot.length;
+        let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
+        // Every field of the parent that is not geometry or identity travels to
+        // the head piece, including any per-shot field added later: the struct
+        // update copies them all, and only the fields a split must change are
+        // named here.
+        let head_data = ShotData {
+            // The head child is a NEW shot; only the tail keeps the parent's
+            // identity (see this method's doc comment - it is what makes every
+            // existing `AfterShot` anchor keep resolving without a remap).
+            // Copying the parent's uuid here would make the line hold two
+            // shots with one id, and the FIRST-wins repair would then re-mint
+            // the tail - moving every anchor. See `ShotData::uuid`.
+            uuid: None,
+            length: distance,
+            depth_out: mid_depth,
+            // A comment and a marker annotate one physical spot, so they stay on
+            // the tail (the parent's identity) and are not duplicated.
+            comment: None,
+            marker_index: None,
+            // Everything else travels, credit included: both pieces were
+            // surveyed together, by the same people.
+            ..shot.to_shot_data()
+        };
+        let tail_updates = ShotUpdates {
+            length: Some(tail_length),
+            depth_in: Some(mid_depth),
+            ..Default::default()
+        };
+        Ok((head_data, tail_updates))
+    }
+}
+
 impl ShotData {
     /// The credit this data carries; the empty credit when it has none.
     pub fn credit(&self) -> &SurveyCredit {

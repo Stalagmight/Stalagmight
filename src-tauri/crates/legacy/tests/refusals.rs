@@ -96,7 +96,10 @@ fn a_hostile_schema_is_refused() {
         .execute_batch("CREATE VIEW sneaky AS SELECT 1;")
         .unwrap();
     let err = open_path(&path, &OpenOptions::default()).unwrap_err();
-    assert!(matches!(err, LegacyError::Corrupt(_)), "{err}");
+    assert!(
+        matches!(&err, LegacyError::RefusedSchema(refused) if refused.name == "sneaky"),
+        "{err}"
+    );
 }
 
 #[test]

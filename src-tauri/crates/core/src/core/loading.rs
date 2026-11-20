@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
+use crate::models::NewerSchema;
 use crate::models::SectionId;
-use crate::persistence::{NewerSchema, RefusedSchemaObject};
+use crate::persistence::RefusedSchemaObject;
 
 // ============================================================================
 // LoadError
@@ -239,9 +240,9 @@ pub(crate) fn over_legacy_path_limit(path: &Path) -> bool {
 /// as readily for a missing folder, a disconnected drive or an over-`MAX_PATH`
 /// path - which is how a 335-character save destination came to be answered
 /// with macOS folder-permission instructions (#429). A caller that sees it must
-/// corroborate it against the filesystem itself: [`read_access_denied`] on the
-/// read side, `classify_save_failure` (`core::state::project_io`) on the write
-/// side.
+/// corroborate it against the filesystem itself (`classify_save_failure` in
+/// `core::state::project_io`). Reads see no such message: a project file is
+/// read as bytes first, so the OS answers with a typed io error.
 ///
 /// Deliberately conservative on the string side: it must NOT classify a
 /// genuine corruption ("integrity check failed") as a permission problem,
@@ -295,18 +296,6 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
     false
 }
 
-/// The schema refusal inside an open error, if that is why the open failed.
-pub(crate) fn refused_schema(err: &anyhow::Error) -> Option<&RefusedSchemaObject> {
-    err.chain()
-        .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
-}
-
-/// The newer-schema refusal inside an open error, if that is why it failed.
-pub(crate) fn newer_schema(err: &anyhow::Error) -> Option<&NewerSchema> {
-    err.chain()
-        .find_map(|cause| cause.downcast_ref::<NewerSchema>())
-}
-
 /// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
 /// the ambiguous one that means "the OS would not give me this file" and
 /// nothing more. See [`is_permission_denied`] for why it needs corroborating.
@@ -317,17 +306,6 @@ pub(crate) fn mentions_unopenable_database(err: &anyhow::Error) -> bool {
             .to_ascii_lowercase()
             .contains("unable to open database file")
     })
-}
-
-/// Corroborate the ambiguous message on a READ: the file is there (the caller
-/// has already established that) but the OS refuses to hand it over. That is
-/// the macOS lost-folder-access case, where SQLite reports `SQLITE_CANTOPEN`
-/// with nothing else to go on.
-pub(crate) fn read_access_denied(path: &Path) -> bool {
-    matches!(
-        std::fs::File::open(path),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
-    )
 }
 
 /// The whole `anyhow` chain on one line, outermost cause first. What a failing
@@ -1426,31 +1404,29 @@ mod tests {
 mod unsafe_file_tests {
     #![expect(clippy::unwrap_used, reason = "test assertions")]
 
-    use super::{refused_schema, LoadError};
-    use crate::models::Project;
-    use crate::persistence::Database;
+    use crate::core::state::AppState;
 
-    /// A real refused open of a file carrying a view whose name hides a
-    /// right-to-left override: the load error is UNSAFE_FILE, names what was
+    /// The production load of a legacy file carrying a view whose name hides
+    /// a right-to-left override: the load error is UNSAFE_FILE, names what was
     /// found, and shows the override as `?` rather than echoing it.
     #[test]
     fn a_hostile_schema_becomes_an_unsafe_file_error_with_a_safe_name() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("crafted.stalx");
-        Database::open(&path)
-            .unwrap()
-            .save_project(&Project::new("Crafted".to_string(), None))
-            .unwrap();
+        let bytes = stalagmight_legacy::write_v18(
+            &stalagmight_legacy::LegacyProject::new("Crafted".to_string(), None),
+            &stalagmight_legacy::LegacyExtras::default(),
+        )
+        .unwrap();
+        std::fs::write(&path, bytes).unwrap();
         rusqlite::Connection::open(&path)
             .unwrap()
             .execute_batch("CREATE VIEW \"evil\u{202E}txt\" AS SELECT 1;")
             .unwrap();
 
-        let Err(err) = Database::open_existing(&path) else {
+        let Err(load) = AppState::new().unwrap().read_project_file(&path) else {
             unreachable!("a file with a view must be refused");
         };
-        let refused = refused_schema(&err).unwrap();
-        let load = LoadError::unsafe_file(refused, &path.display().to_string());
 
         assert_eq!(load.code, "UNSAFE_FILE");
         assert!(

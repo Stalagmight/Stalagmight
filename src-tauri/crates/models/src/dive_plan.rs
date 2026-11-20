@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::config::GasConfig;
-use crate::{Cylinder, Diver, PlanSegment, Project, StationKey, StationRef};
+use crate::{Cylinder, Diver, PlanSegment, StationKey, StationRef};
 
 /// A station identified by the shots it SITS BETWEEN, rather than by its position or by which
 /// side of one shot it is on (#24).
@@ -110,43 +110,6 @@ pub struct PlanAnchor {
     /// byte for byte and a 0.6.0 build ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub station: Option<crate::StationId>,
-}
-
-impl PlanAnchor {
-    /// Position of a neighbour in the line as it stands now.
-    /// Position of a neighbour in the line as it stands now.
-    ///
-    /// Takes the project's shot-UUID index first, the way `Project::resolve_key` does, and only
-    /// falls back to a scan when the index is cold or stale. Without it every anchor cost a full
-    /// pass per neighbour - two per station - and a hand-edited `.plnx` full of UUIDs that match
-    /// nothing would scan the whole line every time.
-    pub fn position_of(
-        project: &Project,
-        line: &crate::Line,
-        uuid: &Option<String>,
-    ) -> Option<usize> {
-        let uuid = uuid.as_deref()?;
-        if let Some(&i) = project.shot_uuid_index.get(&(line.id, uuid.to_string())) {
-            // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
-            // entry then costs only the scan below and can never resolve to the wrong shot.
-            if line.shots.get(i as usize).and_then(|sh| sh.uuid.as_deref()) == Some(uuid) {
-                return Some(i as usize);
-            }
-        }
-        let position = |id: &str| {
-            line.shots
-                .iter()
-                .position(|s| s.uuid.as_deref() == Some(id))
-        };
-        position(uuid).or_else(|| {
-            // A plan saved against an id the load renamed (a cross-line
-            // repeat in a file saved before shot UUIDs were project-wide unique)
-            // still finds its shot through the derived id.
-            let live =
-                crate::live_shot_uuid_for_stored(line.id, uuid, |id| position(id).is_some())?;
-            position(&live)
-        })
-    }
 }
 
 /// What a `.plnx` row can hold for one station.

@@ -2129,13 +2129,19 @@ mod legacy {
         GasConfig, LineId, PlanAnchor, PlnxStore, ShotData, StationRef, StoredAnchor,
     };
     use crate::models::disk_names::{from_disk_str, to_disk_string};
-    use crate::models::{LineData, Project as Legacy};
-    use crate::persistence::Database;
+    use stalagmight_legacy::models as old;
+    use stalagmight_legacy::LegacyProject as Legacy;
+
+    /// A live value as the frozen 0.6.0 type of the same name (both
+    /// serialize alike).
+    fn frozen<T: serde::Serialize, U: serde::de::DeserializeOwned>(value: &T) -> U {
+        serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
+    }
 
     fn legacy_line(p: &mut Legacy, shots: Vec<ShotData>) -> LineId {
-        p.add_line(LineData {
-            shots,
-            ..LineData::default()
+        p.add_line(old::LineData {
+            shots: shots.iter().map(frozen).collect(),
+            ..old::LineData::default()
         })
         .id
     }
@@ -2167,7 +2173,9 @@ mod legacy {
     }
 
     fn legacy_xy(p: &Legacy, at: StationRef) -> [f64; 2] {
-        let c = p.compute_station_raw_coords(at).unwrap();
+        let c = p
+            .compute_station_raw_coords(old::StationRef::new(at.line_id, at.station_index))
+            .unwrap();
         [c.x, c.y]
     }
 
@@ -2195,9 +2203,9 @@ mod legacy {
         let o = legacy_line(&mut p, vec![shot(250.0, 6.0), shot(210.0, 7.0)]);
         p.ensure_shot_uuids();
         assert!(p.reverse_line(o, false));
-        p.merge_stations(StationRef::new(k, 3), StationRef::new(o, 0))
+        p.merge_stations(old::StationRef::new(k, 3), old::StationRef::new(o, 0))
             .unwrap();
-        p.combine_lines(k, o, &combine_options()).unwrap();
+        p.combine_lines(k, o, &frozen(&combine_options())).unwrap();
         assert_eq!(p.get_line(k).unwrap().shots.len(), 5);
         assert!(
             !p.counter_parity_shots.is_empty(),
@@ -2215,7 +2223,8 @@ mod legacy {
         assert!(p.reverse_line(k, false));
         let after = pins(&p);
         let path = dir.path().join("cave.stalx");
-        Database::open(&path).unwrap().save_project(&p).unwrap();
+        let bytes = stalagmight_legacy::write_v18(&p, &Default::default()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         Written {
             path,
             k,

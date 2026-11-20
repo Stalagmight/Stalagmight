@@ -49,7 +49,8 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 dotenvy = { workspace = true }
-# Synthetic native SQLite files for API round-trip tests.
-stalagmight-persistence = { path = "../persistence" }
+# Synthetic native SQLite files for API round-trip tests: the frozen 0.6.0
+# writer (the server accepts only SQLite `.stalx` uploads today).
+stalagmight-legacy = { path = "../legacy", features = ["writer"] }
 tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

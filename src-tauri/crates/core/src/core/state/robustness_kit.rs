@@ -484,30 +484,30 @@ pub(super) fn open_fresh(path: &Path) -> Option<AppState> {
 /// lines of random shots, the second line's start merged onto the first
 /// line's end, and a datum at the first line's start.
 pub(super) fn write_legacy(path: &Path, rng: &mut Rng, name: &str) {
-    let mut p = crate::models::Project::new(name.to_string(), None);
+    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
+    let mut p = Legacy::new(name.to_string(), None);
     let mut ids = Vec::new();
     for i in 0..3 {
-        let shots = (0..2 + rng.below(3)).map(|_| random_shot(rng)).collect();
+        let shots: Vec<ShotData> = (0..2 + rng.below(3)).map(|_| random_shot(rng)).collect();
         ids.push(
-            p.add_line(crate::models::LineData {
+            p.add_line(old::LineData {
                 name: Some(format!("L{i}")),
                 color: (*rng.pick(COLORS)).to_string(),
-                shots,
+                shots: shots.iter().map(frozen).collect(),
                 ..Default::default()
             })
             .id,
         );
     }
     let end = index_of(p.get_line(ids[0]).map_or(0, |l| l.shots.len()));
-    p.merge_stations(StationRef::new(ids[0], end), StationRef::new(ids[1], 0))
+    p.merge_stations(slot(ids[0], end), slot(ids[1], 0))
         .expect("a legacy merge");
     p.set_zero_datum(
-        StationRef::new(ids[0], 0),
-        GpsCoordinates::new(20.4, -87.3, 0.0).expect("a valid GPS"),
+        slot(ids[0], 0),
+        old::GpsCoordinates::new(20.4, -87.3, 0.0).expect("a valid GPS"),
     )
     .expect("a legacy datum");
-    let mut db = crate::persistence::Database::open(path).expect("a legacy file");
-    db.save_project(&p).expect("the legacy save");
+    write_legacy_file(path, &p);
 }
 
 /// The full load's progress events go nowhere.

@@ -1,7 +1,7 @@
 pub mod legacy_link;
 pub mod migrate;
 pub mod plnx;
-pub mod sqlite;
+pub mod recovery;
 pub mod stalx_v2;
 pub mod undo_limits;
 
@@ -25,4 +25,4 @@ mod history_v2_property_tests;
 )]
 mod legacy_link_tests;
 
-pub use sqlite::*;
+pub use recovery::*;

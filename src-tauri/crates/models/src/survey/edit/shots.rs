@@ -704,7 +704,7 @@ impl Project {
         let parent = l.shots.get(index).ok_or_else(EditError::shot_gone)?;
         let legacy = crate::Shot::with_uuid(parent.id, parent.to_shot_data(), None);
         let (mut head_data, tail_updates) =
-            crate::Project::compute_split(&legacy, distance).map_err(EditError::Refused)?;
+            legacy.compute_split(distance).map_err(EditError::Refused)?;
         if let Some(refusal) = self.shot_insert_refusal(line) {
             return Err(EditError::Refused(refusal));
         }

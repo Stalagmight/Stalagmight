@@ -1,16 +1,20 @@
 //! The Closures Computed View, closure alignment, the across-one-shot skip
 //! set and closure metrics against the legacy model, on equivalent surveys
-//! built with `models::project` (`legacy_convert`): every slot's adjusted
+//! built with the frozen 0.6.0 model (`legacy_convert`): every slot's adjusted
 //! position within 1e-6 m of `compute_adjusted_stations`, the same skipped
 //! closures and failures, the same misclosures; plus determinism.
 
 use std::collections::BTreeMap;
 
+use stalagmight_legacy::models as old;
+use stalagmight_legacy::models::ClosureStrategy as OldStrategy;
+
 use crate::config::ClosureAdjustmentConfig;
-use crate::{ClosureStrategy as OldStrategy, StationRef};
+use crate::StationRef;
 
 use super::legacy_convert::{
-    convert, data, old_adjusted, old_line, old_raw, random_legacy_survey, Converted, Mix, Old,
+    convert, data, frozen, live, old_adjusted, old_line, old_raw, random_legacy_survey, relive,
+    Converted, Mix, Old,
 };
 use super::{AdjustedPositions, ClosureStrategy, Project};
 
@@ -182,7 +186,7 @@ fn alignment_skip_set_and_new_closure_check_match_the_legacy_model() {
         let slots: Vec<StationRef> = old_raw(&old).keys().copied().collect();
         for (i, &a) in slots.iter().enumerate().step_by(3) {
             let b = slots[(i * 7 + 5) % slots.len()];
-            let expected = old.closure_spans_one_shot(a, b);
+            let expected = old.closure_spans_one_shot(frozen(a), frozen(b));
             let actual = p.closure_spans_one_shot(conv.station(a), conv.station(b));
             if conv.station(a) == conv.station(b) {
                 continue;
@@ -224,16 +228,13 @@ fn misclosures_match_the_legacy_model_and_path_length_is_along_shots() {
                 (m.vertical_misclosure - expected.vertical_misclosure).abs() <= 1e-9,
                 "{what}"
             );
-            // The new path length: shots (and merges, which are junctions
-            // now) only, never a closure.
-            let along_shots = old.calculate_merge_only_path_length(a, b);
-            if p.topology().connected(conv.station(a), conv.station(b)) {
-                assert!(
-                    (m.path_length - along_shots).abs() <= 1e-9 * along_shots.max(1.0),
-                    "{what}: closure {} path {} vs shots-only {along_shots}",
-                    closure.id,
-                    m.path_length
-                );
+            // The new path length runs along shots (and merges, which are
+            // junctions now) only, never a closure, so it is never shorter
+            // than 0.6.0's, which could cut through closures. (0.6.0's
+            // shots-only length is not in the frozen crate.)
+            if p.topology()
+                .connected(conv.station(live(a)), conv.station(live(b)))
+            {
                 assert!(
                     m.path_length + 1e-9 >= expected.path_length,
                     "{what}: never shorter than through closures"
@@ -266,13 +267,14 @@ fn looped_legacy() -> Old {
             data(90.0, 90.0, 10.2, 0.0, 0.0),
         ],
     );
-    let origin = crate::GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
-    old.set_zero_datum(StationRef::new(a, 0), origin).unwrap();
-    old.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+    let origin = old::GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+    old.set_zero_datum(old::StationRef::new(a, 0), origin)
+        .unwrap();
+    old.merge_stations(old::StationRef::new(a, 0), old::StationRef::new(b, 0))
         .unwrap();
     old.create_loop_closure(
-        StationRef::new(a, 2),
-        StationRef::new(b, 2),
+        old::StationRef::new(a, 2),
+        old::StationRef::new(b, 2),
         OldStrategy::Batch,
     )
     .unwrap();
@@ -312,7 +314,7 @@ fn a_spur_keeps_its_measured_shots() {
             data(135.0, 135.0, 4.0, 0.0, 1.0),
         ],
     );
-    old.merge_stations(StationRef::new(spur, 0), StationRef::new(0, 1))
+    old.merge_stations(old::StationRef::new(spur, 0), old::StationRef::new(0, 1))
         .unwrap();
     let conv = convert(&old);
     let adjusted = conv
@@ -353,17 +355,17 @@ fn two_placement_datums_tied_by_a_closure_fail_and_stay_measured() {
     let mut old = Old::new("two datums".to_string(), None);
     let a = old_line(&mut old, vec![data(90.0, 90.0, 10.0, 0.0, 0.0)]);
     let b = old_line(&mut old, vec![data(0.0, 0.0, 10.0, 0.0, 0.0)]);
-    let ga = crate::GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
-    let (lat, lon) = crate::local_to_gps(30.0, 5.0, &ga).unwrap();
-    old.set_zero_datum(StationRef::new(a, 1), ga).unwrap();
+    let ga = old::GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
+    let (lat, lon) = crate::local_to_gps(30.0, 5.0, &relive(&ga)).unwrap();
+    old.set_zero_datum(old::StationRef::new(a, 1), ga).unwrap();
     old.set_zero_datum(
-        StationRef::new(b, 1),
-        crate::GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+        old::StationRef::new(b, 1),
+        old::GpsCoordinates::new(lat, lon, 0.0).unwrap(),
     )
     .unwrap();
     old.create_loop_closure(
-        StationRef::new(a, 1),
-        StationRef::new(b, 1),
+        old::StationRef::new(a, 1),
+        old::StationRef::new(b, 1),
         OldStrategy::Batch,
     )
     .unwrap();
@@ -381,7 +383,8 @@ fn two_placement_datums_tied_by_a_closure_fail_and_stay_measured() {
     assert_eq!(adjusted.failures()[0].lines, vec![a, b]);
     assert_adjusted_match("two datums", &conv, &expected, &adjusted);
     let report = conv.project.adjustment_report(Some(&adjusted));
-    let old_report_reason = old.compute_adjusted_stations(&config).failures[0].user_reason();
+    let old_report_reason =
+        old.compute_adjusted_stations(&relive(&config)).failures[0].user_reason();
     assert_eq!(report.failures[0].reason, old_report_reason);
 }
 

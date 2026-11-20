@@ -1,12 +1,22 @@
-//! Frozen shots, rigid groups, anchored lines, immovable stations and stats
-//! against the legacy model, on equivalent surveys built with
-//! `models::project` (`legacy_convert`).
+//! Rigid groups, anchored lines and immovable stations against the legacy
+//! model, on equivalent surveys built with the frozen 0.6.0 model
+//! (`legacy_convert`); frozen shots on a hand-checked fixture; and the
+//! derived views' independence of the line order.
+//!
+//! Retired when `models::project` was deleted: the frozen-shot and stats
+//! comparisons (`compute_frozen_shots`, `Project::stats`, `depth_range`,
+//! `calculate_penetration_with` are not in the frozen crate, which carries
+//! only what the 0.6.0 open needs). The station-graph frozen shots and stats
+//! keep their unit tests and the K goldens (C18), which dump both per
+//! scenario.
 
 use std::collections::{BTreeSet, VecDeque};
 
+use stalagmight_legacy::models as old;
+
 use crate::{LineId, StationRef};
 
-use super::legacy_convert::{convert, data, old_line, random_legacy_survey, Mix, Old};
+use super::legacy_convert::{convert, data, live, old_line, random_legacy_survey, Mix, Old};
 
 fn surveys() -> Vec<(String, Old)> {
     let mixes = [
@@ -37,27 +47,6 @@ fn surveys() -> Vec<(String, Old)> {
         }
     }
     out
-}
-
-#[test]
-fn frozen_shots_match_the_legacy_model() {
-    let mut frozen = 0;
-    for (what, old) in surveys() {
-        let conv = convert(&old);
-        let p = &conv.project;
-        let aligned = p.closure_alignment(&p.raw_positions());
-        let expected = old.compute_frozen_shots();
-        let actual = p.frozen_shots(&aligned);
-        let key = |v: &[crate::FrozenShotRef]| -> Vec<(LineId, u32)> {
-            v.iter().map(|f| (f.line_id, f.shot_index)).collect()
-        };
-        assert_eq!(key(&actual), key(&expected), "{what}: frozen shots");
-        frozen += actual.len();
-        for f in actual.iter().take(3) {
-            assert!(p.is_shot_frozen(f.line_id, f.shot_index as usize));
-        }
-    }
-    assert!(frozen > 50, "the generator must freeze shots ({frozen})");
 }
 
 #[test]
@@ -104,12 +93,15 @@ fn legacy_immovable(old: &Old) -> BTreeSet<StationRef> {
     let by_ref: std::collections::BTreeMap<StationRef, usize> = stations
         .iter()
         .enumerate()
-        .map(|(i, s)| (s.station_ref, i))
+        .map(|(i, s)| (live(s.station_ref), i))
         .collect();
     let mut aligned_ends: std::collections::BTreeMap<StationRef, Vec<StationRef>> =
         std::collections::BTreeMap::new();
     for c in old.loop_closures.iter().filter(|c| c.is_aligned) {
-        if let (Some(a), Some(b)) = (old.resolve_key(&c.station_a), old.resolve_key(&c.station_b)) {
+        if let (Some(a), Some(b)) = (
+            old.resolve_key(&c.station_a).map(live),
+            old.resolve_key(&c.station_b).map(live),
+        ) {
             aligned_ends.entry(a).or_default().push(b);
             aligned_ends.entry(b).or_default().push(a);
         }
@@ -118,7 +110,7 @@ fn legacy_immovable(old: &Old) -> BTreeSet<StationRef> {
     let mut queue: VecDeque<StationRef> = stations
         .iter()
         .filter(|s| s.is_zero_datum)
-        .map(|s| s.station_ref)
+        .map(|s| live(s.station_ref))
         .collect();
     while let Some(slot) = queue.pop_front() {
         if !out.insert(slot) {
@@ -127,7 +119,7 @@ fn legacy_immovable(old: &Old) -> BTreeSet<StationRef> {
         let Some(&i) = by_ref.get(&slot) else {
             continue;
         };
-        queue.extend(stations[i].merged_with.iter().copied());
+        queue.extend(stations[i].merged_with.iter().copied().map(live));
         queue.extend(aligned_ends.get(&slot).into_iter().flatten().copied());
     }
     out
@@ -156,55 +148,6 @@ fn immovable_stations_match_the_legacy_move_tools() {
 }
 
 #[test]
-fn stats_match_the_legacy_model() {
-    for (what, old) in surveys() {
-        let conv = convert(&old);
-        let p = &conv.project;
-        let raw = p.raw_positions();
-        let stations = old.compute_station_coordinates();
-        for include_reference in [false, true] {
-            let mut expected = old.stats();
-            let (min, max) = Old::depth_range(&stations);
-            expected.min_depth = min;
-            expected.max_depth = max;
-            expected.penetration_distance =
-                old.calculate_penetration_with(&stations, include_reference);
-            let stats = p.survey_stats(&raw, include_reference);
-            let actual = stats.to_project_stats();
-            assert_eq!(actual.line_count, expected.line_count, "{what}");
-            assert_eq!(actual.shot_count, expected.shot_count, "{what}");
-            assert_eq!(
-                actual.station_count, expected.station_count,
-                "{what}: slots"
-            );
-            assert_eq!(actual.loop_count, expected.loop_count, "{what}");
-            assert_eq!(
-                actual.total_length.to_bits(),
-                expected.total_length.to_bits(),
-                "{what}"
-            );
-            assert!(
-                (actual.min_depth - expected.min_depth).abs() <= 1e-9,
-                "{what}"
-            );
-            assert!(
-                (actual.max_depth - expected.max_depth).abs() <= 1e-9,
-                "{what}"
-            );
-            assert!(
-                (actual.penetration_distance - expected.penetration_distance).abs()
-                    <= 1e-9 * expected.penetration_distance.max(1.0),
-                "{what}"
-            );
-            assert_eq!(actual.first_survey_date, expected.first_survey_date);
-            assert_eq!(actual.last_survey_date, expected.last_survey_date);
-            assert_eq!(stats.station_count, p.topology().stations().len());
-            assert!(stats.station_count <= stats.slot_count);
-        }
-    }
-}
-
-#[test]
 fn a_datum_anchored_loop_freezes_its_shots_and_a_bridge_between_datums() {
     // A: datum at A0, B from A0, closure snapped... here a plain loop closed
     // by a merge is impossible, so the loop is closed by an aligned snap.
@@ -224,18 +167,13 @@ fn a_datum_anchored_loop_freezes_its_shots_and_a_bridge_between_datums() {
         ],
     );
     let tail = old_line(&mut old, vec![data(180.0, 180.0, 5.0, 0.0, 0.0)]);
-    let g = crate::GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
-    old.set_zero_datum(StationRef::new(a, 0), g).unwrap();
-    old.merge_stations(StationRef::new(b, 0), StationRef::new(a, 0))
+    let g = old::GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
+    let at = old::StationRef::new;
+    old.set_zero_datum(at(a, 0), g).unwrap();
+    old.merge_stations(at(b, 0), at(a, 0)).unwrap();
+    old.merge_stations(at(tail, 0), at(a, 1)).unwrap();
+    old.create_loop_closure(at(a, 2), at(b, 2), old::ClosureStrategy::Move)
         .unwrap();
-    old.merge_stations(StationRef::new(tail, 0), StationRef::new(a, 1))
-        .unwrap();
-    old.create_loop_closure(
-        StationRef::new(a, 2),
-        StationRef::new(b, 2),
-        crate::ClosureStrategy::Move,
-    )
-    .unwrap();
     let conv = convert(&old);
     let p = &conv.project;
     let aligned = p.closure_alignment(&p.raw_positions());
@@ -245,14 +183,9 @@ fn a_datum_anchored_loop_freezes_its_shots_and_a_bridge_between_datums() {
         .iter()
         .map(|f| (f.line_id, f.shot_index))
         .collect();
-    // The loop's four shots are frozen; the tail (a spur) is not.
+    // The loop's four shots are frozen (0.6.0 froze the same four); the tail
+    // (a spur) is not.
     assert_eq!(frozen, vec![(a, 0), (a, 1), (b, 0), (b, 1)]);
-    let expected: Vec<(LineId, u32)> = old
-        .compute_frozen_shots()
-        .iter()
-        .map(|f| (f.line_id, f.shot_index))
-        .collect();
-    assert_eq!(frozen, expected);
 }
 
 /// The same survey with its line list shuffled.

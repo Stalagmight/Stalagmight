@@ -175,6 +175,12 @@ pub(crate) fn legacy_error(e: LegacyError, expires: Instant) -> ReadError {
             return ReadError::NewerSchema { found, supported };
         }
         LegacyError::TooLarge { max } => return ReadError::TooLarge { max },
+        LegacyError::RefusedSchema(refused) => {
+            return ReadError::invalid(
+                InvalidKind::RefusedSchemaObject,
+                format!("refused schema object: {refused}"),
+            );
+        }
         LegacyError::Io(e) => return ReadError::Io(e),
         LegacyError::Corrupt(detail) => detail,
     };

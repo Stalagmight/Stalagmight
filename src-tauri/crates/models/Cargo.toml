@@ -30,3 +30,9 @@ chrono = { workspace = true, features = ["serde"] }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v5"] }
+
+[dev-dependencies]
+# The frozen 0.6.0 model (no live crate behind it, so no cycle): the
+# station-graph cross-checks build their surveys with it and compare the
+# derived views with what 0.6.0 computes (`survey::legacy_convert`).
+stalagmight-legacy = { path = "../legacy" }
