@@ -367,7 +367,14 @@ command result, the history items, the per-slot stations, the Computed View
 and report, closures and datum roles, the wire project, the warnings, every
 preview, and the final exports. `every_characterisation_scenario_does_what_it_expects`
 runs them as a gate (a step that does not succeed or refuse as 0.6.0 did, a
-panic, or a full undo/redo round trip that does not come back identical). The
+panic, or a full undo/redo round trip that does not come back identical), and
+on nothing else: the dump's contents are not compared in CI, and its outputs
+are not committed. The 0.6.0 dump was recorded once before `models::project`
+was deleted and compared once (plan stream C18); it cannot be recorded
+again. Parity with 0.6.0 is gated in CI by the code that still runs 0.6.0:
+the migration's verification and the wire-equivalence suite against the
+frozen crate (`persistence::migrate`), the `models::survey` cross-checks built
+with the frozen model, and the Ariane export's pinned legacy document. The
 dump itself is `#[ignore]`d:
 
 ```bash

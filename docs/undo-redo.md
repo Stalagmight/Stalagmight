@@ -150,8 +150,11 @@ shot, a created or deleted line, a line metadata edit, a credit edit, a
 station comment. An entry therefore never changes after later edits: a
 reverse, an insert or a rename does not make an older entry name another
 station, and a deleted line stays named. Batch rows name lines and stations
-as they were before the batch. K's characterisation goldens are the oracle
-for the wording (`core/state/characterization_dump_tests.rs`).
+as they were before the batch. K's characterisation dump was the oracle for
+the wording when it was ported (compared with 0.6.0's once, plan C18); in
+CI the wording is pinned by `core/state/history_labels_tests.rs` and
+`batch_label_tests.rs` (the dump, `characterization_dump_tests.rs`, runs on
+demand).
 
 ### Persisted entries
 

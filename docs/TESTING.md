@@ -53,7 +53,7 @@ restart, a Playwright test cannot cover it. Write a Rust test.
 | A survey operation or derived view (`models::survey`) | Rust test in `stalagmight-models` beside the operation, plus a case in its property test when it is a new kind of edit |
 | The `.stalx` format, or how an old file converts | Rust test in `stalagmight-persistence` (`stalx_v2/`, `migrate/`) |
 | Anything touching disk, persistence, or app restart | Rust command-layer test - no frontend tier can see it |
-| A user-visible behaviour change of the core | Rust test, **plus** the characterisation goldens: a new difference must be a declared one |
+| A user-visible behaviour change of the core | Rust test; declare it (plan Status, CHANGELOG). The characterisation dump shows what changed when run on demand before and after (not a CI gate) |
 | Bug fix | Regression test at the **lowest** tier that can catch it. Prefer unit/component over E2E |
 
 Component-local behavior ("clicking X calls Y", "dialog renders Z in state W")
@@ -73,7 +73,7 @@ each tested on its own and against the one below it:
 | File (`persistence::stalx_v2`) | `crates/persistence/src/persistence/stalx_v2/format_v2_*_tests.rs`, `decode_fuzz_tests.rs` | byte fixpoint, canonical form, versioning and `requires` gating, unknown content, hostile input, limits, crash timing |
 | Migration (`persistence::migrate`) | `crates/persistence/src/persistence/migrate/` | every old file converts to what the frozen 0.6.0 reader (`crates/legacy`) showed, within the declared classes; the wire payloads match 0.6.0's |
 | App core (`AppState`) | `crates/core/src/core/state/*_tests.rs` | the pipeline, every command family and recipe, open and save, SpeleoDB, recovery; the undo, metamorphic, format, crash, adversarial, concurrency and saving fuzzers |
-| Behaviour as a whole | `characterization_dump_tests.rs` (the K goldens) | 18 scenarios, compared with the 0.6.0 dump: every difference is declared (plan 12.2 and its Deviations) |
+| Behaviour as a whole | `characterization_dump_tests.rs` (the K goldens) | 18 scenarios. In CI: each step succeeds or is refused as scripted, nothing panics, and a full undo/redo round trip comes back identical. The dump's contents are compared only on demand (once with 0.6.0's, plan C18); 0.6.0 parity in CI rests on the migration and wire-equivalence suites and the frozen-model cross-checks |
 
 Tests never read or commit a project file they did not write: surveys are built
 with the model's API or through `AppState` commands and saved into a `TempDir`;

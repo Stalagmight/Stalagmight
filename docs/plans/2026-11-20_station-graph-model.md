@@ -13,7 +13,7 @@ Implemented. The app runs on `models::survey` and saves `.stalx` version 2. `mod
 - **App core** (`stalagmight-core`, 9.1): `AppState` with no database handle; every command family, recipe, query and subsystem (open, save, autosave, Recents, recovery, SpeleoDB sync, dive plans, Add .stalx and Merge Projects, imports, exports, warnings).
 - **Wire and frontend** (9.2, 9.3): `survey::wire` sends the TypeScript shapes the frontend already read (only `line_offsets` dropped; binary envelope version 9); Detach Line from Station, junction details, one move per station, the save-conflict prompt, the read-only and conversion banners.
 - **Exporters and stalx-reader** (10.2, 10.5) on both formats.
-- **Tests** (section 11): migration property, fixture and fuzz suites; format property suites; wire equivalence against 0.6.0's own payloads; the K characterisation goldens; the undo, metamorphic, adversarial, concurrency, multi-datum, crash, format and transition fuzzers on the new model.
+- **Tests** (section 11): migration property, fixture and fuzz suites; format property suites; wire equivalence against 0.6.0's own payloads; the K characterisation dump (compared with 0.6.0 once, in C18; in CI it gates only each step's outcome, panics and the undo round trip, not the dump's contents, which are not committed: 0.6.0 parity in CI rests on the migration and wire-equivalence suites and the frozen-model cross-checks); the undo, metamorphic, adversarial, concurrency, multi-datum, crash, format and transition fuzzers on the new model.
 
 ### Declared behaviour changes
 
@@ -642,7 +642,7 @@ Importers keep producing lines, placements and closures through the shared funne
 | T | fuzzers and harness ported alongside each stream; new property suites | each stream |
 | D | docs: architecture, saving, closures, undo-redo, SPEC data model, SpeleoDB, testing; `docs/file-format.md`; `docs/survey-model.md` | all |
 
-The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first, and K's goldens are compared after the switch (differences must be in the declared-change list). Done: C18 diffed the K goldens on the station graph (every difference in a declared class), and C22 deleted the module and the live SQLite layer.
+The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first, and K's goldens are compared after the switch (differences must be in the declared-change list). Done: C18 diffed the K goldens on the station graph (every difference in a declared class), and C22 deleted the module and the live SQLite layer. That diff was one comparison, not a gate: the 0.6.0 dump cannot be recorded again, and the outputs are not committed (wave D, J-docs-tests-truth-4).
 
 ### 12.1 Rollout prerequisites outside this repository (called out in the PR)
 
