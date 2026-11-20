@@ -16,12 +16,11 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-telemetry` | Telemetry collector + event registry (`telemetry/`), tracing/logging setup (`logging/`); its `build.rs` owns `TELEMETRY_ENDPOINT` validation and `APP_VERSION` | models |
 | `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
 | `stalagmight-legacy` | A frozen copy of the 0.6.0 model, SQLite reader and load pipeline: opens every old SQLite `.stalx` exactly as the 0.6.0 app did. Read-only in production; the `writer` feature (tests only) is the 0.6.0 save path | - (standalone) |
-| `stalagmight-persistence` | The `.stalx` version 2 codec (`persistence/stalx_v2/`), the legacy migration (`persistence/migrate/`), the `.plnx` dive-plan store, tile caches (`cache/`, `tilemap_cache`) | models, legacy |
+| `stalagmight-persistence` | The `.stalx` version 2 codec (`persistence/stalx_v2/`), the legacy migration (`persistence/migrate/`), the legacy recovery dialog's SQLite repair and salvage (`persistence/recovery.rs`), the `.plnx` dive-plan store, tile caches (`cache/`, `tilemap_cache`) | models, legacy |
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, project file transfer, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the execute pipeline and the command families, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
 | `stalx-reader` | Read-only `.stalx` reader for external consumers (SpeleoDB server-side maps, #593): both formats, the legacy one through the frozen reader; nothing in the app depends on it | models, persistence, legacy |
-| `stalagmight-legacy-fidelity` | Parked: compared the frozen reader with the live 0.6.0 app, which the station-graph switch replaced | legacy, core, models (dev-dependencies only) |
 | `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above except stalx-reader |
 
 The layering is strict and one-way - models / legacy -> telemetry / parsers /

@@ -3,7 +3,6 @@ pub mod events;
 pub mod load_binary;
 pub mod loading;
 pub mod state;
-pub mod stub;
 pub mod undo;
 pub mod validation;
 

@@ -324,14 +324,8 @@ fn the_gate_is_opened_only_through_the_claim_binding() {
             continue;
         }
         let src = std::fs::read_to_string(entry.path()).expect("source");
-        // Production region only: the top-level test gate starts the fixtures (a
-        // test module parked by the station-graph switch, `cfg(sg_unported)`, is
-        // one too).
-        let end = ["\n#[cfg(test)]", "\n#[cfg(sg_unported)]"]
-            .iter()
-            .filter_map(|gate| src.find(gate))
-            .min()
-            .unwrap_or(src.len());
+        // Production region only: the top-level test gate starts the fixtures.
+        let end = src.find("\n#[cfg(test)]").unwrap_or(src.len());
         let prod = &src[..end];
         assert!(
             !prod.contains("set_edit_enabled"),

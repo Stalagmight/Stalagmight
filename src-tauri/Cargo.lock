@@ -4729,17 +4729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "stalagmight-legacy-fidelity"
-version = "0.0.0"
-dependencies = [
- "serde_json",
- "stalagmight-core",
- "stalagmight-legacy",
- "stalagmight-models",
- "tempfile",
-]
-
-[[package]]
 name = "stalagmight-models"
 version = "0.1.0"
 dependencies = [

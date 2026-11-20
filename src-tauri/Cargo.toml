@@ -15,7 +15,6 @@ members = [
     "crates/core",
     "crates/export",
     "crates/legacy",
-    "crates/legacy-fidelity",
     "crates/models",
     "crates/parsers",
     "crates/persistence",
@@ -309,11 +308,6 @@ wildcard_dependencies = "deny"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
-# `cfg(sg_unported)` is never set: it parks the test modules the
-# station-graph switch (C0) has not ported yet, so the ported tests compile
-# and run. Each port removes the cfg from the modules it ports; the C0 work
-# breakdown lists them. Remove this entry when no `sg_unported` is left.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sg_unported)'] }
 unused_must_use = "deny"
 missing_debug_implementations = "allow"
 unused_qualifications = "deny"

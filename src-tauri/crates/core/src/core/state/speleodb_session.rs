@@ -1644,14 +1644,8 @@ mod tests {
             let src = std::fs::read_to_string(entry.path()).expect("read source");
             // Production code only: this tree keeps test modules at the bottom of
             // the file, so truncating at the first test gate is enough for a
-            // tripwire (fixtures write the slot freely and legitimately). A test
-            // module parked by the station-graph switch (`cfg(sg_unported)`) is a
-            // test gate too.
-            let end = ["#[cfg(test)]", "#[cfg(sg_unported)]"]
-                .iter()
-                .filter_map(|gate| src.find(gate))
-                .min()
-                .unwrap_or(src.len());
+            // tripwire (fixtures write the slot freely and legitimately).
+            let end = src.find("#[cfg(test)]").unwrap_or(src.len());
             let src = &src[..end];
             if src.contains("self.bump_speleodb_session()") {
                 bumping.push(name.clone());
