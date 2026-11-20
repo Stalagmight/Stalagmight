@@ -28,6 +28,7 @@
 //! 5. SOMEONE ELSE'S LOCK (with `SDB_EMAIL2` / `SDB_PASSWORD2`): our un-uploaded
 //!    work on the server tip still opens locally with no prompt, read-only behind
 //!    the other account's lock, with the work kept.
+#![cfg(sg_unported)] // C13: being ported; removed when the port lands
 
 use std::path::{Path, PathBuf};
 

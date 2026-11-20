@@ -21,6 +21,7 @@
 //!
 //! All data here is synthetic: a project built in memory, saved by this build,
 //! then hand-narrowed. No fixture is read or written.
+#![cfg(sg_unported)] // C13: being ported; removed when the port lands
 
 use tempfile::TempDir;
 

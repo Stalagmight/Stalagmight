@@ -127,7 +127,7 @@ mod datum_entrance_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod datum_ui_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
@@ -146,14 +146,14 @@ mod fuzz_undo_tests;
 #[cfg(sg_unported)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_485_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -257,13 +257,24 @@ mod pre_line_rename_disk_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_add_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_restore_tests;
+// The modules below carry their own `#![expect(...)]` at the top of the file.
+#[cfg(test)]
+mod project_salvage_tests;
+#[cfg(test)]
+mod recents_tests;
+#[cfg(test)]
+mod raw_data_tests;
+#[cfg(test)]
+mod project_io_tests;
+#[cfg(test)]
+mod project_save_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,

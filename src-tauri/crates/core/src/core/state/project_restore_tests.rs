@@ -3,6 +3,7 @@
 //!
 //! All data is synthetic: projects built in memory and saved by this build. No
 //! fixture is read or written.
+#![cfg(sg_unported)] // C13: being ported; removed when the port lands
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
