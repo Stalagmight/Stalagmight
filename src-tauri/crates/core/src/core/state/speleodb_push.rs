@@ -208,14 +208,8 @@ impl AppState {
         &self,
         generation: u64,
     ) -> Result<std::sync::MutexGuard<'_, Option<crate::models::Project>>, SpeleoErrorDto> {
-        let project = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.speleodb_session_generation() != generation || project.is_none() {
-            return Err(local_dto(SpeleoDbError::SessionMoved));
-        }
-        Ok(project)
+        let _ = (&generation,);
+        crate::core::stub::not_ported("speleodb_push::speleodb_push_project_guard")
     }
 
     /// Push the open project's edits (if any) and release the write lock,
@@ -569,92 +563,8 @@ impl AppState {
         discard_changes: bool,
         expected: Option<&crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<UpdateResult, SpeleoErrorDto> {
-        let generation = self.speleodb_session_generation();
-        let bytes = {
-            let project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if generation != self.speleodb_session_generation()
-                || expected.is_some_and(|expected| {
-                    expected.session_generation != generation.to_string()
-                        || project.as_ref().is_none_or(|project| {
-                            project.modified_at.to_rfc3339() != expected.project_modified_at
-                        })
-                })
-            {
-                return Err(local_dto(SpeleoDbError::SessionMoved));
-            }
-            serde_json::to_vec(&*project)
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?
-        };
-        if !discard_changes {
-            let project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_require_clean_project(project.as_ref())
-                .map_err(local_dto)?;
-        }
-        let link = self.speleodb_validated_link()?;
-        if link.has_unpushed_edits && !discard_changes {
-            return Err(local_dto(SpeleoDbError::Io(
-                "Reload Project requires confirmation to discard unsaved and unuploaded changes. Saving first preserves your work.".into(),
-            )));
-        }
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
-        })
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        {
-            let project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if generation != self.speleodb_session_generation()
-                || serde_json::to_vec(&*project).ok().as_deref() != Some(bytes.as_slice())
-            {
-                return Err(local_dto(SpeleoDbError::SessionMoved));
-            }
-        }
-        if tip.is_none() && !commits.is_empty() {
-            return Ok(UpdateResult::DivergenceNeeded);
-        }
-        let verdict = sync::reconcile_verdict(
-            link.base_commit_sha.as_deref(),
-            tip.as_deref(),
-            link.has_unpushed_edits,
-            &commits,
-        );
-        let replace = discard_changes || self.speleodb_unwound_from().is_some();
-        if !replace {
-            match verdict {
-                ReconcileVerdict::UpToDate => return Ok(UpdateResult::UpToDate),
-                ReconcileVerdict::Diverged => return Ok(UpdateResult::DivergenceNeeded),
-                ReconcileVerdict::FastForward => {}
-            }
-        }
-        let local_path = self
-            .speleodb_fast_forward(
-                &endpoint,
-                &token,
-                insecure_http,
-                &link,
-                tip.as_deref(),
-                (
-                    if discard_changes {
-                        LocalEditsPolicy::Discard
-                    } else {
-                        LocalEditsPolicy::Protect
-                    },
-                    generation,
-                    Some(bytes),
-                ),
-            )
-            .map_err(local_dto)?;
-        Ok(UpdateResult::FastForwarded { local_path })
+        let _ = (&discard_changes, &expected);
+        crate::core::stub::not_ported("speleodb_push::speleodb_reload_locked")
     }
 
     /// Resolve the server's TRUE HEAD and return it with the full revision
@@ -1149,56 +1059,8 @@ impl AppState {
     /// Best-effort because the push has already landed. Poisoned guards are recovered;
     /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
     pub(super) fn speleodb_clear_undo_after_push(&self, undo_cutoff: &str) {
-        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(undo_cutoff) else {
-            tracing::warn!(
-                undo_cutoff,
-                purpose = "clear undo history after a confirmed push (#303)",
-                "could not parse the undo cutoff; leaving the undo stack alone"
-            );
-            return;
-        };
-        let cutoff = cutoff.with_timezone(&chrono::Utc);
-        let database = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut stack = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let dropped = stack.drop_entries_up_to(cutoff);
-        let Some(db) = database.as_ref() else {
-            tracing::warn!(
-                dropped,
-                purpose = "persist confirmed-push undo cleanup (#303)",
-                "no live database handle; retaining the chain metadata so stale disk rows remain classified"
-            );
-            return;
-        };
-        if !self.persist_locked_undo_stacks_into(db, &stack) {
-            tracing::warn!(
-                dropped,
-                purpose = "persist confirmed-push undo cleanup (#303)",
-                "could not persist the pruned history; retaining the chain metadata so stale disk rows remain classified"
-            );
-            return;
-        }
-        let remaining = stack.len();
-        drop(stack);
-        drop(database);
-
-        // Only clear the chain metadata after the disk rows are gone. If persistence
-        // failed, retaining these markers makes a reopen fail closed instead of
-        // treating stale uploaded rows as fresh history.
-        self.speleodb_set_unwound_from(None);
-        self.speleodb_set_inherited_through(None);
-        tracing::info!(
-            dropped,
-            remaining,
-            undo_cutoff,
-            purpose = "avoid duplicating pushed history in the next commit (#303)",
-            "Persisted the undo cleanup for a confirmed push"
-        );
+        let _ = (&undo_cutoff,);
+        crate::core::stub::not_ported("speleodb_push::speleodb_clear_undo_after_push")
     }
 }
 

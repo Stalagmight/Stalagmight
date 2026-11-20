@@ -96,87 +96,8 @@ impl AppState {
         undo: InheritedUndo,
         generation: u64,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        if policy == LocalEditsPolicy::Protect {
-            self.guard_local_edits(project_id, dest)?;
-        }
-        let staged = stage_download(source, dest, undo, sync_staged_file)?;
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        let mut project = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let loading = self
-            .active_loading
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.speleodb_session_generation() != generation || loading.is_some() {
-            return Err(SpeleoDbError::SessionMoved);
-        }
-        let replaces_open = project
-            .as_ref()
-            .and_then(|p| p.file_path.as_deref())
-            .is_some_and(|path| super::project_io::same_file(path, dest));
-        if replaces_open && policy == LocalEditsPolicy::Protect {
-            let database = self
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let link = database
-                .as_ref()
-                .ok_or_else(|| SpeleoDbError::Io("open cache has no database".into()))?
-                .load_speleo_link()
-                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-            if link.as_ref().is_none_or(|link| link.has_unpushed_edits) {
-                return Err(SpeleoDbError::WouldDiscardLocalEdits {
-                    project_id: project_id.into(),
-                    local_path: dest.to_string_lossy().into_owned(),
-                    last_edit_at: link.and_then(|link| link.last_edit_at),
-                });
-            }
-        }
-        let view = preserved_display_settings(dest);
-        // Windows needs the file handle closed before rename. Retain the in-memory
-        // project and undo stack until rename succeeds, so failure needs no reload.
-        if replaces_open {
-            self.database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-        }
-        let reopen_original = || -> Result<(), SpeleoDbError> {
-            if replaces_open {
-                let original_database = Database::open_existing(dest).map_err(|e| SpeleoDbError::Io(format!("cache replacement failed and its original database could not be reopened: {e}")))?;
-                *self
-                    .database
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(original_database);
-            }
-            Ok(())
-        };
-        // No connection of ours is left on `dest` (closed above, or it was never
-        // the open project), so whatever sidecar sits beside it is the outgoing
-        // file's and must not be replayed into the incoming one.
-        let sidecars = match SetAsideSidecars::take(dest) {
-            Ok(sidecars) => sidecars,
-            Err(error) => {
-                reopen_original()?;
-                return Err(error);
-            }
-        };
-        if let Err(error) = std::fs::rename(&staged, dest) {
-            sidecars.restore();
-            reopen_original()?;
-            return Err(SpeleoDbError::Io(error.to_string()));
-        }
-        sidecars.discard();
-        if replaces_open {
-            self.close_open_project_locked(&mut project);
-        } else {
-            // Installing a cache is itself a completed mutation, even from home.
-            self.bump_speleodb_session();
-        }
-        sync_cache_directory(dest);
-        Ok(view)
+        let _ = (&source, &dest, &project_id, &policy, &undo, &generation);
+        crate::core::stub::not_ported("speleodb_cache_install::replace_cache_for_session")
     }
 }
 

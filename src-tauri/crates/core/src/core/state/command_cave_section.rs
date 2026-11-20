@@ -44,13 +44,8 @@ impl AppState {
         &self,
         edit: impl FnOnce(&mut Project) -> Result<CommandResult, String>,
     ) -> CommandResult {
-        let Ok(mut guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-        let Some(project) = guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-        edit(project).unwrap_or_else(CommandResult::failure)
+        let _ = (&edit,);
+        crate::core::stub::not_ported("command_cave_section::with_project_for_sections")
     }
 
     /// `Command::CreateCaveSection`: a Section named `name` (user-typed, so
@@ -175,39 +170,8 @@ impl AppState {
         mut data: LineData,
         section: Option<SectionId>,
     ) -> CommandResult {
-        for shot in &mut data.shots {
-            shot.uuid = None;
-        }
-        if let Some(section_id) = section {
-            let exists = self
-                .project
-                .lock()
-                .ok()
-                .and_then(|guard| guard.as_ref().map(|p| p.section(section_id).is_some()));
-            match exists {
-                Some(true) => {}
-                Some(false) => return CommandResult::failure(missing_section(section_id)),
-                None => return CommandResult::failure("No project open".to_string()),
-            }
-        }
-        between_section_locks(self);
-        let result = self.create_line(data);
-        if let (true, Some(section_id), Some(line_id)) = (result.success, section, result.line_id) {
-            let mut guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // Re-checked under this lock: `command_lock` serializes commands,
-            // undo and redo, but a project load does not take it, so the
-            // project (and its Sections) may have changed since the check
-            // above; a line whose Section is gone stays ungrouped.
-            if let Some(project) = guard.as_mut() {
-                if project.section(section_id).is_some() {
-                    project.set_line_section(line_id, Some(section_id));
-                }
-            }
-        }
-        result
+        let _ = (&data, &section);
+        crate::core::stub::not_ported("command_cave_section::create_line_command")
     }
 }
 

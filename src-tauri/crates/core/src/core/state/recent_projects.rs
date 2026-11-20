@@ -7,9 +7,27 @@ use crate::persistence::Database;
 use super::AppState;
 
 impl AppState {
-    /// Get the current project state for the frontend
-    pub fn get_project_state(&self) -> Option<Project> {
-        self.project.lock().ok().and_then(|p| p.clone())
+    /// A clone of the open project (the station-graph survey), for the
+    /// callers that compute on it outside the lock (exports, the IPC).
+    pub fn get_project_state(&self) -> Option<crate::models::survey::Project> {
+        self.project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `get_project_state`'s IPC payload (the TS `ProjectState`): the wire
+    /// project, per-slot raw stations, stats and frozen shots, from the raw
+    /// layout memoised for this revision.
+    pub fn project_state_wire(&self) -> Option<crate::models::survey::wire::ProjectStateWire> {
+        let include_reference_legs = self.get_config().gas.include_reference_legs;
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let project = guard.as_ref()?;
+        let raw = self.raw_positions_of(project);
+        Some(project.project_state_wire_with(&raw, include_reference_legs))
     }
 
     /// Get recent projects list.

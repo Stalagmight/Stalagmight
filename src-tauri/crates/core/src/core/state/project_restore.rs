@@ -88,57 +88,8 @@ impl AppState {
     }
 
     fn restore(&self, project: &Path, backup: &Path) -> Result<String, String> {
-        let files = Files::new(project, backup)?;
-        files.check()?;
-        {
-            let project_slot = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let loading = self
-                .active_loading
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
-        }
-        // 1. The backup's bytes, staged and checked before anything is written.
-        // Only the staged copy is opened: SQLite may create a `-wal`/`-shm`
-        // beside a file it opens, even read-only, and the backup is only read.
-        let staged = stage_copy(&files.backup_real, &files.dir, &files.project)?;
-        let checked = Database::check_not_newer_at(&staged)
-            .map_err(|newer| {
-                // A backup a newer Stalagmight saved would put a file this
-                // build cannot open in the project's place (#649).
-                let newer = crate::persistence::NewerSchema {
-                    file: name(backup),
-                    ..newer
-                };
-                format!("Not restored: {newer}")
-            })
-            .and_then(|()| {
-                Database::open_readonly(&staged)
-                    .map(drop)
-                    .map_err(|e| unopenable_backup(backup, &staged, &e))
-            });
-        remove_sidecars_of(&staged);
-        checked?;
-
-        let project_slot = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let loading = self
-            .active_loading
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Again under the locks: a load may have started, and the files may have
-        // changed, while the backup was being copied.
-        files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
-        files.check()?;
-        let result = files.replace(staged);
-        drop(loading);
-        drop(project_slot);
-        result
+        let _ = (&project, &backup);
+        crate::core::stub::not_ported("project_restore::restore")
     }
 }
 

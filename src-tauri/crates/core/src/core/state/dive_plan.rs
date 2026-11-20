@@ -696,18 +696,8 @@ impl AppState {
         &self,
         refs: Vec<StationRef>,
     ) -> Result<Vec<Option<StoredAnchor>>, String> {
-        validate_anchor_batch(refs.len())?;
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let Some(project) = guard.as_ref() else {
-            return Err("No project open.".to_string());
-        };
-        Ok(refs
-            .into_iter()
-            .map(|r| to_anchor(project, Some(r)))
-            .collect())
+        let _ = (&refs,);
+        crate::core::stub::not_ported("dive_plan::plan_anchors_for_refs")
     }
 
     /// Place each anchor against the survey as it stands now (#310), index-aligned with the
@@ -718,15 +708,8 @@ impl AppState {
         &self,
         anchors: Vec<StoredAnchor>,
     ) -> Result<Vec<Option<StationRef>>, String> {
-        validate_anchor_batch(anchors.len())?;
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let Some(project) = guard.as_ref() else {
-            return Err("No project open.".to_string());
-        };
-        Ok(anchors.iter().map(|a| resolve_stored(project, a)).collect())
+        let _ = (&anchors,);
+        crate::core::stub::not_ported("dive_plan::plan_refs_for_anchors")
     }
 
     /// Save (insert when `id` is `None`, else update) a plan next to the open
@@ -814,78 +797,8 @@ impl AppState {
     /// Canonicalize an IPC snapshot's positional refs to stable keys against the open
     /// project (for on-disk persistence).
     fn to_persisted(&self, snap: &DivePlanSnapshot) -> Result<PersistedDivePlanSnapshot, String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let Some(project) = guard.as_ref() else {
-            return Err("No project open.".to_string());
-        };
-        if snap.waypoints.len() > MAX_WAYPOINTS {
-            return Err("That plan has too many way points.".to_string());
-        }
-        if snap.marked_points.len() > MAX_MARKED_POINTS {
-            return Err("That plan has too many marked points.".to_string());
-        }
-        // A route point that no longer anchors is REFUSED, not dropped. Dropping is what the load
-        // path does (there is no empty slot in a list), but on save it would be data loss the user
-        // is never told about: the frontend rebaselines its dirty check on the snapshot it SENT, so
-        // the plan would read "saved" while the file on disk quietly held a shorter route. Refusing
-        // keeps the file and the panel in agreement, and matches the engine's own doctrine that a
-        // way point is a constraint rather than a hint.
-        let waypoints = snap
-            .waypoints
-            .iter()
-            .map(|w| {
-                to_anchor(project, Some(*w)).ok_or_else(|| {
-                    "A way point in this plan no longer exists in the survey. Remove it from the \
-                     route and save again."
-                        .to_string()
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let marked_points = snap
-            .marked_points
-            .iter()
-            .map(|m| {
-                to_anchor(project, Some(m.station))
-                    .map(|station| PersistedMarkedPoint {
-                        station,
-                        label: m.label.clone(),
-                    })
-                    .ok_or_else(|| {
-                        "A marked point in this plan no longer exists in the survey. Remove it and \
-                         save again."
-                            .to_string()
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(PersistedDivePlanSnapshot {
-            origin: to_anchor(project, snap.origin),
-            endpoint: to_anchor(project, snap.endpoint),
-            waypoints,
-            diver: snap.diver.clone(),
-            cylinders: snap.cylinders.clone(),
-            gas_config: snap.gas_config.clone(),
-            stage_drop_overrides: snap
-                .stage_drop_overrides
-                .iter()
-                .map(|o| to_anchor(project, *o))
-                .collect(),
-            marked_points,
-            // Normalised, not truncated. A segment past `waypoints.len() + 1` describes a span that
-            // cannot exist for ANY plan, so unlike a dangling way point (refused above) there is
-            // nothing to refuse the write over - but the data in it is still the diver's statement
-            // about how a span is flown, and `take()` dropped it in the reach-extending direction.
-            // `normalize_segment_count` folds it in instead; way points are capped just above, so
-            // the result is `<= MAX_SEGMENTS` by construction and that separate cap can no longer
-            // bind here.
-            segments: normalize_segment_count(
-                snap.segments.clone(),
-                snap.waypoints.len(),
-                plan_speed_of(&snap.gas_config),
-            ),
-        })
+        let _ = (&snap,);
+        crate::core::stub::not_ported("dive_plan::to_persisted")
     }
 
     /// Resolve a persisted (key) snapshot back to the IPC (`StationRef`) form against the
@@ -896,83 +809,8 @@ impl AppState {
         &self,
         p: PersistedDivePlanSnapshot,
     ) -> Result<(DivePlanSnapshot, PlanAnchorSet, u32), String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let Some(project) = guard.as_ref() else {
-            return Err("No project open.".to_string());
-        };
-        let mut stale = 0u32;
-        let (origin, origin_anchor) = resolve_keeping_anchor(project, p.origin, &mut stale);
-        let (endpoint, endpoint_anchor) = resolve_keeping_anchor(project, p.endpoint, &mut stale);
-        // The caps are re-applied HERE, not only on save: the threat they exist for is a
-        // hand-edited `.plnx`, which by definition never crosses the write path. Every way point
-        // costs the engine a full extra Dijkstra and every marked point a DOM node plus a station
-        // lookup, so an unbounded list from a doctored file would be a compute amplifier on every
-        // recompute. Truncating (rather than refusing the load) keeps the rest of the plan usable.
-        let (waypoints, waypoint_anchors, waypoints_survived) = from_anchors_with_survival(
-            project,
-            p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
-            &mut stale,
-        );
-        // Segments are positional against the PRE-drop way points, so the merge must run against
-        // the survival mask above BEFORE anything about waypoints changes shape - see
-        // `merge_segments_for_surviving_waypoints`. It runs on the RAW persisted list (any
-        // length): the mask describes the input positions, so trimming first would misalign it.
-        let plan_speed = plan_speed_of(&p.gas_config);
-        let segments =
-            merge_segments_for_surviving_waypoints(p.segments, &waypoints_survived, plan_speed);
-        // The load side of the `segments.len() == waypoints.len() + 1` invariant (#317), which a
-        // plan written before segments existed (zero rows) and a hand-edited file (any number of
-        // rows) both violate. Way points are already capped just above, so `waypoints.len() + 1 <=
-        // MAX_SEGMENTS` holds by construction and that separate cap can no longer bind here.
-        let segments = normalize_segment_count(segments, waypoints.len(), plan_speed);
-        // Capped on the way IN like the way points and marked points, and for the same reason:
-        // the threat is a hand-edited `.plnx`, which by definition never crosses the write
-        // path. One entry per stage cylinder is the real bound (`gas.rs` already truncates the
-        // engine side to the plan's cylinder count), so anything past the way-point cap is
-        // doctored data, and each entry costs a station lookup on every load.
-        let mut stage_drop_overrides = Vec::new();
-        let mut stage_drop_anchors = Vec::new();
-        for k in p.stage_drop_overrides.into_iter().take(MAX_WAYPOINTS) {
-            let (r, a) = resolve_keeping_anchor(project, k, &mut stale);
-            stage_drop_overrides.push(r);
-            stage_drop_anchors.push(a);
-        }
-        let mut marked_points = Vec::new();
-        let mut marked_point_anchors = Vec::new();
-        for m in p.marked_points.into_iter().take(MAX_MARKED_POINTS) {
-            let Some(station) = from_anchor(project, &m.station, &mut stale) else {
-                continue;
-            };
-            marked_points.push(MarkedPoint {
-                station,
-                // Same reasoning as the list caps: the save path rejects an over-long label,
-                // but a doctored file bypasses it entirely, so truncate on the way in.
-                label: m.label.map(|l| truncate_chars(l, MAX_MARKED_LABEL_CHARS)),
-            });
-            marked_point_anchors.push(Some(m.station));
-        }
-        let anchors = PlanAnchorSet {
-            origin: origin_anchor,
-            endpoint: endpoint_anchor,
-            waypoints: waypoint_anchors,
-            marked_points: marked_point_anchors,
-            stage_drop_overrides: stage_drop_anchors,
-        };
-        let snapshot = DivePlanSnapshot {
-            origin,
-            endpoint,
-            waypoints,
-            diver: p.diver,
-            cylinders: p.cylinders,
-            gas_config: p.gas_config,
-            stage_drop_overrides,
-            marked_points,
-            segments,
-        };
-        Ok((snapshot, anchors, stale))
+        let _ = (&p,);
+        crate::core::stub::not_ported("dive_plan::resolve_persisted")
     }
 }
 

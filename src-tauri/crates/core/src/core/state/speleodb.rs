@@ -1280,14 +1280,7 @@ impl AppState {
     /// Read the open project's persisted SpeleoDB hand-off link, or
     /// [`SpeleoDbError::NoRemoteProject`] when no remote project is open.
     pub(super) fn speleodb_open_link(&self) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
-        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
-        db.load_speleo_link()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?
-            .ok_or(SpeleoDbError::NoRemoteProject)
+        self.speleo_link().ok_or(SpeleoDbError::NoRemoteProject)
     }
 
     /// Convert the open managed project into a plain, unmanaged `.stalx` (T2/#204):
@@ -1304,26 +1297,10 @@ impl AppState {
     /// Unlike logout the token is kept - the user stays signed in, they just walk
     /// away from this one project.
     pub fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
-        // Release the server lock if this is a held remote edit session, so we don't
-        // leave it stranded. Best-effort: an offline / no-access release just no-ops.
-        // The ABANDONING variant: un-pushed edits do not veto this release the way
-        // they veto the silent close/quit/switch one, because unlink deletes the link
-        // row - a lock kept back here could never be released from this project
-        // again, and the user has said outright that the managed copy is abandoned.
         self.speleodb_release_held_lock_abandoning();
-        {
-            let db_guard = self
-                .database
-                .lock()
-                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
-            let db = db_guard
-                .as_ref()
-                .ok_or_else(|| local_dto(SpeleoDbError::NoRemoteProject))?;
-            db.save_speleo_link(None)
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        }
-        // No link, no lock to edit under: the project is unmanaged now, and an
-        // unmanaged project is always editable (`speleodb_edit_gate`).
+        self.with_file(|file| file.set_speleo_link(None));
+        self.persist_local_state()
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         self.speleodb_set_open_gate(None);
         Ok(())
     }
@@ -1607,18 +1584,21 @@ impl AppState {
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),
     ) -> Result<(), SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
-        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
-        let mut link = db
-            .load_speleo_link()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?
-            .ok_or(SpeleoDbError::NoRemoteProject)?;
-        f(&mut link);
-        db.save_speleo_link(Some(&link))
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        let mut missing = false;
+        self.mutate_speleo_link(|link| match link.as_mut() {
+            Some(link) => {
+                f(link);
+                true
+            }
+            None => {
+                missing = true;
+                false
+            }
+        })
+        .map_err(SpeleoDbError::Io)?;
+        if missing {
+            return Err(SpeleoDbError::NoRemoteProject);
+        }
         Ok(())
     }
 

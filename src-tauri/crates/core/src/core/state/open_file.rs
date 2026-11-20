@@ -46,7 +46,7 @@ pub const READ_ONLY_FILE_CODE: &str = "READ_ONLY_FILE";
 
 /// Where the open project came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FileOrigin {
+pub(crate) enum FileOrigin {
     /// Nothing open, or created in this session and never written.
     #[default]
     New,
@@ -62,14 +62,14 @@ pub enum FileOrigin {
 /// (plan 7.2.10, G4: whenever `verification.moved().slots > 0` or anything is
 /// unexplained).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConversionNotice {
-    pub slots_moved: usize,
-    pub max_displacement_m: f64,
-    pub unexplained: usize,
+pub(crate) struct ConversionNotice {
+    pub(crate) slots_moved: usize,
+    pub(crate) max_displacement_m: f64,
+    pub(crate) unexplained: usize,
 }
 
 impl ConversionNotice {
-    pub fn of(verification: &Verification) -> Option<Self> {
+    pub(crate) fn of(verification: &Verification) -> Option<Self> {
         let moved = verification.moved();
         let unexplained = verification.mismatches.len();
         (moved.slots > 0 || unexplained > 0).then_some(Self {
@@ -79,7 +79,7 @@ impl ConversionNotice {
         })
     }
 
-    pub fn message(&self) -> String {
+    pub(crate) fn message(&self) -> String {
         format!(
             "Converted from the old file format; {} stations moved by up to {:.2} m; \
              the original is kept in Recovery.",
@@ -90,32 +90,32 @@ impl ConversionNotice {
 
 /// The open project's per-file state (see the module docs).
 #[derive(Debug, Default)]
-pub struct FileState {
+pub(crate) struct FileState {
     /// Every member of the file but the survey and the history: SpeleoDB
     /// link identity, per-machine state (display settings, sync state, unwind
     /// chain, watermark), ignored warnings, preserved unknown members,
     /// `requires`, the read-only reason. `extras.history` is unused: the undo
     /// stack holds the history.
-    pub extras: Extras,
+    pub(crate) extras: Extras,
     /// The `history` member as last read or written, which a local-only save
     /// writes while the survey has unsaved changes (the stacks then describe
     /// a body the file does not hold).
-    pub saved_history: History,
+    pub(crate) saved_history: History,
     /// The bytes last read or written at the project's path (the guard).
     /// `None` until something of ours is on disk. For a legacy origin it is
     /// the SQLite file's, so the upgrading save is guarded too.
-    pub fingerprint: Option<Fingerprint>,
-    pub origin: FileOrigin,
+    pub(crate) fingerprint: Option<Fingerprint>,
+    pub(crate) origin: FileOrigin,
     /// The survey (or its ignores) changed since the last save.
-    pub dirty: bool,
+    pub(crate) dirty: bool,
     /// Durable state changed in memory that only the next real save can
     /// write (legacy origin or never saved).
-    pub local_pending: bool,
+    pub(crate) local_pending: bool,
     /// Shown once after a legacy open that moved stations.
-    pub conversion: Option<ConversionNotice>,
+    pub(crate) conversion: Option<ConversionNotice>,
     /// Record parity the legacy model kept for `.plnx` pins (dive-plan
     /// resolver, plan 10.3); `None` for version 2 files.
-    pub legacy_parity: Option<LegacyParity>,
+    pub(crate) legacy_parity: Option<LegacyParity>,
 }
 
 fn parse_time(text: Option<&String>) -> Option<DateTime<Utc>> {
@@ -131,7 +131,7 @@ fn parse_time(text: Option<&String>) -> Option<DateTime<Utc>> {
 
 impl FileState {
     /// A version 2 file just decoded.
-    pub fn from_v2(extras: Extras, fingerprint: Fingerprint) -> Self {
+    pub(crate) fn from_v2(extras: Extras, fingerprint: Fingerprint) -> Self {
         let mut extras = extras;
         let saved_history = std::mem::take(&mut extras.history);
         Self {
@@ -144,7 +144,7 @@ impl FileState {
     }
 
     /// A legacy file just migrated (its history is dropped, plan 7.2.8).
-    pub fn from_migrated(
+    pub(crate) fn from_migrated(
         migrated: MigratedExtras,
         fingerprint: Option<Fingerprint>,
         verification: &Verification,
@@ -167,7 +167,7 @@ impl FileState {
 
     /// The SpeleoDB link in the shape the SpeleoDB code reads (identity from
     /// `speleodb`, sync state from `local.speleodb`).
-    pub fn speleo_link(&self) -> Option<SpeleoLink> {
+    pub(crate) fn speleo_link(&self) -> Option<SpeleoLink> {
         let link = self.extras.speleodb.as_ref()?;
         let sync = &self.extras.local.speleodb;
         Some(SpeleoLink {
@@ -184,7 +184,7 @@ impl FileState {
 
     /// Replace the link (identity and sync state); `None` unlinks and clears
     /// the SpeleoDB sync state, unwind chain and watermark included.
-    pub fn set_speleo_link(&mut self, link: Option<&SpeleoLink>) {
+    pub(crate) fn set_speleo_link(&mut self, link: Option<&SpeleoLink>) {
         let Some(link) = link else {
             self.extras.speleodb = None;
             self.extras.local.speleodb = LocalSync::default();
@@ -203,11 +203,11 @@ impl FileState {
         sync.last_verify_at = parse_time(link.last_verify_at.as_ref());
     }
 
-    pub fn display_settings(&self) -> &BTreeMap<String, String> {
+    pub(crate) fn display_settings(&self) -> &BTreeMap<String, String> {
         &self.extras.local.display
     }
 
-    pub fn ignored_warnings(&self) -> &[IgnoredWarning] {
+    pub(crate) fn ignored_warnings(&self) -> &[IgnoredWarning] {
         &self.extras.ignored_warnings
     }
 
@@ -219,7 +219,7 @@ impl FileState {
 
 /// Why a local-only save did not happen.
 #[derive(Debug)]
-pub enum LocalSaveError {
+pub(crate) enum LocalSaveError {
     /// The file on disk is not the one last read or written.
     ExternallyModified(String),
     Io(String),

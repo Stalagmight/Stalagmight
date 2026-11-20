@@ -11,19 +11,8 @@ impl AppState {
     /// (`Project::validate_station_name`), so a duplicate is refused with
     /// "Line X already has a station named Y".
     pub(super) fn set_station_name(&self, station_ref: StationRef, name: &str) -> CommandResult {
-        self.with_project_mut(
-            |project| match project.set_station_name(station_ref, name) {
-                Ok(_) => {
-                    tracing::info!(
-                        ?station_ref,
-                        purpose = "rename station",
-                        "Station name updated"
-                    );
-                    CommandResult::success()
-                }
-                Err(e) => CommandResult::failure(e),
-            },
-        )
+        let _ = (&station_ref, &name);
+        crate::core::stub::not_ported("command_station_name::set_station_name")
     }
 
     /// Line names are required and unique in the project, so a user's new
@@ -67,11 +56,8 @@ impl AppState {
     /// `f` on the open project; `None` when there is none (the command then
     /// fails on its own, with the usual message).
     fn with_open_project<R>(&self, f: impl FnOnce(&Project) -> Option<R>) -> Option<R> {
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.as_ref().and_then(f)
+        let _ = (&f,);
+        crate::core::stub::not_ported("command_station_name::with_open_project")
     }
 
     /// The station-identity epilogue: give every station that lacks one a
@@ -85,13 +71,7 @@ impl AppState {
     /// cannot change station identity skips it
     /// (`Command::can_change_station_identity`).
     pub(super) fn settle_station_identities(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(project) = guard.as_mut() {
-            settle(project);
-        }
+        crate::core::stub::not_ported("command_station_name::settle_station_identities")
     }
 }
 

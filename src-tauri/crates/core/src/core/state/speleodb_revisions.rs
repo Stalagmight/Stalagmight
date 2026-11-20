@@ -270,16 +270,7 @@ impl AppState {
 
     /// [#303] The revision the working copy has been unwound to, if any.
     pub(super) fn speleodb_unwound_from(&self) -> Option<String> {
-        self.database
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(crate::persistence::Database::load_speleo_undo_chain)
-            })?
-            .ok()
-            .flatten()
+        self.with_file(|file| file.extras.local.speleodb.unwound_from.clone())
     }
 
     /// [#303] Record (or clear) that watermark.
@@ -289,33 +280,19 @@ impl AppState {
     /// loaded revision's history ride into the next commit as though it were authored
     /// here, which is the duplication this exists to stop. Hence the louder log.
     pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
-        {
-            let Ok(guard) = self.database.lock() else {
-                return;
-            };
-            if let Some(db) = guard.as_ref() {
-                if let Err(e) = db.save_speleo_undo_watermark(instant) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "record the inherited-history watermark (#303)",
-                        "could not persist the undo watermark; the next push may carry a \
-                         loaded revision's history as if this session had authored it"
-                    );
-                }
-            }
-        }
-        // [#303] Mirror it onto the stack, which needs it to stamp new entries ABOVE the
-        // watermark - see `UndoStack::next_stamp`. This is the single funnel every set and
-        // clear goes through, so the mirror cannot drift by a caller forgetting it.
-        //
-        // Sequenced after the database guard is dropped rather than inside it: the house
-        // order is database-then-`undo_stack`, and holding neither across the other keeps
-        // that trivially true.
         let parsed = instant.and_then(|ts| {
             chrono::DateTime::parse_from_rfc3339(ts)
                 .ok()
                 .map(|dt| dt.with_timezone(&chrono::Utc))
         });
+        self.with_file(|file| file.extras.local.speleodb.inherited_through = parsed);
+        if let Err(e) = self.persist_local_state() {
+            tracing::warn!(
+                error = %e,
+                purpose = "record the inherited-history watermark (#303)",
+                "could not persist the undo watermark; it is set in memory"
+            );
+        }
         if let Ok(mut stack) = self.undo_stack.lock() {
             stack.set_inherited_through(parsed);
         }
@@ -329,12 +306,11 @@ impl AppState {
     /// the later of `now` and the newest loaded entry makes "at or before" true of every
     /// row that was just loaded, whatever clock wrote it.
     fn speleodb_stamp_inherited_watermark(&self) {
-        let newest = self.undo_stack.lock().ok().and_then(|stack| {
-            stack
-                .undo_entries()
-                .filter_map(|entry| entry.timestamp)
-                .max()
-        });
+        let newest = self
+            .undo_stack
+            .lock()
+            .ok()
+            .and_then(|stack| stack.newest_stamp());
         let now = chrono::Utc::now();
         let watermark = newest.map_or(now, |newest| newest.max(now));
         self.speleodb_set_inherited_through(Some(&watermark.to_rfc3339()));
@@ -364,17 +340,13 @@ impl AppState {
     /// the next Unwind its position - it restarts from BASE, which re-loads a history the
     /// user already has rather than destroying anything.
     pub(super) fn speleodb_set_unwound_from(&self, sha: Option<&str>) {
-        let Ok(guard) = self.database.lock() else {
-            return;
-        };
-        if let Some(db) = guard.as_ref() {
-            if let Err(e) = db.save_speleo_undo_chain(sha) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "record the Unwind chain position (#303)",
-                    "could not persist the undo chain pointer; the next Unwind will restart from BASE"
-                );
-            }
+        self.with_file(|file| file.extras.local.speleodb.unwound_from = sha.map(str::to_string));
+        if let Err(e) = self.persist_local_state() {
+            tracing::warn!(
+                error = %e,
+                purpose = "record the Unwind chain position (#303)",
+                "could not persist the undo chain pointer; it is set in memory"
+            );
         }
     }
 

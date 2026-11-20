@@ -43,6 +43,18 @@ impl From<NotPorted> for crate::core::loading::LoadError {
     }
 }
 
+impl From<NotPorted> for CommandResult {
+    fn from(value: NotPorted) -> Self {
+        CommandResult::failure(value.to_string())
+    }
+}
+
+impl From<NotPorted> for crate::speleodb::SpeleoDbError {
+    fn from(value: NotPorted) -> Self {
+        crate::speleodb::SpeleoDbError::Io(value.to_string())
+    }
+}
+
 impl From<NotPorted> for crate::speleodb::SpeleoErrorDto {
     fn from(value: NotPorted) -> Self {
         crate::speleodb::contract::dto_for_error(

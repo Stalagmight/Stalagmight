@@ -24,98 +24,8 @@ impl AppState {
         at: SplitAt,
         options: SplitLineOptions,
     ) -> CommandResult {
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
-        // Every refusal is decided first, read-only: the ignore pin below
-        // writes to the database, so a refused split must not reach it.
-        let cut = match self.split_refusal(line_id, at, &options) {
-            Ok(cut) => cut,
-            Err(reason) => return CommandResult::failure(reason),
-        };
-        tracing::info!(line_id, ?at, "Executing split_line as single undo unit");
-
-        // The shots past the cut move to a new line: position-keyed
-        // ignores on them would lapse (see the pin's doc).
-        self.pin_position_keyed_ignores_before_move(&[line_id]);
-
-        let before_snapshot = match self.capture_project_snapshot() {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-        // This path bypasses `execute()`, so it carries its own frame check
-        // (#469): moving a datum to the second half can re-define the frame.
-        let datums_before = self.datum_layout();
-        let undo_name_b = options.name_b.trim().to_string();
-        // The line by the name it has before the cut (the halves are renamed).
-        let line_name = self
-            .batch_label(|project| project.line_label(line_id).unwrap_or_default())
-            .unwrap_or_default();
-
-        let second_id = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(project) = proj_guard.as_mut() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            // `validate_cut` ran every check the model refuses on, but the
-            // shot split shortens the tail before it inserts the head, so any
-            // failure rolls back to the snapshot.
-            match Self::apply_cut(project, line_id, cut, &options) {
-                Ok(outcome) => {
-                    // Logged here, not in the sweep: the preview runs the same
-                    // cut on a copy, and its removals never happen.
-                    outcome.sweep.log_removed("split line");
-                    project.touch();
-                    outcome.second
-                }
-                Err(e) => {
-                    let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
-                    return CommandResult::failure(e);
-                }
-            }
-        };
-
-        self.settle_datum_layout(&datums_before);
-        self.reconcile_geometry();
-
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-        // The station the cut was made at ends the first half now (one the
-        // cut made inside a shot has its name only from here on).
-        let history_label = self.batch_label(|project| {
-            let end = project.get_line(line_id).map_or(0, |line| line.shots.len());
-            let at = u32::try_from(end)
-                .ok()
-                .and_then(|index| project.station_name_at(StationRef::new(line_id, index)))
-                .map_or_else(|| end.to_string(), str::to_string);
-            crate::core::undo::history_batch::split_line(&line_name, &at)
-        });
-        // The label only names the operation in history. It must not contain a
-        // ReverseLine: undo/redo settle reversed lines off this command.
-        let label = Command::Batch {
-            commands: vec![Command::CreateLine {
-                name: Some(undo_name_b),
-                surveyor: None,
-                date: None,
-                color: String::new(),
-                direction: None,
-                shots: Vec::new(),
-                cave_section_id: None,
-            }],
-            label: history_label,
-        };
-        self.push_snapshot_undo(label, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): set-only; a no-op for a local project.
-        self.mark_remote_forward_edit();
-
-        tracing::info!(line_id, second_id, "Split line completed");
-        CommandResult::success()
-            .with_line_id(second_id)
-            .with_line_ids(vec![line_id, second_id])
+        let _ = (&line_id, &at, &options);
+        crate::core::stub::not_ported("command_split_line::execute_split_line")
     }
 
     /// Make the validated `cut` in `project`: split the shot first when the
@@ -177,58 +87,8 @@ impl AppState {
         at: SplitAt,
         options: &SplitLineOptions,
     ) -> Result<SplitPreview, String> {
-        let cut = self.split_refusal(line_id, at, options)?;
-        self.with_project(|project| {
-            let mut copy = project.clone();
-            let last = copy
-                .get_line(line_id)
-                .map_or(0, |line| line.shots.len() as u32);
-            let start = StationRef::new(line_id, 0);
-            let (start_before, end_before) = (
-                copy.compute_station_raw_coords(start),
-                copy.compute_station_raw_coords(StationRef::new(line_id, last)),
-            );
-            let CutOutcome {
-                second,
-                sweep,
-                removed,
-            } = Self::apply_cut(&mut copy, line_id, cut, options)?;
-            let second_last = copy
-                .get_line(second)
-                .map_or(0, |line| line.shots.len() as u32);
-            let moved = |before: Option<Coordinates>, after: Option<Coordinates>| {
-                before.zip(after).map_or(0.0, |(b, a)| {
-                    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
-                })
-            };
-            let moved_a = moved(start_before, copy.compute_station_raw_coords(start));
-            let moved_b = moved(
-                end_before,
-                copy.compute_station_raw_coords(StationRef::new(second, second_last)),
-            );
-            let (moved_side, moved_m) = if moved_a.max(moved_b) <= SPLIT_PREVIEW_STILL_M {
-                (None, 0.0)
-            } else if moved_b >= moved_a {
-                (Some(SplitSide::B), moved_b)
-            } else {
-                (Some(SplitSide::A), moved_a)
-            };
-            Ok(SplitPreview {
-                closures_to_merges: u32::try_from(sweep.converted).unwrap_or(u32::MAX),
-                moved_side,
-                moved_m,
-                removed_closures: removed
-                    .iter()
-                    .filter(|r| !r.already_one_point)
-                    .map(|r| r.pair)
-                    .collect(),
-                removed_already_one_point: removed
-                    .iter()
-                    .filter(|r| r.already_one_point)
-                    .map(|r| r.pair)
-                    .collect(),
-            })
-        })
+        let _ = (&line_id, &at, &options);
+        crate::core::stub::not_ported("command_split_line::split_line_preview")
     }
 
     /// Every refusal of Split Line Here, read-only and in the order the
@@ -246,22 +106,8 @@ impl AppState {
         at: SplitAt,
         options: &SplitLineOptions,
     ) -> Result<Cut, String> {
-        if let Err(refused) = self.guard_mutation("Split line") {
-            return Err(refused.error.unwrap_or_default());
-        }
-        if let Some(refusal) = options.refusal() {
-            return Err(refusal);
-        }
-        self.with_project(|project| {
-            let cut = Self::validate_cut(project, line_id, at)?;
-            // The halves' names replace the line's: refused like a rename
-            // when empty or another line's.
-            project.validate_replacement_line_names(
-                &[options.name_a.as_str(), options.name_b.as_str()],
-                &[line_id],
-            )?;
-            Ok(cut)
-        })
+        let _ = (&line_id, &at, &options);
+        crate::core::stub::not_ported("command_split_line::split_refusal")
     }
 
     /// Resolve `at` to where the split cuts, or why it is refused. Read-only:

@@ -143,89 +143,8 @@ impl AppState {
         &self,
         expected: Option<crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<(), SpeleoErrorDto> {
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        self.speleodb_check_expected_context(expected.as_ref())
-            .map_err(admin_dto)?;
-        let generation = self.speleodb_session_generation();
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
-        if link.has_unpushed_edits {
-            return Err(admin_dto(SpeleoDbError::Io(
-                "Save your changes using Save Changes before switching to read-only mode.".into(),
-            )));
-        }
-        {
-            let _commands = self
-                .command_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_require_clean_project(project.as_ref())
-                .map_err(admin_dto)?;
-        }
-        let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
-        let holder = self
-            .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
-            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        // Clean check and gate transition under ONE `command_lock` + `project`
-        // acquisition: mutations and session boundaries cannot slip between them.
-        // Taking the claim out IS shutting the gate (`speleodb_edit_gate`), and a
-        // failed POST can put back exactly what was there.
-        let (gate_was_open, claim) = {
-            let _commands = self
-                .command_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if generation != self.speleodb_session_generation()
-                || expected.as_ref().is_none_or(|expected| {
-                    expected.session_generation != generation.to_string()
-                        || project.as_ref().is_none_or(|project| {
-                            project.modified_at.to_rfc3339() != expected.project_modified_at
-                        })
-                })
-            {
-                return Err(admin_dto(SpeleoDbError::SessionMoved));
-            }
-            self.speleodb_require_clean_project(project.as_ref())
-                .map_err(admin_dto)?;
-            let open = self.edit_enabled();
-            let claim = self.speleodb_forget_lock_acquired_for(&link.project_id);
-            (open, claim)
-        };
-        if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
-            if let Err(e) = client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
-            {
-                // Still ours: give the same session its gate back, exactly as it was
-                // before this call. A boundary that landed during the POST owns the
-                // gate now, so leave it alone - but the claim goes back either way:
-                // it is the only local pointer to a mutex the server still holds,
-                // and with the session gone it is what the janitor retries from.
-                let _project = self
-                    .project
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let authored = claim.as_ref().is_some_and(LockClaim::is_authored);
-                self.speleodb_restore_lock_claim(claim);
-                if gate_was_open && generation == self.speleodb_session_generation() {
-                    // Re-bound through the one way in, as the same kind of claim
-                    // it was; never recorded as a flow's fresh acquisition.
-                    let _ = self.speleodb_bind_edit_claim(
-                        &link.project_id,
-                        &link.endpoint,
-                        authored,
-                        false,
-                    );
-                }
-                return Err(dto_for_error(Endpoint::Release, &e));
-            }
-        }
-        Ok(())
+        let _ = (&expected,);
+        crate::core::stub::not_ported("speleodb_admin::speleodb_release_current_lock")
     }
 
     /// Caller holds project and excludes command mutations.
@@ -233,25 +152,8 @@ impl AppState {
         &self,
         project: Option<&crate::models::Project>,
     ) -> Result<(), SpeleoDbError> {
-        let database = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let db = database.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
-        let saved = db
-            .load_project()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        let link = db
-            .load_speleo_link()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        if project.is_none_or(|p| p.modified_at != saved.modified_at)
-            || link.is_none_or(|link| link.has_unpushed_edits)
-        {
-            return Err(SpeleoDbError::Io(
-                "Save your changes using Save Changes before switching to read-only mode.".into(),
-            ));
-        }
-        Ok(())
+        let _ = (&project,);
+        crate::core::stub::not_ported("speleodb_admin::speleodb_require_clean_project")
     }
 
     /// Bind UI consent to the open project and authenticated backend session.

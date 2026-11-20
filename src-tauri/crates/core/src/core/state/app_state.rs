@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +14,7 @@ use crate::models::{
 use crate::tile_stats::TileFetchStats;
 use crate::tilemap_cache::TilemapCache;
 
-use crate::core::{CommandResult, UndoStack};
+use crate::core::{CommandResult, HistoryDropped, UndoStack};
 
 /// Trait for types that can represent project lock errors.
 /// Enables `with_project_mut` and `with_project` to work with different return types.
@@ -338,7 +339,7 @@ impl AppState {
 
         // Cancel any existing load
         if let Some(old_token) = guard.take() {
-            old_token.store(true, std::sync::atomic::Ordering::SeqCst);
+            old_token.store(true, Ordering::SeqCst);
         }
 
         // Create new token
@@ -678,24 +679,24 @@ impl AppState {
     /// for why every commit must write it.
     pub fn set_history_discarded(&self, discarded: bool) {
         self.history_discarded
-            .store(discarded, std::sync::atomic::Ordering::SeqCst);
+            .store(discarded, Ordering::SeqCst);
         self.history_from_earlier_version
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+            .store(false, Ordering::SeqCst);
     }
 
     /// Record what the history load of the just-committed project dropped, if
     /// anything: either reason raises the discarded-history banner, and an earlier
     /// version's history gets its own words there (it was not damaged, only written in
     /// the format before compact undo entries).
-    pub fn note_history_dropped(&self, dropped: Option<crate::core::HistoryDropped>) {
+    pub fn note_history_dropped(&self, dropped: Option<HistoryDropped>) {
         let Some(reason) = dropped else {
             return;
         };
         self.history_discarded
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+            .store(true, Ordering::SeqCst);
         self.history_from_earlier_version.store(
-            reason == crate::core::HistoryDropped::EarlierVersion,
-            std::sync::atomic::Ordering::SeqCst,
+            reason == HistoryDropped::EarlierVersion,
+            Ordering::SeqCst,
         );
     }
 
@@ -704,7 +705,7 @@ impl AppState {
         self.history_discarded()
             && self
                 .history_from_earlier_version
-                .load(std::sync::atomic::Ordering::SeqCst)
+                .load(Ordering::SeqCst)
     }
 
     /// [#473] Whether the open project lost its edit history on load.
@@ -716,6 +717,6 @@ impl AppState {
     /// business, exactly as it is for the integrity banner.
     pub fn history_discarded(&self) -> bool {
         self.history_discarded
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .load(Ordering::SeqCst)
     }
 }
