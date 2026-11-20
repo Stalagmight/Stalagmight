@@ -47,7 +47,7 @@
 //!   command; its Split Line Here twin is
 //!   `a_split_keeps_the_closures_computed_view`).
 
-use super::split_combine_kit::{
+use super::topology_kit::{
     apart, assert_undo_redo_exact, canonical, close, deep, empty, history, line_at, line_from,
     open, positions, preview_rows, project, save_close_reopen, shot, slot, snapshot, st, xy,
 };

@@ -1414,7 +1414,7 @@ model's construction API (`models::survey` `build.rs`: `add_line`,
 `set_placement`, `push_datum`, `push_closure`, or the commands themselves),
 writes it with `stalx_v2::encode` into a `TempDir`, and opens it through
 `AppState` like the app does. The core's test kits do this
-(`state/topology_kit.rs`, `split_combine_kit.rs`, `stalx_v2_fixtures.rs`,
+(`state/topology_kit.rs`, `stalx_v2_fixtures.rs`,
 `synthetic_stalx_tests.rs`, `robustness_kit.rs`). A file is compared by its
 canonical bytes; nothing needs masking but `modified_at`.
 

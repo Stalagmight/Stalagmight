@@ -439,12 +439,6 @@ mod speleodb_upload_limit_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod split_combine_kit;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]

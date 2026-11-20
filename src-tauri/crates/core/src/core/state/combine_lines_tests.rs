@@ -56,7 +56,7 @@
 
 use std::collections::BTreeMap;
 
-use super::split_combine_kit::{
+use super::topology_kit::{
     add_datum, apart, assert_same, assert_undo_redo_exact, canonical, close, deep, empty, gps,
     history, hold, line_at, line_from, open, positions, preview_rows, project, save_close_reopen,
     shot, slot, snapshot, st, xy,
