@@ -228,7 +228,9 @@ impl Topology {
     }
 }
 
-fn find(parent: &mut [usize], mut x: usize) -> usize {
+/// Union-find root of `x` with path halving: the one helper every
+/// union-find over dense indices in this module uses.
+pub(super) fn find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
         parent[x] = parent[parent[x]];
         x = parent[x];

@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 
 use crate::{LineId, SkippedClosure, StationId, StationRef};
 
+use super::topology::find;
 use super::{ClosureId, ClosureStrategy, LoopClosure, Project, RawPositions};
 
 /// A shot as `(line id, shot index)`: ordered, so "the lowest shot" is
@@ -216,14 +217,6 @@ impl Project {
             members,
         }
     }
-}
-
-pub(crate) fn find(parent: &mut [usize], mut x: usize) -> usize {
-    while parent[x] != x {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-    }
-    x
 }
 
 /// Union-find over the dense stations plus the CONTRACTED shot graph between

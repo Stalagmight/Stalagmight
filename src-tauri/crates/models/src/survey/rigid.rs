@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 
 use crate::{LineId, StationId, StationRef};
 
-use super::closures::find;
+use super::topology::find;
 use super::{Project, TieGroups};
 
 /// The rigid groups of one state.

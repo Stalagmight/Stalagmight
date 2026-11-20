@@ -139,7 +139,7 @@ impl Project {
         let chain = self.topology().chain(line).unwrap_or(&[]);
         let name = |i: usize| {
             chain.get(i).map_or_else(
-                || format!("{} / {i}", self.line_text(line)),
+                || format!("{} / {i}", self.line_label_of(line)),
                 |&s| self.station_text(s, Some(line)),
             )
         };

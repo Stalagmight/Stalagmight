@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use crate::{LineId, StationId, StationRef, UNNAMED_LINE};
+use crate::{LineId, StationId, StationRef};
 
 use super::{AnchorReport, BuildError, ClosureId, EditContext, Project, SweepReport, Violation};
 
@@ -227,14 +227,6 @@ impl Project {
         }
     }
 
-    /// A line's name as the user reads it (`unnamed line` when it has none).
-    pub fn line_text(&self, line: LineId) -> String {
-        self.line(line)
-            .and_then(|l| l.name.clone())
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| UNNAMED_LINE.to_string())
-    }
-
     /// A station as the user reads it on `line`: `Main Line / 4`. Falls back
     /// to the station's first line, then to `a station`.
     pub fn station_text(&self, station: StationId, line: Option<LineId>) -> String {
@@ -243,7 +235,7 @@ impl Project {
             .filter(|&l| topology.slot_on(station, l).is_some())
             .or_else(|| topology.first_slot(station).map(|slot| slot.line_id));
         match (line, self.stations.get(&station)) {
-            (Some(line), Some(s)) => format!("{} / {}", self.line_text(line), s.name),
+            (Some(line), Some(s)) => format!("{} / {}", self.line_label_of(line), s.name),
             (None, Some(s)) => s.name.clone(),
             (_, None) => "a station".to_string(),
         }

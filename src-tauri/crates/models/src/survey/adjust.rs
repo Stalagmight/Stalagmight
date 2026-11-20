@@ -43,7 +43,8 @@ use crate::{
     DEFAULT_GPS_ACCURACY_M,
 };
 
-use super::closures::{find, ClosureAcrossOneShot};
+use super::closures::ClosureAcrossOneShot;
+use super::topology::find;
 use super::graph::{ShotEdge, StationPositions};
 use super::lsq::solve_reduced_laplacian;
 use super::{Anchor, Project, RawPositions, SlotPosition};

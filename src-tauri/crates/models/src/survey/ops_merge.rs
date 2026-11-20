@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 use crate::{ClosurePreview, CombinePick, LineId, StationId};
 
 use super::ops::{OpError, OpOutcome, Sweep};
+use super::topology::find;
 use super::{EditContext, Project, StationAlias};
 
 /// How a merge settles the two stations' comments.
@@ -366,12 +367,4 @@ fn merged_comment(
         }),
         (k, g) => k.or(g),
     }
-}
-
-pub(super) fn find(parent: &mut [usize], mut x: usize) -> usize {
-    while parent[x] != x {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-    }
-    x
 }

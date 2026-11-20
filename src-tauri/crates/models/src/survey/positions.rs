@@ -26,6 +26,7 @@ use std::collections::VecDeque;
 
 use crate::{gps_to_local, StationId, StationRef};
 
+use super::topology::find;
 use super::{ClosureStrategy, LoopClosure, Project, Topology};
 
 /// A snap (`Move` closure) is rigid while its ends are closer than this,
@@ -535,12 +536,4 @@ fn is_aligned(
         | ClosureStrategy::ProportionalByLength
         | ClosureStrategy::EqualDistribution => false,
     }
-}
-
-fn find(parent: &mut [usize], mut x: usize) -> usize {
-    while parent[x] != x {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-    }
-    x
 }
