@@ -342,7 +342,10 @@ impl AppState {
         // would be a teardown for nothing. See `names_the_deleted_file` above.)
         let mut cleared_claim = None;
         let (session_closed, held_lock) = {
-            let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            let mut open = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // A never-saved project has no `file_path` and so can never be the file
             // being deleted - same predicate `open_project_path` encodes.
             let deleting_open_project = open
@@ -789,26 +792,25 @@ fn recent_metadata(path: &Path) -> Result<ProjectMetadata, String> {
         speleodb,
         ..
     } = header;
-    let (summary, project, speleodb) = match (summary, project) {
-        (Some(summary), Some(project)) => (summary, project, speleodb),
+    let (summary, project, speleodb) = if let (Some(summary), Some(project)) = (summary, project) {
+        (summary, project, speleodb)
+    } else {
         // A version 2 file without a usable header: decode it (rare; a
         // third-party writer may leave the cache out).
-        _ => {
-            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-            let decoded = decode(&bytes, &DecodeOptions::default()).map_err(|e| e.to_string())?;
-            let link = decoded.extras.speleodb.clone();
-            let p = &decoded.project;
-            (
-                Summary::of(p, link.as_ref()),
-                stalx_v2::ProjectInfo {
-                    name: p.name.clone(),
-                    location: p.location.clone(),
-                    created: Some(p.created_at),
-                    modified: Some(p.modified_at),
-                },
-                link,
-            )
-        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let decoded = decode(&bytes, &DecodeOptions::default()).map_err(|e| e.to_string())?;
+        let link = decoded.extras.speleodb.clone();
+        let p = &decoded.project;
+        (
+            Summary::of(p, link.as_ref()),
+            stalx_v2::ProjectInfo {
+                name: p.name.clone(),
+                location: p.location.clone(),
+                created: Some(p.created_at),
+                modified: Some(p.modified_at),
+            },
+            link,
+        )
     };
     let modified_at = project
         .modified

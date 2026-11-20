@@ -27,6 +27,7 @@ mod project_io;
 mod project_load;
 mod project_merge;
 mod project_restore;
+mod project_salvage;
 mod project_source;
 mod raw_data;
 mod recent_projects;
