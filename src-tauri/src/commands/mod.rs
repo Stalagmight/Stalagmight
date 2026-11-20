@@ -39,7 +39,7 @@ mod app_contract_tests;
     clippy::float_cmp
 )]
 mod command_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: a failed setup step is the point"
