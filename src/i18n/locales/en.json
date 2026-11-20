@@ -1680,7 +1680,7 @@
       "skipAll": "Skip All"
     },
     "editStation": {
-      "nameHint": "Unique within its line. Renaming keeps the Station ID.",
+      "nameHint": "Unique on every line the station is on. Renaming keeps the Station ID.",
       "accuracyLabel": "Accuracy (m)",
       "accuracyHint": "0 puts the computed survey exactly through this GPS. A larger number (a smartwatch is roughly 5 m) trusts the GPS less, and the survey wins most of the gap.",
       "accuracyInvalid": "Enter an accuracy from 0 to {{max}} m.",
