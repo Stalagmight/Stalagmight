@@ -242,7 +242,12 @@ impl Changeset {
             );
         }
         for (id, a, b) in s.comment.iter().flat_map(FieldCol::rows) {
-            push(id, StationField::Comment, text(a.as_ref()), text(b.as_ref()));
+            push(
+                id,
+                StationField::Comment,
+                text(a.as_ref()),
+                text(b.as_ref()),
+            );
         }
         for (id, a, b) in s.aliases.iter().flat_map(FieldCol::rows) {
             push(
@@ -253,7 +258,12 @@ impl Changeset {
             );
         }
         for (id, a, b) in s.external.iter().flat_map(FieldCol::rows) {
-            push(id, StationField::External, text(a.as_ref()), text(b.as_ref()));
+            push(
+                id,
+                StationField::External,
+                text(a.as_ref()),
+                text(b.as_ref()),
+            );
         }
         d.station_fields.sort_by_key(|c| c.station);
     }

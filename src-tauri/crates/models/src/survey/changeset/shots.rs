@@ -280,10 +280,16 @@ pub(crate) fn capture_side(
             j += n;
             continue;
         };
-        let modes: &[RunMode] = if reversed == Some(true) {
-            &[RunMode::Flipped, RunMode::FlippedSwapLr, RunMode::Reversed]
-        } else {
-            &[RunMode::Forward]
+        // A one-shot run has no direction of its own: every mode is tried.
+        let modes: &[RunMode] = match reversed {
+            Some(true) => &[RunMode::Flipped, RunMode::FlippedSwapLr, RunMode::Reversed],
+            Some(false) => &[RunMode::Forward],
+            None => &[
+                RunMode::Forward,
+                RunMode::Flipped,
+                RunMode::FlippedSwapLr,
+                RunMode::Reversed,
+            ],
         };
         let target_run = &shots[j..j + n];
         let mode = modes

@@ -48,6 +48,9 @@ sha2 = { workspace = true }
 stalagmight-legacy = { path = "../legacy" }
 
 [dev-dependencies]
+# The undo engine's shared test kit (`survey::changeset::testkit`: the gate
+# surveys, the random walk), for the v2 size gates and property tests.
+stalagmight-models = { path = "../models", features = ["test-support"] }
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
 # through the parser to exercise a realistic project shape.
 stalagmight-parsers = { path = "../parsers" }

@@ -201,6 +201,50 @@ pub(crate) fn same_shots(a: &[Shot], b: &[Shot]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_shot(x, y))
 }
 
+/// Whether two projects hold the same persisted model to the bit, counters
+/// aside (session ids, the file path and the caches are not part of it).
+/// Every field is named, so a new field cannot be missed silently.
+pub(crate) fn same_model_but_counters(
+    a: &super::super::Project,
+    b: &super::super::Project,
+) -> bool {
+    let super::super::Project {
+        name,
+        location,
+        created_at,
+        modified_at,
+        stations,
+        lines,
+        datums,
+        placements,
+        closures,
+        sections,
+        settings,
+        imported_file_hashes,
+        imported_line_hashes,
+        counters: _,
+        file_path: _,
+        caches: _,
+    } = a;
+    *name == b.name
+        && *location == b.location
+        && *created_at == b.created_at
+        && *modified_at == b.modified_at
+        && *stations == b.stations
+        && lines.len() == b.lines().len()
+        && lines
+            .iter()
+            .zip(b.lines())
+            .all(|(x, y)| same_line_meta(x, y) && same_shots(&x.shots, &y.shots))
+        && datums.same(&b.datums)
+        && placements.same(&b.placements)
+        && closures.same(&b.closures)
+        && sections.same(&b.sections)
+        && settings.same(&b.settings)
+        && imported_file_hashes.same(&b.imported_file_hashes)
+        && imported_line_hashes.same(&b.imported_line_hashes)
+}
+
 /// The largest integer a JSON reader keeps exactly (2^53 - 1): hashes are
 /// cut to it so they persist as plain integers.
 pub(crate) const HASH_MASK: u64 = (1 << 53) - 1;

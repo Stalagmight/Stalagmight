@@ -40,11 +40,14 @@ pub fn same_state(live: &Project, expected: &Project) -> Result<(), String> {
     {
         return Err(format!("a counter went down: live {l:?}, recorded {e:?}"));
     }
+    if super::bits::same_model_but_counters(live, expected) {
+        return Ok(());
+    }
     let mut normalized = live.clone();
     normalized.counters = e;
     let (a, b) = (canonical(&normalized), canonical(expected));
     if a == b {
-        return Ok(());
+        return Err("the models differ in a way their text does not show".to_string());
     }
     let at = a
         .bytes()
@@ -702,7 +705,7 @@ impl Walk {
                 let Some(station) = self.station() else {
                     return ("skip", false);
                 };
-                let lines = self.project.topology().lines_of(station).clone();
+                let lines = self.project.topology().lines_of(station);
                 let Some(line) = self.rng.pick(&lines) else {
                     return ("skip", false);
                 };
