@@ -34,15 +34,24 @@ chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 flate2 = { workspace = true }
+thiserror = { workspace = true }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v5"] }
 # `.stalx` v2: the canonical float spelling (shortest round trip) and the
 # external-modification guard's content hash.
 ryu = { workspace = true }
 sha2 = { workspace = true }
+# The frozen 0.6.0 model and SQLite reader: old `.stalx` files are opened
+# exactly as 0.6.0 opened them and migrated into `models::survey`
+# (`persistence::migrate`). Not published: it must be published (or this
+# dependency gated) before `stalagmight-persistence` can be.
+stalagmight-legacy = { path = "../legacy" }
 
 [dev-dependencies]
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
 # through the parser to exercise a realistic project shape.
 stalagmight-parsers = { path = "../parsers" }
 tempfile = { workspace = true }
+# The legacy test writer (`write_v18`), so the migration property tests can
+# produce "what an old build wrote" in memory.
+stalagmight-legacy = { path = "../legacy", features = ["writer"] }
