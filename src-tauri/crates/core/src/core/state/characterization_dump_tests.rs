@@ -1061,10 +1061,11 @@ impl Script {
     fn finish(mut self) -> Vec<String> {
         self.roundtrip();
         query_exports(&self.state, &mut self.rec);
-        // Stream X: the final state as a `.stalx` plus the uuid book, so the
-        // exporters can be run on it and masked alike. The 0.6.0 build wrote
-        // the SQLite file `export::survey::golden_tests` migrates; this build
-        // writes version 2.
+        // Stream X's hook: the final state as a version 2 `.stalx` plus the
+        // uuid book and the export settings, so a scenario's end state can be
+        // opened, or exported and masked alike, by hand. The 0.6.0 build wrote
+        // a SQLite file here for X's `golden_exports` runner, retired once
+        // this dump exported through `export::survey` itself.
         if let Ok(dir) = std::env::var("STALAGMIGHT_CHAR_SAVE") {
             let dir = PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create the save directory");

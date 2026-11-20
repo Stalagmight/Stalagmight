@@ -48,10 +48,3 @@ pub use tabular::{export_csv, export_json, json_export, write_csv, write_json};
 pub(crate) mod test_helpers;
 
 pub use super::tml::survey::{export_tml, export_tml_for_speleodb};
-
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "on-demand golden runner: a missing input is a usage error"
-)]
-mod golden_tests;
