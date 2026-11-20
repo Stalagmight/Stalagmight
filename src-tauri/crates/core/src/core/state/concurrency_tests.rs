@@ -358,7 +358,7 @@ fn worker(
                 let _ = state.get_adjustment_report();
             }
             13 => {
-                let _ = state.integrity_check();
+                let _ = state.integrity_violation_messages();
             }
             14 => {
                 let path = files.dir.join(format!("concurrent-{thread}.stalx"));

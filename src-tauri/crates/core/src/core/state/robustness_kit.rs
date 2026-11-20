@@ -307,12 +307,15 @@ pub(super) fn canonical_snapshot(state: &AppState) -> String {
         .map_or_else(String::new, |p| canonical(&p))
 }
 
-/// The app's integrity verdict (`integrity_check`), messages sorted.
+/// The model's integrity verdict (`integrity_violation_messages`), messages
+/// sorted, in the format the retired `check_project_integrity` answer gave.
 pub(super) fn integrity_verdict(state: &AppState) -> String {
-    let result = state.integrity_check();
-    let mut messages = result.messages;
+    let mut messages = state.integrity_violation_messages();
     messages.sort();
-    format!("save_blocked={} messages={messages:?}", result.save_blocked)
+    format!(
+        "save_blocked={} messages={messages:?}",
+        !messages.is_empty()
+    )
 }
 
 /// The Closures Computed View per slot, bit for bit, sorted by slot (the solve

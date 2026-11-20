@@ -2832,17 +2832,6 @@
       "restartWaitsForTransfer": "Stalagmight did not restart: a SpeleoDB transfer is still running. Restart to update once it has finished."
     }
   },
-  "integrityRepair": {
-    "toasts": {
-      "issue_one": "issue",
-      "issue_other": "issues",
-      "needWord_one": "needs",
-      "needWord_other": "need",
-      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.",
-      "full": "Repaired {{fixed}} {{issueWord}}. Save to keep the fix.",
-      "failed": "Repair failed - nothing was changed. Please try again."
-    }
-  },
   "debugDialog": {
     "toasts": {
       "refreshed": "Logs refreshed",

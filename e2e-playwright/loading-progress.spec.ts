@@ -195,14 +195,14 @@ test.describe('Loading Progress', () => {
         e2e?.simulateLoadingProgress?.({
           isLoading: true,
           projectName: 'Test Project',
-          phase: 'opening_database',
+          phase: 'opening_file',
           phaseIndex: 0,
           phaseCount: 8,
           overallProgress: 5,
         });
       });
 
-      // Phase text should be visible (opening_database, worded for the file)
+      // Phase text should be visible (opening_file)
       await expect(page.getByText(/Opening the project file/)).toBeVisible();
     });
 

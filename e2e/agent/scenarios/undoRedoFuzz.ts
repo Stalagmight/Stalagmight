@@ -267,7 +267,7 @@
  * first reload the model compares id-agnostically (shot ids replaced by position,
  * everything else still exact). Line ids ARE persisted and are compared.
  *
- * ## Three oracles, not one
+ * ## Two oracles, not one
  *
  * 1. ROUNDTRIP - the snapshot-per-depth comparison above, including the
  *    single-step/jump equivalence.
@@ -275,11 +275,16 @@
  *    observed state). The roundtrip only sees drift BETWEEN states: a command
  *    that corrupts the project and an undo that faithfully restores the
  *    corruption match at every depth. Only an absolute check fires on that.
- * 3. INTEGRITY DELTA - `check_project_integrity`'s own verdict is recorded per
- *    depth alongside the snapshot and must be restored by every history move. A
- *    state that roundtrips while its integrity verdict does not is either a bug
- *    in the checker or a divergence the snapshot cannot see. `integrityCompared`
- *    counts the comparisons so this cannot pass vacuously.
+ *
+ * A third, the INTEGRITY DELTA (`check_project_integrity`'s verdict recorded
+ * per depth and restored by every history move), is retired with that command.
+ * On the station graph the app runs `Project::validate` itself after every
+ * edit, import and file-decoded history step and rolls back (with an error
+ * log, which the sweep reports) whatever would break it, so the verdict was
+ * empty at every depth; and the save and reload are strict now
+ * (`SAVE_HEALING_MUTATIONS` / `RELOAD_RESOLVED_GEOMETRY` are empty), so the
+ * roundtrip sees what the delta once caught behind a re-baseline (bug 7's
+ * second line, below). Repair, which the delta measured, went with it.
  *
  * ## Generator streams: v1 repro lines, v2 default
  *
@@ -647,7 +652,6 @@ import {
   observeOnly,
   resyncModel,
   runStep,
-  type IntegrityVerdict,
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
@@ -755,34 +759,6 @@ const MAX_SAVE_RELOADS = 3;
  * stream would have made "add saves" silently change which jumps a seed takes.
  */
 const SAVE_STREAM_SALT = 0x85ebca6b;
-
-/**
- * Repair runs ONCE per run, after the main loop and before the boundary
- * save/reload, never inside the loop.
- *
- * `repair_open_project_integrity` drops dangling refs, re-mints duplicate shot
- * uuids, converts sole-bridge closures to merges and then does a zero-trust
- * `resolve_offsets()`. Unlike a save it PUSHES AN UNDO ENTRY whenever the
- * project actually changed - so firing it inside the loop would move the cursor
- * and shift the trajectory, which is exactly what every documented repro line
- * depends on not happening. After the loop it is still fully exercised: the
- * final unwind/rewind walks its entry in both directions like any other.
- *
- * It is not a no-op in practice - bug 2's leaked all-zero offset keys and
- * finding 10's orphan closures are both things repair heals.
- *
- * OFF BY DEFAULT behind `STALAGMIGHT_FUZZ_REPAIR=1`, and it stays off - but for
- * a different reason than when the gate went in. It was added because Repair
- * surfaced finding 11, which is now root-caused and reproduces WITHOUT Repair,
- * so that justification is gone. The gate remains because Repair pushes an undo
- * entry whenever it changes the project, and that entry is walked by the final
- * unwind/rewind - so enabling it by default would add one undo and one redo to
- * every run's counts, changing the metrics the faithfulness checks compare
- * byte-for-byte. Opt in when hunting; leave off when verifying.
- */
-function repairEnabled(): boolean {
-  return process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
-}
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -1276,7 +1252,6 @@ async function runFuzz(
     ctx.metric('actionMs', res.timing.actionMs);
     ctx.metric('observeMs', res.timing.observeMs);
     ctx.metric('canonicalMs', res.timing.canonicalMs);
-    ctx.metric('integrityMs', res.timing.integrityMs);
     ctx.metric('steps');
     return res;
   };
@@ -1305,43 +1280,6 @@ async function runFuzz(
     );
   };
 
-  const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
-    a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
-
-  /**
-   * The app runs `check_project_integrity` after every undo/redo anyway, so
-   * its verdict is part of the state a history move is supposed to restore. A
-   * state that roundtrips while its integrity verdict does not is either a bug
-   * in the checker or a divergence the snapshot cannot see.
-   */
-  const assertIntegrityDelta = (res: StepResponse, what: string, resynced = false): void => {
-    const expected = res.integrityExpected;
-    if (expected === null) return;
-    // `resolveMismatch` just replaced the model's snapshot at this depth, and
-    // `resyncModel` moves the recorded integrity verdict with it - that is
-    // its documented job. `expected` was computed IN THE PAGE at step time,
-    // against the snapshot that has since been superseded, so comparing it
-    // now would fail on precisely the difference the resync accepted. That is
-    // how a run could log a documented save/reload re-baseline and then
-    // immediately fail naming a different oracle. (The only resync left is
-    // that one: `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is inert and tolerates
-    // nothing.)
-    if (resynced) {
-      ctx.metric('integrityResynced');
-      return;
-    }
-    // Counted so the oracle can be shown to be doing work rather than
-    // passing vacuously on a model that never recorded a verdict.
-    ctx.metric('integrityCompared');
-    if (sameIntegrity(expected, res.integrity)) return;
-    const format = (verdict: IntegrityVerdict): string =>
-      `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
-    fail(
-      `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
-      `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
-    );
-  };
-
   const assertStacks = (headline: string, res: StepResponse): void => {
     const wantUndo = baseUndo + cursor;
     const wantRedo = top - cursor;
@@ -1359,15 +1297,11 @@ async function runFuzz(
    * save/reload change or fails with the full diff. Those two outcomes are all
    * there are - no known-bug tolerance survives.
    *
-   * Returns true when the model was RESYNCED, which the caller has to know:
-   * every expectation the page computed for this step - the integrity verdict
-   * included - was computed against the snapshot the resync replaced.
+   * Returns true when the model was RESYNCED: every expectation the page
+   * computed for this step was computed against the snapshot the resync
+   * replaced.
    */
-  const resolveMismatch = async (
-    headline: string,
-    resyncIntegrity: IntegrityVerdict | null,
-    res: StepResponse,
-  ): Promise<boolean> => {
+  const resolveMismatch = async (headline: string, res: StepResponse): Promise<boolean> => {
     const pair = await fetchMismatch(ctx);
     // ONLY a comparison that crosses an epoch boundary may subtract the
     // documented undo-less changes. Within an epoch the oracle stays strict -
@@ -1391,7 +1325,7 @@ async function runFuzz(
     if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
       ctx.metric('resyncs');
       for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
-      top = await resyncModel(ctx, pair.index, resyncIntegrity);
+      top = await resyncModel(ctx, pair.index);
       return true;
     }
     // No known-bug branch: every issue-413 finding is fixed and every
@@ -1453,14 +1387,9 @@ async function runFuzz(
     assertInvariants(res, label);
     assertModel(res, `${label} left the page model where Node did not expect it`);
     assertStacks(`${label} left the history stacks in an unexpected shape`, res);
-    const resynced =
-      res.verdict !== 'equal' &&
-      (await resolveMismatch(
-        `${label} did not restore the state recorded at depth ${cursor}`,
-        res.integrity,
-        res,
-      ));
-    assertIntegrityDelta(res, label, resynced);
+    if (res.verdict !== 'equal') {
+      await resolveMismatch(`${label} did not restore the state recorded at depth ${cursor}`, res);
+    }
     record(res);
     ctx.metric(direction === 'undo' ? 'undos' : 'redos');
     if (jumped) {
@@ -1507,7 +1436,6 @@ async function runFuzz(
     if (saveRes.verdict !== 'equal') {
       await resolveMismatch(
         'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
-        saveRes.integrity,
         saveRes,
       );
     }
@@ -1542,72 +1470,11 @@ async function runFuzz(
     note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
     assertInvariants(res, 'reload');
     assertStacks('the persisted history did not come back intact', res);
-    const resynced =
-      res.verdict !== 'equal' &&
-      (await resolveMismatch(
-        'reopening the saved project did not restore the state it was saved at',
-        res.integrity,
-        res,
-      ));
-    assertIntegrityDelta(res, 'reload', resynced);
+    if (res.verdict !== 'equal') {
+      await resolveMismatch('reopening the saved project did not restore the state it was saved at', res);
+    }
     record(res);
     ctx.metric('reloads');
-  };
-
-  /**
-   * Run Repair as an additive move. It is a normal mutation as far as the
-   * model is concerned - it either pushes one snapshot-pair entry or nothing -
-   * so the same case analysis the mutate branch uses applies here.
-   */
-  const runRepair = async (tag: string): Promise<void> => {
-    const beforeUndo = undoLen;
-    const beforeRedo = redoLen;
-    startingMove(`${tag} repairProjectIntegrity`);
-    const res = await step('mutate', 'repairProjectIntegrity', []);
-    finishedMove();
-    const accepted = res.actionOk && res.commandSuccess !== false;
-    const pushed = res.undoLen - beforeUndo;
-    note(
-      `${tag} repairProjectIntegrity -> ${accepted ? 'ok' : 'rejected'} ` +
-        `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
-    );
-    assertInvariants(res, 'repairProjectIntegrity');
-    if (!accepted) {
-      ctx.metric('rejected');
-      ctx.metric('rejected:repairProjectIntegrity');
-      record(res);
-      return;
-    }
-    if (pushed === 1) {
-      // Repair changed the project: it becomes the new top of the branch.
-      snapshotsTopChanged(res);
-      ctx.metric('repairs');
-      record(res);
-      return;
-    }
-    if (pushed !== 0) {
-      fail(`repair pushed ${pushed} undo entries (expected 0 or 1)`);
-    }
-    // No-op repair: nothing changed, so nothing may have changed.
-    ctx.metric('repairNoops');
-    if (res.redoLen === 0) top = cursor;
-    if (res.verdict !== 'equal') {
-      await resolveMismatch('a no-op Repair changed the project state', res.integrity, res);
-    }
-    record(res);
-  };
-
-  /** Shared bookkeeping for a move that pushed exactly one undo entry. */
-  const snapshotsTopChanged = (res: StepResponse): void => {
-    if (res.redoLen !== 0) {
-      fail('a successful Repair did not clear the redo stack');
-    }
-    cursor += 1;
-    top = cursor;
-    assertModel(res, 'Repair recorded its snapshot at an unexpected depth');
-    if (res.verdict !== 'recorded') {
-      fail(`the page did not record a snapshot for Repair (verdict=${res.verdict})`);
-    }
   };
 
   /** Should this iteration cross the save/reload boundary? */
@@ -1708,15 +1575,13 @@ async function runFuzz(
       }
       assertInvariants(res, `a rejected ${action.action}`);
       assertModel(res, 'a rejected command moved the page model');
-      const resynced =
-        res.verdict !== 'equal' &&
-        (await resolveMismatch(
+      if (res.verdict !== 'equal') {
+        await resolveMismatch(
           `a REJECTED command (${action.action}) mutated the project: ` +
             `${res.commandError ?? res.actionError ?? 'unknown'}`,
-          res.integrity,
           res,
-        ));
-      assertIntegrityDelta(res, `a rejected ${action.action}`, resynced);
+        );
+      }
       record(res);
       return;
     }
@@ -1767,14 +1632,9 @@ async function runFuzz(
     }
     assertInvariants(res, `a no-op ${action.action}`);
     assertModel(res, 'a no-op command moved the page model');
-    const resynced =
-      res.verdict !== 'equal' &&
-      (await resolveMismatch(
-        `a no-op command (${action.action}) changed the project state`,
-        res.integrity,
-        res,
-      ));
-    assertIntegrityDelta(res, `a no-op ${action.action}`, resynced);
+    if (res.verdict !== 'equal') {
+      await resolveMismatch(`a no-op command (${action.action}) changed the project state`, res);
+    }
     record(res);
   };
 
@@ -1812,8 +1672,10 @@ async function runFuzz(
       return;
     }
     if (traceStep.kind === 'repair') {
-      recorder.record({ kind: 'repair' });
-      await runRepair(tag);
+      // Repair left with the integrity banner: it never changed a project on
+      // the station graph (every edit validates), so an old trace's Repair
+      // replays as nothing, as `undo-persistence-fuzz` replays it.
+      ctx.metric('replaySkipped:repair');
       return;
     }
     if (traceStep.kind === 'save') {
@@ -1925,14 +1787,6 @@ async function runFuzz(
       continue;
     }
     await applyMutation(drawAction(ctx, digest, weightedNames), tag);
-  }
-
-  // Repair once, before the boundary crossing, so its entry is both persisted
-  // and walked by the final roundtrip. Skipped on a replay: the trace already
-  // contains whatever Repair the recorded run did, in the place it did it.
-  if (repairEnabled() && !replay) {
-    recorder.record({ kind: 'repair' });
-    await runRepair('repair');
   }
 
   // Cross the persistence boundary at least once per run, so the final

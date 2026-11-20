@@ -33,7 +33,6 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     refreshProjectState = vi.fn().mockResolvedValue(undefined);
     useProjectStore.setState({
       refreshProjectState,
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
     showToast = vi.fn();
     // activeDialog reset explicitly: the catch-all cases below flip it, and a

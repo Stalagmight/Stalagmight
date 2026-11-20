@@ -13,8 +13,8 @@ const save = createSaveProjectAction(useProjectStore.setState, useProjectStore.g
 beforeEach(() => {
   ipc.mockReset();
   useProjectStore.setState({ project: { file_path: '/a.stalx', created_at: 'A' } as never,
-    projectTreeGeneration: 10, isDirty: true, integrityIssues: [],
-    refreshUndoState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []),
+    projectTreeGeneration: 10, isDirty: true,
+    refreshUndoState: vi.fn(async () => {}),
   });
 });
 it('never clears edits made after a local save started', async () => {

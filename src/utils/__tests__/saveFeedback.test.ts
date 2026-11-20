@@ -7,7 +7,6 @@ vi.mock('../ipc', async (importOriginal) => ({
 
 import {
   autosaveFailureMessage,
-  shouldShowAutosaveBanner,
   surfaceSaveFailure,
   surfaceImportFailure,
   completeImportToSingleView,
@@ -29,7 +28,6 @@ import {
   IGNORES_UNREADABLE,
   READ_ONLY_FILE,
 } from '../saveErrors';
-import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
@@ -59,46 +57,27 @@ const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
 });
 
 describe('surfaceSaveFailure', () => {
-  beforeEach(() => {
-    useProjectStore.setState({ integritySaveBlocked: false, integrityDialogOpen: false });
-  });
-
-  it('routes a save-blocked failure to Review & Repair, not an error window', () => {
-    useProjectStore.setState({ integritySaveBlocked: true });
-    const openDialog = vi.fn();
-
-    surfaceSaveFailure("Can't save: 1 unresolved cross-reference", openDialog);
-
-    // No error dialog - instead the integrity (Review & Repair) dialog opens.
-    expect(openDialog).not.toHaveBeenCalled();
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(true);
-  });
-
-  it('opens the save prompt for a file another program changed, even when save-blocked', () => {
-    useProjectStore.setState({ integritySaveBlocked: true });
+  it('opens the save prompt for a file another program changed', () => {
     const openDialog = vi.fn();
     const error = `${EXTERNALLY_MODIFIED}: cave.stalx was changed by another program`;
 
     surfaceSaveFailure(error, openDialog);
 
     expect(openDialog).toHaveBeenCalledWith('save-conflict', { error });
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
   });
 
-  it('says a read-only file was made with a newer Stalagmight, never Review & Repair', () => {
-    useProjectStore.setState({ integritySaveBlocked: true });
+  it('says a read-only file was made with a newer Stalagmight', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(`${READ_ONLY_FILE}: this project was made with a newer Stalagmight`, openDialog);
 
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
     const [, data] = openDialog.mock.calls[0] as [string, { message: string }];
     expect(openDialog.mock.calls[0]?.[0]).toBe('error');
     expect(data.message).toContain('made with a newer version of Stalagmight');
     expect(data.message).not.toContain(READ_ONLY_FILE);
   });
 
-  it('shows the error dialog for a real (non-integrity) failure', () => {
+  it('shows the error dialog for a real failure', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure('Disk full', openDialog);
@@ -107,16 +86,11 @@ describe('surfaceSaveFailure', () => {
       message: 'Disk full',
       title: 'Save Failed',
     });
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
   });
 
-  // [#517] The refusal when the ignore list cannot be read names its own cause
-  // and has no repair in Review & Repair. `saveProject` runs
-  // `checkProjectIntegrity()` on EVERY failure, so on a project that also has
-  // cross-reference problems the integrity route would swallow this refusal and
-  // it would render on no surface at all.
-  it('shows the unreadable-ignore-list refusal even when the project is save-blocked', () => {
-    useProjectStore.setState({ integritySaveBlocked: true });
+  // [#517] The refusal when the ignore list cannot be read names its own cause:
+  // the error dialog shows the backend's sentence, without its marker.
+  it('shows the unreadable-ignore-list refusal', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(
@@ -124,22 +98,20 @@ describe('surfaceSaveFailure', () => {
       openDialog
     );
 
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
     const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
     expect(dialog).toBe('error');
-    // The marker is for routing; it must never reach the user.
+    // The marker must never reach the user.
     expect(data.message).not.toContain(IGNORES_UNREADABLE);
     expect(data.message).toContain('list of ignored warnings could not be read');
     expect(data.message).toContain('the file on disk is unchanged');
   });
 
-  it('does nothing when there is no error and the project is not save-blocked', () => {
+  it('does nothing when there is no error', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(undefined, openDialog);
 
     expect(openDialog).not.toHaveBeenCalled();
-    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
   });
 
   it('leaves a permission denial to the folder-access guidance dialog', () => {
@@ -176,53 +148,6 @@ describe('surfaceSaveFailure', () => {
     expect(data.message).not.toContain(FS_PATH_TOO_LONG);
     expect(data.message).not.toContain('Failed to open database');
     expect(data.message).toContain('too long');
-  });
-});
-
-// [#517] The banner has its own render gate in App.tsx, independent of
-// surfaceSaveFailure's routing: it hides whenever saving is integrity-blocked.
-// A refusal Review & Repair cannot fix would be stored and never rendered - the
-// user would see only "repair your cross-references" while every save is
-// refused for an unrelated reason.
-describe('shouldShowAutosaveBanner (#517)', () => {
-  const base = {
-    autosaveFailure: 'Autosave failed',
-    autosaveFailureKind: 'other' as const,
-    integritySaveBlocked: false,
-    integrityIssueCount: 0,
-  };
-
-  it('yields to the integrity banner for an ordinary failure', () => {
-    expect(
-      shouldShowAutosaveBanner({ ...base, integritySaveBlocked: true, integrityIssueCount: 2 })
-    ).toBe(false);
-  });
-
-  it('shows an unreadable-ignore-list refusal even behind the integrity banner', () => {
-    expect(
-      shouldShowAutosaveBanner({
-        ...base,
-        autosaveFailure: "Can't save: this project's list of ignored warnings could not be read (x).",
-        autosaveFailureKind: 'ignores-unreadable',
-        integritySaveBlocked: true,
-        integrityIssueCount: 2,
-      })
-    ).toBe(true);
-  });
-
-  it('shows nothing when there is no autosave failure, whatever the kind', () => {
-    expect(
-      shouldShowAutosaveBanner({
-        ...base,
-        autosaveFailure: null,
-        autosaveFailureKind: 'ignores-unreadable',
-      })
-    ).toBe(false);
-  });
-
-  it('shows an ordinary failure when the project is not integrity-blocked', () => {
-    expect(shouldShowAutosaveBanner(base)).toBe(true);
-    expect(shouldShowAutosaveBanner({ ...base, integrityIssueCount: 3 })).toBe(true);
   });
 });
 

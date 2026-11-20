@@ -83,19 +83,9 @@ export function useAutoSave(): AutoSaveState {
         state.config?.general?.auto_save_interval_seconds ?? 30;
       const hasProject = state.project != null;
 
-      // --- Resume after a save-block clears ---
-      // Auto-save pauses itself after a save-blocking failure (see the fire
-      // handler below). Resume the moment the project stops being save-blocked -
-      // i.e. the integrity issues were resolved (Repair) - so the next pending
-      // edit saves normally.
-      if (
-        pausedRef.current &&
-        prevState.integritySaveBlocked &&
-        !state.integritySaveBlocked
-      ) {
-        pausedRef.current = false;
-      }
-      // ...or once the failure that paused it is gone: a file another program
+      // --- Resume after a pausing failure clears ---
+      // Auto-save pauses itself after a failure no retry can fix (see the fire
+      // handler below). Resume once that failure is gone: a file another program
       // changed (the `.stalx` v2 guard, resolved in the save prompt) or a
       // read-only file. A save that lands clears `autosaveFailureKind`, and so
       // does dismissing the banner (the next edit then tries again and, if the
@@ -188,21 +178,13 @@ export function useAutoSave(): AutoSaveState {
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {
             savingRef.current = false;
-            // Auto-save must never persist a broken project, so the backend
-            // refuses the save when the project has unresolvable cross-references.
             // Surface that auto-save did NOT run *persistently* (not a transient
-            // flash) so the user knows their changes are not on disk; the integrity
-            // banner shows how to fix it (Repair).
-            // When the failure is the integrity save-block, PAUSE auto-save rather
-            // than retry on every edit - it would just fail again. It resumes via
-            // the check at the top of the subscriber once the block clears. (The
-            // failure branch of saveProject awaits checkProjectIntegrity, so this
-            // flag is fresh here.)
-            if (useProjectStore.getState().integritySaveBlocked) {
-              pausedRef.current = true;
-            }
-            // The same for a file another program changed, or a read-only
-            // one: retrying would fail the same way until the user decides.
+            // flash) so the user knows their changes are not on disk (the
+            // autosave banner says why).
+            // PAUSE auto-save rather than retry on every edit for a file another
+            // program changed, or a read-only one: retrying would fail the same
+            // way until the user decides. It resumes via the check at the top of
+            // the subscriber once that failure clears.
             if (isPausingFailure(classifySaveError(result.error))) {
               pausedRef.current = true;
             }

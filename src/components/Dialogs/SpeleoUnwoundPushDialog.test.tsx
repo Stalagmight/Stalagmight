@@ -63,7 +63,6 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     });
     useProjectStore.setState({
       refreshProjectState: vi.fn(async () => {}),
-      checkProjectIntegrity: vi.fn(async () => []),
       isDirty: true,
     });
   });

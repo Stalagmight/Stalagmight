@@ -38,7 +38,7 @@ use crate::models::survey::changeset::testkit::{gate_shot, gate_survey, gps, SHO
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CreditEdit, CreditTargets,
     LineId, LineUpdates, Person, SectionId, ShotId, ShotKind, ShotUpdates, SplitAt,
-    SplitLineOptions, SplitSide, StationRef,
+    SplitLineOptions, StationRef,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -374,8 +374,6 @@ fn actions() -> Vec<(&'static str, Action)> {
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
                     color_b: "#222222".to_string(),
-                    comment_side: SplitSide::A,
-                    datum_side: SplitSide::A,
                 },
             )
         }),

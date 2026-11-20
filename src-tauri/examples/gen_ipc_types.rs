@@ -30,8 +30,8 @@ use stalagmight_lib::config::{
     UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
-    CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    LockReleaseOutcome, ReversedLine, ValidationWarning, WarningSeverity,
+    CommandResult, CommentHolder, ImportReceipt, LockReleaseOutcome, ReversedLine,
+    ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
@@ -52,7 +52,7 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
-    ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
+    ClosurePreview, ClosureRef, ClosureStrategy, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
     CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
     CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
@@ -180,6 +180,13 @@ fn main() {
         "SpeleoUserSuggestion",
         // Retired with the dead Settings > Display "Depth Gradient" section (#380).
         "DepthGradientConfig",
+        // Retired with the integrity banner and its IPC, which the station
+        // graph cannot reach (every edit and load validates).
+        "IntegrityCheckResult",
+        "IntegrityRepairResult",
+        // The delete previews' re-anchored closures, which the station graph
+        // never makes.
+        "ClosureUpdate",
     ] {
         for directory in [
             &out_dir,
@@ -198,8 +205,6 @@ fn main() {
     export::<ReversedLine>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
-    export::<IntegrityRepairResult>(&out_dir);
-    export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
 
@@ -307,7 +312,6 @@ fn main() {
     export::<LineRelationships>(&out_dir);
     export::<StationPair>(&out_dir);
     export::<ClosurePair>(&out_dir);
-    export::<ClosureUpdate>(&out_dir);
     export::<DeleteShotImpact>(&out_dir);
     export::<RangeDeleteKind>(&out_dir);
     export::<DeleteShotRangeImpact>(&out_dir);
@@ -532,8 +536,6 @@ fn main() {
         "ReversedLine",
         "ImportReceipt",
         "CommentHolder",
-        "IntegrityRepairResult",
-        "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
         "DisplaySettings",
@@ -630,7 +632,6 @@ fn main() {
         "LineRelationships",
         "StationPair",
         "ClosurePair",
-        "ClosureUpdate",
         "DeleteShotImpact",
         "RangeDeleteKind",
         "DeleteShotRangeImpact",

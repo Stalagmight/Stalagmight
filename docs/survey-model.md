@@ -504,9 +504,10 @@ one the user sees.
 
 ### Previews
 
-What the station graph makes impossible is reported empty, never invented:
-`replacement_merges`, `replacement_closure_updates`, `*_rewire_skipped`
-(delete), `moved_side` / `moved_m` / `removed_already_one_point` (split).
+What the station graph makes impossible is not on the wire (the delete
+previews' 0.6.0 `replacement_merges`, `replacement_closure_updates` and
+`*_rewire_skipped` are gone) or reported empty, never invented (the split
+preview's `moved_side` / `moved_m` / `removed_already_one_point`).
 `removed_merges` is the removed slot leaving its junction (one pair per other
 slot of the station); `removed_closures` also lists the `Tie`s the slot takes
 with it at a junction (S13), the closures the delete leaves across one shot

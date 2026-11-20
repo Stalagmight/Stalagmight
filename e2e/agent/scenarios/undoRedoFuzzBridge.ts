@@ -125,7 +125,7 @@ export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
 /**
  * Every `projectStore` action a fuzz step may dispatch at all: the replayable
  * mutations, plus the control moves the SCENARIO drives with its own arguments
- * (history moves, the save/reload boundary, Repair, and the re-observe
+ * (history moves, the save/reload boundary, and the re-observe
  * sentinel). `runStep` reaches an action by NAME, so without this set a step
  * could call any method the store exposes.
  *
@@ -147,10 +147,9 @@ export const FUZZABLE_ACTIONS: ReadonlySet<string> = new Set([
   'redo',
   'undoTo',
   'redoTo',
-  // The persistence boundary and the repair pass - scenario-driven, with the
-  // scenario's own arguments. Never replayable from a trace.
+  // The persistence boundary - scenario-driven, with the scenario's own
+  // arguments. Never replayable from a trace.
   'saveProject',
-  'repairProjectIntegrity',
 ]);
 
 /** What Node asks the page to do for one step. */
@@ -171,13 +170,6 @@ export interface StepRequest {
   undo0: number;
   /** History moves only: how many entries this move crosses (1 for singles). */
   steps?: number;
-}
-
-/** `check_project_integrity`, normalized for comparison across depths. */
-export interface IntegrityVerdict {
-  saveBlocked: boolean;
-  /** Sorted, so message order can never masquerade as a difference. */
-  messages: string[];
 }
 
 /** Everything Node needs to run its case analysis, and nothing else. */
@@ -211,10 +203,6 @@ export interface StepResponse {
    * matches, which is the case a corrupting command with a faithful undo hits.
    */
   invariants: string[];
-  /** This step's integrity verdict, and the one recorded at the depth landed on. */
-  integrity: IntegrityVerdict;
-  /** Null when the model has no verdict recorded for this depth yet. */
-  integrityExpected: IntegrityVerdict | null;
   /**
    * True when the snapshot being compared against was recorded in an EARLIER
    * epoch - i.e. before a save or reload made an undo-less change to live state.
@@ -227,11 +215,11 @@ export interface StepResponse {
    * In-page attribution for the step, in ms. Not diagnostics for their own
    * sake: they are what says whether the remaining cost is the bridge, the
    * store action's own work (`flushPlanAnchors` + the IPC command +
-   * `refreshProjectState` + `checkProjectIntegrity`), the three read-only IPC
-   * calls, or the canonicalization - so the next optimization is aimed at
-   * evidence rather than at a guess.
+   * `refreshProjectState`), the three read-only IPC calls, or the
+   * canonicalization - so the next optimization is aimed at evidence rather
+   * than at a guess.
    */
-  timing: { actionMs: number; observeMs: number; canonicalMs: number; integrityMs: number };
+  timing: { actionMs: number; observeMs: number; canonicalMs: number };
 }
 
 /** The initial observation, taken before any action. */
@@ -241,7 +229,6 @@ export interface InitResponse {
   bytes: number;
   digest: TargetingDigest;
   invariants: string[];
-  integrity: IntegrityVerdict;
 }
 
 const ORACLE = `globalThis.${ORACLE_GLOBAL}`;
@@ -269,15 +256,6 @@ const OBSERVE = `
   const digest = O.digest(project);
   const invariants = O.invariants(project);
   const canonicalMs = Date.now() - canonicalStarted;
-  // Measured separately: it is a whole extra IPC command doing O(N) structural
-  // work, and whether it is worth paying every step is a numbers question.
-  const integrityStarted = Date.now();
-  const integrityRaw = await core.invoke('check_project_integrity');
-  const integrity = {
-    saveBlocked: !!(integrityRaw && integrityRaw.save_blocked),
-    messages: (integrityRaw && integrityRaw.messages ? integrityRaw.messages.slice() : []).sort(),
-  };
-  const integrityMs = Date.now() - integrityStarted;
 `;
 
 /** Install the oracle (and reset its model) for this run. */
@@ -291,7 +269,6 @@ export async function initModel(ctx: ScenarioContext): Promise<InitResponse> {
     ${PREAMBLE}
     ${OBSERVE}
     O.snapshots = [canonical];
-    O.integrity = [integrity];
     O.epoch = 0;
     O.epochs = [0];
     O.lastExpected = null;
@@ -303,7 +280,6 @@ export async function initModel(ctx: ScenarioContext): Promise<InitResponse> {
       bytes: canonical.length,
       digest: digest,
       invariants: invariants,
-      integrity: integrity,
     };
   `);
 }
@@ -371,8 +347,6 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       } else if (pushed === 1) {
         O.snapshots.length = req.cursor + 1;
         O.snapshots.push(canonical);
-        O.integrity.length = req.cursor + 1;
-        O.integrity.push(integrity);
         O.epochs.length = req.cursor + 1;
         O.epochs.push(O.epoch);
         cursorAfter = req.cursor + 1;
@@ -382,7 +356,6 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
         // truncates the model's forward branch BEFORE the comparison.
         if (redoLen === 0) {
           O.snapshots.length = req.cursor + 1;
-          O.integrity.length = req.cursor + 1;
           O.epochs.length = req.cursor + 1;
         }
         comparedIndex = req.cursor;
@@ -425,16 +398,11 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       top: O.snapshots.length - 1,
       digest: digest,
       invariants: invariants,
-      integrity: integrity,
-      integrityExpected: comparedIndex >= 0 && O.integrity[comparedIndex] !== undefined
-        ? O.integrity[comparedIndex]
-        : null,
       crossesEpoch: comparedIndex >= 0 && (O.epochs[comparedIndex] === undefined || O.epochs[comparedIndex] < O.epoch),
       timing: {
         actionMs: actionMs,
         observeMs: observeMs,
         canonicalMs: canonicalMs,
-        integrityMs: integrityMs,
       },
     };
   `,
@@ -465,11 +433,7 @@ export async function fetchMismatch(
  * There is no known-bug branch left in either fuzz scenario:
  * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is inert and tolerates nothing.
  */
-export async function resyncModel(
-  ctx: ScenarioContext,
-  index: number,
-  integrity: IntegrityVerdict | null,
-): Promise<number> {
+export async function resyncModel(ctx: ScenarioContext, index: number): Promise<number> {
   return ctx.eval<number>(
     `
     const req = args[0];
@@ -480,14 +444,10 @@ export async function resyncModel(
     }
     if (O.lastActual === null) throw new Error('no recorded mismatch to resync from');
     O.snapshots[req.index] = O.lastActual;
-    // The integrity verdict recorded at that depth belongs to the snapshot being
-    // replaced, so it has to move with it or the delta oracle would compare the
-    // resynced state against a verdict from the state it superseded.
-    if (req.integrity !== null) O.integrity[req.index] = req.integrity;
     O.epochs[req.index] = O.epoch;
     return O.snapshots.length - 1;
   `,
-    [{ index, integrity }],
+    [{ index }],
   );
 }
 

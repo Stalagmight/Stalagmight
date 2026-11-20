@@ -102,8 +102,9 @@ export const createProjectSingleWrite: Journey = {
         fs.existsSync(savePath),
         `nothing at ${savePath}`);
     } finally {
-      // Close before removing the file: deleting a live SQLite database under
-      // the backend's open handle is the SIGBUS hazard the harness documents.
+      // Close before removing the file, so the backend no longer holds it as
+      // the open project (0.6.0 also kept a live SQLite handle on it, whose
+      // removal underneath was the SIGBUS hazard the harness documents).
       await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
       fs.rmSync(path.dirname(savePath), { recursive: true, force: true });
     }

@@ -64,7 +64,7 @@ use crate::models::survey::Project;
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CreditEdit, CreditTargets,
     GpsCoordinates, LineUpdates, Person, ShotData, ShotKind, ShotUpdates, SplitAt,
-    SplitLineOptions, SplitSide, StationRef,
+    SplitLineOptions, StationRef,
 };
 use crate::persistence::stalx_v2::{self, decode, encode, DecodeOptions, Extras, Format, Mode};
 use crate::persistence::ResolvedWarning;
@@ -579,8 +579,6 @@ fn operate(
                             name_b: format!("B{tag}"),
                             color_a: "#111111".to_string(),
                             color_b: "#222222".to_string(),
-                            comment_side: SplitSide::A,
-                            datum_side: SplitSide::A,
                         },
                     ),
                 )

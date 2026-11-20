@@ -38,7 +38,7 @@ use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
     CombineJoinEnds, CombineLinesOptions, CombinePick, LineEnd, LineId, LineUpdates, SplitAt,
-    SplitLineOptions, SplitSide, StationId,
+    SplitLineOptions, StationId,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -215,8 +215,6 @@ fn undo_redo_of_insert_station_split_and_combine_are_exact() {
         name_b: "Main B".to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     };
     let result = state.execute_split_line(main, SplitAt::Station { station_index: 3 }, options);
     assert!(result.success, "{:?}", result.error);

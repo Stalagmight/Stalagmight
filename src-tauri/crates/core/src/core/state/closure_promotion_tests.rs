@@ -104,7 +104,7 @@ fn near(a: [f64; 2], b: [f64; 2], what: &str) {
 /// line laid out on its own from its first station puts every one of its
 /// stations where the survey does (0.6.0's "merged stations N m apart").
 fn assert_sound(state: &AppState) {
-    let messages = state.integrity_check().messages;
+    let messages = state.integrity_violation_messages();
     assert!(messages.is_empty(), "{messages:?}");
     let p = project(state);
     let raw = p.raw_positions();
@@ -241,10 +241,6 @@ fn the_delete_dialog_promises_what_the_delete_does() {
     assert_eq!(preview.promoted_closures.len(), 1);
     assert_eq!(preview.promoted_closures[0].closure.id, first);
     assert!(impact.removed_closures.is_empty(), "{impact:?}");
-    assert!(
-        impact.replacement_closure_updates.is_empty(),
-        "nothing is re-anchored: the closure stays on the junction"
-    );
     assert!(!impact.shift_blocked);
 
     // The delete does exactly that: the promoted pair is the one junction,

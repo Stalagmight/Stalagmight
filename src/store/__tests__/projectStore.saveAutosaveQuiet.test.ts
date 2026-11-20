@@ -2,7 +2,6 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
-import { shouldShowAutosaveBanner } from '../../utils/saveFeedback';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -18,20 +17,19 @@ vi.mock('../../utils/ipc', () => ({
  *
  *  1. a folder-access denial must NOT reopen the save-permission dialog on every
  *     retry (the user would be unable to do anything else while access is denied), and
- *  2. a clean autosave must NOT trigger a post-save integrity re-check, which on a
- *     large project is real churn for no new information.
+ *  2. a successful save must NOT re-fetch the project: the `.stalx` v2 save
+ *     heals nothing, so there is no new information to pull. (0.6.0 re-checked
+ *     integrity after every manual save; that check is gone with its banner.)
  *
  * Neither guard had a test, which is how a refactor briefly removed both. This
  * pins them.
  */
 describe('saveProject autosave quieting', () => {
   let openDialogSpy: ReturnType<typeof vi.fn>;
-  let checkIntegritySpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     openDialogSpy = vi.fn();
-    checkIntegritySpy = vi.fn().mockResolvedValue(undefined);
     useUIStore.setState({ openDialog: openDialogSpy } as never);
     useProjectStore.setState({
       project: { file_path: '/cave.stalx' } as never,
@@ -39,11 +37,8 @@ describe('saveProject autosave quieting', () => {
       // failure paths below are exercised from.
       isDirty: true,
       autosaveFailure: null,
-      integrityIssues: [],
-      integritySaveBlocked: false,
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
       refreshProjectState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: checkIntegritySpy,
     } as never);
   });
 
@@ -87,20 +82,16 @@ describe('saveProject autosave quieting', () => {
     expect(openDialogSpy).toHaveBeenCalledWith('save-permission', expect.anything());
   });
 
-  it('skips the post-save integrity re-check on a clean autosave', async () => {
+  it('re-fetches nothing after a successful autosave or manual save', async () => {
     resolveSave();
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
-
-    expect(checkIntegritySpy).not.toHaveBeenCalled();
-  });
-
-  it('still re-checks integrity on a manual save', async () => {
-    resolveSave();
-
     await useProjectStore.getState().saveProject('/cave.stalx');
 
-    expect(checkIntegritySpy).toHaveBeenCalled();
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+    // The save itself is the only IPC (undo availability goes through the
+    // mocked store action).
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toEqual(['save_project', 'save_project']);
   });
 
   it('sends isAutosave over IPC so the backend log can name the trigger (#429)', async () => {
@@ -132,15 +123,9 @@ describe('saveProject autosave quieting', () => {
     expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
   });
 
-  // [#517] The banner's render gate hides an ordinary failure behind the
-  // integrity banner, so the KIND has to reach the store - the message alone
-  // (marker already stripped) cannot tell `shouldShowAutosaveBanner` that this
-  // is the one failure Review & Repair cannot fix.
-  it('records the unreadable-ignore-list kind so the banner can refuse to yield', async () => {
-    useProjectStore.setState({
-      integritySaveBlocked: true,
-      integrityIssues: [{ category: 'dangling_merge_ref', message: 'x' }],
-    } as never);
+  // [#517] The KIND reaches the store beside the message (marker already
+  // stripped): `useAutoSave` reads it to decide whether to pause.
+  it('records the unreadable-ignore-list kind beside its message', async () => {
     invokeIpcMock.mockImplementation(async (command: string) =>
       command === 'save_project'
         ? {
@@ -157,15 +142,6 @@ describe('saveProject autosave quieting', () => {
     expect(autosaveFailureKind).toBe('ignores-unreadable');
     expect(autosaveFailure).not.toContain('IGNORES_UNREADABLE');
     expect(autosaveFailure).toContain('list of ignored warnings could not be read');
-    // The whole point: this combination still renders.
-    expect(
-      shouldShowAutosaveBanner({
-        autosaveFailure,
-        autosaveFailureKind,
-        integritySaveBlocked: useProjectStore.getState().integritySaveBlocked,
-        integrityIssueCount: useProjectStore.getState().integrityIssues.length,
-      })
-    ).toBe(true);
   });
 
   it('raises the banner when the autosave fails and the changes really are unsaved', async () => {

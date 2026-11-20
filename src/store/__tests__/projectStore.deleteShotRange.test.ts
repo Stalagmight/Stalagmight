@@ -16,7 +16,6 @@ describe('projectStore range deletion', () => {
     // fan out into the rest of the IPC surface.
     useProjectStore.setState({
       refreshProjectState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
   });
 

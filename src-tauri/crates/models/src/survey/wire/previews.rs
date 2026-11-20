@@ -2,10 +2,10 @@
 //!
 //! Each mapping takes the project state the preview ran on (before the
 //! edit), so every slot it names exists in the state the user sees. What
-//! the station graph makes impossible is reported empty, never invented:
-//! no replacement merges, no rewired closures, no "rewire skipped", no
-//! split promotion that moves a half (plan 9.3: the panels can drop those
-//! rows).
+//! the station graph makes impossible is not on the wire: the delete
+//! previews have no replacement merges, rewired closures or "rewire
+//! skipped" flags (plan 9.3), and the split preview reports no promotion
+//! that moves a half.
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
@@ -49,11 +49,7 @@ impl Project {
                     .chain(&preview.removed_across_one_shot)
                     .chain(&preview.swept_closures),
             ),
-            replacement_merges: Vec::new(),
-            replacement_closure_updates: Vec::new(),
             closure_to_merge: self.promoted_pairs(&preview.promoted_closures),
-            merge_rewire_skipped: false,
-            closure_rewire_skipped: false,
             shift_blocked: preview.shift_blocked,
             shift_blocked_reasons: preview.shift_blocked_reasons.clone(),
         }
@@ -88,11 +84,7 @@ impl Project {
                     .iter()
                     .chain(&preview.swept_closures),
             ),
-            replacement_merges: Vec::new(),
-            replacement_closure_updates: Vec::new(),
             closure_to_merge: self.promoted_pairs(&preview.promoted_closures),
-            merge_rewire_skipped: false,
-            closure_rewire_skipped: false,
             shift_blocked: preview.shift_blocked,
             shift_blocked_reasons: preview.shift_blocked_reasons.clone(),
             removed_datums: preview

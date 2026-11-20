@@ -38,27 +38,21 @@ pub struct ClosurePair {
     pub station_b: StationRef,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-pub struct ClosureUpdate {
-    pub closure_id: u64,
-    pub old_station: StationRef,
-    pub new_station: StationRef,
-}
-
+/// What deleting one shot does to station relationships
+/// (`preview_delete_shot`). The station graph never re-anchors a merge or a
+/// closure onto a neighbour, so 0.6.0's `replacement_merges`,
+/// `replacement_closure_updates` and `*_rewire_skipped` (always empty) left
+/// the wire.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DeleteShotImpact {
     pub removed_station: StationRef,
     pub removed_merges: Vec<StationPair>,
     pub removed_closures: Vec<ClosurePair>,
-    pub replacement_merges: Vec<StationPair>,
-    pub replacement_closure_updates: Vec<ClosureUpdate>,
     /// Closures broken by the deletion: the surviving endpoints are no longer
     /// connected through the survey, so the closure is replaced by a plain
     /// station merge instead of being kept as a (false) loop. See issue #8.
     #[serde(default)]
     pub closure_to_merge: Vec<StationPair>,
-    pub merge_rewire_skipped: bool,
-    pub closure_rewire_skipped: bool,
     #[serde(default)]
     pub shift_blocked: bool,
     #[serde(default)]
@@ -100,12 +94,8 @@ pub struct DeleteShotRangeImpact {
     pub removed_stations: Vec<StationRef>,
     pub removed_merges: Vec<StationPair>,
     pub removed_closures: Vec<ClosurePair>,
-    pub replacement_merges: Vec<StationPair>,
-    pub replacement_closure_updates: Vec<ClosureUpdate>,
     #[serde(default)]
     pub closure_to_merge: Vec<StationPair>,
-    pub merge_rewire_skipped: bool,
-    pub closure_rewire_skipped: bool,
     /// True when the gap-close (shift) path is unavailable for this range (the
     /// two sides are already connected or both anchored, or the gap-close drops
     /// a zero datum).

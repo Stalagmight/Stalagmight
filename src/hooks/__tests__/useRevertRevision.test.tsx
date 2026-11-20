@@ -90,7 +90,6 @@ beforeEach(() => {
   });
   useProjectStore.setState({
     refreshProjectState: vi.fn(async () => {}),
-    checkProjectIntegrity: vi.fn(async () => []),
     saveProject: vi.fn(async () => ({ success: true }) as never),
     isDirty: false,
   });

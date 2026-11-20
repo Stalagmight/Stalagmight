@@ -48,7 +48,6 @@ describe('hidden Sections pruning (#327)', () => {
     useProjectStore.setState({
       project: { name: 'T', created_at: 'c', lines: [], cave_sections: sections } as never,
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as never);
     useUIStore.setState({ hiddenSections: [1, 2] });
   });

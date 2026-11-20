@@ -1034,8 +1034,6 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
                     color_b: "#222222".to_string(),
-                    comment_side: crate::models::SplitSide::A,
-                    datum_side: crate::models::SplitSide::A,
                 },
             ),
         );
@@ -1124,10 +1122,6 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "track_line_hashes",
             &state.track_line_hashes(vec!["hash".to_string()]),
         );
-        // Repair has no coded failure surface; there is nothing to repair on
-        // the station graph, and it changes nothing on a read-only project.
-        let repair = state.repair_open_project_integrity();
-        assert!(!repair.changed, "repair on a read-only remote is a no-op");
         assert_same(&snapshot(&state), &before, "the refusals changed nothing");
         assert!(state.get_undo_stack().is_empty());
         assert!(!dirty_bit(&state));
@@ -1422,11 +1416,8 @@ fn edit_disabled_code_prefix_is_distinct() {
 }
 
 #[test]
-fn repair_and_settings_gated_on_locked_remote() {
+fn settings_gated_on_locked_remote() {
     let (state, _, _, _temp) = remote_fixture();
-    let repair = state.repair_open_project_integrity();
-    assert!(!repair.changed);
-    assert_eq!(repair.fixed, 0);
     let settings =
         state.update_project_settings("New Name".to_string(), state.get_config().validation);
     assert_disabled("update_project_settings", &settings);

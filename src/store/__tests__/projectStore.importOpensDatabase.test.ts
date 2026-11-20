@@ -27,7 +27,6 @@ const deferred = () => {
   useProjectStore.setState({
     databaseOpen: false,
     refreshProjectState: vi.fn().mockResolvedValue(undefined),
-    checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
   } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
 };
 

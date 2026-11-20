@@ -712,18 +712,18 @@ export function checkFileResult(attempt: ExportAttempt, reproduce: string): void
 }
 
 /**
- * X2 - the open project's own database survives every attempt to export over it.
+ * X2 - the open project's own file survives every attempt to export over it.
  *
  * `projectBytesBefore` / `After` are the `.stalx`'s own bytes. This is the
  * claim that actually matters, and it is route-independent: whether the app
  * refused (the store route, where the path reaches the command verbatim) or
  * REDIRECTED (the UI routes, where `ensureExtension` rewrites `cave.stalx` to
- * `cave.csv` before the command ever sees it), the live database must be
+ * `cave.csv` before the command ever sees it), the open project's file must be
  * byte-for-byte what it was.
  *
  * `expectRefusal` is passed only for the store route, and it is a separate
  * claim: there the backend guard is the only thing standing between an
- * arbitrary IPC path and the open database, so it must fire.
+ * arbitrary IPC path and the open project's file, so it must fire.
  */
 export function checkProjectFileSurvived(
   args: {
@@ -747,7 +747,7 @@ export function checkProjectFileSurvived(
     throw new ExportOracleError(
       `X2 an export aimed at the open project MODIFIED its .stalx\n  ${where}\n` +
         `    reported: ${args.ok ? 'success' : `failure (${args.error ?? 'no message'})`}\n` +
-        `    the live database is what every one of these guards exists to protect\n  ${reproduce}`,
+        `    the open project's file is what every one of these guards exists to protect\n  ${reproduce}`,
     );
   }
   if (args.expectRefusal && args.ok) {
@@ -755,7 +755,7 @@ export function checkProjectFileSurvived(
       `X2 the raw command ACCEPTED the open project's own path\n  ${where}\n` +
         `    commands/export.rs refuses it with "Cannot export over the open project file";\n` +
         `    the UI routes are protected by ensureExtension rewriting the path, so this\n` +
-        `    guard is the only thing between the IPC boundary and the database\n  ${reproduce}`,
+        `    guard is the only thing between the IPC boundary and the project file\n  ${reproduce}`,
     );
   }
 }

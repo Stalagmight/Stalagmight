@@ -41,7 +41,6 @@ function ok() {
     if (MUTATIONS.has(command)) return { success: true, warnings: [], error: null, line_ids: [3] };
     if (command === 'can_undo' || command === 'can_redo') return false;
     if (command === 'get_project_state') return null;
-    if (command.includes('integrity')) return { messages: [] };
     if (command.startsWith('get_') || command.startsWith('validate')) return [];
     return null;
   });
@@ -175,7 +174,6 @@ describe('Edit Station name', () => {
       if (command === 'set_station_name') return { success: false, warnings: [], error: refusal, line_ids: [] };
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_state') return null;
-      if (command.includes('integrity')) return { messages: [] };
       if (command.startsWith('get_') || command.startsWith('validate')) return [];
       return null;
     });

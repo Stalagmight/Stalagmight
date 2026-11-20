@@ -48,7 +48,6 @@ export async function applySpeleoTreeReplacement(
     if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;
 
     useProjectStore.setState({ isDirty: false });
-    void useProjectStore.getState().checkProjectIntegrity();
     // [#473] Re-ask whether the SWAPPED tree could read its history.
     //
     // This seam is the reason the check belongs here rather than in the App effect that

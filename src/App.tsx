@@ -11,7 +11,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import {
   surfaceSaveFailure,
-  shouldShowAutosaveBanner,
   completeImportToSingleView,
   finishImportWithoutOrphanSuggestions,
 } from './utils/saveFeedback';
@@ -44,21 +43,11 @@ import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
-import { TOAST_KEYS } from './utils/toastKeys';
 import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig } from './utils/zeroDatumCarry';
 
 function App() {
   const { t } = useTranslation();
   const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
-  const integrityIssues = useProjectStore((s) => s.integrityIssues);
-  const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
-  const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
-  const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
-  const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
-  const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
-  const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
-  const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
-  const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
   const historyDiscarded = useProjectStore((s) => s.historyDiscarded);
   const historyDiscardedEarlierVersion = useProjectStore((s) => s.historyDiscardedEarlierVersion);
   const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
@@ -69,10 +58,8 @@ function App() {
   const checkFileStatus = useProjectStore((s) => s.checkFileStatus);
   const dismissConversionNotice = useProjectStore((s) => s.dismissConversionNotice);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
-  const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
   const saveProject = useProjectStore((s) => s.saveProject);
-  const [repairingIntegrity, setRepairingIntegrity] = useState(false);
   const {
     view,
     setView,
@@ -230,18 +217,10 @@ function App() {
     }
   }, [config?.general.telemetry_enabled]);
 
-  // After a project loads, check its structural integrity so corruption already
-  // on disk (older versions / external edits) surfaces a warn + repair banner (#17).
-  useEffect(() => {
-    if (project?.file_path && !loading.isLoading) {
-      void checkProjectIntegrity();
-    }
-  }, [project?.file_path, loading.isLoading, checkProjectIntegrity]);
-
-  // [#473] ...and whether that load could read the project's edit history at all.
-  // Same key as the integrity check, for the same reason: both describe the file
-  // that just finished loading, and asking before it settles would describe the
-  // previous one.
+  // [#473] After a project loads, ask whether that load could read the
+  // project's edit history at all. Keyed on the file and the end of the load:
+  // it describes the file that just finished loading, and asking before it
+  // settles would describe the previous one.
   //
   // The backend can also reopen a project WITHOUT a frontend load - the SpeleoDB
   // replace/pull/revision paths close and reopen internally - and neither dep here
@@ -553,85 +532,8 @@ function App() {
     void store.updateConfig(nextConfig);
   }, []);
 
-  const handleRepairIntegrity = async () => {
-    setRepairingIntegrity(true);
-    try {
-      const { fixed, remaining } = await repairProjectIntegrity();
-      const issueWord = t('integrityRepair.toasts.issue', { count: fixed });
-      const message =
-        remaining > 0
-          ? t('integrityRepair.toasts.partial', {
-              fixed,
-              remaining,
-              issueWord,
-              needWord: t('integrityRepair.toasts.needWord', { count: remaining }),
-            })
-          : t('integrityRepair.toasts.full', { fixed, issueWord });
-      useUIStore
-        .getState()
-        .showToast(message, TOAST_KEYS.INTEGRITY_REPAIR, remaining > 0 ? 'warning' : 'success');
-      // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
-      // (the same integrityIssues the banner and the dialog render-gate use) rather
-      // than the point-in-time `remaining` - a command or undo that interleaved
-      // during the repair's awaits could have changed the real issue set, and
-      // repairProjectIntegrity awaits its post-repair checkProjectIntegrity before
-      // resolving, so integrityIssues is already fresh here.
-      if (useProjectStore.getState().integrityIssues.length === 0) {
-        closeIntegrityDialog();
-      }
-    } catch {
-      // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
-      // during teardown) rather than reporting a fake no-op success. Surface it and
-      // keep the dialog open - integrityIssues is untouched, so the banner/save-block
-      // stay correct and the user can retry.
-      useUIStore
-        .getState()
-        .showToast(
-          t('integrityRepair.toasts.failed'),
-          TOAST_KEYS.INTEGRITY_REPAIR,
-          'error',
-        );
-    } finally {
-      setRepairingIntegrity(false);
-    }
-  };
-
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-      {/* Integrity warning banner (corruption found on load/save) */}
-      {integrityIssues.length > 0 && (integritySaveBlocked || !integrityDismissed) && !loading.isLoading && (
-        <div
-          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
-          role="alert"
-          data-testid="integrity-banner"
-        >
-          <span className="text-warning font-medium flex-1 min-w-0">
-            This project has {integrityIssues.length} integrity{' '}
-            {integrityIssues.length === 1 ? 'issue' : 'issues'} that may affect your survey.
-            {integritySaveBlocked && ' Saving is paused until you repair them.'}
-          </span>
-          <button
-            onClick={() => openIntegrityDialog()}
-            className="px-3 py-1 rounded bg-accent text-white text-xs"
-            data-testid="integrity-review-button"
-          >
-            Review &amp; Repair
-          </button>
-          {/* Dismiss is offered only for non-blocking (detect-only) issues. When
-              saving is blocked, the banner stays so the Repair entry point can't
-              be hidden on a project that can't be saved. */}
-          {!integritySaveBlocked && (
-            <button
-              onClick={dismissIntegrityIssues}
-              className="px-2 py-1 text-text-secondary hover:text-text text-xs"
-              data-testid="integrity-dismiss-button"
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-      )}
-
       {/* [#473] Discarded-history banner. A history table the backend could not read
           is replaced by an empty stack so the project still opens - the right call -
           but that silently costs the user every undo AND redo entry they had, which
@@ -715,15 +617,8 @@ function App() {
 
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
           changes are not on disk" condition is banner-class, not modal and not a
-          repeating toast). When saving is integrity-blocked the integrity banner
-          above already owns the "saving is paused" story, so this one yields -
-          except for a failure Repair cannot fix; see shouldShowAutosaveBanner. */}
-      {shouldShowAutosaveBanner({
-        autosaveFailure,
-        autosaveFailureKind,
-        integritySaveBlocked,
-        integrityIssueCount: integrityIssues.length,
-      }) && project && !loading.isLoading && (
+          repeating toast). */}
+      {autosaveFailure !== null && project && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
           role="status"
@@ -736,13 +631,11 @@ function App() {
             onClick={() => {
               void (async () => {
                 const result = await saveProject().catch((e: unknown) => {
-                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, {
-                    skipIntegrityRouting: true,
-                  });
+                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog);
                   return null;
                 });
                 // A manual retry that still fails gets the full user-initiated
-                // treatment (permission guidance / Review & Repair / error dialog).
+                // treatment (permission guidance / save prompt / error dialog).
                 if (result && !result.success) {
                   surfaceSaveFailure(result.error, openDialog);
                 }
@@ -765,64 +658,6 @@ function App() {
 
       {/* In-app update banner (#579): available / downloading / ready to restart. */}
       <UpdateBanner />
-
-      {/* Integrity details + repair dialog */}
-      {integrityDialogOpen && integrityIssues.length > 0 && (
-        <div
-          className="fixed inset-0 z-[1000] bg-overlay flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="integrity-dialog-title"
-          data-testid="integrity-dialog"
-          onClick={() => !repairingIntegrity && closeIntegrityDialog()}
-        >
-          <div
-            className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
-            data-testid="integrity-dialog-panel"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <h2 id="integrity-dialog-title" className="font-medium text-text-primary">
-                Project integrity ({integrityIssues.length}{' '}
-                {integrityIssues.length === 1 ? 'issue' : 'issues'})
-              </h2>
-            </div>
-            <div className="px-4 py-3 overflow-auto">
-              <p className="text-sm text-text-secondary mb-3">
-                The following problems were found in this project. Repairing drops invalid
-                references and realigns drifted station merges; valid survey data is kept. Save the
-                project afterwards to make the fix permanent.
-              </p>
-              <ul
-                className="list-disc list-inside space-y-1 text-sm text-text-primary"
-                data-testid="integrity-dialog-list"
-              >
-                {integrityIssues.map((issue, i) => (
-                  <li key={i} className="break-words">{issue}</li>
-                ))}
-              </ul>
-            </div>
-            <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
-              <button
-                onClick={() => closeIntegrityDialog()}
-                disabled={repairingIntegrity}
-                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-background disabled:opacity-50"
-                data-testid="integrity-dialog-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRepairIntegrity}
-                disabled={repairingIntegrity}
-                className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
-                data-testid="integrity-dialog-repair"
-              >
-                {repairingIntegrity ? 'Repairing…' : 'Repair'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Splash screen overlay */}
       {splashMounted && (

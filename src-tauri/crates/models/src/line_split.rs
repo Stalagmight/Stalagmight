@@ -1,5 +1,5 @@
-//! Arguments for Split Line Here (#335): where to cut a line, and what
-//! each half gets of the station the cut duplicates.
+//! Arguments for Split Line Here (#335): where to cut a line, and the
+//! names and colours of the two halves (which share the split station).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -18,7 +18,9 @@ pub enum SplitAt {
     Shot { shot_id: ShotId, distance: f64 },
 }
 
-/// Which half of the split keeps something that sat on the split station.
+/// A half of a split, as [`SplitPreview::moved_side`] names it (0.6.0's
+/// dialog also used it to say which half kept the split station's comment
+/// and datum; the halves now share that station).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SplitSide {
@@ -26,7 +28,7 @@ pub enum SplitSide {
     A,
     /// The new second half.
     B,
-    /// Both halves get a copy. Not allowed for a zero datum.
+    /// Both halves.
     Both,
 }
 
@@ -59,7 +61,10 @@ pub struct SplitPreview {
     pub removed_already_one_point: Vec<ClosurePair>,
 }
 
-/// The choices the Split Line Here dialog sends.
+/// The choices the Split Line Here dialog sends. The halves share the split
+/// station, so its name, comment and datums stay on that one station: there
+/// is no side to choose (plan S9; 0.6.0's `comment_side` / `datum_side` left
+/// the wire).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct SplitLineOptions {
     pub name_a: String,
@@ -68,10 +73,6 @@ pub struct SplitLineOptions {
     pub color_a: String,
     /// `#rrggbb`.
     pub color_b: String,
-    /// Which half keeps a comment on the split station.
-    pub comment_side: SplitSide,
-    /// Which half keeps a zero datum on the split station: `A` or `B`.
-    pub datum_side: SplitSide,
 }
 
 /// Minimum length (meters) either child of a split may end up with (issue

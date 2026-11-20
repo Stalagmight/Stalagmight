@@ -1,7 +1,7 @@
 use chrono::Utc;
 use tauri::State;
 
-use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
+use crate::core::AppState;
 use crate::models::{warning_is_ignorable, LineId, ShotId};
 use crate::persistence::ResolvedWarning;
 
@@ -12,23 +12,6 @@ pub use crate::models::warning::ProjectWarning;
 #[tauri::command]
 pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
     get_project_warnings_impl(state.inner())
-}
-
-/// Structural-integrity violation messages for the open project (critical
-/// first). Empty when the project is sound. The frontend uses a non-empty
-/// result after load to warn the user and offer a repair.
-#[tauri::command]
-pub fn check_project_integrity(state: State<AppState>) -> IntegrityCheckResult {
-    state.integrity_check()
-}
-
-/// Repair the open project's structural integrity, returning `{ fixed,
-/// remaining }`. The project is left dirty so the user can save the repair.
-/// `remaining > 0` means some issues are detect-only (drifted aligned loop
-/// closures, non-finite geometry) and need manual attention.
-#[tauri::command]
-pub fn repair_project_integrity(state: State<AppState>) -> IntegrityRepairResult {
-    state.repair_open_project_integrity()
 }
 
 pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {

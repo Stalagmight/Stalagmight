@@ -23,10 +23,12 @@
 //!   `a_cut_inside_a_shot_of_a_full_line_is_refused`,
 //!   `a_plain_split_previews_no_move`,
 //!   `the_preview_refuses_exactly_what_the_split_refuses` (the two "datum on
-//!   both halves" rows are accepted now, S9; a read-only file row added);
+//!   both halves" rows left with the dialog's sides, S9; a read-only file
+//!   row added);
 //! - adapted: `a_datum_on_both_halves_is_refused_before_the_shot_splits` ->
-//!   `the_comment_and_datum_sides_choose_nothing` (S9: the datum is on the
-//!   one shared station); `a_loop_closure_across_the_cut_is_previewed_as_a_move`
+//!   `a_datum_and_a_comment_on_the_cut_stay_on_the_shared_station` (S9: the
+//!   datum is on the one shared station; the dialog's comment and datum
+//!   sides have left the wire); `a_loop_closure_across_the_cut_is_previewed_as_a_move`
 //!   -> `a_loop_closure_across_the_cut_stays_a_loop_and_nothing_moves` (the
 //!   halves stay joined, so the closure is no sole tie and nothing is
 //!   promoted); `an_ignored_warning_follows_its_shot_into_the_second_half` and
@@ -55,7 +57,7 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::survey::{ClosureStrategy, Project, ZeroDatum};
 use crate::models::{
-    GpsCoordinates, LineId, SplitAt, SplitLineOptions, SplitSide, FEATURE_ID_STRIDE, MAX_LINE_ID,
+    GpsCoordinates, LineId, SplitAt, SplitLineOptions, FEATURE_ID_STRIDE, MAX_LINE_ID,
 };
 
 fn options() -> SplitLineOptions {
@@ -64,8 +66,6 @@ fn options() -> SplitLineOptions {
         name_b: "Main-B".to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 
@@ -353,60 +353,47 @@ fn a_shot_from_another_line_is_refused() {
     assert_eq!(reason, crate::models::SHOT_GONE);
 }
 
-/// S9: the dialog's comment and datum sides choose nothing any more. A datum
-/// and a comment on the cut station stay on that one station, which both
-/// halves pass, whatever the sides say; a datum "on both halves" (refused in
-/// 0.6.0, which duplicated the station) is simply what happens.
+/// S9: a datum and a comment on the cut station stay on that one station,
+/// which both halves pass; a datum "on both halves" (refused in 0.6.0, which
+/// duplicated the station) is simply what happens. The dialog's comment and
+/// datum sides chose which copy kept them; with no copy they have left the
+/// wire (`SplitLineOptions` carries the names and colours only).
 #[test]
-fn the_comment_and_datum_sides_choose_nothing() {
-    for (comment_side, datum_side) in [
-        (SplitSide::A, SplitSide::Both),
-        (SplitSide::B, SplitSide::B),
-        (SplitSide::Both, SplitSide::A),
-    ] {
-        let what = format!("comment {comment_side:?}, datum {datum_side:?}");
-        let (mut p, main) = main_survey();
-        let cut = st(&p, main, 1);
-        p.stations.get_mut(&cut).unwrap().comment = Some("the cut".to_string());
-        p.set_datum(
-            cut,
-            Some(main),
-            GpsCoordinates::new(20.5, -87.4, 0.0).unwrap(),
-            None,
-        )
-        .unwrap();
-        let opened = open(&p);
-        let state = &opened.state;
-        let result = state.execute_split_line(
-            main,
-            SplitAt::Station { station_index: 1 },
-            SplitLineOptions {
-                comment_side,
-                datum_side,
-                ..options()
-            },
-        );
-        assert!(result.success, "{what}: {:?}", result.error);
-        let second = result.line_id.unwrap();
-        let after = project(state);
-        assert_eq!(after.datums.len(), 1, "{what}: one datum");
-        assert_eq!(after.datums[0].station, cut, "{what}");
+fn a_datum_and_a_comment_on_the_cut_stay_on_the_shared_station() {
+    let what = "the cut station";
+    let (mut p, main) = main_survey();
+    let cut = st(&p, main, 1);
+    p.stations.get_mut(&cut).unwrap().comment = Some("the cut".to_string());
+    p.set_datum(
+        cut,
+        Some(main),
+        GpsCoordinates::new(20.5, -87.4, 0.0).unwrap(),
+        None,
+    )
+    .unwrap();
+    let opened = open(&p);
+    let state = &opened.state;
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    assert!(result.success, "{what}: {:?}", result.error);
+    let second = result.line_id.unwrap();
+    let after = project(state);
+    assert_eq!(after.datums.len(), 1, "{what}: one datum");
+    assert_eq!(after.datums[0].station, cut, "{what}");
+    assert_eq!(
+        after.stations.get(&cut).unwrap().comment.as_deref(),
+        Some("the cut"),
+        "{what}"
+    );
+    // Both halves' slots show it (W2): one station.
+    let wire = after.project_state_wire(false);
+    for at in [slot(main, 1), slot(second, 0)] {
+        let station = wire.stations.iter().find(|s| s.station_ref == at).unwrap();
+        assert!(station.is_zero_datum, "{what}: {at:?}");
         assert_eq!(
-            after.stations.get(&cut).unwrap().comment.as_deref(),
+            station.comment.as_deref(),
             Some("the cut"),
-            "{what}"
+            "{what}: {at:?}"
         );
-        // Both halves' slots show it (W2): one station.
-        let wire = after.project_state_wire(false);
-        for at in [slot(main, 1), slot(second, 0)] {
-            let station = wire.stations.iter().find(|s| s.station_ref == at).unwrap();
-            assert!(station.is_zero_datum, "{what}: {at:?}");
-            assert_eq!(
-                station.comment.as_deref(),
-                Some("the cut"),
-                "{what}: {at:?}"
-            );
-        }
     }
 }
 
@@ -972,36 +959,6 @@ fn the_preview_refuses_exactly_what_the_split_refuses() {
             false,
         ),
         (
-            "a datum on both halves, at a station (S9: accepted)",
-            |_, m| {
-                let options = SplitLineOptions {
-                    datum_side: SplitSide::Both,
-                    ..options()
-                };
-                (m, SplitAt::Station { station_index: 1 }, options)
-            },
-            true,
-        ),
-        (
-            "a datum on both halves, inside a shot (S9: accepted)",
-            |s, m| {
-                let shot_id = shot_id(s, m, 1);
-                let options = SplitLineOptions {
-                    datum_side: SplitSide::Both,
-                    ..options()
-                };
-                (
-                    m,
-                    SplitAt::Shot {
-                        shot_id,
-                        distance: 2.0,
-                    },
-                    options,
-                )
-            },
-            true,
-        ),
-        (
             "an empty first-half name",
             |_, m| {
                 let options = SplitLineOptions {
@@ -1224,12 +1181,7 @@ fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
         } else {
             SplitAt::Station { station_index: 2 }
         };
-        let options = SplitLineOptions {
-            comment_side: SplitSide::Both,
-            datum_side: SplitSide::B,
-            ..options()
-        };
-        let result = state.execute_split_line(main, at, options);
+        let result = state.execute_split_line(main, at, options());
         assert!(result.success, "{what}: {:?}", result.error);
         let second = result.line_id.unwrap();
         let after_project = project(state);

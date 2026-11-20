@@ -5,8 +5,6 @@ import type { CreditEdit, CreditTargets } from './ipc.generated';
 
 export type {
   CommandResult,
-  IntegrityRepairResult,
-  IntegrityCheckResult,
   ValidationWarning,
   WarningSeverity,
   ProjectWarning,
@@ -33,7 +31,6 @@ export type {
   LineRelationships,
   StationPair,
   ClosurePair,
-  ClosureUpdate,
   DeleteShotImpact,
   DeleteShotRangeImpact,
   RangeDeleteKind,

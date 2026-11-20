@@ -344,8 +344,6 @@ fn deleting_a_junction_shot_reports_the_slot_leaving_the_junction() {
         .map(|m| (m.station_a, m.station_b))
         .collect();
     assert_eq!(pairs, [(slot(l1, 0), slot(l0, 1))]);
-    assert!(impact.replacement_merges.is_empty());
-    assert!(impact.replacement_closure_updates.is_empty());
 }
 
 #[test]

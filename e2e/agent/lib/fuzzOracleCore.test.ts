@@ -400,10 +400,10 @@ describe('checkProjectInvariants', () => {
     ).toBe(true);
   });
 
-  it('does NOT duplicate what check_project_integrity owns', () => {
-    // A duplicate uuid and non-finite geometry are the integrity checker's
-    // job (`Project::validate`, and the integrity-delta oracle's); this suite
-    // must stay silent on them or every run would double-report.
+  it('does NOT duplicate what Project::validate owns', () => {
+    // A duplicate uuid and non-finite geometry are the app's own validation's
+    // job (`Project::validate`, run after every edit); this suite must stay
+    // silent on them or every run would double-report.
     const withIntegrityIssues = sound();
     const project = withIntegrityIssues.project as {
       lines: { shots: { uuid: string; length?: number }[] }[];

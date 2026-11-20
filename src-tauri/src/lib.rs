@@ -2005,8 +2005,6 @@ pub fn run() {
             commands::raw_data::get_raw_table,
             // Validation
             commands::validation::get_project_warnings,
-            commands::validation::check_project_integrity,
-            commands::validation::repair_project_integrity,
             commands::validation::resolve_warning,
             commands::validation::unresolve_warning,
             // Survey geometry

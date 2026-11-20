@@ -53,8 +53,8 @@ use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId,
-    LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt, SplitLineOptions, SplitSide,
-    StationRef, FEATURE_ID_STRIDE,
+    LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt, SplitLineOptions, StationRef,
+    FEATURE_ID_STRIDE,
 };
 use crate::test_helpers::isolated_config;
 
@@ -215,8 +215,6 @@ fn split_options(rng: &mut Rng) -> SplitLineOptions {
             (*rng.pick(COLORS)).to_string()
         },
         color_b: (*rng.pick(COLORS)).to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::B,
     }
 }
 

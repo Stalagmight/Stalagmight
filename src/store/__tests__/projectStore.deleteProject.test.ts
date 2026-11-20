@@ -72,7 +72,6 @@ describe('projectStore.deleteProject', () => {
       databaseOpen: true,
       isDirty: true,
       stations: [{} as never],
-      integrityIssues: ['something'],
     } as never);
 
     const result = await useProjectStore.getState().deleteProject(PATH);
@@ -83,7 +82,6 @@ describe('projectStore.deleteProject', () => {
     expect(state.databaseOpen).toBe(false);
     expect(state.isDirty).toBe(false);
     expect(state.stations).toEqual([]);
-    expect(state.integrityIssues).toEqual([]);
   });
 
   it('closes the project when the delete FAILS after the backend already closed it', async () => {

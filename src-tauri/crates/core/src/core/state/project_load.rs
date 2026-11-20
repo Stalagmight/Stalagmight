@@ -421,7 +421,7 @@ impl AppState {
                 Ok(())
             }
         };
-        progress.start_phase(LoadingPhase::OpeningDatabase);
+        progress.start_phase(LoadingPhase::OpeningFile);
         use super::speleodb_foreign::LinkedSpelling;
         let path = match self.foreign_link(path) {
             LinkedSpelling::AsSpelled => path.to_path_buf(),
@@ -429,7 +429,7 @@ impl AppState {
             LinkedSpelling::Foreign(managed) => return Err(LoadError::speleodb_managed(managed)),
         };
         cancelled(progress)?;
-        progress.complete_phase(LoadingPhase::OpeningDatabase);
+        progress.complete_phase(LoadingPhase::OpeningFile);
         progress.start_phase(LoadingPhase::LoadingProjectData);
         let opened = self.read_project_file(&path)?;
         cancelled(progress)?;
