@@ -278,6 +278,15 @@ mod project_unique_uuid_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and exact float equality is what it checks"
+)]
+mod shot_commands_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
