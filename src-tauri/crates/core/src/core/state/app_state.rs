@@ -438,15 +438,24 @@ impl AppState {
     /// durable at once by a local-only save (B3), so a crash after an edit
     /// still knows the copy has unpushed work.
     pub(super) fn mark_remote_dirty(&self) {
-        let result = self.mutate_speleo_link(|link| {
-            let Some(link) = link.as_mut() else {
-                return false;
-            };
-            link.has_unpushed_edits = true;
-            link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
-            true
+        // The flag is what a crash must not lose (this copy holds work that
+        // is not on the server); the edit time is the push fence, read live,
+        // and rides the next save with the survey it dates. So only the flip
+        // to dirty rewrites the file now: every edit of a linked project used
+        // to rewrite the whole file to restamp the time (C11).
+        let flipped = self.with_file(|file| {
+            let mut link = file.speleo_link();
+            let l = link.as_mut()?;
+            let flipped = !l.has_unpushed_edits || l.last_edit_at.is_none();
+            l.has_unpushed_edits = true;
+            l.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            file.set_speleo_link(link.as_ref());
+            Some(flipped)
         });
-        if let Err(e) = result {
+        if flipped != Some(true) {
+            return;
+        }
+        if let Err(e) = self.persist_local_state() {
             tracing::warn!(
                 error = %e,
                 purpose = "flip SpeleoDB dirty bit after a remote edit",
