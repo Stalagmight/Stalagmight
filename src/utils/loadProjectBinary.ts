@@ -86,8 +86,14 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * 8 adds station identity: the dense per-station `stations_ids` buffer (u32 LE,
  * the project-unique Station ID) and a `station_names` list that names every
  * station.
+ *
+ * 9 is the station-graph model (`.stalx` v2): the header's `line_offsets` is
+ * gone (positions are derived from placements and datums, nothing reads it),
+ * and a junction's slots share ONE Station ID, name and comment, so
+ * `stations_ids`, `station_names` and `station_comments` are no longer
+ * unique per slot. The layout is otherwise unchanged.
  */
-const EXPECTED_VERSION = 8;
+const EXPECTED_VERSION = 9;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -143,7 +149,6 @@ interface ProjectHeaderBinary {
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
   loop_closures: LoopClosure[];
-  line_offsets: Array<[number, [number, number]]>;
   station_offsets: Array<[StationRef, [number, number, number]]>;
   station_comments_map: Array<[StationRef, string]>;
   imported_file_hashes: string[];
@@ -396,12 +401,6 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     return line;
   });
 
-  // Reconstruct the line_offsets record: Vec<(LineId, (f64,f64))> -> Record<number, [number, number]>
-  const line_offsets: Record<number, [number, number]> = {};
-  for (const [sid, [x, y]] of env.project_header.line_offsets) {
-    line_offsets[sid] = [x, y];
-  }
-
   // Note: station_offsets and station_comments_map are on Project but TS
   // type generator skips them (#[ts(skip)]). They're carried in the
   // binary but we don't surface them on the LoadProjectFullResult.project
@@ -418,7 +417,6 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     loop_closures: env.project_header.loop_closures,
     file_path: env.project_header.file_path,
     next_line_id: env.project_header.next_line_id,
-    line_offsets,
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_line_hashes: env.project_header.imported_line_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),

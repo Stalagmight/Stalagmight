@@ -174,7 +174,7 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -520,26 +520,14 @@ export default function ContextMenu() {
         },
       ];
 
+      // A junction (plan 5.2): the station is shared by two or more lines, and
+      // any one of them can leave it. The dialog names the lines, says what a
+      // detach does, and preselects the clicked slot's line.
       if (mergedStations.length > 0) {
         items.push({
-          label: 'Unmerge Stations',
+          label: 'Detach Line from Station...',
           action: () => {
-            if (mergedStations.length === 1) {
-              const mergeTarget = mergedStations[0]!;
-              const isDirectMerge = project?.station_merges.some((merge) => {
-                const direct = sameStationRef(merge.station_a, target.ref) && sameStationRef(merge.station_b, mergeTarget);
-                const reverse = sameStationRef(merge.station_a, mergeTarget) && sameStationRef(merge.station_b, target.ref);
-                return direct || reverse;
-              }) ?? false;
-              trackContextMenuAction('unmerge', 'context-menu');
-              trackDialogComplete('context-menu');
-              closeDialog();
-              void (isDirectMerge
-                ? unmergeStationPair(target.ref, mergeTarget)
-                : unmergeStations(target.ref));
-              return;
-            }
-
+            trackContextMenuAction('unmerge', 'context-menu');
             openDialog('unmerge-stations', {
               stationRef: target.ref,
               mergedStations,

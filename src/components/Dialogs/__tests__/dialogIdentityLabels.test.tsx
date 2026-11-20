@@ -107,13 +107,15 @@ describe('dialog identity labels', () => {
     expectNoHandles();
   });
 
-  it('Unmerge names each merged station by line and name', () => {
+  it('Detach names the station and each line through it', () => {
     open({
       stationRef: { line_id: MAIN, station_index: 0 },
       mergedStations: [{ line_id: SIDE, station_index: 1 }],
     });
     render(<UnmergeStationsDialog />);
-    expect(screen.getByText('Side / S1')).toBeInTheDocument();
+    expect(screen.getByTestId('unmerge-stations-lead')).toHaveTextContent('M0 is where 2 lines meet');
+    expect(screen.getByText('Main Line (the line you clicked)')).toBeInTheDocument();
+    expect(screen.getByText('Side')).toBeInTheDocument();
     expectNoHandles();
   });
 

@@ -375,6 +375,12 @@ impl AppState {
         self.with_file(|file| file.dirty)
     }
 
+    /// Why the open file is read-only ("made with a newer Stalagmight", plan
+    /// 6.4), or `None` when the file allows edits.
+    pub fn read_only_reason(&self) -> Option<String> {
+        self.with_file(|file| file.extras.read_only.as_ref().map(ToString::to_string))
+    }
+
     /// The path the open project saves to, if any.
     pub(crate) fn open_file_path(&self) -> Option<PathBuf> {
         self.project

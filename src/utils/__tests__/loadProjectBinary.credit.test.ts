@@ -24,7 +24,7 @@ function envelope(creditIdx: number[] | null): BinaryEnvelope {
   }
   const u8 = (a: Float32Array | Uint32Array): Uint8Array => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
   return {
-    version: 8,
+    version: 9,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -55,7 +55,6 @@ function envelope(creditIdx: number[] | null): BinaryEnvelope {
       station_merges: [],
       zero_datums: [],
       loop_closures: [],
-      line_offsets: [],
       station_offsets: [],
       station_comments_map: [],
       imported_file_hashes: [],

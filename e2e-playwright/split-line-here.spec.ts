@@ -124,41 +124,24 @@ test.describe('Split Line Here (#335)', () => {
     await expect.poll(ruler).toEqual([false, false]);
   });
 
-  test('names the loop closure the split removes before it splits (#738)', async ({ page }) => {
-    // The preview (the split run on a copy in the backend) reports one closure that
-    // becomes a merge and moves Main B, and a second one to the same point that the
-    // merge leaves tying that point to itself, named by the stations it was created with.
+  test('says the halves share the split station, and offers no comment or datum side', async ({ page }) => {
+    // The station graph (plan 5.4): the second half starts ON the split station,
+    // so the halves stay joined, nothing moves and no closure becomes a merge.
     const line = await seedFourShotLine(page);
-    await page.evaluate((id) => {
-      (window as any).__MOCK_SPLIT_PREVIEW__ = {
-        closures_to_merges: 1,
-        moved_side: 'b',
-        moved_m: 0.1,
-        removed_already_one_point: [],
-        removed_closures: [
-          {
-            closure_id: 2,
-            station_a: { line_id: id, station_index: 4 },
-            station_b: { line_id: id, station_index: 1 },
-          },
-        ],
-      };
-    }, line.id);
     await openContextMenu(page, { type: 'station', ref: { line_id: line.id, station_index: 2 } });
     await page.getByRole('button', { name: 'Split Line Here' }).click();
-    await expect(page.getByTestId('split-line-here-dialog')).toBeVisible();
+    const dialog = page.getByTestId('split-line-here-dialog');
+    await expect(dialog).toBeVisible();
 
-    await expect(page.getByTestId('split-here-closure-move')).toHaveText(
-      'Main B is tied to Main A only by loop closures, so the split turns one of them into a merge and moves ' +
-        'Main B 0.10m to close it.'
+    await expect(page.getByTestId('split-here-shared-station-hint')).toContainText(
+      'The two halves stay joined: the split station becomes one station on both lines'
     );
-    await expect(page.getByTestId('split-here-closure-removed-0')).toHaveText(
-      // By line and station name, never the positional handle.
-      'Loop closure Main / 4 to Main / 1 is removed: its two stations become one point.'
-    );
-    // Still the user's call.
+    await expect(page.getByTestId('split-here-comment-side')).toHaveCount(0);
+    await expect(page.getByTestId('split-here-datum-side')).toHaveCount(0);
+    await expect(page.getByTestId('split-here-closure-warning')).toHaveCount(0);
+
     await page.getByTestId('split-here-confirm').click();
-    await expect(page.getByTestId('split-line-here-dialog')).not.toBeVisible();
+    await expect(dialog).not.toBeVisible();
     await expect.poll(async () => (await readLines(page)).length).toBe(2);
   });
 

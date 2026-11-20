@@ -221,18 +221,30 @@ export default function ConfirmDialog() {
         {removesLine && hasRelationships && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-1">
             <p className="font-medium text-warning">The following relationships will also be removed:</p>
+            {/* What deleting the line takes with it on the station graph
+                (`get_line_relationships`, plan 9.3 / W7): its connections to
+                other lines (the stations it shares stay for them), closures
+                and datums on stations only it passes, the map placement it
+                alone holds for a piece no datum places, and hand moves an
+                older version recorded. */}
             <ul className="list-disc list-inside text-text-secondary">
               {relationships!.merges.length > 0 && (
-                <li>{relationships!.merges.length} station merge{relationships!.merges.length !== 1 ? 's' : ''}</li>
+                <li>
+                  {relationships!.merges.length} connection{relationships!.merges.length !== 1 ? 's' : ''} to other lines
+                  (the shared station{relationships!.merges.length !== 1 ? 's stay' : ' stays'} on them)
+                </li>
               )}
               {relationships!.closures.length > 0 && (
                 <li>{relationships!.closures.length} loop closure{relationships!.closures.length !== 1 ? 's' : ''}</li>
               )}
               {relationships!.has_line_offset && (
-                <li>1 line offset</li>
+                <li>Its map placement (no zero datum places it; what stays connected keeps its position)</li>
               )}
               {relationships!.station_offset_count > 0 && (
-                <li>{relationships!.station_offset_count} station offset{relationships!.station_offset_count !== 1 ? 's' : ''}</li>
+                <li>
+                  {relationships!.station_offset_count} hand-moved station position
+                  {relationships!.station_offset_count !== 1 ? 's' : ''}
+                </li>
               )}
               {relationships!.zero_datum_count > 0 && (
                 <li>{relationships!.zero_datum_count} zero datum{relationships!.zero_datum_count !== 1 ? 's' : ''}</li>

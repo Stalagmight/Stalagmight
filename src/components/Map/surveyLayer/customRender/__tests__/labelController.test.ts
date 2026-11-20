@@ -1700,11 +1700,13 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
   it("a merge group's one label drag-hides when any member is dragged", () => {
     const c = cameraController(zoomOnlyMap(18).map);
     const p = makeParams();
-    // B's start (g3) is merged onto A's middle station (g1): g1 labels both.
+    // B's start (g3) is merged onto A's middle station (g1): one station, so
+    // the two slots share its Station ID, and g1 labels both.
     p.surveyData.stationMergedWith = new Map([
       [1, [{ line_id: 2, station_index: 0 }]],
       [3, [{ line_id: 1, station_index: 1 }]],
     ]);
+    p.surveyData.stationIds[3] = p.surveyData.stationIds[1]!;
     c.sync(p);
     const layer = h.layerState.last!;
     expect(vfl(layer).kind.filter((k) => k === LABEL_KIND.STATION_LABEL).length / 4).toBe(3);

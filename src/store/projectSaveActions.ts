@@ -9,15 +9,23 @@ import { autosaveFailureMessage } from '../utils/saveFeedback';
 import { classifySaveError, isPermissionError } from '../utils/saveErrors';
 import { noticeOlderVersionsDropFixes } from '../utils/gpsFixSaveNotice';
 
-/** Local-save completion belongs to the project and edits that issued it. */
-export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'], get: () => ProjectStore): ProjectStore['saveProject'] {
+/**
+ * Local-save completion belongs to the project and edits that issued it.
+ *
+ * `command` is `save_project`, or `save_project_overwriting` for the save
+ * prompt's Overwrite answer (the external-modification guard refused the save,
+ * `EXTERNALLY_MODIFIED`); both finish the same way.
+ */
+export function createSaveProjectAction(
+  set: StoreApi<ProjectStore>['setState'],
+  get: () => ProjectStore,
+  command: 'save_project' | 'save_project_overwriting' = 'save_project',
+): ProjectStore['saveProject'] {
   return async (path?: string, isAutosave?: boolean) => {
-    // The Rust save path heals duplicate shot UUIDs / orphan line offsets /
-    // non-finite geometry in memory before persisting, which mutates the backend
-    // project - so afterward the frontend's mirror can be stale. Those heals only
-    // ever fire on a project the integrity check already flags, so capture that here
-    // as a cheap signal to refresh below, avoiding a get_project_state on every
-    // clean save / autosave.
+    // The `.stalx` v2 save never heals: it validates and refuses an invalid
+    // survey instead, leaving the project as it was. The refresh below for a
+    // project the integrity check flagged is kept as a cheap safety net (it
+    // costs a get_project_state only on such a project, never on a clean save).
     const issued = get();
     let ownerPath = issued.project?.file_path;
     const current = () => get().project?.file_path === ownerPath &&
@@ -25,9 +33,12 @@ export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'],
       get().loading.clientOpId === issued.loading.clientOpId;
     const hadIntegrityIssues = issued.integrityIssues.length > 0;
     const result = await invokeIpc<CommandResult>(
-      'save_project',
-      { path, isAutosave: isAutosave === true },
-      { purpose: 'persist project changes', fields: { path, isAutosave } }
+      command,
+      command === 'save_project' ? { path, isAutosave: isAutosave === true } : { path },
+      {
+        purpose: command === 'save_project' ? 'persist project changes' : 'overwrite a project file another program changed',
+        fields: { path, isAutosave },
+      }
     );
     if (!current()) return result;
     if (result.success) {

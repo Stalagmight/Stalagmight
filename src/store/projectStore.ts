@@ -69,6 +69,8 @@ import { createProjectShotActions, type ProjectShotActions } from './projectShot
 import { createLineStructureActions, type LineStructureActions } from './lineStructureActions';
 import { createCaveSectionActions, type CaveSectionActions } from './caveSectionActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
+import { createProjectFileStatusActions, FILE_STATUS_CLEARED, type ProjectFileStatusActions, type ProjectFileStatusState } from './projectFileStatusActions';
+import { createProjectWarningActions, type ProjectWarningActions } from './projectWarningActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -222,7 +224,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, LineStructureActions, CaveSectionActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectFileStatusActions, ProjectFileStatusState, ProjectWarningActions, ProjectShotActions, LineStructureActions, CaveSectionActions {
   // State
   project: Project | null;
   /**
@@ -325,6 +327,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * save-after-import) must not.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  /** The save prompt's Overwrite answer to a save refused because another program changed the file (`EXTERNALLY_MODIFIED`). */
+  saveProjectOverwriting: () => Promise<CommandResult>;
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
@@ -400,9 +404,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
-  refreshWarnings: () => Promise<void>;
-  resolveWarning: (lineId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
-  unresolveWarning: (lineId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
   deleteProject: (path: string) => Promise<CommandResult>;
@@ -641,7 +642,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     integrityDismissed: false,
     integritySaveBlocked: false,
     integrityDialogOpen: false,
-    ...HISTORY_BANNER_CLEARED,
+    ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
@@ -897,7 +898,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integrityDismissed: false,
   integritySaveBlocked: false,
   integrityDialogOpen: false,
-  ...HISTORY_BANNER_CLEARED,
+  ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
@@ -910,6 +911,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
+  ...createProjectFileStatusActions(set, get),
+  ...createProjectWarningActions(set, get),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
   // splitLine / combineLines live in lineStructureActions.ts
@@ -1092,7 +1095,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityDismissed: false,
           integritySaveBlocked: false,
           integrityDialogOpen: false,
-          ...HISTORY_BANNER_CLEARED,
+          ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -1358,7 +1361,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integrityDismissed: false,
         integritySaveBlocked: false,
         integrityDialogOpen: false,
-        ...HISTORY_BANNER_CLEARED,
+        ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
       });
 
       // #270: a freshly created project is local by construction - it has no
@@ -1391,6 +1394,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }),
 
   saveProject: createSaveProjectAction(set, get),
+  saveProjectOverwriting: () => createSaveProjectAction(set, get, 'save_project_overwriting')(),
 
   markDirty: () => set({ isDirty: true }),
 
@@ -1554,50 +1558,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       debugLog('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
-    }
-  },
-
-  refreshWarnings: async () => {
-    try {
-      const warnings = await invokeIpc<ProjectWarning[]>('get_project_warnings', undefined, {
-        purpose: 'refresh validation warnings',
-      });
-      set({ warnings });
-    } catch (e) {
-      console.error('Failed to refresh warnings:', e);
-      set({ warnings: [] });
-    }
-  },
-
-  resolveWarning: async (lineId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
-    try {
-      await invokeIpc(
-        'resolve_warning',
-        { lineId, shotId, warningCode, comment },
-        { purpose: 'acknowledge validation warning', fields: { lineId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-      return true;
-    } catch (e) {
-      // Surface failure to the caller (e.g. the shot no longer exists) so the
-      // resolve flow doesn't report a suppression that never persisted (#57).
-      console.error('Failed to resolve warning:', e);
-      return false;
-    }
-  },
-
-  unresolveWarning: async (lineId: number, shotId: number, warningCode: string) => {
-    try {
-      await invokeIpc(
-        'unresolve_warning',
-        { lineId, shotId, warningCode },
-        { purpose: 'reopen validation warning', fields: { lineId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-    } catch (e) {
-      console.error('Failed to unresolve warning:', e);
     }
   },
 

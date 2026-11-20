@@ -54,7 +54,6 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     loop_closures: [],
     file_path: '/mock/a.stalx',
     next_line_id: 1,
-    line_offsets: {},
     imported_file_hashes: [],
     imported_line_hashes: [],
     next_closure_id: 1n,

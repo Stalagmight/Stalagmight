@@ -280,7 +280,7 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   fetch_tile: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
   get_tile_fetch_stats: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
 
-  // Line-graph / relationship queries and warning-resolution: no
+  // Line-graph / relationship queries: no
   // frontend caller reaches these from any mocked e2e flow today.
   get_rigid_connected_line_ids:
     'LineAdjustDialog calls it (line-adjust-dialog.spec.ts) but no spec asserts on the derived connected count; a null response is swallowed by the dialog\'s own .catch()',
@@ -288,8 +288,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
     'export-dialog.spec.ts drives the TML export flow, but only asserts the dialog closes afterward, which happens regardless of the (missing) mock response',
   get_line_relationships:
     'ConfirmDialog calls it when deleting a line, but no seeded e2e project has merges/closures/offsets on the deleted line, so a null fallback renders identically to a real empty response',
-  resolve_warning: 'no mocked spec drives the warning-resolution flow',
-  unresolve_warning: 'no mocked spec drives the warning-resolution flow',
   get_recent_logs_since: 'no frontend caller (only get_recent_logs, the unbounded variant, is used)',
 
   // Real, wired feature with genuinely zero e2e coverage today (not a
@@ -396,6 +394,134 @@ describe('mock contract tripwire (#275)', () => {
     );
 
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Shape check for the identity-bearing commands (plan 9.3). The name tripwire
+// above passes when a command keeps its name but changes what it takes, which
+// is exactly how the station-graph switch changes things: a merge, a detach,
+// a rename or a datum is addressed by a slot (`StationRef`) and resolved to a
+// station by the backend. So for every command here, each argument the Rust
+// command takes that names a station, a line or a closure must be read by the
+// mock's case under the camelCase key Tauri delivers; and the mock's station
+// list must carry every field the generated `Station` type requires.
+// ----------------------------------------------------------------------------
+const IDENTITY_BEARING_COMMANDS = [
+  'merge_stations',
+  'unmerge_stations',
+  'unmerge_station_pair',
+  'create_loop_closure',
+  'remove_loop_closure',
+  'set_zero_datum',
+  'remove_zero_datum',
+  'set_station_comment',
+  'set_station_name',
+  'move_station',
+] as const;
+
+const COMMANDS_DIR = path.join(REPO_ROOT, 'src-tauri/src/commands');
+
+function rustCommandSources(): string {
+  return fs
+    .readdirSync(COMMANDS_DIR)
+    .filter((f) => f.endsWith('.rs') && !f.endsWith('_tests.rs'))
+    .map((f) => fs.readFileSync(path.join(COMMANDS_DIR, f), 'utf8'))
+    .join('\n');
+}
+
+/** The `(name, type)` parameters of the `#[tauri::command]` fn `name`. */
+function rustCommandParams(source: string, name: string): Array<{ name: string; type: string }> {
+  const re = new RegExp(`#\\[tauri::command\\][^\\n]*\\n(?:\\s*#\\[[^\\n]*\\n)*\\s*pub (?:async )?fn ${name}\\b[^(]*\\(`);
+  const m = re.exec(source);
+  if (!m) throw new Error(`rustCommandParams: no #[tauri::command] fn ${name} in src-tauri/src/commands`);
+  const open = m.index + m[0].length - 1;
+  const close = findMatchingBracket(source, open, '(', ')');
+  const params: Array<{ name: string; type: string }> = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open + 1; i <= close; i += 1) {
+    const ch = source[i];
+    if (ch === '<' || ch === '(' || ch === '[') depth += 1;
+    else if (ch === '>' || ch === ']' || (ch === ')' && i !== close)) depth -= 1;
+    if ((ch === ',' && depth === 0) || i === close) {
+      const piece = source.slice(start, i).trim();
+      start = i + 1;
+      const colon = piece.indexOf(':');
+      if (colon > 0) params.push({ name: piece.slice(0, colon).trim(), type: piece.slice(colon + 1).trim() });
+    }
+  }
+  return params;
+}
+
+const camel = (snake: string) => snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+
+/** The body of the shared switch's `case '<name>':` (fallthrough labels included). */
+function mockCaseBody(source: string, name: string): string {
+  const stripped = stripComments(source);
+  const label = stripped.indexOf(`case '${name}':`);
+  if (label < 0) throw new Error(`mockCaseBody: no case '${name}' in the mock`);
+  const next = /\n {10}case '|\n {10}default:/g;
+  next.lastIndex = label + 1;
+  let end = stripped.length;
+  for (let m = next.exec(stripped); m; m = next.exec(stripped)) {
+    // Skip fallthrough labels that directly follow this one.
+    const between = stripped.slice(label, m.index).trim();
+    if (/^(case '[^']+':\s*)+$/.test(between)) continue;
+    end = m.index;
+    break;
+  }
+  return stripped.slice(label, end);
+}
+
+describe('identity-bearing command shapes (plan 9.3)', () => {
+  const rust = rustCommandSources();
+
+  it.each(IDENTITY_BEARING_COMMANDS)('the mock reads every identity argument %s takes', (name) => {
+    const params = rustCommandParams(rust, name).filter(
+      (p) => /\bStationRef\b/.test(p.type) || /^(closure_id|line_id)$/.test(p.name),
+    );
+    expect(params.length, `${name} takes no StationRef / line / closure argument any more`).toBeGreaterThan(0);
+    const body = mockCaseBody(mockTsSource, name);
+    for (const param of params) {
+      const key = camel(param.name);
+      expect(
+        new RegExp(`args(?:\\?\\.|\\.|\\?\\.\\[|\\[)['"]?${key}\\b`).test(body),
+        `mock case '${name}' does not read args.${key} (Rust takes ${param.name}: ${param.type})`,
+      ).toBe(true);
+    }
+  });
+
+  it('the mock station list carries every field the generated Station type requires', () => {
+    const stationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/Station.ts'), 'utf8');
+    const body = /export interface Station \{([^}]*)\}/.exec(stationTs)?.[1] ?? '';
+    const required = body
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => f !== '' && !/^\w+\?:/.test(f))
+      .map((f) => f.slice(0, f.indexOf(':')).trim());
+    expect(required).toEqual(expect.arrayContaining(['station_ref', 'merged_with', 'id', 'name']));
+    const pushes = stripComments(mockTsSource).split('mockStations.push({').slice(1);
+    expect(pushes.length, 'the mock builds no station list').toBeGreaterThanOrEqual(2);
+    for (const push of pushes) {
+      const literal = push.slice(0, findMatchingBracket(`{${push}`, 0, '{', '}'));
+      for (const field of required) {
+        expect(new RegExp(`\\b${field}\\s*[:,]`).test(literal), `a mock station lacks ${field}`).toBe(true);
+      }
+      // A junction's slots share one Station ID, name and merge list (plan
+      // 9.2): the mock derives them from its junctions, never per slot.
+      expect(literal).toMatch(/\bid:\s*identity\.id\b/);
+      expect(literal).toMatch(/\bmerged_with:\s*identity\.merged_with\b/);
+    }
+  });
+
+  it('the shape check finds the arguments of a known command', () => {
+    expect(rustCommandParams(rust, 'unmerge_station_pair').map((p) => p.name)).toEqual([
+      'state',
+      'station_a',
+      'station_b',
+    ]);
+    expect(mockCaseBody("switch (cmd) {\n          case 'a':\n          case 'b': {\n            x(args?.y);\n          }\n          case 'c':\n", 'a')).toContain('args?.y');
   });
 });
 

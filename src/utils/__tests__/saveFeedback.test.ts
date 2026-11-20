@@ -22,10 +22,12 @@ import { importReceiptSummaryParts } from '../importReceipt';
 import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
 import {
+  EXTERNALLY_MODIFIED,
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
   FS_PERMISSION_DENIED,
   IGNORES_UNREADABLE,
+  READ_ONLY_FILE,
 } from '../saveErrors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -70,6 +72,30 @@ describe('surfaceSaveFailure', () => {
     // No error dialog - instead the integrity (Review & Repair) dialog opens.
     expect(openDialog).not.toHaveBeenCalled();
     expect(useProjectStore.getState().integrityDialogOpen).toBe(true);
+  });
+
+  it('opens the save prompt for a file another program changed, even when save-blocked', () => {
+    useProjectStore.setState({ integritySaveBlocked: true });
+    const openDialog = vi.fn();
+    const error = `${EXTERNALLY_MODIFIED}: cave.stalx was changed by another program`;
+
+    surfaceSaveFailure(error, openDialog);
+
+    expect(openDialog).toHaveBeenCalledWith('save-conflict', { error });
+    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
+  });
+
+  it('says a read-only file was made with a newer Stalagmight, never Review & Repair', () => {
+    useProjectStore.setState({ integritySaveBlocked: true });
+    const openDialog = vi.fn();
+
+    surfaceSaveFailure(`${READ_ONLY_FILE}: this project was made with a newer Stalagmight`, openDialog);
+
+    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
+    const [, data] = openDialog.mock.calls[0] as [string, { message: string }];
+    expect(openDialog.mock.calls[0]?.[0]).toBe('error');
+    expect(data.message).toContain('made with a newer version of Stalagmight');
+    expect(data.message).not.toContain(READ_ONLY_FILE);
   });
 
   it('shows the error dialog for a real (non-integrity) failure', () => {
@@ -222,6 +248,13 @@ describe('autosaveFailureMessage (#429)', () => {
 
     expect(line).not.toContain(IGNORES_UNREADABLE);
     expect(line).toContain('list of ignored warnings could not be read');
+  });
+
+  it('words the v2 refusals for the banner, never the raw marker', () => {
+    expect(autosaveFailureMessage(`${EXTERNALLY_MODIFIED}: x`)).toBe(
+      i18n.t('banners.autosave.externallyModified'),
+    );
+    expect(autosaveFailureMessage(`${READ_ONLY_FILE}: x`)).toBe(i18n.t('banners.autosave.readOnlyFile'));
   });
 
   it('relays an unmarked failure as the backend wrote it', () => {

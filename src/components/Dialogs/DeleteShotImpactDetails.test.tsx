@@ -24,11 +24,7 @@ beforeEach(() => {
 const none: ShotImpactRelationships = {
   removed_merges: [],
   removed_closures: [],
-  replacement_merges: [],
-  replacement_closure_updates: [],
   closure_to_merge: [],
-  merge_rewire_skipped: false,
-  closure_rewire_skipped: false,
 };
 
 describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
@@ -86,5 +82,24 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(container).toBeEmptyDOMElement();
     rerender(<DeleteShotImpactDetails impact={none} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('DeleteShotImpactDetails - the station graph (plan 5.4)', () => {
+  it('says the line leaves a station it shared, and which closures join their stations', () => {
+    render(
+      <DeleteShotImpactDetails
+        impact={{
+          ...none,
+          removed_merges: [{ station_a: { line_id: 0, station_index: 5 }, station_b: { line_id: 0, station_index: 1 } }],
+          closure_to_merge: [{ station_a: { line_id: 0, station_index: 1 }, station_b: { line_id: 0, station_index: 5 } }],
+        }}
+      />
+    );
+    expect(screen.getByText('No longer shared with another line')).toBeInTheDocument();
+    expect(screen.getByText('Loop closures that join their two stations into one')).toBeInTheDocument();
+    // Nothing is re-wired on the station graph: no replacement rows exist.
+    expect(screen.queryByText(/Replacement/)).toBeNull();
+    expect(screen.queryByText(/could not be/)).toBeNull();
   });
 });

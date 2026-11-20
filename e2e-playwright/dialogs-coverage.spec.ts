@@ -543,7 +543,7 @@ test.describe('Dialog Coverage - Delete Shot Choice', () => {
 
     const dialog = page.getByTestId('delete-shot-choice-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('text=Removed merges')).toBeVisible();
+    await expect(dialog.locator('text=No longer shared with another line')).toBeVisible();
     await expect(dialog.locator('text=Removed closures')).toBeVisible();
 
     const shiftButton = dialog.getByRole('button', { name: 'Shift Geometry' });

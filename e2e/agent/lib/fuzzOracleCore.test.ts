@@ -22,7 +22,6 @@ function projectState(overrides: Record<string, unknown> = {}): Record<string, u
       file_path: '/tmp/a.stalx',
       next_line_id: 9,
       next_closure_id: 3,
-      line_offsets: { 10: [3.5, 4.5], 2: [1.5, 2.5] },
       lines: [
         {
           id: 4,
@@ -134,10 +133,10 @@ describe('canonicalProjectSnapshot', () => {
     expect(canonicalProjectSnapshot(mutated)).not.toBe(canonicalProjectSnapshot(projectState()));
   });
 
-  it('is insensitive to map key order (HashMap-backed line_offsets)', () => {
-    const shuffled = projectState({ line_offsets: { 2: [1.5, 2.5], 10: [3.5, 4.5] } });
+  it('is insensitive to map key order', () => {
+    const shuffled = projectState({ validation: { b: 2, a: 1 } });
 
-    expect(canonicalProjectSnapshot(shuffled)).toBe(canonicalProjectSnapshot(projectState()));
+    expect(canonicalProjectSnapshot(shuffled)).toBe(canonicalProjectSnapshot(projectState({ validation: { a: 1, b: 2 } })));
   });
 
   it('sorts nested object keys so insertion order never leaks in', () => {
@@ -239,12 +238,26 @@ describe('checkProjectInvariants', () => {
           },
         ],
       },
+      // Line 1's end and line 2's start are one station (Station ID 11):
+      // they share its name and list each other.
       stations: [
-        { station_ref: { line_id: 1, station_index: 0 } },
-        { station_ref: { line_id: 1, station_index: 1 } },
-        { station_ref: { line_id: 2, station_index: 0 } },
-        { station_ref: { line_id: 2, station_index: 1 } },
-        { station_ref: { line_id: 2, station_index: 2 } },
+        { station_ref: { line_id: 1, station_index: 0 }, id: 10, name: '0', merged_with: [] },
+        {
+          station_ref: { line_id: 1, station_index: 1 },
+          id: 11,
+          name: 'J',
+          comment: 'junction',
+          merged_with: [{ line_id: 2, station_index: 0 }],
+        },
+        {
+          station_ref: { line_id: 2, station_index: 0 },
+          id: 11,
+          name: 'J',
+          comment: 'junction',
+          merged_with: [{ line_id: 1, station_index: 1 }],
+        },
+        { station_ref: { line_id: 2, station_index: 1 }, id: 12, name: '1', merged_with: [] },
+        { station_ref: { line_id: 2, station_index: 2 }, id: 13, name: '2', merged_with: [] },
       ],
       stats: { line_count: 2, shot_count: 3, station_count: 5 },
       frozen_shots: [{ line_id: 2, shot_index: 1 }],
@@ -388,20 +401,79 @@ describe('checkProjectInvariants', () => {
   });
 
   it('does NOT duplicate what check_project_integrity owns', () => {
-    // Per-line duplicate uuid, non-finite geometry and orphan line_offsets
-    // are the integrity checker's job (and the integrity-delta oracle's); this
-    // suite must stay silent on them or every run would double-report.
+    // A duplicate uuid and non-finite geometry are the integrity checker's
+    // job (`Project::validate`, and the integrity-delta oracle's); this suite
+    // must stay silent on them or every run would double-report.
     const withIntegrityIssues = sound();
     const project = withIntegrityIssues.project as {
       lines: { shots: { uuid: string; length?: number }[] }[];
-      line_offsets: Record<number, [number, number]>;
     };
     const shots = project.lines[1]?.shots;
     if (shots?.[0] && shots[1]) shots[1].uuid = shots[0].uuid;
     if (shots?.[0]) shots[0].length = Number.NaN;
-    project.line_offsets = { 99: [1, 2] };
 
     expect(checkProjectInvariants(withIntegrityIssues)).toEqual([]);
+  });
+
+  describe('the station graph on the wire (plan 9.2)', () => {
+    type Slot = { station_ref: { line_id: number; station_index: number }; id: number; name: string; comment?: string; merged_with: unknown[] };
+    const slots = (state: Record<string, unknown>) => state.stations as Slot[];
+
+    it('fires when a line passes one Station ID twice', () => {
+      expect(
+        violationsAfter((state) => {
+          slots(state)[4]!.id = 12;
+        }).some((v) => v.includes('line 2 passes Station ID 12 twice (at 2/2)')),
+      ).toBe(true);
+    });
+
+    it('fires when a line names two of its stations alike', () => {
+      expect(
+        violationsAfter((state) => {
+          slots(state)[4]!.name = '1';
+        }).some((v) => v.includes('line 2 has two stations named "1" (at 2/2)')),
+      ).toBe(true);
+    });
+
+    it('fires when the slots of one station disagree on its name or comment', () => {
+      expect(
+        violationsAfter((state) => {
+          slots(state)[2]!.comment = 'another';
+        }).some((v) => v.includes('Station ID 11 has a different name or comment at 2/0 than at 1/1')),
+      ).toBe(true);
+    });
+
+    it('fires when merged_with is not exactly the other slots of the station', () => {
+      expect(
+        violationsAfter((state) => {
+          slots(state)[2]!.merged_with = [];
+        }).some((v) => v.includes('2/0 (Station ID 11) lists merged_with [] but the slots sharing its Station ID are [1/1]')),
+      ).toBe(true);
+      expect(
+        violationsAfter((state) => {
+          slots(state)[0]!.merged_with = [{ line_id: 2, station_index: 1 }];
+        }).some((v) => v.includes('1/0 (Station ID 10) lists merged_with [2/1]')),
+      ).toBe(true);
+    });
+
+    it('fires when a station_merges pair joins two different stations', () => {
+      expect(
+        violationsAfter((state) => {
+          (state.project as { station_merges: unknown[] }).station_merges = [
+            { station_a: { line_id: 1, station_index: 0 }, station_b: { line_id: 2, station_index: 0 } },
+          ];
+        }).some((v) => v.includes('station_merges[0] joins 1/0 and 2/0, which are not two slots of one station')),
+      ).toBe(true);
+    });
+
+    it('leaves a slot without an id out of the identity checks', () => {
+      const state = sound();
+      for (const slot of slots(state)) {
+        delete (slot as Partial<Slot>).id;
+        slot.merged_with = [];
+      }
+      expect(checkProjectInvariants(state)).toEqual([]);
+    });
   });
 
   it('runs identically injected and called directly', () => {

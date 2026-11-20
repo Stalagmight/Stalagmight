@@ -47,18 +47,15 @@ export function lineNameProblem(
 }
 
 /**
- * Whether `name` can name station `stationIndex` of a line whose stations are
- * named `lineStationNames` (by index). Trimmed, exact.
+ * Whether `name` can rename a station, given the line it would collide on
+ * (`takenOnLine`, from `stationNameTakenOn`: a junction's name must be free on
+ * every line through it, plan 5.3). Trimmed, exact.
  */
-export function stationNameProblem(
-  name: string,
-  lineStationNames: ReadonlyArray<string>,
-  stationIndex: number,
-): NameProblem | null {
+export function stationRenameProblem(name: string, takenOnLine: number | null): NameProblem | null {
   const trimmed = name.trim();
   if (trimmed === '') return 'empty';
   if (hasForbiddenNameChars(name)) return 'invalidChars';
-  return lineStationNames.some((n, i) => i !== stationIndex && n === trimmed) ? 'duplicate' : null;
+  return takenOnLine === null ? null : 'duplicate';
 }
 
 /** The inline message for a station-name problem; `lineName` names the

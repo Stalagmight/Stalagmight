@@ -31,12 +31,23 @@
  */
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { useProjectStore } from '../store/projectStore';
+
+/**
+ * The third term: the open FILE is read-only because a newer Stalagmight made
+ * it (`.stalx` v2, plan 6.4: an unknown `requires` feature or survey field).
+ * The backend refuses every edit of such a file with `READ_ONLY_FILE`, so this
+ * term has a server backstop like the SpeleoDB one; gating on it here keeps the
+ * controls from offering edits that can only fail. It reports as `'project'`.
+ */
+const selectFileReadOnly = (s: { fileReadOnlyReason: string | null }): boolean => s.fileReadOnlyReason !== null;
 
 /** React-hook form: subscribes to both stores and recomposes on change. */
 export function useEditingBlocked(): boolean {
   const mapReadOnly = useUIStore(isMapReadOnly);
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  return mapReadOnly || speleoReadOnly;
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
+  return mapReadOnly || speleoReadOnly || fileReadOnly;
 }
 
 /**
@@ -45,12 +56,17 @@ export function useEditingBlocked(): boolean {
  * subscription.
  */
 export function isEditingBlockedNow(): boolean {
-  return isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState());
+  return (
+    isMapReadOnly(useUIStore.getState()) ||
+    selectSpeleoReadOnly(useSpeleoStore.getState()) ||
+    selectFileReadOnly(useProjectStore.getState())
+  );
 }
 
 /**
- * Which of the two terms blocks editing, for copy that says why: `'project'`
- * for a remote SpeleoDB project open without the write lock, `'view'` for the
+ * Which term blocks editing, for copy that says why: `'project'` for a remote
+ * SpeleoDB project open without the write lock or a file made with a newer
+ * Stalagmight, `'view'` for the
  * closure-adjusted view or Plan/Export, `null` when editing is open. The
  * project wins when both hold, since leaving the view would not unblock it.
  */
@@ -65,10 +81,14 @@ function blockedReason(mapReadOnly: boolean, speleoReadOnly: boolean): EditingBl
 export function useEditingBlockedReason(): EditingBlockedReason {
   const mapReadOnly = useUIStore(isMapReadOnly);
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  return blockedReason(mapReadOnly, speleoReadOnly);
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
+  return blockedReason(mapReadOnly, speleoReadOnly || fileReadOnly);
 }
 
 /** Imperative twin of `useEditingBlockedReason`, read via `getState()`. */
 export function editingBlockedReasonNow(): EditingBlockedReason {
-  return blockedReason(isMapReadOnly(useUIStore.getState()), selectSpeleoReadOnly(useSpeleoStore.getState()));
+  return blockedReason(
+    isMapReadOnly(useUIStore.getState()),
+    selectSpeleoReadOnly(useSpeleoStore.getState()) || selectFileReadOnly(useProjectStore.getState()),
+  );
 }

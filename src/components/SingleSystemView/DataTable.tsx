@@ -544,12 +544,6 @@ export default function DataTable({ lines }: DataTableProps) {
     // refs/comments are unchanged, so comment editing still targets measured data.
     return activeStations.filter((s) => s.station_ref.line_id === selectedLineId);
   }, [activeStations, selectedLineId, tableView]);
-  // The shown line's station names by index, for the inline rename check.
-  const lineStationNames = useMemo(() => {
-    const names: string[] = [];
-    for (const s of lineStations) names[s.station_ref.station_index] = s.name;
-    return names;
-  }, [lineStations]);
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
     setTableView(value);
@@ -1394,9 +1388,8 @@ export default function DataTable({ lines }: DataTableProps) {
         onGpsCellClick: handleGpsCellClick,
         onConnectionsCellClick: handleConnectionsCellClick,
         labels,
-        lineStationNames,
       }),
-    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels, lineStationNames]
+    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels]
   );
 
   // Gutter shows the station's name pill (never its position); double-click

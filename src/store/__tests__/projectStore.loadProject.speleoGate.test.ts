@@ -66,7 +66,6 @@ const mockLoad = (isRemote: boolean) =>
       loop_closures: [],
       file_path: '/mock/loaded.stalx',
       next_line_id: 1,
-      line_offsets: {},
       imported_file_hashes: [],
       imported_line_hashes: [],
       next_closure_id: 1n,

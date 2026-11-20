@@ -948,7 +948,7 @@ describe('CombineLinesDialog', () => {
     ]);
   });
 
-  it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
+  it('lists converted bearings, the kept quality and offset, and crossings', () => {
     lines = creditedLines().map((s) => ({ ...s, quality: s.id === 2 ? 1 : 2 }));
     dialogData = {
       candidate: candidate({
@@ -967,9 +967,8 @@ describe('CombineLinesDialog', () => {
     expect(screen.getByTestId('combine-note-offset')).toHaveTextContent(
       "The joined station keeps Main-A's, so Main-B's end moves 0.25m."
     );
-    expect(screen.getByTestId('combine-note-repeated-ids')).toHaveTextContent(
-      "2 of Main-B's shots have the same identity as shots of Main-A, and get new ones."
-    );
+    // Shot uuids are project-unique on the station graph: nothing is renewed.
+    expect(screen.queryByTestId('combine-note-repeated-ids')).toBeNull();
     expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
   });
 

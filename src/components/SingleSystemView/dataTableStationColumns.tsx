@@ -16,7 +16,7 @@ import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { xyToGps } from '../../utils/coordinates';
 import { displayStationName } from '../../utils/formatters';
-import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import { stationRenameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
 import type { IdentityLabels } from '../../utils/stationIdentity';
 import type { GpsCoordinates } from '../../types/project';
 
@@ -33,11 +33,10 @@ export interface StationColumnContext {
   /** Click on a connections cell with connections - opens the merged/closure
    *  station picker at the pointer. */
   onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
-  /** Names for the rename check and the connections tooltip. */
-  labels?: Pick<IdentityLabels, 'station' | 'stationName' | 'stationId' | 'lineName'>;
-  /** The names of the stations of the shown line, by index - a rename to one
-   *  of them is refused inline before it reaches the backend. */
-  lineStationNames?: ReadonlyArray<string>;
+  /** Names for the rename check and the connections tooltip. A rename to a
+   *  name another station holds on any line through the station is refused
+   *  inline before it reaches the backend (`stationNameTakenOn`, plan 5.3). */
+  labels?: Pick<IdentityLabels, 'station' | 'stationName' | 'stationId' | 'lineName' | 'stationNameTakenOn'>;
 }
 
 /**
@@ -89,7 +88,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
   return [
     {
       // The editable copy of the gutter's name pill (set_station_name: trimmed,
-      // never empty, unique within the line). Hidden by default
+      // never empty, unique on every line through the station). Hidden by default
       // (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),
@@ -100,10 +99,11 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       // An empty name is not a name: skip the write rather than send it.
       parse: (raw) => (raw.trim() === '' ? undefined : raw.trim()),
       validate: (value, r) => {
-        if (typeof value !== 'string' || !ctx.lineStationNames) return null;
-        const problem = stationNameProblem(value, ctx.lineStationNames, r.station_ref.station_index);
+        if (typeof value !== 'string' || !ctx.labels) return null;
+        const takenOn = ctx.labels.stationNameTakenOn(r.station_ref, value.trim());
+        const problem = stationRenameProblem(value, takenOn);
         return problem
-          ? stationNameProblemMessage(problem, ctx.labels?.lineName(r.station_ref.line_id) ?? '', value)
+          ? stationNameProblemMessage(problem, ctx.labels.lineName(takenOn ?? r.station_ref.line_id), value)
           : null;
       },
     },

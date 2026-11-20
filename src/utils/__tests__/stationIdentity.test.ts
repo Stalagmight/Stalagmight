@@ -108,3 +108,81 @@ describe('survey warning text', () => {
     );
   });
 });
+
+/**
+ * A junction on the station graph: line 2 ("Side") starts ON Main Line's
+ * station "4a", so the two slots share Station ID 30 and the name (plan 9.2).
+ */
+function junction(): IdentityData {
+  const d = data();
+  d.stationIds[3] = 30;
+  d.stationNames.set(3, '4a');
+  return d;
+}
+
+describe('a junction', () => {
+  const labels = identityLabels({ surveyData: junction() });
+
+  it('lists every slot of the station, on every line through it', () => {
+    expect(labels.stationSlots({ line_id: 2, station_index: 0 })).toEqual([
+      { line_id: 7, station_index: 1 },
+      { line_id: 2, station_index: 0 },
+    ]);
+    expect(labels.stationSlots({ line_id: 7, station_index: 2 })).toEqual([{ line_id: 7, station_index: 2 }]);
+  });
+
+  it("refuses a rename to a name taken on ANY of the junction's lines, naming that line", () => {
+    // "A1" is free on Main Line but taken on Side, which also passes the junction.
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 1 }, 'A1')).toBe(2);
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 1 }, '5')).toBe(7);
+    // Its own name, shown on both of its slots, is not a collision.
+    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 0 }, '4a')).toBeNull();
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 1 }, 'fresh')).toBeNull();
+  });
+
+  it('checks only its own line for a station on one line', () => {
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, 'A1')).toBeNull();
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, '4')).toBe(7);
+  });
+
+  it('reads the same off the Station list when there is no SurveyData', () => {
+    const station = (line_id: number, station_index: number, id: number, name: string): Station =>
+      ({ station_ref: { line_id, station_index }, id, name, merged_with: [] }) as unknown as Station;
+    const fromList = identityLabels({
+      stations: [station(7, 0, 31, '4'), station(7, 1, 30, '4a'), station(2, 0, 30, '4a'), station(2, 1, 13, 'A1')],
+    });
+    expect(fromList.stationSlots({ line_id: 7, station_index: 1 })).toHaveLength(2);
+    expect(fromList.stationNameTakenOn({ line_id: 7, station_index: 1 }, 'A1')).toBe(2);
+  });
+});
+
+describe('onePerStation', () => {
+  it("keeps one slot of each station, so a junction's move is sent once", () => {
+    const labels = identityLabels({ surveyData: junction() });
+    expect(
+      labels.onePerStation([
+        { line_id: 2, station_index: 0 },
+        { line_id: 7, station_index: 1 },
+        { line_id: 7, station_index: 2 },
+        { line_id: 9, station_index: 0 },
+      ]),
+    ).toEqual([
+      { line_id: 2, station_index: 0 },
+      { line_id: 7, station_index: 2 },
+      // Unknown to the SoA: kept, the backend decides.
+      { line_id: 9, station_index: 0 },
+    ]);
+  });
+});
+
+describe('datumOfStation', () => {
+  it("finds a junction's datum from any of its slots, its own slot first", () => {
+    const labels = identityLabels({ surveyData: junction() });
+    const onMain = { station_ref: { line_id: 7, station_index: 1 }, tag: 'main' };
+    const onSide = { station_ref: { line_id: 2, station_index: 0 }, tag: 'side' };
+    expect(labels.datumOf([onMain], { line_id: 2, station_index: 0 })?.tag).toBe('main');
+    expect(labels.datumOf([onMain, onSide], { line_id: 2, station_index: 0 })?.tag).toBe('side');
+    expect(labels.datumOf([onMain], { line_id: 7, station_index: 2 })).toBeUndefined();
+    expect(labels.datumOf(undefined, { line_id: 7, station_index: 1 })).toBeUndefined();
+  });
+});

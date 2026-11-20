@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  type KnownAsymmetry,
   LOOP_CLOSURES_PATH,
   RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
@@ -108,7 +109,7 @@ describe('classifyDiffs', () => {
     const classified = classifyDiffs(
       [
         { path: 'project.lines[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
-        { path: 'project.line_offsets.32', expected: '<absent>', actual: '[0,0]' },
+        { path: 'stations[3].coordinates.x', expected: '1', actual: '2' },
       ],
       [],
     );
@@ -118,10 +119,18 @@ describe('classifyDiffs', () => {
     expect(classified.asymmetries).toHaveLength(0);
   });
 
+  /** A rule shaped like the families the scenarios pass (a fill-in only). */
+  const FILL_IN: KnownAsymmetry = {
+    id: 'test-fills-in-a-label',
+    pathPattern: /^project\.lines\[\d+\]\.label$/,
+    accepts: (diff) => diff.expected === 'null' && diff.actual !== 'null',
+    description: 'A test-only rule: a line label may go from null to a value, nothing else.',
+  };
+
   it('does not swallow a neighbouring field on an attributable path', () => {
     const classified = classifyDiffs(
       [{ path: 'project.lines[2].shots[0].length', expected: '5', actual: '6' }],
-      SAVE_HEALING_MUTATIONS,
+      [FILL_IN],
     );
 
     expect(classified.known).toHaveLength(0);
@@ -131,21 +140,24 @@ describe('classifyDiffs', () => {
   it('reports each matching rule once, whatever the diff count', () => {
     const classified = classifyDiffs(
       [
-        { path: 'project.lines[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
-        { path: 'project.lines[5].gauge_shot_uuid', expected: 'null', actual: '"u-2"' },
+        { path: 'project.lines[2].label', expected: 'null', actual: '"a"' },
+        { path: 'project.lines[5].label', expected: 'null', actual: '"b"' },
       ],
-      SAVE_HEALING_MUTATIONS,
+      [FILL_IN],
     );
 
     expect(classified.known).toHaveLength(2);
-    expect(classified.asymmetries.map((a) => a.id)).toEqual(['save-captures-missing-gauge-anchors']);
+    expect(classified.asymmetries.map((a) => a.id)).toEqual(['test-fills-in-a-label']);
   });
 
-  it('exposes every attribution rule with an id and an explanation', () => {
-    for (const asymmetry of [...SAVE_HEALING_MUTATIONS, ...RELOAD_RESOLVED_GEOMETRY]) {
-      expect(asymmetry.id).toMatch(/^[a-z0-9-]+$/);
-      expect(asymmetry.description.length).toBeGreaterThan(40);
-    }
+  it('honours a rule\'s direction', () => {
+    const classified = classifyDiffs(
+      [{ path: 'project.lines[2].label', expected: '"a"', actual: '"b"' }],
+      [FILL_IN],
+    );
+
+    expect(classified.known).toEqual([]);
+    expect(classified.unknown).toHaveLength(1);
   });
 });
 
@@ -208,46 +220,26 @@ describe('isListPermutationOnly', () => {
   });
 });
 
-describe('SAVE_HEALING_MUTATIONS', () => {
-  it('accepts the three documented save-time heals, in the documented direction', () => {
+describe('the save and reload families on the station-graph model', () => {
+  it('are empty: a v2 save never heals and a v2 load is pure', () => {
+    expect(SAVE_HEALING_MUTATIONS).toEqual([]);
+    expect(RELOAD_RESOLVED_GEOMETRY).toEqual([]);
+  });
+
+  it('attribute nothing a save or a reload could change', () => {
+    // The SQLite heals and the line-offset re-solve these used to attribute:
+    // on v2 every one of them is a hard failure.
     const classified = classifyDiffs(
       [
         { path: 'project.lines[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
-        { path: 'project.lines[2].gauge_neighbour_uuid', expected: 'null', actual: '"u-2"' },
         { path: 'project.lines[0].shots[1].uuid', expected: '<absent>', actual: '"u-3"' },
-        { path: 'project.line_offsets.9', expected: '[0,0]', actual: '<absent>' },
+        { path: 'stations[4].coordinates.x', expected: '1.5', actual: '1.75' },
       ],
-      SAVE_HEALING_MUTATIONS,
-    );
-
-    expect(classified.unknown).toEqual([]);
-    expect(classified.asymmetries).toHaveLength(3);
-  });
-
-  it('rejects the same paths moving the WRONG way', () => {
-    const classified = classifyDiffs(
-      [
-        // A gauge anchor changing value (not null -> value) is not a heal.
-        { path: 'project.lines[2].gauge_shot_uuid', expected: '"old"', actual: '"new"' },
-        // An offset entry APPEARING is not the orphan retain.
-        { path: 'project.line_offsets.9', expected: '<absent>', actual: '[1,2]' },
-        // A uuid being cleared is not the backfill.
-        { path: 'project.lines[0].shots[1].uuid', expected: '"u"', actual: '<absent>' },
-      ],
-      SAVE_HEALING_MUTATIONS,
+      [...SAVE_HEALING_MUTATIONS, ...RELOAD_RESOLVED_GEOMETRY],
     );
 
     expect(classified.known).toEqual([]);
     expect(classified.unknown).toHaveLength(3);
-  });
-
-  it('rejects anything else a save might have touched', () => {
-    const classified = classifyDiffs(
-      [{ path: 'project.lines[0].shots[1].length', expected: '5', actual: '6' }],
-      SAVE_HEALING_MUTATIONS,
-    );
-
-    expect(classified.unknown).toHaveLength(1);
   });
 });
 
