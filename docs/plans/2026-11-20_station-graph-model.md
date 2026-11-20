@@ -1,6 +1,90 @@
 # Station-graph model and `.stalx` v2 (JSON)
 
-Status: in progress on `feat/survey-graph` (base `release/0.6.0`).
+## Status (final)
+
+Implemented. The app runs on `models::survey` and saves `.stalx` version 2. `models::project`, persistence's live SQLite layer and the switch scaffolding (`core::stub`, `cfg(sg_unported)`, `crates/legacy-fidelity`) are deleted; an old SQLite file is read only by the frozen 0.6.0 crate (`crates/legacy`) and the migration (`persistence::migrate`). The numbered sections below are the design as planned; the Deviations sections at the end record what each stream built differently; the guides describe the code: [survey-model.md](../survey-model.md), [file-format.md](../file-format.md), [saving.md](../saving.md), [undo-redo.md](../undo-redo.md), [closures.md](../closures.md).
+
+### What shipped
+
+- **Model** (`models::survey`, sections 1 to 5): stations with stable ids, lines as simple chains, junctions, datums with maintained corrections, placements, closures with `Tie`, legacy hand moves; `validate` (section 2); solver v1 and the one post-edit anchor algorithm; every line, shot, topology, closure, datum, move and Add operation; the orphan-closure sweep; the derived views (Computed View, metrics, skip set, roles, frozen shots, rigid groups, stats, survey graph, gas engine).
+- **File** (`persistence::stalx_v2`, section 6): the canonical encoder and decoder, the three unknown-content tiers, `requires`, salvage, the header probe, the four serializer modes, the atomic write with the external-modification guard.
+- **Migration** (`crates/legacy`, `persistence::migrate`, section 7): the frozen 0.6.0 open, the conversion, per-slot verification of the raw layout and the Computed View with declared difference classes, the `MigrationReport`, the silent upgrade on the first save with the original kept in Recovery, the conversion notice.
+- **Undo** (`survey::changeset`, section 8): id-keyed changesets, persisted in the file's `history` member, under the size gates.
+- **App core** (`stalagmight-core`, 9.1): `AppState` with no database handle; every command family, recipe, query and subsystem (open, save, autosave, Recents, recovery, SpeleoDB sync, dive plans, Add .stalx and Merge Projects, imports, exports, warnings).
+- **Wire and frontend** (9.2, 9.3): `survey::wire` sends the TypeScript shapes the frontend already read (only `line_offsets` dropped; binary envelope version 9); Detach Line from Station, junction details, one move per station, the save-conflict prompt, the read-only and conversion banners.
+- **Exporters and stalx-reader** (10.2, 10.5) on both formats.
+- **Tests** (section 11): migration property, fixture and fuzz suites; format property suites; wire equivalence against 0.6.0's own payloads; the K characterisation goldens; the undo, metamorphic, adversarial, concurrency, multi-datum, crash, format and transition fuzzers on the new model.
+
+### Declared behaviour changes
+
+Everything a user can see that differs from 0.6.0, gathered from 12.2 and the Deviations (labels in brackets). Fixes that restore 0.6.0 behaviour are not listed.
+
+Editing:
+
+- **A junction is one station**, with one Station ID, name and comment: a merge records the retired station's id and name as an alias and joins distinct comments (survivor first); renaming a junction checks all its lines (12.2, 5.1, 5.3, G3). Why: a merge makes one station, so merged stations can never drift apart or disagree.
+- **Split Line Here makes a junction**: the halves share the split station, so an edit to one half moves the other, Move Segment on the second half is refused when the first holds a datum, merging the far ends goes to the closure dialog, and the dialog has no comment or datum side (a datum "on both halves" is no longer refused) (12.2, 5.4, S9, N3). Why: no duplicated co-located station.
+- **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (name copied and made unique, no comment); datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach (12.2, 5.2, E6, N13). Why: there is no pairwise merge left to remove.
+- **A delete leaves a junction on its other lines** with its comment and datums, whatever line they were set from; nothing is re-anchored and no replacement merge is made; the delete preview also lists the sweep's promotions beyond the removed member's (M1, S13, W6). Why: the junction is still a station of those lines.
+- **Set Zero Datum on a junction slot edits the station's datum** when it has one; two datums on one station come only from merging two placed pieces or from a migration (E1). Why: a datum belongs to the station, not to one line's member.
+- **A loop closure from a junction to a station a closure already ties it to is refused** as a duplicate (Q5). Why: 0.6.0's merged twin is the junction itself.
+- **Combine Lines works on junctions**: a torn junction detaches the moving line (closure ids differ from 0.6.0's; positions and misclosures match), and third lines there stay on the fixed side; a gauge both lines pass, or a migrated merge loop at a hand-moved join, can change which line moves; two datums on one merged join are allowed; the depth notice reads the station's averaged depth; a torn junction is named by its two slots and its one name (S1, S3, S5 to S8, S10, N3). Why: one station per junction, and the Computed View's own hold decides what stays.
+- **Closure figures are recomputed** from the current layout: path length counts shots only (closures and merges are no zero-length edges) and is 0 between two datum-held pieces (12.2, 3.6, D14). Why: nothing derived is stored.
+- **History labels are worded when the edit is recorded**, with the names before it, batch rows included; an Update Shot preview lists only the cells that changed (N1). Why: the persisted history holds no forward command to word later.
+- **Smaller editing differences**: an edit that changes nothing keeps the redo branch (Unmerge off a junction too); MoveComment onto its own station is a no-op (0.6.0 deleted the comment); Create Line names only the new line; a range gap-close reports the closures it removes; import tracking and Untrack Import are undo steps behind the read-only gate; Add .stalx and Section creation refuse when ids run out instead of renumbering; with no project open undo says "No project open", and editing a shot on a deleted line says "That line no longer exists." (N2, N4, N5, N6, N14, E5). Why: an empty changeset records nothing, the hash lists are recorded content, ids are never reused.
+
+Derived views and Plan mode:
+
+- **Migrated merge loops are `Tie` closures**, shown as aligned `Batch`: the Closures Computed View now solves a component 0.6.0 showed measured, and a demoted merge spanning one shot is skipped and reported instead of failing its component (D10, D11, G2, W3). Why: a merge that closes a loop is a loop closure.
+- **Immovable stations follow the documented rule** (datum stations and their aligned tie groups); 0.6.0's frontend also followed chain entries through an unaligned closure (D15). Why: that walk could let Move Station break an aligned tie.
+- **One station, one entry**: a datum is flagged on every slot of its station (W2); Plan mode's route has no merge hops and lists each turn station once, and a drop override on another slot of the default drop's junction does nothing (D18); the ruler's path lists the two ends of each traversed shot (D19); Recents counts a version 2 file's junction once (N12). Why: a junction is one node.
+
+Files:
+
+- **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
+- **An old SQLite file is upgraded silently on its first save**: the original is copied into the backups folder (Recovery lists it) with its journal files moved beside the copy, and its undo history is dropped with the existing banner (7.2.8, 7.2.10, C3). Why: the product decision, with the original kept restorable.
+- **A conversion that moved stations shows a one-time notice** with the count and the largest move (a torn legacy merge collapsed into one station, or an unexplained raw difference); Computed View differences are logged, not shown (C4, G4). Why: data never moves silently.
+- **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work (6.4, F7, C7, N13). Why: never rewrite what this build would lose.
+- **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
+- **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned (12.2, 6.5, C11, N9). Why: ignores are survey content.
+- **Save a Copy onto the open file's own path is a normal save** (0.6.0 refused it) (C6). Why: the destination is the open file, so there is no copy to detach.
+- **Export Salvageable Data on a legacy file** lists the frozen open's error instead of a best-effort project when that open refuses the file (Q4). Why: the full project comes from the open that runs 0.6.0's integrity checks.
+
+SpeleoDB:
+
+- **Pushes send the version 2 JSON** (`application/json`, `project.stalx`); until the server accepts it, a push fails through the existing error path and the project stays dirty and locked (10.1). Why: the product decision; see the rollout prerequisites.
+- **Sync bookkeeping is durable at once**: every SpeleoDB state change, clear-on-lock included, is a local-only save; "Uploaded without undo history" shows only when every entry was cut; a download made by a newer build opens read-only; legacy revisions are converted on download; stripping a foreign copy's link upgrades a legacy copy to version 2 (backup kept); logout keeps the open project's Recents row while its link is dirty; Publish refuses an invalid survey or a read-only file (N10, N11). Why: there is no live database to defer a change to.
+
+Exports, imports and readers:
+
+- **CSV and JSON `from_id` / `to_id` are the shared Station ID at a junction** (12.2). Why: one station.
+- **Ariane export**: ids are Station IDs, stable across exports; every closure, migrated `Tie`s included, is a CLOSURE row (0.6.0 dropped such a merge silently); a station comment is written once; all lines at a hub are adjacent in the walk (X1 to X4). Why: the station graph gives each station one id and one comment.
+- **Image export** draws one comment and one star per station, the Levels histogram counts each station once, and the dive profile has no zero-length point at a junction (X7, X8). Why: one station per junction.
+- **Compass, Walls and Ariane imports store each station's file identity** in `Station.external` (written to the file, not shown); a reversed Origin or Manual import line places the file's first station exactly (Q1, N6). Why: plan 1.2 and 10.5.
+- **stalx-reader** reads both formats; its `Survey` gains `format`, `format_version`, `newer_content`, the shared station ids and `LoopClosure::tie`; `ReadError::NewerFormat` is new, and an empty input is `InvalidKind::NotSqlite` (X9). Why: third-party readers see both formats through one API.
+
+### Open
+
+- **Rollout prerequisites** (below).
+- **Publishing.** `stalagmight-persistence` and `stalx-reader` depend on the unpublished `stalagmight-legacy` (G7).
+- **Not built from the plan.** The read-only salvage open (6.6): an invalid file is refused with the repair offer (N12). Merge Projects still carries neither the sources' ignored warnings nor their import hashes, as in 0.6.0 (N7).
+- **Lint backlog.** About 300 warn-level clippy findings of pre-existing families (`result_large_err`, `float_cmp`, doc indentation, ...; no deny-level finding); they were not mass-fixed.
+- **Stale code comments.** A few still describe the SQLite-era undo (`persistence::undo_limits`, `core::command`, `models::disk_names`); persistence's 32 MiB `UNDO_BYTE_BUDGET_BYTES` only derives the history row cap (`MAX_PERSISTED_HISTORY_ROWS`), the app's budget is `core::undo`'s 4 MiB.
+- **Release runs.** The fuzz campaigns and the migration corpus modes on the final build (11.6).
+
+Fixed in wave C, so not open: the first save of a legacy file left with a hot journal (C17 bug 3), one edit pass per batch and the release benchmark against 0.6.0 (C16), the least-squares edge cases C24 F2 and F3 (G9) and the frozen crate's #822 port, the wire cleanups (`SplitLineOptions` sides, the LoadingPhase names, the integrity banner and its IPC, the empty delete-preview fields) and the Move Station tie bug (D15), and the test-kit fold.
+
+### Rollout prerequisites
+
+Outside this repository (12.1), before the release that carries this change:
+
+1. **The SpeleoDB server accepts version 2 uploads.** Today its upload processor refuses anything without the SQLite header.
+2. **SpeleoDB's Python reader reads version 2.** [file-format.md](../file-format.md) is the specification: section 10 is a minimal reader, section 9 derives positions.
+3. **A minimum-client gate** on the server for projects whose HEAD is version 2, ideally, so an older client is told to update instead of downloading a file it cannot open.
+4. **A 0.5.x patch** that sniffs `{"format":"stalx"` and says "made with a newer Stalagmight" instead of taking the corrupt-file route.
+5. **stalx-reader published** for the server-side maps (#593): publish `stalagmight-legacy` or gate the dependency (G7).
+6. **Release notes** (CHANGELOG): a saved project no longer opens in an older Stalagmight, and SpeleoDB pushes need the updated server.
+
+---
 
 This plan replaces the survey data model and the save format together:
 
@@ -113,7 +197,7 @@ pub struct ZeroDatum {
     pub entrance: Option<bool>,
     /// Horizontal displacement (local metres) between where this placement
     /// datum's piece sits and where its GPS says, relative to the current
-    /// frame. A maintained field ("measure, do not re-derive", 4.5): set by
+    /// frame. A maintained field ("measure, do not re-derive", 4.3): set by
     /// frame changes and Add .stalx so nothing moves; cleared by a GPS edit of
     /// this datum and when it is demoted to a GPS fix. None for a datum that
     /// sits exactly on its GPS.
@@ -290,7 +374,7 @@ The creation rules (End, Mid, Prepend, Combine prefix) are unchanged and apply t
   5. Snaps torn by the move become `Batch` (as today). The kept line's hand move wins at the join; the other line's hand moves move to the kept line.
   6. A tie that would make the combined line pass a station twice is torn into a `Batch` closure (invariant 3).
 - **Delete datum / set datum, merge, detach, delete:** anchors per 4.1; the orphan-closure sweep runs after Merge, Unmerge/Detach, RemoveZeroDatum and every delete (as today).
-- **Reverse:** 4.8.
+- **Reverse:** 4.4.
 
 ### 5.5 Closures
 
@@ -302,7 +386,7 @@ Only migrated files carry them (no current command creates one). Stored per (lin
 
 ### 5.7 Datums
 
-Set (refusals as today; setting a datum on a piece that already has a placement datum stores a GPS fix by derivation), remove, accuracy and entrance edits, frame rules (4.5), previews (`preview_zero_datum`, merge datum shift). A station may hold several datums (from migrated merges, or merging two placed pieces at stations that each had one).
+Set (refusals as today; setting a datum on a piece that already has a placement datum stores a GPS fix by derivation), remove, accuracy and entrance edits, frame rules (4.3), previews (`preview_zero_datum`, merge datum shift). A station may hold several datums (from migrated merges, or merging two placed pieces at stations that each had one).
 
 ### 5.8 Add `.stalx` / Merge projects
 
@@ -316,7 +400,7 @@ Copy stations (ids offset by the target's `next_station_id`), lines, datums, pla
 
 - Extension stays `.stalx`. Content is UTF-8 JSON, no BOM.
 - Sniff: a file starting with `SQLite format 3\0` is legacy (7); a file starting with `{"format":"stalx","version":` is v2; anything else is refused as not a Stalagmight project.
-- One `stalx::probe(path) -> Header { format, summary, speleodb, local }` API reads the cheap header of either format; every link reader and opener uses it or the full open: load, Add .stalx, Recents metadata, the foreign-copy probe, logout's forget-recents (`speleodb_logout.rs`), the cached-copies / local-state listing (`speleodb_local_state.rs`), the access probe (`speleodb_admin.rs`), `survey_geometry`, recovery/backups, create project and Merge Projects (no SQLite temp anymore), SpeleoDB pull/install/revisions/revision swap/unwind, stalx-reader.
+- One `stalx::probe(path) -> Header { format, summary, speleodb, local }` API reads the cheap header of either format (as built: `persistence::stalx_v2::probe_path` / `probe_bytes`, whose `Header` also carries `version`, `requires`, `generator` and `project`; a legacy file's header comes from `migrate::legacy_header`, F13); every link reader and opener uses it or the full open: load, Add .stalx, Recents metadata, the foreign-copy probe, logout's forget-recents (`speleodb_logout.rs`), the cached-copies / local-state listing (`speleodb_local_state.rs`), the access probe (`speleodb_admin.rs`), `survey_geometry`, recovery/backups, create project and Merge Projects (no SQLite temp anymore), SpeleoDB pull/install/revisions/revision swap/unwind, stalx-reader.
 
 ### 6.2 Layout
 
@@ -408,6 +492,8 @@ Parse with size and count limits (port stalx-reader's `CountLimits`), check `for
 - `legacy::open(path_or_bytes) -> LegacySurvey`: copies the file and any `-journal` to a private temp, runs the old migration chain and the full old load pipeline (exactly what the app did on open), and returns the settled legacy project plus raw positions and Closures Computed View positions per slot, and the gauge station of each datum-less component.
 - For tests only (`feature = "writer"`): `legacy::write(project, shape) -> bytes`, the v18 writer (and the older shapes where cheap), so property tests can produce "what an old build wrote".
 
+As built: `stalagmight_legacy::open_path` / `open_bytes` with `OpenOptions` (the path form copies the file and any `-journal` or `-wal`), and for tests `write_v18` / `write_v18_with`, whose `WriteOptions` pick the `FileShape`. Its changes since the cutover are the typed `LegacyError::RefusedSchema` (Q2) and release fixes the migration must mirror (#822).
+
 ### 7.2 Conversion
 
 1. **Stations:** union-find over the legacy merges. Self-merges, same-line merges and merges that would close a cycle (taken in the old cascade's BFS order) become `Tie` closures instead, placed at the FRONT of the closure list (today merges are united before any closure, so later closures keep their skip verdicts). Each group is one station. Survivor id = the member the map labelled (the label-representative rule: not a line's first station, then not its last, then line order, then index); others become aliases with their names. Names: survivor's, uniquified. Comments: distinct non-empty member comments joined in member order with a blank line. Datums: all kept, in list order.
@@ -419,7 +505,7 @@ Parse with size and count limits (port stalx-reader's `CountLimits`), check `for
 7. **Verify:** compute new raw and Closures Computed View positions and compare per slot with the legacy ones. Tolerance: raw XY within `1e-6 m x (merge-tree depth of the slot's line + 1)` (the old cascade leaves up to 1e-6 m dust per hop), adjusted within 1e-6 m, Z within 1e-9 m. Expected-difference classes (drifted or torn legacy merges collapsed into one station) are reported separately with their maximum displacement; anything else is a mismatch. Mismatches are logged and in the MigrationReport; tests and the corpus run assert zero unexplained mismatches.
 8. **History:** dropped, with the existing "history discarded" banner (as v7/v13/v15/v16/v17 and #808 did).
 9. **Everything else** (settings, Sections, credits, import hashes, SpeleoDB link and per-machine state, display settings) carried over. Ignored warnings are re-keyed through the legacy load's shot-uuid backfill (pre-v8 rows keyed by session shot id included).
-10. **Backup:** on the first v2 write over a SQLite file, the original file and any `-journal`/`-wal` sidecar are moved into the app-data backups folder (silent; listed by `list_backups`, restorable) before the rename, so no old build can later roll a stale journal into the JSON file. When verification reported unexplained mismatches, the app shows one non-blocking notice ("Converted from the old file format; N stations moved by up to X m; the original is kept in Recovery").
+10. **Backup:** on the first v2 write over a SQLite file, the original file and any `-journal`/`-wal` sidecar are moved into the app-data backups folder (silent; listed by `list_backups`, restorable) before the rename, so no old build can later roll a stale journal into the JSON file. When verification reported unexplained mismatches, the app shows one non-blocking notice ("Converted from the old file format; N stations moved by up to X m; the original is kept in Recovery"). As built (C3, C4): the original is copied into the backups folder and its sidecars are moved beside the copy; the notice also shows when a torn merge was collapsed (G4).
 
 The result is held in memory; the original file is untouched until the first save writes v2 over it (silent upgrade).
 
@@ -501,7 +587,7 @@ A batch that moves several slots of one station (today's co-located `move_statio
 
 - Push: the canonical v2 bytes in a "for push" mode (no `local`, no redo; undo only in Full mode, cut at the watermark), filename `project.stalx`, content type `application/json`. Fallback without history when over 5 MiB, as today.
 - The server currently rejects non-SQLite uploads; until it accepts v2, a push fails with the existing error path (the project stays dirty and locked). This is called out in the PR.
-- Pull/install/revisions/unwind: sniff; SQLite revisions are migrated in memory (7), v2 opened directly. `drop_inherited_undo`, display-setting restore and the dirty columns map to the v2 `history` and `local` members.
+- Pull/install/revisions/unwind: sniff; SQLite revisions are migrated in memory (7), v2 opened directly. 0.6.0's `drop_inherited_undo` (now `speleodb_clear_inherited_undo`), display-setting restore and the dirty columns map to the v2 `history` and `local` members.
 
 ### 10.2 stalx-reader
 
@@ -517,14 +603,14 @@ Recents reads `summary` from the first bytes; the foreign-copy probe reads `spel
 
 ### 10.5 Importers and exporters
 
-Importers keep producing lines, placements and closures through the shared funnel. A placement into an existing or same-batch station makes the line's start (or the chosen chain station) **that station** instead of recording a merge. Compass/Walls/Ariane names and ids are stored in `Station.external` (item 6). Exporters read stations through the chain (CSV/JSON `from_id`/`to_id` become shared ids at junctions; Ariane export walks the station graph). Behaviour that changes is listed in the PR.
+Importers keep producing lines, placements and closures through the shared funnel. A placement into an existing or same-batch station makes the line's start (or the chosen chain station) **that station** instead of recording a merge. Compass/Walls/Ariane names and ids are stored in `Station.external` (item 6; built in C22, Q1). Exporters read stations through the chain (CSV/JSON `from_id`/`to_id` become shared ids at junctions; Ariane export walks the station graph). Behaviour that changes is listed in the PR.
 
 ---
 
 ## 11. Tests and fuzzing
 
-1. **Legacy oracle and migration** (`core/state/migration_property_tests.rs`, gated): generators build projects through the legacy API (`legacy` crate), write them with the legacy writer, migrate, and assert: total station map; merged members map to one station; every slot position within tolerance (7.2.6) raw and adjusted; measurements bit-identical; counts; closures preserved or reported; `save(migrate(x))` canonical and reopen-identical. Generators cover floating components, datum pieces with stored offsets, multi-datum components, hand moves, drifted merges, merge cycles, closures across one shot, orphan closures, aligned closures, reversed/split/combined lines, empty and single-shot lines, missing uuids, old value conventions. The two tracked fixtures (`e2e/fixtures/*.stalx`, v4 and v14) are migrated in a Rust test. An `#[ignore]` corpus runner (`STALAGMIGHT_MIGRATION_CORPUS=<dir>`) prints only counts and failure classes.
-2. **Format properties** (`format_v2_property_tests.rs`): byte fixpoint, round trip, canonicalisation of shuffled/whitespace/escape/float-spelling variants, float bit round trip (subnormals, -0.0), diff locality per command (bounded changed lines), version/requires/conventions gating, unknown-member preservation, hostile input (depth bombs, huge counts, NaN literals, duplicate keys and ids, dangling refs, cycles, truncation, BOM), crash timing (torn temp refused, old-or-new).
+1. **Legacy oracle and migration** (as built: `persistence/migrate/migrate_property_tests.rs`, with `migrate_fixture_tests.rs` and `migrate_fuzz_tests.rs` beside it; gated): generators build projects through the legacy API (`legacy` crate), write them with the legacy writer, migrate, and assert: total station map; merged members map to one station; every slot position within tolerance (7.2.7) raw and adjusted; measurements bit-identical; counts; closures preserved or reported; `save(migrate(x))` canonical and reopen-identical. Generators cover floating components, datum pieces with stored offsets, multi-datum components, hand moves, drifted merges, merge cycles, closures across one shot, orphan closures, aligned closures, reversed/split/combined lines, empty and single-shot lines, missing uuids, old value conventions. The two tracked fixtures (`e2e/fixtures/*.stalx`, v4 and v14) are migrated in a Rust test. An `#[ignore]` corpus runner (`STALAGMIGHT_MIGRATION_CORPUS=<dir>`) prints only counts and failure classes (as built: `migrate_fixture_tests::migrate_corpus`, plus the corpus modes of the migration and transition fuzzers).
+2. **Format properties** (as built: the `persistence/stalx_v2/format_v2_*_tests.rs` suites and `decode_fuzz_tests.rs`): byte fixpoint, round trip, canonicalisation of shuffled/whitespace/escape/float-spelling variants, float bit round trip (subnormals, -0.0), diff locality per command (bounded changed lines), version/requires/conventions gating, unknown-member preservation, hostile input (depth bombs, huge counts, NaN literals, duplicate keys and ids, dangling refs, cycles, truncation, BOM), crash timing (torn temp refused, old-or-new).
 3. **Model invariants** after every fuzz move: section 2 plus determinism (positions bitwise equal under shuffled input order), no derived field written (delete any field: refuse or identical positions).
 4. **Fuzzers ported** to the new vocabulary (station ids, detach instead of pair unmerge): undo roundtrip (now bit-exact canonical JSON, only `modified_at` masked, allocators "may be higher"), metamorphic, adversarial, concurrency, multi-datum, crash, format. A `legacy_origin` mode starts runs from a migrated old-format project.
 5. **TS harness and Playwright**: canonical snapshot, invariants, fractal generator, fixture handling, leftover-temp names, the IPC mock; journeys for opening the tracked old fixtures.
@@ -536,7 +622,7 @@ Importers keep producing lines, placements and closures through the shared funne
 
 | Stream | Scope | Depends on |
 |---|---|---|
-| L | `crates/legacy` (done): frozen reader + load pipeline + positions + test-only v18 writer; `crates/legacy-fidelity` proves bit-exactness against the live app | - |
+| L | `crates/legacy` (done): frozen reader + load pipeline + positions + test-only v18 writer; `crates/legacy-fidelity` proved bit-exactness against the live app (deleted in C22 with that app, Q6) | - |
 | K | Characterisation goldens recorded from the CURRENT build before `models::project` is deleted: history labels and previews per command kind, delete/combine/merge previews, IPC DTO shapes, export outputs (CSV, JSON, TML, SVG) for the synthetic projects | - |
 | M0 | `models::survey` skeleton: types, ids, slots, components, invariants/validate, positions (3.3-3.5), depth, anchors (4.1), naming, identity | - |
 | M1 | shots/lines/ranges/reverse/split/combine on M0 | M0 |
@@ -554,18 +640,24 @@ Importers keep producing lines, placements and closures through the shared funne
 | T | fuzzers and harness ported alongside each stream; new property suites | each stream |
 | D | docs: architecture, saving, closures, undo-redo, SPEC data model, SpeleoDB, testing; `docs/file-format.md`; `docs/survey-model.md` | all |
 
-The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first, and K's goldens are compared after the switch (differences must be in the declared-change list).
+The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first, and K's goldens are compared after the switch (differences must be in the declared-change list). Done: C18 diffed the K goldens on the station graph (every difference in a declared class), and C22 deleted the module and the live SQLite layer.
 
 ### 12.1 Rollout prerequisites outside this repository (called out in the PR)
+
+The complete list as built is "Rollout prerequisites" in the Status section at the top.
 
 - The SpeleoDB server accepts v2 uploads (today it refuses non-SQLite), its Python reader reads v2, and ideally a minimum-client gate for projects whose HEAD is v2.
 - A small patch to the 0.5.x line that sniffs `{"format":"stalx"` and shows "made with a newer Stalagmight" instead of the corrupt-file route.
 
 ### 12.2 Declared behaviour changes (to list in the PR)
 
+The complete list as built, each change with its reason, is "Declared behaviour changes" in the Status section at the top.
+
 Junctions share one Station ID, name and comment (migration keeps the others as aliases); Split Line Here makes a junction; Unmerge detaches one line; closure metrics are recomputed (path length counts shots only); warning ignores ride the save instead of being written at once; CSV/JSON `from_id`/`to_id` at junctions; Ariane export station ids; anything else K's goldens show.
 
 ## Background (current-state findings this plan relies on)
+
+These describe `release/0.6.0` (the SQLite model) when the plan was written, not the station-graph tree.
 
 - Merges already form a forest by construction (a merge between connected lines is refused; every loop is an explicit closure), so "shared station + forest" changes no topology any current code path creates. Legacy files can hold merge cycles; migration demotes the cycle-closing merge to a closure.
 - `line_offsets` is derived for every line reached by the cascade, but the seeds (placement-datum lines and each datum-less component's lowest line) carry user decisions: where a free piece sits and where a datum piece sits relative to its GPS. These become `Placement` and `ZeroDatum.correction`.
@@ -579,7 +671,7 @@ Junctions share one Station ID, name and comment (migration keeps the others as 
 
 What the built model does differently from the text above, and why. The module guide is `docs/survey-model.md`.
 
-- **D1. `ClosureStrategy` with `Tie` is its own enum for now.** `survey::ClosureStrategy` has the shared variants with the same serde spellings and legacy aliases, plus `Tie`; `From<crate::ClosureStrategy>` and `to_shared()` convert. Adding `Tie` to the shared enum would change the generated TypeScript union and break the frontend's exhaustive `Record<ClosureStrategy, boolean>` (`src/utils/closures.ts`) before W/FE switch. W unifies the wire enum.
+- **D1. `ClosureStrategy` with `Tie` is its own enum for now.** `survey::ClosureStrategy` has the shared variants with the same serde spellings and legacy aliases, plus `Tie`; `From<crate::ClosureStrategy>` and `to_shared()` convert. Adding `Tie` to the shared enum would change the generated TypeScript union and break the frontend's exhaustive `Record<ClosureStrategy, boolean>` (`src/utils/closures.ts`) before W/FE switch. W unifies the wire enum. Resolved differently in W (W3): the model keeps its own enum, and the wire sends a `Tie` as an aligned `Batch`, so the TypeScript union never changed.
 - **D2. Traversal order (3.3 step 2).** A station's lines are visited in line-id order, not list order. In a valid model the values are the same (each station has one tree path from its anchor), but the float summation route no longer depends on display order: reordering the line list changes no bit (tested).
 - **D3. `via` hints are checked by invariant 2.** A datum's `via` and a closure end's `a_via`/`b_via` must name a line through that station. A stale hint is not harmless: line ids are re-derived as `max + 1`, so a deleted line's id can come back and a stale hint would then misdirect a detach. `Project::drop_stale_attachments()` clears stale hints and drops hand moves keyed on a station the line no longer passes (already required by invariant 2); the epilogue of delete shot / range / line, split and combine runs it before `validate`.
 - **D4. Rule (0) in 4.1: commands declare their own anchor decisions.** A placement the command set or moved itself (Move Segment / Line, an import's placement, Add .stalx) is listed in `EditContext::placed` and is authoritative; a datum correction the command computed (Add .stalx) is listed in `EditContext::corrected` and kept. Without this, 4.1 re-lays a free piece out from its pre-edit position (undoing a Move Segment) and clears Add's corrections. Any other placement-list entry is treated as pre-edit state only, so a placement re-keyed by a merge's station replacement cannot drag the stationary piece.
@@ -587,7 +679,7 @@ What the built model does differently from the text above, and why. The module g
 - **D6. A new component with no pre-edit station** (a brand-new free piece) needs a declared placement; without one it is laid out from its lowest station at the local origin.
 - **D7. Stricter `validate` at birth** (no format cost now, costly later): ids within their spaces (Station and Section ids below 2^31, line ids at most `MAX_LINE_ID`), alias ids distinct from live ids and from each other, counters above alias ids too, shot uuids non-empty and at most 128 characters, validation thresholds finite.
 - **D8. Depth summation order** (3.4 "sorted order") is `(line id, index)` over the slots of the tie group, which makes a junction's depth bit-identical to today's merge-group depth.
-- **D9. The letter-suffix rule is reused, not copied**, from `models::project::station_naming` (pure functions). That file must move under `survey/` or the crate root when C deletes `models::project`.
+- **D9. The letter-suffix rule is reused, not copied**, from `models::project::station_naming` (pure functions). That file must move under `survey/` or the crate root when C deletes `models::project`. Resolved in C22: it is `models::station_naming`.
 
 ## Deviations (stream M1, shots / lines / ranges / reverse / split / combine)
 
@@ -601,7 +693,7 @@ Declared by the plan and implemented as written: Split Line Here makes a junctio
 - **S6. A legacy merge loop at a hand-moved join** (migrated to a junction plus a `Tie`): the other line moves with the joined station and the `Tie` becomes `Batch`, where today it stayed and its merge at the join tore. Not representable otherwise (the line would hang by closures only); one ported test is `#[ignore]`d with this reason.
 - **S7. `depth_difference_m`** reads each join station's depth from the solver, which averages over a junction's lines and its snaps; today it read one member's readings.
 - **S8. Two datums on a merged join** (one station) are allowed (plan 5.7); on side-by-side join stations they are still refused, as today.
-- **S9. Payload trims.** `SplitOptions` has no `comment_side` / `datum_side`; `CombineCandidate` drops `repeated_shot_ids` (uuids are project-unique) and the always-`None` `merged` / `station_name_a` / `station_name_b`.
+- **S9. Payload trims.** `SplitOptions` has no `comment_side` / `datum_side` (wave C dropped them from the wire's `SplitLineOptions` too); `CombineCandidate` drops `repeated_shot_ids` (uuids are project-unique) and the always-`None` `merged` / `station_name_a` / `station_name_b`.
 - **S10 (integration). Combine's gauge rule reads the solve.** "Is the joined survey solved" and "which station is the gauge" are M3's `Project::solve_hold` (the least squares' own partition and held component). A component tied only by a `Tie` now counts as solved (D10), and with a datum in the component the gauge is the datum station, which no free side holds (today's `adjustment_anchor_of`). M1's copy (no `Tie`; the first `Placement` in list order, even beside a datum) is gone.
 - **S11 (integration). Combine's join and torn junctions use M2's mutation cores** (`merge_ids` with the dialog's comment pick, `detach_ids`). Two visible differences from M1's own fold: the survivor lists the retired station's own aliases before the retired station, and keeps the retired station's `external` id when it has none (E7). Every ported combine test passes unchanged.
 - **S12.** Frozen-shot refusals ("Cannot edit geometry of a frozen shot" and the delete and split variants) are not in the model operations: C checks `is_shot_frozen` before calling them.
@@ -609,7 +701,7 @@ Declared by the plan and implemented as written: Split Line Here makes a junctio
   - a `Tie` attached via the line (a 0.6.0 cycle or same-line merge the migration demoted) stayed on the junction and, left as the only bridge, was promoted, moving a piece by the 0.6.0 misclosure (wire equivalence seed 5: 18 m). 0.6.0 dropped that merge and re-stitched the remaining members only when co-located and not otherwise connected. The `Tie` now leaves with the slot unless its ends were co-located before the edit and the edit leaves them in different pieces; then the sweep promotes it, nothing moves, and its far end is retired so the junction keeps its id;
   - a closure attached via the line was re-anchored onto a remaining member in 0.6.0 and, when the delete broke its loop, promoted before the rest with the junction's side moving (unless held by a datum); the station graph's sweep took list order and moved end `a`'s piece (seeds 23, 215). The delete now names the junction's end (`sweep_orphan_closures_moving`), and those closures are judged first.
 
-  Unavoidable differences: the junction keeps its datums and comment (declared above), so a datum on the line's member stays and can change which piece is held; a legacy aligned non-`Move` closure the migration made a `Tie` cannot be told from a demoted merge, so when not co-located it leaves like one (0.6.0 re-anchored it); 0.6.0 could promote a second closure on the member into a merge cycle (the first promotion had joined its ends), which stays a loop closure here; 0.6.0's preview listed only the member's promotions, the station graph's lists the sweep's others too. `delete_line` is unchanged (0.6.0's `preserve_connections_for_line_deletion` is not compared). The wire equivalence compares the promotions in 0.6.0's preview scope, and seeds 5, 23 and 215 run the delete on both models and compare every slot.
+  Unavoidable differences: the junction keeps its datums and comment (declared above), so a datum on the line's member stays and can change which piece is held; a legacy aligned non-`Move` closure the migration made a `Tie` cannot be told from a demoted merge, so when not co-located it leaves like one (0.6.0 re-anchored it); 0.6.0 before #822 (#776) could promote a second closure on the member into a merge cycle (the first promotion had joined its ends), which stays a loop closure here, as with #822; 0.6.0's preview listed only the member's promotions, the station graph's lists the sweep's others too. `delete_line` is unchanged (0.6.0's `preserve_connections_for_line_deletion` is not compared). The wire equivalence compares the promotions in 0.6.0's preview scope, and seeds 5, 23 and 215 run the delete on both models and compare every slot.
 
 ## Deviations (stream M2, topology / closures / datums / move tools / Add)
 
@@ -630,7 +722,7 @@ Declared by the plan and implemented as written: Split Line Here makes a junctio
 - **D12. The Computed View keeps today's depth co-location of adjusted closure ends.** Today's solve stamps the closures it adjusted as aligned on its working copy, so the view's depth averages each such closure's two ends (over the tie group). Positions are horizontal only; depth follows that rule.
 - **D13. Solve numbering.** A solve component is the shot components joined by any closure (today's `get_connected_line_ids`). Unknowns are constraint groups numbered by lowest StationId, shots are assembled in line-id order, the warm start is the group's lowest member. Results match today within 1e-6 m (tested), not bit for bit.
 - **D14. `path_length` between two pieces.** A closure between two datum-held pieces has no shot path: `path_length` and `error_percentage` are 0 (today: the reachable line lengths).
-- **D15. Immovable stations follow the documented rule** (datum stations and their tie groups over aligned closures). Today's frontend walk also follows chain-transitive `closures_with` entries, which carry the far closure's id, so an unaligned closure followed by an aligned one counted as rigid.
+- **D15. Immovable stations follow the documented rule** (datum stations and their tie groups over aligned closures). Today's frontend walk also follows chain-transitive `closures_with` entries, which carry the far closure's id, so an unaligned closure followed by an aligned one counted as rigid. Fixed in wave C: the frontend walks (`computeImmovableStationKeys`, the drag preview, `expandColocated`) skip those chain entries.
 - **D16. Stats** carry `station_count` (distinct stations) and `slot_count`; `to_project_stats` keeps today's meaning (slots) for the wire.
 - **D17. Graph builders** emit shots in line-id order and closures in id order (as D2), so reordering lines or closures changes no tie-break and no bit.
 - **D18. Gas engine.** The route has no merge hops (route indices shift; legs are station to station); the turn frontier lists each station once (its first slot on the wire); a route node has one depth (only legacy hand-move z on a junction differs); a drop override on another slot of the default drop's junction is a no-op.
@@ -661,14 +753,14 @@ The full format is `docs/file-format.md`.
   - `TieSolved` (D10): 0.6.0 showed a component measured, without a failure, because nothing in it was eligible; a migrated `Tie` (a cycle-closing or same-line merge, or a legacy aligned closure of a non-eligible strategy such as `ProportionalByLength`) is eligible, so the view now solves it and pulls the torn tie together.
   - `TieNoLongerFails` (D11): 0.6.0 failed a component ("inconsistent line translation", shown measured) because it united merges before the across-one-shot check; the demoted merge (same-line, or a cycle-closing merge spanning one shot) is a `Tie` the new solve ties as one point or skips and reports, and the component is adjusted by its other closures and GPS fixes. The legacy failure is explained, not a fallback mismatch.
 
-  Measured on the generator (3000 seeds, every one clean): `TieSolved` in 285 seeds (3136 slots, at most 47.99 m), `TieNoLongerFails` in 34 seeds (913 slots, at most 2292.8 m: the legacy view showed those components raw while the synthetic GPS fixes, placed far away, now pull them). The tracked fixtures have neither (`naharon.stalx` within 9.1e-10 m, `fractal_plant_iter3.stalx` exact). The corpus runner prints both views' classes with their maxima. Stream P decides whether the conversion notice (7.2.10) mentions Computed View changes; today it counts raw moves only (`Verification::moved`).
+  Measured on the generator (3000 seeds, every one clean): `TieSolved` in 285 seeds (3136 slots, at most 47.99 m), `TieNoLongerFails` in 34 seeds (913 slots, at most 2292.8 m: the legacy view showed those components raw while the synthetic GPS fixes, placed far away, now pull them). The tracked fixtures have neither (`naharon.stalx` within 9.1e-10 m, `fractal_plant_iter3.stalx` exact). The corpus runner prints both views' classes with their maxima. Stream P decides whether the conversion notice (7.2.10) mentions Computed View changes; today it counts raw moves only (`Verification::moved`). Decided in C0 (C4): it does not; Computed View classes and mismatches are logged and kept in the report.
 - **G3. Comment join order** ("member order", 7.2.1) is the survivor first, then the other members by label rank.
 - **G4. `TornMergeCollapsed` is a real move.** A torn merge across two datum-less pieces cannot be kept as a `Tie` (invariant 7), so it is collapsed and its pieces move by up to the gap; counted per merge (`merges_collapsed_torn`, `..._max_m`) and in `moved()`. Recommendation for stream P: show the 7.2.10 notice whenever `verification.moved().slots > 0`, not only for unexplained mismatches.
 - **G5. Cascade replay, phase 2,** reads closure `is_aligned` after the legacy load re-measured it (0.6.0 used the file's flags). It only orders merges in pieces merges alone cannot reach, which needs dangling references.
 - **G6. `migrate_path` computes the legacy Computed View** (about twice the open time) for G2; `OpenOptions::with_adjusted = false` skips it, and the comparison then reports `NoLegacyPositions`.
 - **G7. Publishing.** `stalagmight-persistence` depends on the unpublished `stalagmight-legacy` (path only); `cargo publish` of persistence (for stalx-reader) fails until legacy is published or the dependency is gated.
 - **G8. Dates are clamped at the migration too** (F10, wave B C24): a legacy credit or line date outside 0001-9999 becomes the date the v2 file would hold, so the migrated session equals its first save. Counted (`MigrationReport::dates_clamped`); the wire comparison declares the class.
-- **G9. Open migration findings (wave B C24, not fixed).** The hostile generator still makes the migration report unexplained Computed View slots in two shapes, and either can raise the conversion notice on a real file: F2, a shot under about 20 cm within 2 degrees of a grid axis gives a degenerate least-squares weight on that axis, and the 0.6.0 and the ported solves each go wrong their own way (candidate fix: a per-axis sigma floor); F3, shots or depth changes of 10 km and more make 0.6.0's Computed View fail its own 1e-6 m line-translation check (candidate: a declared class or a relative tolerance). Pinned by the ignored `migrate_fuzz_tests::short_shots_on_a_grid_axis_keep_the_computed_view` and `km_scale_shots_keep_the_computed_view`.
+- **G9. Open migration findings (wave B C24, not fixed).** The hostile generator still makes the migration report unexplained Computed View slots in two shapes, which a real file can hit (logged; the conversion notice reads the raw comparison only, C4): F2, a shot under about 20 cm within 2 degrees of a grid axis gives a degenerate least-squares weight on that axis, and the 0.6.0 and the ported solves each go wrong their own way (candidate fix: a per-axis sigma floor); F3, shots or depth changes of 10 km and more make 0.6.0's Computed View fail its own 1e-6 m line-translation check (candidate: a declared class or a relative tolerance). Pinned by the ignored `migrate_fuzz_tests::short_shots_on_a_grid_axis_keep_the_computed_view` and `km_scale_shots_keep_the_computed_view`.
 
 ## Deviations (stream U, undo engine)
 
@@ -709,7 +801,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 - **W3. `Tie` is an aligned `Batch` on the wire** (D1 resolved without a TS change): the frontend's exhaustive `Record<ClosureStrategy, boolean>` and its eligibility rule stay as they are, and a legacy aligned closure looked exactly like that.
 - **W4. Derived merge pairs carry the project's `created_at` as `merged_at`** (no edit changes it; nothing in the app reads it).
 - **W5. `Line.reverse_parity`, `gauge_shot_uuid`, `gauge_neighbour_uuid` stay on the wire as `false` / `null`** so the TS `Line` does not change; no frontend code reads them.
-- **W6. Previews report what cannot happen as empty**: no replacement merges or rewired closures, no rewire-skipped flags, no split half that moves. A delete's `removed_merges` is the removed slot leaving its junction; `closure_to_merge` is the sweep's promotions; `removed_closures` includes the #737 and swept removals.
+- **W6. Previews report what cannot happen as empty**: no replacement merges or rewired closures, no rewire-skipped flags, no split half that moves (wave C removed the always-empty delete-preview fields from the wire types). A delete's `removed_merges` is the removed slot leaving its junction; `closure_to_merge` is the sweep's promotions; `removed_closures` includes the #737 and swept removals.
 - **W7. `get_line_relationships` counts what deleting the line removes**: merge pairs on the line, closures and datums on stations only that line passes, its hand moves, and `has_line_offset` = the line alone holds its piece's non-origin `Placement` station.
 - **W8. The merge check's closure preview reads each end's depth on the picked slot's line** (`closure_metrics_via`), as today's slot-based preview did; M2's `merge_check` uses first slots.
 - **W9. The binary load envelope drops `line_offsets`: version 8 -> 9.** Every other field keeps its name and element type.
@@ -717,17 +809,17 @@ The wire API is `docs/survey-model.md`, "Wire API".
 
 ## Deviations (stream C0, the core switch foundation)
 
-`AppState` holds `models::survey::Project`; every unported executor, query and subsystem answers with a typed "not yet ported" failure (`core::stub::not_ported`); the remaining work is the C0 work breakdown.
+`AppState` holds `models::survey::Project`; every unported executor, query and subsystem answers with a typed "not yet ported" failure (`core::stub::not_ported`); the remaining work is the C0 work breakdown. Resolved: waves A and B ported every one, and C22 deleted `core::stub`.
 
 - **C1. How an undo entry is held.** The stack keeps the decoded `HistoryEntry` (its changeset carries the session shot ids of an in-session capture, so in-session steps give every shot its id back) AND its canonical text (`encode_entry`, computed once at push or read from the file). The byte budget counts the text, which is exactly what a save writes and a push carries, and a save copies it instead of re-encoding the history. A decoded entry (no session ids) is validated after its step and rolled back with the inverse step on a violation (U10).
 - **C2. No live database: `FileState`.** Everything the file holds besides the survey and the history (link identity, `local` sync state, unwind chain, watermark, display settings, ignored warnings, preserved members, `requires`, the read-only reason) lives in memory beside the guard fingerprint, the origin (new / v2 / legacy) and a dirty flag. The local-only durable save (6.5 mode 4) rewrites `speleodb`, `local` and `history` from it; while the survey has unsaved changes it writes the history the file last held, never the in-memory stacks (they would describe a body the file does not have). On a legacy or never-saved project it only marks `local_pending`; the first real save writes it.
 - **C3. The upgrade backup** is a COPY of the SQLite original at `<app data>/backups/<stem>.<UTC stamp>.pre-v2.stalx`, with any `-journal` / `-wal` / `-shm` sidecar MOVED beside it before the rename (R2 L19) and moved back if the write fails. `list_backups` does not list that folder yet (recovery package). Resolved in wave A: `list_project_backups` lists the originals beside the project's own backups (N12).
-- **C4. Conversion notice** whenever `verification.moved().slots > 0` or anything is unexplained (G4); `AppState::take_conversion_notice()` returns it once. The IPC and the banner are the frontend's.
+- **C4. Conversion notice** whenever `verification.moved().slots > 0` or the raw comparison has an unexplained mismatch (G4); Computed View differences never raise it (G2); `AppState::take_conversion_notice()` returns it once. The IPC and the banner are the frontend's.
 - **C5. Undo and redo stamp `modified_at`, bump the revision and mark the file dirty**; on a linked project they set the SpeleoDB dirty bit (not a forward edit: the Unwind position stays, as in 0.6.0).
 - **C6. Save a Copy** of a managed project is `Mode::DetachedCopy` when the explicit destination is not the open file (`unlinked_copy_path`); an explicit destination that IS the open file is a normal save (0.6.0 refused it).
 - **C7. The guard.** A save to the open file expects the fingerprint last read or written; the first write of a project created in this session expects nothing there (`Guard::Absent`); its first implicit save (a deferred project's reserved path) moves to the next free name when a file appeared there, and writes over an empty placeholder, as 0.6.0 did (wave B); an explicit Save As destination is overwritten (the dialog confirmed). A refusal is `EXTERNALLY_MODIFIED: ...`; `AppState::save_project_overwriting` is the Overwrite answer. A read-only file refuses edits, undo, redo and saves with `READ_ONLY_FILE: ...`.
 - **C8. One `apply` per command family** (`command_line.rs`, `command_shot.rs`, `command_station.rs`, ...), dispatched by `commands::apply_command`, so the families are ported in parallel. The mutation receives the `Record` (kind, label, refs, preview rows) to add what only the result can say. `run_recorded` is the pipeline every bypass recipe uses.
-- **C9. `cfg(sg_unported)`** (never set; declared in the workspace `check-cfg`) parks the test modules and integration suites that do not compile against the new model; a port flips its modules back to `cfg(test)`. Surviving tests that exercise an unported path are `#[ignore]`d with a reason.
+- **C9. `cfg(sg_unported)`** (never set; declared in the workspace `check-cfg`) parks the test modules and integration suites that do not compile against the new model; a port flips its modules back to `cfg(test)`. Surviving tests that exercise an unported path are `#[ignore]`d with a reason. Resolved: every parked module was ported or retired, and C22 removed the cfg and its `check-cfg` entry.
 - **C10. Derived views are memoised per revision** (`AppState::revision`, bumped by every change of the project slot): the raw layout and, per closure-adjustment config, the Computed View. The adjustment report and the ruler read the adjusted view, the distance field the raw one (as 0.6.0).
 - **C11. Ignored warnings** are kept in memory, mark the project dirty and ride the save (declared change, 6.5); `shot_uuid_is_persisted` is "the shot exists" (every uuid is written with the ignore). The datum GPS-gap code pinning and the warnings computation itself are not ported yet (no warnings in C0). Resolved in wave A (N9).
 - **C12. History previews** are generic in C0 (the digest's fields, lines, datums, closures, Sections, and recorded rows); the 0.6.0 wording per command kind is the history-labels package, with the K goldens as the oracle. Labels are worded at record time with 0.6.0's `describe` rules. Resolved in wave A (N1).
