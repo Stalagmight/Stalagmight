@@ -1054,9 +1054,15 @@ mod tests {
         let probe = body
             .find("self.foreign_link(")
             .expect("the production load must run the canonical-storage probe");
+        // The read happens in `load_full_once`, which `load_full` calls (again
+        // when the file changed before the commit).
         let open = body
-            .find("self.read_project_file(")
-            .expect("the production load reads the project file");
+            .find("self.load_full_once(")
+            .expect("the production load reads the project file through load_full_once");
+        assert!(
+            fn_body("fn load_full_once(").contains("self.read_project_file("),
+            "load_full_once reads the project file"
+        );
         assert!(
             probe < open,
             "the canonical-storage refusal must run BEFORE the project is read, not after it"
