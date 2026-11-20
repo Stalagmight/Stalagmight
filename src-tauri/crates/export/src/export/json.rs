@@ -1,24 +1,9 @@
-use anyhow::{Context, Result};
-use chrono::Utc;
+//! The JSON document's records. They are filled from the station graph by
+//! `survey::json_export` (`survey/tabular.rs`).
+
 use serde::Serialize;
-use std::io::Write as _;
-use std::path::Path;
 
-use super::atomic_write::write_atomic;
-use crate::models::{Person, Project, ShotKind};
-
-/// Export project data to JSON format
-pub fn export_json(project: &Project, path: &Path) -> Result<()> {
-    let export_data = JsonExport::from_project(project);
-
-    let json = serde_json::to_string_pretty(&export_data).context("Failed to serialize JSON")?;
-
-    write_atomic(path, |w| Ok(w.write_all(json.as_bytes())?))
-        .context("Failed to write JSON file")?;
-
-    tracing::info!(path = ?path, "Exported JSON");
-    Ok(())
-}
+use crate::models::{Person, ShotKind};
 
 /// JSON export format
 #[derive(Debug, Serialize)]
@@ -96,109 +81,48 @@ pub(crate) fn names(people: &[Person]) -> Vec<String> {
     people.iter().map(|p| p.name.clone()).collect()
 }
 
-impl JsonExport {
-    pub fn from_project(project: &Project) -> Self {
-        Self {
-            project: JsonProjectMeta {
-                name: project.name.clone(),
-                location: project.location.clone(),
-                exported_at: Utc::now().to_rfc3339(),
-            },
-            lines: project
-                .lines
-                .iter()
-                .map(|s| JsonLine {
-                    name: s.name.clone(),
-                    surveyor: s.surveyor_names(),
-                    date: s.first_survey_date().map(|d| d.to_string()),
-                    surveyors: names(&s.credit_summary().surveyor_people()),
-                    explorers: names(&s.credit_summary().explorer_people()),
-                    date_last: s
-                        .credit_summary()
-                        .date_max
-                        .filter(|last| Some(*last) != s.first_survey_date())
-                        .map(|d| d.to_string()),
-                    color: s.color.clone(),
-                    section: s
-                        .section_id
-                        .and_then(|id| project.section(id))
-                        .map(|section| section.name.clone()),
-                    shots: {
-                        let stations = super::csv::station_columns(project, s.id);
-                        let name =
-                            |i: usize| stations.get(i).map(|st| st.0.clone()).unwrap_or_default();
-                        let id = |i: usize| stations.get(i).and_then(|st| st.1.parse().ok());
-                        s.shots
-                            .iter()
-                            .enumerate()
-                            .map(|(index, shot)| JsonShot {
-                                from: name(index),
-                                to: name(index + 1),
-                                from_id: id(index),
-                                to_id: id(index + 1),
-                                length: shot.length,
-                                azimuth_in: shot.azimuth_in,
-                                azimuth_out: shot.azimuth_out,
-                                depth_in: shot.depth_in,
-                                depth_out: shot.depth_out,
-                                lrud: if shot.left.is_some()
-                                    || shot.right.is_some()
-                                    || shot.up.is_some()
-                                    || shot.down.is_some()
-                                {
-                                    Some([
-                                        shot.left.unwrap_or(0.0),
-                                        shot.right.unwrap_or(0.0),
-                                        shot.up.unwrap_or(0.0),
-                                        shot.down.unwrap_or(0.0),
-                                    ])
-                                } else {
-                                    None
-                                },
-                                kind: shot.kind,
-                                comment: shot.comment.clone(),
-                                surveyors: names(&shot.credit().surveyors),
-                                explorers: names(&shot.credit().explorers),
-                                date: shot.credit().date.map(|d| d.to_string()),
-                            })
-                            .collect()
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use super::*;
-    use crate::models::{LineData, ShotData};
+    use crate::export::survey::test_helpers::Survey;
+    use crate::export::survey::{export_json, json_export};
+    use crate::models::{Person, ShotData, ShotKind, SurveyCredit};
     use tempfile::NamedTempFile;
+
+    /// A shot credited to `surveyor` (the per-shot form of a 0.6.0 line's
+    /// surveyor text).
+    fn credited(shot: ShotData, surveyor: &str) -> ShotData {
+        ShotData {
+            credit: SurveyCredit::from_legacy(Some(surveyor), None)
+                .stored()
+                .map(Into::into),
+            ..shot
+        }
+    }
 
     #[test]
     fn test_export_json() {
-        let mut project = Project::new("Test".to_string(), None);
-        project.add_line(LineData {
-            name: Some("Main".to_string()),
-            surveyor: Some("Tester".to_string()),
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                left: Some(1.0),
-                right: Some(2.0),
-                up: Some(3.0),
-                down: Some(4.0),
-                ..Default::default()
-            }],
-        });
+        let mut survey = Survey::new("Test");
+        survey.named(
+            "Main",
+            "#4ecdc4",
+            vec![credited(
+                ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 6.0,
+                    left: Some(1.0),
+                    right: Some(2.0),
+                    up: Some(3.0),
+                    down: Some(4.0),
+                    ..Default::default()
+                },
+                "Tester",
+            )],
+        );
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
@@ -215,23 +139,23 @@ mod tests {
 
     #[test]
     fn a_line_in_a_section_carries_the_section_name() {
-        let mut project = Project::new("Test".to_string(), None);
-        let data = |name: &str| LineData {
-            name: Some(name.to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
+        let mut survey = Survey::new("Test");
+        let shots = || {
+            vec![ShotData {
                 length: 10.0,
                 ..Default::default()
-            }],
+            }]
         };
-        let grouped = project.add_line(data("Main")).id;
-        project.add_line(data("Side"));
-        let upper = project.add_section("Upper series".to_string(), "#ff6b6b".to_string());
-        project.get_line_mut(grouped).unwrap().section_id = Some(upper);
+        let grouped = survey.named("Main", "#4ecdc4", shots());
+        survey.named("Side", "#4ecdc4", shots());
+        let mut project = survey.build();
+        let upper = project.mint_section_id().unwrap();
+        project.sections.push(crate::models::Section {
+            id: upper,
+            name: "Upper series".to_string(),
+            color: "#ff6b6b".to_string(),
+        });
+        project.line_mut(grouped).unwrap().section_id = Some(upper);
 
         let file = NamedTempFile::new().unwrap();
         export_json(&project, file.path()).unwrap();
@@ -243,8 +167,7 @@ mod tests {
 
     #[test]
     fn credit_is_per_shot_with_line_aggregates_and_never_emails() {
-        use crate::models::{Person, SurveyCredit};
-        let mut project = Project::new("Credit".to_string(), None);
+        let mut survey = Survey::new("Credit");
         let shot = |credit: SurveyCredit| ShotData {
             length: 3.0,
             credit: credit.stored().map(Into::into),
@@ -252,8 +175,9 @@ mod tests {
         };
         let ann = Person::new("Ann", Some("ann@example.org")).unwrap();
         let bo = Person::named("Bo").unwrap();
-        project.add_line(LineData {
-            shots: vec![
+        survey.line(
+            crate::models::survey::LineMeta::default(),
+            vec![
                 shot(SurveyCredit {
                     surveyors: vec![ann],
                     explorers: vec![bo.clone()],
@@ -266,8 +190,8 @@ mod tests {
                 }),
                 shot(SurveyCredit::default()),
             ],
-            ..Default::default()
-        });
+        );
+        let project = survey.build();
         let file = NamedTempFile::new().unwrap();
         export_json(&project, file.path()).unwrap();
         let contents = std::fs::read_to_string(file.path()).unwrap();
@@ -290,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_export_json_empty_project() {
-        let project = Project::new("Empty".to_string(), None);
+        let project = Survey::new("Empty").build();
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
         assert!(result.is_ok(), "empty project JSON export should succeed");
@@ -303,24 +227,24 @@ mod tests {
 
     #[test]
     fn test_export_json_unicode_names() {
-        let mut project = Project::new("日本語テスト".to_string(), None);
-        project.add_line(LineData {
-            name: Some("Grotte de l'Ours".to_string()),
-            surveyor: Some("Ñoño".to_string()),
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                comment: Some("特殊なコメント".to_string()),
-                ..Default::default()
-            }],
-        });
+        let mut survey = Survey::new("日本語テスト");
+        survey.named(
+            "Grotte de l'Ours",
+            "#ff0000",
+            vec![credited(
+                ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 1.0,
+                    comment: Some("特殊なコメント".to_string()),
+                    ..Default::default()
+                },
+                "Ñoño",
+            )],
+        );
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
@@ -334,15 +258,13 @@ mod tests {
 
     #[test]
     fn test_export_json_reference_shots_and_optional_fields() {
-        let mut project = Project::new("Reference".to_string(), None);
-        project.add_line(LineData {
-            name: None,
-            surveyor: None,
-            date: None,
-            color: "#000000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
+        let mut survey = Survey::new("Reference");
+        survey.line(
+            crate::models::survey::LineMeta {
+                color: "#000000".to_string(),
+                ..Default::default()
+            },
+            vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 0.0,
                 length: 1.0,
@@ -351,7 +273,8 @@ mod tests {
                 kind: ShotKind::Reference,
                 ..Default::default()
             }],
-        });
+        );
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
@@ -367,21 +290,12 @@ mod tests {
     /// Station IDs; no internal line or shot id leaves.
     #[test]
     fn shots_carry_station_names_and_ids_not_internal_ids() {
-        let mut project = Project::new("Ids".to_string(), None);
-        let line = project
-            .add_line(LineData {
-                name: Some("Main".to_string()),
-                color: "#ff0000".to_string(),
-                shots: vec![ShotData::default(), ShotData::default()],
-                ..Default::default()
-            })
-            .id;
-        project.ensure_station_identities();
-        project
-            .set_station_name(crate::models::StationRef::new(line, 1), "sump")
-            .unwrap();
+        let mut survey = Survey::new("Ids");
+        let line = survey.named("Main", "#ff0000", vec![ShotData::default(); 2]);
+        survey.rename((line, 1), "sump");
+        let project = survey.build();
 
-        let value = serde_json::to_value(JsonExport::from_project(&project)).unwrap();
+        let value = serde_json::to_value(json_export(&project, chrono::Utc::now())).unwrap();
         let line = &value["lines"][0];
         assert!(line.get("id").is_none(), "{line}");
         let shots = line["shots"].as_array().unwrap();

@@ -1,75 +1,11 @@
-use anyhow::{Context, Result};
-use std::io::Write;
-use std::path::Path;
-
-use super::atomic_write::write_atomic;
-use crate::models::{Project, StationRef};
-
-/// Export project data to CSV format
-pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
-    write_atomic(path, |file| write_csv(project, file)).context("Failed to write CSV file")?;
-    tracing::info!(path = ?path, "Exported CSV");
-    Ok(())
-}
+//! The CSV document's shared pieces: the header, the escaping and the number
+//! format. The rows are read off the station graph by
+//! `survey::write_csv` (`survey/tabular.rs`).
 
 /// The CSV header. A shot is identified the way the user reads it: its line
 /// by name and its two stations by name (`from`, `to`) and by Station ID
 /// (`from_id`, `to_id`); the internal line and shot ids are not written.
 pub const CSV_HEADER: &str = "line,from,to,from_id,to_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment";
-
-/// A line's station names and Station IDs, by station index (empty text for
-/// a station a normalization has not reached).
-pub(crate) fn station_columns(project: &Project, line_id: u32) -> Vec<(String, String)> {
-    project
-        .line_station_names(line_id)
-        .into_iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let id = project
-                .station_id_at(StationRef::new(line_id, index as u32))
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            (name.unwrap_or_default(), id)
-        })
-        .collect()
-}
-
-fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
-    writeln!(file, "{CSV_HEADER}")?;
-
-    // Write shots
-    for line in &project.lines {
-        let line_name = line.name.as_deref().unwrap_or("");
-        let stations = station_columns(project, line.id);
-        let station = |index: usize| stations.get(index).cloned().unwrap_or_default();
-
-        for (index, shot) in line.shots.iter().enumerate() {
-            let (from, from_id) = station(index);
-            let (to, to_id) = station(index + 1);
-            writeln!(
-                file,
-                "{},{},{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
-                escape_csv(line_name),
-                escape_csv(&from),
-                escape_csv(&to),
-                from_id,
-                to_id,
-                shot.length,
-                shot.azimuth_in,
-                shot.azimuth_out,
-                shot.depth_in,
-                shot.depth_out,
-                format_optional(shot.left),
-                format_optional(shot.right),
-                format_optional(shot.up),
-                format_optional(shot.down),
-                shot.kind.label(),
-                escape_csv(shot.comment.as_deref().unwrap_or(""))
-            )?;
-        }
-    }
-    Ok(())
-}
 
 /// Escape a string for CSV, and defuse spreadsheet formula injection.
 ///
@@ -116,28 +52,27 @@ pub(crate) fn format_optional(value: Option<f64>) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{LineData, ShotData};
+    use crate::export::survey::test_helpers::{meta, Survey};
+    use crate::export::survey::{export_csv, write_csv};
+    use crate::models::ShotData;
     use tempfile::NamedTempFile;
+
+    fn one_shot() -> ShotData {
+        ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 10.0,
+            depth_in: 5.0,
+            depth_out: 6.0,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_export_csv() {
-        let mut project = Project::new("Test".to_string(), None);
-        project.add_line(LineData {
-            name: Some("Main".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                ..Default::default()
-            }],
-        });
+        let mut survey = Survey::new("Test");
+        survey.named("Main", "#4ecdc4", vec![one_shot()]);
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
@@ -234,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_export_csv_empty_project() {
-        let project = Project::new("Empty".to_string(), None);
+        let project = Survey::new("Empty").build();
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
         assert!(result.is_ok(), "empty project CSV export should succeed");
@@ -247,23 +182,11 @@ mod tests {
 
     #[test]
     fn test_export_csv_unicode_line_name() {
-        let mut project = Project::new("Unicode".to_string(), None);
-        project.add_line(LineData {
-            name: Some("Grotte de l'Ours 🐻".to_string()),
-            surveyor: Some("José García".to_string()),
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                ..Default::default()
-            }],
-        });
+        let mut survey = Survey::new("Unicode");
+        let mut line = meta("Grotte de l'Ours 🐻", "#ff0000");
+        line.legacy_surveyor = Some("José García".to_string());
+        survey.line(line, vec![one_shot()]);
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
@@ -283,12 +206,12 @@ mod tests {
 
     #[test]
     fn test_export_csv_multiple_lines() {
-        let mut project = Project::new("Multi".to_string(), None);
+        let mut survey = Survey::new("Multi");
         for i in 0..3 {
-            project.add_line(LineData {
-                name: Some(format!("Sec{i}")),
-                color: "#ff0000".to_string(),
-                shots: vec![ShotData {
+            survey.named(
+                &format!("Sec{i}"),
+                "#ff0000",
+                vec![ShotData {
                     azimuth_in: 0.0,
                     azimuth_out: 180.0,
                     length: f64::from(i + 1) * 5.0,
@@ -296,9 +219,9 @@ mod tests {
                     depth_out: 1.0,
                     ..Default::default()
                 }],
-                ..Default::default()
-            });
+            );
         }
+        let project = survey.build();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
@@ -312,19 +235,10 @@ mod tests {
     /// names, Station IDs - and escapes a hostile station name like any text.
     #[test]
     fn rows_carry_station_names_and_ids() {
-        let mut project = Project::new("Ids".to_string(), None);
-        let line = project
-            .add_line(LineData {
-                name: Some("Main".to_string()),
-                color: "#ff0000".to_string(),
-                shots: vec![ShotData::default(), ShotData::default()],
-                ..Default::default()
-            })
-            .id;
-        project.ensure_station_identities();
-        project
-            .set_station_name(StationRef::new(line, 1), "=cmd")
-            .unwrap();
+        let mut survey = Survey::new("Ids");
+        let line = survey.named("Main", "#ff0000", vec![ShotData::default(); 2]);
+        survey.rename((line, 1), "=cmd");
+        let project = survey.build();
         let mut out = Vec::new();
         write_csv(&project, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();

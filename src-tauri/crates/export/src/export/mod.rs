@@ -5,7 +5,6 @@ mod depth_colors;
 pub mod dive_profile;
 pub mod image;
 mod image_labels;
-mod image_scope;
 mod image_sketch;
 pub mod json;
 pub mod survey;

@@ -207,3 +207,127 @@ pub(crate) fn cave() -> Cave {
         f,
     }
 }
+
+/// A slot: `(line, chain index)`.
+pub(crate) type At = (LineId, u32);
+
+/// A survey built line by line, the way the exporter tests describe one: a
+/// free line is placed at the origin (as 0.6.0 placed an unconnected line),
+/// a branch starts on an existing station, a merge joins two stations (the
+/// piece of the first moves onto the second), and every edit goes through
+/// the model's own operations, so the result always validates.
+pub(crate) struct Survey {
+    pub(crate) project: Project,
+}
+
+impl Survey {
+    /// An empty survey named `name`, with no location.
+    pub(crate) fn new(name: &str) -> Self {
+        Self::located(name, None)
+    }
+
+    /// An empty survey with a location and a fixed creation instant.
+    pub(crate) fn located(name: &str, location: Option<&str>) -> Self {
+        let mut project = project(name);
+        project.location = location.map(str::to_string);
+        Self { project }
+    }
+
+    /// A line starting on a new station, as a free piece placed at the
+    /// origin.
+    pub(crate) fn line(&mut self, meta: LineMeta, shots: Vec<ShotData>) -> LineId {
+        let line = match self.project.add_line(meta, StartAt::New, shots) {
+            Ok(id) => id,
+            Err(e) => panic!("line refused: {e}"),
+        };
+        let start = self.station(line, 0);
+        if let Err(e) = self.project.set_placement(start, 0.0, 0.0) {
+            panic!("placement refused: {e}");
+        }
+        line
+    }
+
+    /// A line named `name` (colour `color`) starting on a new station.
+    pub(crate) fn named(&mut self, name: &str, color: &str, shots: Vec<ShotData>) -> LineId {
+        self.line(meta(name, color), shots)
+    }
+
+    /// A line starting on the existing station at `from`.
+    pub(crate) fn branch(&mut self, meta: LineMeta, from: At, shots: Vec<ShotData>) -> LineId {
+        let start = self.station(from.0, from.1);
+        match self.project.add_line(meta, StartAt::Station(start), shots) {
+            Ok(id) => id,
+            Err(e) => panic!("branch refused: {e}"),
+        }
+    }
+
+    /// The station at slot `(line, index)`.
+    pub(crate) fn station(&self, line: LineId, index: u32) -> StationId {
+        match self
+            .project
+            .station_at(crate::models::StationRef::new(line, index))
+        {
+            Some(id) => id,
+            None => panic!("no station at ({line}, {index})"),
+        }
+    }
+
+    /// Merge the station at `a` with the one at `b` (the model's Merge
+    /// Stations: `a`'s piece moves onto `b` unless that would move a placed
+    /// piece).
+    pub(crate) fn merge(&mut self, a: At, b: At) {
+        let (a, b) = (self.station(a.0, a.1), self.station(b.0, b.1));
+        if let Err(e) = self.project.merge_stations(a, b) {
+            panic!("merge refused: {e}");
+        }
+    }
+
+    /// Set a zero datum on the slot `at`.
+    pub(crate) fn datum(&mut self, at: At, gps: GpsCoordinates) {
+        let slot = crate::models::StationRef::new(at.0, at.1);
+        if let Err(e) = self.project.set_datum_at(slot, gps, None) {
+            panic!("datum refused: {e}");
+        }
+    }
+
+    /// A loop closure between the slots `a` and `b`.
+    pub(crate) fn closure(&mut self, a: At, b: At, strategy: ClosureStrategy) {
+        let (sa, sb) = (self.station(a.0, a.1), self.station(b.0, b.1));
+        self.project
+            .push_closure(sa, Some(a.0), sb, Some(b.0), strategy);
+    }
+
+    /// Set the comment of the station at `at`.
+    pub(crate) fn comment(&mut self, at: At, text: &str) {
+        let id = self.station(at.0, at.1);
+        if let Some(station) = self.project.station_mut(id) {
+            station.comment = Some(text.to_string());
+        }
+    }
+
+    /// Rename the station at `at`.
+    pub(crate) fn rename(&mut self, at: At, name: &str) {
+        let id = self.station(at.0, at.1);
+        if let Some(station) = self.project.station_mut(id) {
+            station.name = name.to_string();
+        }
+    }
+
+    /// The finished survey (it must validate).
+    pub(crate) fn build(self) -> Project {
+        let violations = self.project.validate();
+        assert!(violations.is_empty(), "test survey invalid: {violations:?}");
+        self.project
+    }
+}
+
+/// A shot with both azimuth readings `azimuth`, `length` long, flat at
+/// depth 0 (no uuid: the model mints one).
+pub(crate) fn flat(length: f64, azimuth: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length,
+        ..ShotData::default()
+    }
+}
