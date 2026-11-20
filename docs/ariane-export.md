@@ -342,6 +342,14 @@ IDs are assigned sequentially starting from 0:
 - CLOSURE shots are appended at the end
 - Each GPS fix's START and its tying CLOSURE come last, one pair per fix
 
+The station-graph exporter (`export::survey::export_tml`, used once the app
+core runs on `models::survey`) keeps the rows, their order and every rule
+above but numbers them by station: a row's `ID` is the Station ID of the
+station it ends at, its `FromID` the one it starts from, a START's id the
+station it stands on, and CLOSURE rows and fix STARTs follow from the highest
+Station ID + 1. Ids are then stable across exports; see the plan's stream X
+deviations (`docs/plans/2026-11-20_station-graph-model.md`).
+
 ## Color Format Conversion
 
 Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-digit hex with alpha suffix). On import, the reverse conversion strips the alpha channel.
