@@ -68,6 +68,17 @@ fn add_free_line(p: &mut Project, rng: &mut Rng, prefix: &str, next: &mut u64) -
     let count = 1 + rng.below(4);
     let data = shots(rng, count, prefix, next);
     let line = p.add_line(meta("free"), StartAt::New, data).ok()?;
+    if rng.below(4) == 0 {
+        // A legacy hand move (only migrated files carry them).
+        let chain = p.line_stations(line)?.to_vec();
+        let at = rng.pick(&chain)?;
+        let hand = [
+            rng.range(-0.5, 0.5),
+            rng.range(-0.5, 0.5),
+            rng.range(-0.2, 0.2),
+        ];
+        p.line_mut(line)?.hand_moves.insert(at, hand);
+    }
     let start = p.line(line)?.start;
     p.set_placement(start, rng.range(-500.0, 500.0), rng.range(-500.0, 500.0))
         .ok()?;
@@ -148,6 +159,37 @@ fn check<T>(
     }
 }
 
+/// The stations of `station`'s piece.
+fn piece(p: &Project, station: StationId) -> Vec<StationId> {
+    let topology = p.topology();
+    topology
+        .component_of(station)
+        .and_then(|c| topology.component(c))
+        .map(|c| c.stations.clone())
+        .unwrap_or_default()
+}
+
+/// Every station of `before` still present moved by `shift(s)` (`None`: not
+/// checked), within `tolerance`.
+fn assert_moves(
+    before: &BTreeMap<StationId, [f64; 2]>,
+    after: &BTreeMap<StationId, [f64; 2]>,
+    tolerance: f64,
+    label: &str,
+    shift: impl Fn(StationId) -> Option<[f64; 2]>,
+) {
+    for (station, old) in before {
+        let (Some(now), Some(d)) = (after.get(station), shift(*station)) else {
+            continue;
+        };
+        let gap = (now[0] - old[0] - d[0]).hypot(now[1] - old[1] - d[1]);
+        assert!(
+            gap <= tolerance,
+            "{label}: station {station} is {gap} m off its expected move {d:?}"
+        );
+    }
+}
+
 fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> String {
     let before = p.clone();
     let stations: Vec<StationId> = p.topology().stations().to_vec();
@@ -171,7 +213,27 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
             let (Some(a), Some(b)) = (rng.pick(&stations), rng.pick(&stations)) else {
                 return "merge: none".to_string();
             };
+            let (stationary, moving) = p.merge_direction(a, b);
+            let (fixed, moved) = (piece(p, stationary), piece(p, moving));
+            let xy_before = xy_all(p);
             let result = p.merge_stations(a, b);
+            if result.is_ok() {
+                // The stationary piece stays; the moving one moves rigidly
+                // so its station lands on the survivor.
+                let d = [
+                    xy_before[&stationary][0] - xy_before[&moving][0],
+                    xy_before[&stationary][1] - xy_before[&moving][1],
+                ];
+                assert_moves(&xy_before, &xy_all(p), 1e-6, "merge", |s| {
+                    if fixed.contains(&s) {
+                        Some([0.0, 0.0])
+                    } else if moved.contains(&s) {
+                        Some(d)
+                    } else {
+                        None
+                    }
+                });
+            }
             check(
                 p,
                 &before,
@@ -192,7 +254,25 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
             let Some(slot) = rng.pick(&junctions) else {
                 return "detach: none".to_string();
             };
+            let xy_before = xy_all(p);
             let result = p.unmerge_station(slot);
+            if let Ok(OpOutcome {
+                value: Some(report),
+                anchors,
+                sweep,
+            }) = &result
+            {
+                // Nothing moves unless a fix that ended up in a piece of its
+                // own was promoted onto its GPS, or the sweep promoted a
+                // closure.
+                if anchors.placed_on_gps.is_empty() && sweep.is_empty() {
+                    let after = xy_all(p);
+                    assert_moves(&xy_before, &after, 1e-9, "detach", |_| Some([0.0, 0.0]));
+                    let at = after[&report.new_station];
+                    let was = xy_before[&report.station];
+                    assert!((at[0] - was[0]).hypot(at[1] - was[1]) <= 1e-9);
+                }
+            }
             check(
                 p,
                 &before,
@@ -253,7 +333,16 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
             };
             let gps = gps_at(rng.range(-3000.0, 3000.0), rng.range(-3000.0, 3000.0));
             let accuracy = [None, Some(rng.range(0.0, 50.0))][rng.below(2)];
+            let xy_before = xy_all(p);
             let result = p.set_datum_at(slot, gps, accuracy);
+            if let Ok(outcome) = &result {
+                let set = outcome.value;
+                let fix_added = set.change == super::DatumChange::Added
+                    && set.role == Some(crate::DatumRole::GpsFix);
+                if fix_added || set.change == super::DatumChange::AccuracyOnly {
+                    assert_moves(&xy_before, &xy_all(p), 0.0, "fix", |_| Some([0.0, 0.0]));
+                }
+            }
             check(
                 p,
                 &before,
@@ -297,7 +386,26 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
                 return "segment: none".to_string();
             };
             let offset = [rng.range(-20.0, 20.0), rng.range(-20.0, 20.0), 0.0];
+            let xy_before = xy_all(p);
             let result = p.move_segment(line, offset);
+            if let Ok(outcome) = &result {
+                let topology = p.topology_arc();
+                let group: Vec<StationId> = outcome
+                    .value
+                    .lines
+                    .iter()
+                    .filter_map(|&l| topology.chain(l))
+                    .flatten()
+                    .copied()
+                    .collect();
+                assert_moves(&xy_before, &xy_all(p), 1e-9, "segment", |s| {
+                    Some(if group.contains(&s) {
+                        [offset[0], offset[1]]
+                    } else {
+                        [0.0, 0.0]
+                    })
+                });
+            }
             check(
                 p,
                 &before,
@@ -315,7 +423,17 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
                 rng.range(-3.0, 3.0),
                 rng.range(-0.5, 0.5),
             ];
+            let xy_before = xy_all(p);
             let result = p.move_station(station, offset);
+            if result.is_ok() {
+                assert_moves(&xy_before, &xy_all(p), 1e-6, "move station", |s| {
+                    Some(if s == station {
+                        [offset[0], offset[1]]
+                    } else {
+                        [0.0, 0.0]
+                    })
+                });
+            }
             check(
                 p,
                 &before,
@@ -327,7 +445,11 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
         11 => {
             *tag += 1;
             let source = random_source(rng, *tag);
+            let xy_before = xy_all(p);
             let result = p.append_project(&source);
+            if result.is_ok() {
+                assert_moves(&xy_before, &xy_all(p), 0.0, "append", |_| Some([0.0, 0.0]));
+            }
             check(p, &before, Expect::Anything, "append".to_string(), result)
         }
         12 => {
