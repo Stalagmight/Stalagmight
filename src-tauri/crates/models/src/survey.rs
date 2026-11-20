@@ -79,6 +79,9 @@ mod rigid;
 mod roles;
 mod stats;
 
+// The wire projection (plan 9.2).
+pub mod wire;
+
 #[cfg(test)]
 #[expect(
     clippy::panic,
