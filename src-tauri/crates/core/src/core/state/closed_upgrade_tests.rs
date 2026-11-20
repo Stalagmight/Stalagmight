@@ -313,7 +313,7 @@ fn an_unlink_of_an_open_legacy_copy_is_written_at_once() {
             .count();
         assert_eq!(kept, 1, "the 0.6.0 original is kept");
         assert!(state.close_project().success);
-        assert!(state.open_project(path.clone()).success);
+        assert!(state.open_project(path).success);
         assert!(state.speleo_link().is_none());
         forget_backups(&stem);
     });

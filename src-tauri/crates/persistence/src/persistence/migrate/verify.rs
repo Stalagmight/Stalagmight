@@ -483,7 +483,7 @@ fn verify_adjusted(
         }
     }
 
-    let budgets = misclosure_budgets(project, raw, facts.len(), |s| solve_of_station(s));
+    let budgets = misclosure_budgets(project, raw, facts.len(), solve_of_station);
 
     for (position, line) in project.lines().iter().enumerate() {
         let (hops, _) = lines.get(position).copied().unwrap_or((1, 0.0));
@@ -579,9 +579,12 @@ fn verify_adjusted(
 /// largest raw coordinate (the conjugate gradient's tolerance at that scale).
 #[derive(Debug, Clone, Copy, Default)]
 struct Budget {
-    xy_m: f64,
-    z_m: f64,
-    scale_m: f64,
+    /// Horizontal, metres.
+    xy: f64,
+    /// Depth, metres.
+    z: f64,
+    /// The largest raw coordinate (absolute), metres.
+    scale: f64,
 }
 
 /// [`Budget`] per least-squares component, `component_of` naming each
@@ -597,10 +600,10 @@ fn misclosure_budgets(
     let gap = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let mut add = |station: StationId, xy: f64, z: f64| {
         if let Some(budget) = component_of(station).and_then(|k| budgets.get_mut(k)) {
-            budget.xy_m += xy;
-            budget.z_m += z;
+            budget.xy += xy;
+            budget.z += z;
             if let Some([x, y]) = raw.xy(station) {
-                budget.scale_m = budget.scale_m.max(x.abs()).max(y.abs());
+                budget.scale = budget.scale.max(x.abs()).max(y.abs());
             }
         }
     };
@@ -665,10 +668,10 @@ fn class_bound(
         return [f64::INFINITY; 2];
     };
     let xy = |a: [f64; 3], b: &[f64; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
-    let slack = 1e-6 + 1e-9 * budget.scale_m;
+    let slack = 1e-6 + 1e-9 * budget.scale;
     let bound = [
-        budget.xy_m + xy(new_raw, &old_raw) + xy(old_raw, old_adjusted) + slack,
-        budget.z_m + (new_raw[2] - old_raw[2]).abs() + (old_raw[2] - old_adjusted[2]).abs() + slack,
+        budget.xy + xy(new_raw, &old_raw) + xy(old_raw, old_adjusted) + slack,
+        budget.z + (new_raw[2] - old_raw[2]).abs() + (old_raw[2] - old_adjusted[2]).abs() + slack,
     ];
     if bound.iter().all(|b| b.is_finite()) {
         bound

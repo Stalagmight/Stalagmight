@@ -106,6 +106,7 @@ mod characterization_dump_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod closed_upgrade_tests;
@@ -130,6 +131,10 @@ mod combine_lines_tests;
 )]
 mod concurrency_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod conversion_notice_tests;
 #[cfg(test)]
 #[expect(

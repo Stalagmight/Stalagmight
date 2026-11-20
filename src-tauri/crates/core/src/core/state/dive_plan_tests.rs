@@ -2557,9 +2557,9 @@ mod legacy {
                     w.path.clone(),
                     crate::core::loading::SpeleoManagedFile {
                         path: w.path.display().to_string(),
-                        project_id: link.project_id.clone(),
-                        project_name: link.project_name.clone(),
-                        endpoint: link.endpoint.clone(),
+                        project_id: link.project_id,
+                        project_name: link.project_name,
+                        endpoint: link.endpoint,
                         can_open_remote: true,
                     },
                 )
