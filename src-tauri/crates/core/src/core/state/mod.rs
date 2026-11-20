@@ -340,6 +340,13 @@ mod speleodb_install_sidecar_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_nonblocking_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test fixtures: a failed setup step is a failed test"
+)]
+mod speleodb_test_files;
 #[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
