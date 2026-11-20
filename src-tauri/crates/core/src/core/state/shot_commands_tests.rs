@@ -883,6 +883,47 @@ fn unrecognised_shot_kinds_are_scoped_to_their_load() {
     assert!(state.take_unrecognised_shot_kinds(2).is_empty());
 }
 
+/// A legacy file whose shot holds a kind 0.6.0 cannot read: the load hands
+/// it to the frontend under that load's id, named by the migrated shot id,
+/// and the shot opens as `Reference` (the fail-closed substitution).
+#[test]
+fn a_legacy_shot_with_an_unreadable_kind_is_reported_to_its_load() {
+    use super::legacy_fixture_kit::{frozen, old, write_legacy_file, Legacy};
+    use std::sync::Arc;
+
+    crate::app_dirs::init_for_test();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("kinds.stalx");
+    let mut legacy = Legacy::new("Kinds".to_string(), None);
+    legacy.add_line(old::LineData {
+        name: Some("Main".to_string()),
+        shots: shots(&[5.0, 7.0]).iter().map(frozen).collect(),
+        ..Default::default()
+    });
+    write_legacy_file(&path, &legacy);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("UPDATE shots SET kind = 7 WHERE sequence_order = 1", [])
+        .unwrap();
+
+    let state = AppState::new().unwrap();
+    state.set_event_sink(Arc::new(super::robustness_kit::NullSink));
+    let loaded = state.do_load_project_full(path).unwrap();
+    let found = state.take_unrecognised_shot_kinds(loaded.loading_id);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let p = project(&state);
+    let line = &p.lines()[0];
+    let index = found[0].shot_number as usize - 1;
+    assert_eq!(found[0].line_id, line.id);
+    assert_eq!(found[0].shot_id, line.shots[index].id);
+    assert_eq!(found[0].line_name.as_deref(), Some("Main"));
+    assert_eq!(found[0].raw_value, "7");
+    assert_eq!(line.shots[index].kind, ShotKind::Reference);
+    assert!(state
+        .take_unrecognised_shot_kinds(loaded.loading_id)
+        .is_empty());
+}
+
 #[test]
 fn a_shot_kind_change_is_one_exact_entry() {
     let mut b = Build::new();

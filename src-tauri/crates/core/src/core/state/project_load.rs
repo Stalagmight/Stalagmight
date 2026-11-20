@@ -45,6 +45,9 @@ pub(crate) struct Opened {
     pub(crate) history: History,
     /// Why the history was dropped before the commit (a legacy file's).
     pub(crate) history_dropped: Option<HistoryDropped>,
+    /// Shots a legacy file stored with a kind 0.6.0 could not read (#27),
+    /// for the load's notice; empty for a version 2 file.
+    pub(crate) unrecognised_shot_kinds: Vec<crate::models::UnrecognisedShotKind>,
 }
 
 fn path_text(path: &Path) -> String {
@@ -155,6 +158,7 @@ impl AppState {
                     file,
                     history,
                     history_dropped,
+                    unrecognised_shot_kinds: Vec::new(),
                 })
             }
             Format::Legacy => {
@@ -178,8 +182,10 @@ impl AppState {
                     project.settings.validation = config.validation;
                 }
                 project.file_path = Some(path.to_path_buf());
+                let mut extras = migrated.extras;
+                let unrecognised_shot_kinds = std::mem::take(&mut extras.unrecognised_shot_kinds);
                 let file = FileState::from_migrated(
-                    migrated.extras,
+                    extras,
                     Some(fingerprint),
                     &migrated.report.verification,
                 );
@@ -190,6 +196,7 @@ impl AppState {
                     history_dropped: migrated
                         .had_history
                         .then_some(HistoryDropped::EarlierVersion),
+                    unrecognised_shot_kinds,
                 })
             }
             Format::Unknown => Err(LoadError::corrupt(
@@ -235,6 +242,7 @@ impl AppState {
             mut file,
             history,
             history_dropped,
+            unrecognised_shot_kinds: _,
         } = opened;
         // A legacy NULL undo mode is materialized from this machine's default
         // on first open, and made durable (#303).
@@ -457,6 +465,15 @@ impl AppState {
         // land before the seed, and keyed by the revision read now the opened
         // survey's layout would be cached as the edited one's. Keyed by the
         // commit's, it is merely stale then, and never read.
+        let mut opened = opened;
+        let unrecognised = std::mem::take(&mut opened.unrecognised_shot_kinds);
+        if !unrecognised.is_empty() {
+            tracing::warn!(
+                count = unrecognised.len(),
+                "Shots with an unreadable kind were loaded as Reference"
+            );
+        }
+        self.set_unrecognised_shot_kinds(progress.loading_id(), unrecognised);
         let revision = self.commit_opened(opened);
         *self
             .derived

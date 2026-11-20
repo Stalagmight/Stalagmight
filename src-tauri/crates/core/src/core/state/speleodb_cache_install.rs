@@ -136,6 +136,7 @@ impl PreparedDownload {
             file,
             history,
             history_dropped,
+            unrecognised_shot_kinds: Vec::new(),
         }
     }
 }

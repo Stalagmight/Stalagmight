@@ -203,7 +203,9 @@ pub(crate) fn same_shots(a: &[Shot], b: &[Shot]) -> bool {
 
 /// Whether two projects hold the same persisted model to the bit, counters
 /// aside (session ids, the file path and the caches are not part of it).
-/// Every field is named, so a new field cannot be missed silently.
+/// Every field is named, so a new field cannot be missed silently. Used by
+/// the shared test kit (`testkit`) only.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn same_model_but_counters(
     a: &super::super::Project,
     b: &super::super::Project,

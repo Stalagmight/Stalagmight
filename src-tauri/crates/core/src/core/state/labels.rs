@@ -291,7 +291,7 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
 /// before it runs (what `Record::of` stores): [`command_label`], except
 /// where the entry knows better, as 0.6.0's `describe_entry` and its
 /// entry-level labels said it:
-/// - a frontend batch is summarized from its sub-commands ([`batch_summary`];
+/// - a frontend batch is summarized from its sub-commands (`summarize`;
 ///   a batch that brings its own `label` keeps it);
 /// - a shot edit names the shot by its stations (`Update shot Main: 2 -> 3`);
 /// - a credit edit counts the shots it changes (`Edit surveyors (12 shots)`);
@@ -640,7 +640,9 @@ fn summarize(commands: &[Command], names: &NameBook<'_>) -> String {
 /// named by the one that stands for the rest (a merge, a closure, a line
 /// delete, a metadata edit, a reverse), or by the first and a count
 /// (0.6.0's `history_batch::summarize`). A batch with its own `label` is
-/// labelled by [`entry_label`], not here.
+/// labelled by [`entry_label`], not here. Test-only: [`entry_label`] and the
+/// recipes call `summarize` directly.
+#[cfg(test)]
 pub(crate) fn batch_summary(project: &Project, commands: &[Command]) -> String {
     bounded(summarize(commands, &NameBook::of(project)))
 }

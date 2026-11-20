@@ -146,6 +146,10 @@ pub struct MigratedExtras {
     pub display_settings: BTreeMap<String, String>,
     /// Ignored warnings, keyed by the migrated shot uuids.
     pub ignored_warnings: Vec<IgnoredWarning>,
+    /// Shots whose stored kind 0.6.0 could not read (#27, loaded as
+    /// `Reference`), with the migrated survey's shot ids, for the app's
+    /// "unreadable shot kind" notice.
+    pub unrecognised_shot_kinds: Vec<crate::models::UnrecognisedShotKind>,
     /// Whether the file stored its own validation thresholds. When it did
     /// not, `project.settings.validation` is the 0.6.0 default and the app
     /// should seed the user's global thresholds instead (as 0.6.0 did).
@@ -294,6 +298,7 @@ pub fn migrate(
         speleo_undo_watermark: legacy.extras.speleo_undo_watermark.clone(),
         display_settings: legacy.extras.display_settings.clone(),
         ignored_warnings,
+        unrecognised_shot_kinds: unrecognised_shot_kinds(legacy, &built.project),
         validation_stored: legacy.load.validation_stored,
         legacy_parity: LegacyParity {
             reversed_lines: lp
@@ -340,6 +345,30 @@ pub fn migrate(
         report,
         had_history: legacy.history.any(),
     })
+}
+
+/// The legacy load's unreadable shot kinds on the migrated survey: the same
+/// line (line ids are kept) and shot position, the migrated session shot id.
+fn unrecognised_shot_kinds(
+    legacy: &LegacySurvey,
+    project: &Project,
+) -> Vec<crate::models::UnrecognisedShotKind> {
+    legacy
+        .load
+        .unrecognised_shot_kinds
+        .iter()
+        .filter_map(|found| {
+            let line = project.line(found.line_id)?;
+            let index = usize::try_from(found.shot_number.checked_sub(1)?).ok()?;
+            Some(crate::models::UnrecognisedShotKind {
+                line_id: found.line_id,
+                shot_id: line.shots.get(index)?.id,
+                shot_number: found.shot_number,
+                line_name: line.name.clone(),
+                raw_value: found.raw_value.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The cheap header of a legacy (SQLite) `.stalx` at `path`, in the shape

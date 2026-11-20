@@ -271,6 +271,7 @@ impl AppState {
     /// symmetric. Losing the chain pointer costs a walk its position; losing this lets a
     /// loaded revision's history ride into the next commit as though it were authored
     /// here, which is the duplication this exists to stop. Hence the louder log.
+    #[cfg(test)]
     pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
         let parsed = instant.and_then(|ts| {
             chrono::DateTime::parse_from_rfc3339(ts)

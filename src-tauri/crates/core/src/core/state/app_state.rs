@@ -464,7 +464,9 @@ impl AppState {
     /// Lock the project mutex and pass a mutable reference to the callback.
     /// Returns the callback's result, or an error if the lock fails or no project is open.
     /// Bumps the revision (whatever the callback did): a caller that only
-    /// reads uses [`Self::with_project`].
+    /// reads uses [`Self::with_project`]. Test-only: production edits go
+    /// through the execute pipeline (`run_recorded`).
+    #[cfg(test)]
     pub(super) fn with_project_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Project) -> R,
