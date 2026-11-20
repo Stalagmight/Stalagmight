@@ -58,32 +58,70 @@ pub(crate) enum FileOrigin {
     Legacy,
 }
 
-/// The one-line notice an upgrade shows when the migration moved stations
-/// (plan 7.2.10, G4: whenever `verification.moved().slots > 0` or anything is
-/// unexplained).
+/// The one-line notice an upgrade shows when the migration changed what the
+/// user sees (plan 7.2.10, G4, C4): stations moved in plan (a torn legacy merge
+/// collapsed, or an unexplained raw difference), stations whose depth changed
+/// (a snap's derived alignment changed a depth tie, or an unexplained one), or
+/// stations the conversion could not place. Computed View differences never
+/// raise it (C4).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConversionNotice {
     pub(crate) slots_moved: usize,
     pub(crate) max_displacement_m: f64,
+    /// Slots whose depth changed beyond the 1e-9 m tolerance, and by how much
+    /// at most (review finding D-migration-upgrade-6).
+    pub(crate) depth_changed: usize,
+    pub(crate) max_depth_change_m: f64,
+    /// Slots with no finite migrated position.
+    pub(crate) unplaced: usize,
     pub(crate) unexplained: usize,
 }
 
 impl ConversionNotice {
     pub(crate) fn of(verification: &Verification) -> Option<Self> {
         let moved = verification.moved();
-        let unexplained = verification.mismatches.len();
-        (moved.slots > 0 || unexplained > 0).then_some(Self {
+        let depth = verification.depth_changed();
+        let notice = Self {
             slots_moved: moved.slots,
             max_displacement_m: moved.max_displacement_m,
-            unexplained,
-        })
+            depth_changed: depth.slots,
+            max_depth_change_m: depth.max_displacement_m,
+            unplaced: verification.unplaced(),
+            unexplained: verification.mismatches.len(),
+        };
+        (notice.slots_moved > 0
+            || notice.depth_changed > 0
+            || notice.unplaced > 0
+            || notice.unexplained > 0)
+            .then_some(notice)
     }
 
     pub(crate) fn message(&self) -> String {
+        let mut what = Vec::new();
+        if self.slots_moved > 0 {
+            what.push(format!(
+                "{} stations moved by up to {:.2} m",
+                self.slots_moved, self.max_displacement_m
+            ));
+        }
+        if self.depth_changed > 0 {
+            what.push(format!(
+                "{} stations changed depth by up to {:.2} m",
+                self.depth_changed, self.max_depth_change_m
+            ));
+        }
+        if self.unplaced > 0 {
+            what.push(format!("{} stations could not be placed", self.unplaced));
+        }
+        if what.is_empty() {
+            // `of` raises no notice without one of the counts above; never
+            // "0 stations moved" all the same.
+            what.push("some positions differ from the old version's".to_owned());
+        }
         format!(
-            "Converted from the old file format; {} stations moved by up to {:.2} m; \
-             the original is kept (Recent Projects: right-click, Restore an earlier copy).",
-            self.slots_moved, self.max_displacement_m
+            "Converted from the old file format; {}; the original is kept (Recent Projects: \
+             right-click, Restore an earlier copy).",
+            what.join("; ")
         )
     }
 }
@@ -382,6 +420,62 @@ impl AppState {
         file.saved_history = extras.history;
         file.local_pending = false;
         Ok(())
+    }
+
+    /// What a write that upgraded the CLOSED legacy file at `path` to version
+    /// 2 (a Recents rename, a SpeleoDB link strip) still owes, as the
+    /// upgrading save does it (review finding D-migration-upgrade-4): the
+    /// `.plnx` beside it rewritten with the record parity of the migration
+    /// that was written (`project`), and the conversion notice kept for the
+    /// next open of `path` in this session. Never fails the write, which
+    /// already happened.
+    pub(super) fn finish_closed_upgrade(
+        &self,
+        path: &Path,
+        project: &crate::models::survey::Project,
+        parity: Option<&LegacyParity>,
+        notice: Option<ConversionNotice>,
+    ) {
+        if let Some(parity) = parity {
+            match super::dive_plan::upgrade_dive_plan_anchors_beside(path, project, parity) {
+                Ok(0) => {}
+                Ok(plans) => tracing::info!(plans, "Rewrote the dive plans' 0.6.0 anchors"),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    purpose = "upgrade dive-plan anchors on a closed file's upgrade",
+                    "Could not rewrite the dive plans' 0.6.0 anchors; they keep the 0.6.0 form"
+                ),
+            }
+        }
+        let Some(notice) = notice else {
+            return;
+        };
+        tracing::info!(
+            moved = notice.slots_moved,
+            depth_changed = notice.depth_changed,
+            unplaced = notice.unplaced,
+            unexplained = notice.unexplained,
+            purpose = "never move stations silently",
+            "A closed legacy file's conversion changed positions; its next open says so"
+        );
+        let mut pending = self
+            .pending_upgrade_notices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.retain(|(p, _)| !super::project_io::same_file(p, path));
+        pending.push((path.to_path_buf(), notice));
+    }
+
+    /// The notice [`Self::finish_closed_upgrade`] kept for `path`, taken.
+    pub(super) fn take_pending_upgrade_notice(&self, path: &Path) -> Option<ConversionNotice> {
+        let mut pending = self
+            .pending_upgrade_notices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = pending
+            .iter()
+            .position(|(p, _)| super::project_io::same_file(p, path))?;
+        Some(pending.remove(at).1)
     }
 
     /// The conversion notice of a legacy open, taken once.

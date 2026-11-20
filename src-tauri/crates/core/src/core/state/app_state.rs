@@ -220,6 +220,11 @@ pub struct AppState {
     /// Taken by the next commit of an open of the same path.
     pub(super) pending_download_notice:
         Mutex<Option<(PathBuf, super::open_file::ConversionNotice)>>,
+    /// Legacy files upgraded to version 2 while closed (a Recents rename, a
+    /// SpeleoDB link strip) whose conversion moved something: the notice the
+    /// next open of that path in this session shows (review finding
+    /// D-migration-upgrade-4). Taken by that open's commit.
+    pub(super) pending_upgrade_notices: Mutex<Vec<(PathBuf, super::open_file::ConversionNotice)>>,
     /// The SpeleoDB SESSION generation: bumped on every session boundary - a
     /// project committed into (or cleared from) the `project` slot, and logout -
     /// and ONLY while holding the `project` mutex. Captured by Start Editing at
@@ -305,6 +310,7 @@ impl AppState {
             history_discarded: AtomicBool::new(false),
             history_from_earlier_version: AtomicBool::new(false),
             pending_download_notice: Mutex::new(None),
+            pending_upgrade_notices: Mutex::new(Vec::new()),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
             speleodb_reverify: Mutex::new(None),

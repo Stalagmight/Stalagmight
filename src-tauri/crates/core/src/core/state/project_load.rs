@@ -341,6 +341,18 @@ impl AppState {
                 file.conversion = Some(notice);
             }
         }
+        // A legacy file this session upgraded while it was closed (a Recents
+        // rename, a SpeleoDB link strip) left its notice for this open. An open
+        // that reads a legacy file there again (a restored original) has its own.
+        if let Some(notice) = project
+            .file_path
+            .as_deref()
+            .and_then(|p| self.take_pending_upgrade_notice(p))
+        {
+            if file.origin == super::open_file::FileOrigin::V2 && file.conversion.is_none() {
+                file.conversion = Some(notice);
+            }
+        }
         // A legacy NULL undo mode is materialized from this machine's default
         // on first open, and made durable (#303).
         let mut link = file.speleo_link();

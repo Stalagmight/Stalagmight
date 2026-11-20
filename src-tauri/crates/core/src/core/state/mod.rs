@@ -108,6 +108,12 @@ mod characterization_dump_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod closed_upgrade_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod closure_promotion_tests;
 #[cfg(test)]
 #[expect(
@@ -123,6 +129,8 @@ mod combine_lines_tests;
     reason = "a fuzzer's summary IS its output, and a failed setup step is the point"
 )]
 mod concurrency_tests;
+#[cfg(test)]
+mod conversion_notice_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

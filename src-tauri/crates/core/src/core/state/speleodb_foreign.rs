@@ -198,6 +198,10 @@ enum Strip {
     Legacy {
         project: Box<crate::models::survey::Project>,
         extras: stalx_v2::Extras,
+        /// The migration's record parity and conversion notice, which the
+        /// upgrade still owes (`AppState::finish_closed_upgrade`).
+        parity: Option<crate::persistence::migrate::LegacyParity>,
+        notice: Option<super::open_file::ConversionNotice>,
     },
 }
 
@@ -247,6 +251,8 @@ fn read_for_strip(
                 Strip::Legacy {
                     project: Box::new(project),
                     extras: file.extras,
+                    parity: file.legacy_parity,
+                    notice: file.conversion,
                 },
                 fingerprint,
             ))
@@ -256,19 +262,32 @@ fn read_for_strip(
 }
 
 /// Write `strip` over `path`, guarded by the fingerprint of the bytes read.
-fn write_strip(path: &Path, strip: Strip, fingerprint: &Fingerprint) -> Result<(), String> {
+/// Takes no state lock but `pending_upgrade_notices`.
+fn write_strip(
+    state: &AppState,
+    path: &Path,
+    strip: Strip,
+    fingerprint: &Fingerprint,
+) -> Result<(), String> {
     match strip {
         Strip::V2 { original, extras } => {
             let bytes = stalx_v2::rewrite_local(&original, &extras).map_err(|e| e.to_string())?;
             write_atomic(path, &bytes, Guard::Expect(fingerprint)).map_err(|e| e.to_string())?;
         }
-        Strip::Legacy { project, extras } => {
+        Strip::Legacy {
+            project,
+            extras,
+            parity,
+            notice,
+        } => {
             let bytes =
                 stalx_v2::encode(&project, &extras, Mode::Normal).map_err(|e| e.to_string())?;
             // The original is made whole and kept in the backups folder first,
-            // as the upgrading save does (`legacy_upgrade`).
+            // as the upgrading save does (`legacy_upgrade`), and the dive-plan
+            // pins and the conversion notice follow as after that save.
             super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(fingerprint))
                 .map_err(|failure| failure.error.to_string())?;
+            state.finish_closed_upgrade(path, &project, parity.as_ref(), notice);
         }
     }
     Ok(())
@@ -425,7 +444,8 @@ impl AppState {
                     .to_owned(),
             )));
         }
-        write_strip(&path, strip, &fingerprint).map_err(|e| local_dto(SpeleoDbError::Io(e)))?;
+        write_strip(self, &path, strip, &fingerprint)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e)))?;
         drop(open);
         tracing::info!(
             path = %path.display(),

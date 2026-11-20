@@ -731,6 +731,8 @@ impl AppState {
         };
         let mut project = opened.project;
         name.clone_into(&mut project.name);
+        let parity = opened.file.legacy_parity;
+        let notice = opened.file.conversion;
         let mut extras = opened.file.extras;
         extras.generator = generator();
         // The legacy history is dropped by the conversion (plan 7.2.8).
@@ -746,6 +748,7 @@ impl AppState {
                     purpose = "rename a closed legacy project",
                     "Upgraded a legacy project to version 2 to rename it"
                 );
+                self.finish_closed_upgrade(path, &project, parity.as_ref(), notice);
                 CommandResult::success()
             }
             Err(failure) => match &failure.error {

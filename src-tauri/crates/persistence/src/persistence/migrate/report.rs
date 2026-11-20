@@ -161,18 +161,62 @@ impl Verification {
     /// The slots that moved horizontally beyond the cascade's dust, expected
     /// (a torn merge collapsed) or not, and the largest move: the "N stations
     /// moved by up to X m" of the conversion notice (plan 7.2.10). Depth
-    /// differences are not moves and are not counted.
+    /// changes are [`Self::depth_changed`]; a slot with no finite position is
+    /// [`Self::unplaced`], never a move "by up to inf m".
     pub fn moved(&self) -> ClassStats {
         let mut moved = self
             .expected
             .get(&ExpectedClass::TornMergeCollapsed)
             .copied()
             .unwrap_or_default();
-        for m in self.mismatches.iter().filter(|m| m.axis != Axis::Depth) {
+        for m in self
+            .mismatches
+            .iter()
+            .filter(|m| m.axis == Axis::Horizontal && m.displacement_m.is_finite())
+        {
             moved.slots += 1;
             moved.max_displacement_m = moved.max_displacement_m.max(m.displacement_m);
         }
         moved
+    }
+
+    /// The slots whose depth changed beyond the tolerance, expected (a snap
+    /// whose derived alignment changed a depth tie,
+    /// [`ExpectedClass::SnapAlignmentChanged`]) or not, and the largest
+    /// change: the "N stations changed depth by up to Z m" of the conversion
+    /// notice (review finding D-migration-upgrade-6: depth is what a diver
+    /// navigates by, so a depth change is as visible as a move).
+    pub fn depth_changed(&self) -> ClassStats {
+        let mut changed = self
+            .expected
+            .get(&ExpectedClass::SnapAlignmentChanged)
+            .copied()
+            .unwrap_or_default();
+        for m in self
+            .mismatches
+            .iter()
+            .filter(|m| m.axis == Axis::Depth && m.displacement_m.is_finite())
+        {
+            changed.slots += 1;
+            changed.max_displacement_m = changed.max_displacement_m.max(m.displacement_m);
+        }
+        changed
+    }
+
+    /// The slots the migrated project has no finite position for where 0.6.0
+    /// had one (an unexplained [`Axis::Missing`] slot, or a difference that is
+    /// not a number): "could not be placed" in the conversion notice. Each
+    /// slot counts once.
+    pub fn unplaced(&self) -> usize {
+        let mut slots: Vec<(LineId, u32)> = self
+            .mismatches
+            .iter()
+            .filter(|m| m.axis == Axis::Missing || !m.displacement_m.is_finite())
+            .map(|m| (m.line_id, m.station_index))
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        slots.len()
     }
 }
 
