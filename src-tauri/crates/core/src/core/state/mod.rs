@@ -82,6 +82,14 @@ mod batch_label_tests;
 mod cave_sections_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "on-demand characterisation dump: fails loudly, and says where it wrote"
+)]
+mod characterization_dump_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
