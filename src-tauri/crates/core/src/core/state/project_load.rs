@@ -15,6 +15,18 @@
 //!   the verification moved slots or left anything unexplained.
 //!
 //! Load is pure: the project in memory is exactly the file's (no heals).
+//!
+//! The read runs without any lock (a legacy migration takes seconds), so the
+//! file can change between the read and the commit: one of our own writes
+//! (a save, a display toggle's local-only save, Save As or Save a Copy onto
+//! that path) or another program's. The commit re-reads the fingerprint
+//! under the `project` guard, which every write of ours to the open file
+//! holds, and refuses a read the file no longer holds; the open then reads it
+//! again, up to [`OPEN_ATTEMPTS`] reads. Committed, the guard's fingerprint
+//! was stale: the next save was refused as "changed by another program" for
+//! our own write. Those writes are serialized by that guard, so a second read
+//! converges; a file another program keeps rewriting is opened as last read,
+//! and the guard then says so at the next save, which is true.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +61,51 @@ pub(crate) struct Opened {
     /// for the load's notice; empty for a version 2 file.
     pub(crate) unrecognised_shot_kinds: Vec<crate::models::UnrecognisedShotKind>,
 }
+
+impl Opened {
+    /// Whether the file at the project's path still holds the bytes this was
+    /// read from. Exact only under the `project` guard (every write of ours
+    /// to the open file holds it); a file that grew, shrank, changed or went
+    /// away does not.
+    fn still_on_disk(&self) -> bool {
+        let (Some(path), Some(expected)) = (
+            self.project.file_path.as_deref(),
+            self.file.fingerprint.as_ref(),
+        ) else {
+            return true;
+        };
+        Fingerprint::read(path, expected.len).is_ok_and(|(_, found)| found.same_content(expected))
+    }
+}
+
+/// How many times an open reads a file that changed between its read and its
+/// commit; the last read is committed whatever the file holds by then.
+const OPEN_ATTEMPTS: usize = 3;
+
+/// What [`AppState::commit_opened`] does with a read the file no longer
+/// holds (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IfChanged {
+    /// Refuse it: the caller reads the file again.
+    ReadAgain,
+    /// Commit it as read (the last attempt): the guard reports the change at
+    /// the next save.
+    OpenAsRead,
+}
+
+impl IfChanged {
+    fn of_attempt(attempt: usize) -> Self {
+        if attempt < OPEN_ATTEMPTS {
+            Self::ReadAgain
+        } else {
+            Self::OpenAsRead
+        }
+    }
+}
+
+/// The file changed between the read and the commit (see the module docs).
+#[derive(Debug)]
+pub(crate) struct ChangedWhileOpening;
 
 fn path_text(path: &Path) -> String {
     path.display().to_string()
@@ -211,17 +268,39 @@ impl AppState {
     /// holds no lock. A lock held for the project that leaves is released
     /// first (detached). Returns the revision the commit made (read under its
     /// guard), the key of anything derived from the opened survey.
-    pub(crate) fn commit_opened(&self, opened: Opened) -> u64 {
+    ///
+    /// When the file no longer holds the bytes `opened` was read from
+    /// (checked under the guard; module docs), [`IfChanged::ReadAgain`]
+    /// refuses with nothing committed: the caller reads it again.
+    pub(crate) fn commit_opened(
+        &self,
+        opened: Opened,
+        if_changed: IfChanged,
+    ) -> Result<u64, ChangedWhileOpening> {
         self.speleodb_release_held_lock_detached();
         let mut proj_guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !opened.still_on_disk() {
+            if if_changed == IfChanged::ReadAgain {
+                tracing::info!(
+                    purpose = "keep the save guard on the bytes on disk",
+                    "The project file changed while it was opened; reading it again"
+                );
+                return Err(ChangedWhileOpening);
+            }
+            tracing::warn!(
+                attempts = OPEN_ATTEMPTS,
+                purpose = "keep the save guard on the bytes on disk",
+                "The project file kept changing while it was opened; opened as last read"
+            );
+        }
         self.commit_opened_locked(&mut proj_guard, opened, None);
         let revision = self.current_revision();
         drop(proj_guard);
         self.persist_pending_local_state();
-        revision
+        Ok(revision)
     }
 
     /// [`Self::commit_opened`] under the caller's `project` guard, in ONE
@@ -304,13 +383,20 @@ impl AppState {
     /// Open a project (the executor's `Command::OpenProject` and tests): no
     /// progress events, no canonical-storage guard.
     pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
-        match self.read_project_file(&path) {
-            Ok(opened) => {
-                self.commit_opened(opened);
+        let mut attempt = 1;
+        loop {
+            let opened = match self.read_project_file(&path) {
+                Ok(opened) => opened,
+                Err(error) => return CommandResult::failure(error.message),
+            };
+            if self
+                .commit_opened(opened, IfChanged::of_attempt(attempt))
+                .is_ok()
+            {
                 self.note_recent_project(&path);
-                CommandResult::success()
+                return CommandResult::success();
             }
-            Err(error) => CommandResult::failure(error.message),
+            attempt += 1;
         }
     }
 
@@ -414,13 +500,6 @@ impl AppState {
         path: &Path,
         progress: &mut ProgressEmitter,
     ) -> Result<LoadProjectFullResult, LoadError> {
-        let cancelled = |progress: &ProgressEmitter| {
-            if progress.is_cancelled() {
-                Err(LoadError::cancelled())
-            } else {
-                Ok(())
-            }
-        };
         progress.start_phase(LoadingPhase::OpeningFile);
         use super::speleodb_foreign::LinkedSpelling;
         let path = match self.foreign_link(path) {
@@ -428,10 +507,37 @@ impl AppState {
             LinkedSpelling::Canonical(canonical) => canonical,
             LinkedSpelling::Foreign(managed) => return Err(LoadError::speleodb_managed(managed)),
         };
-        cancelled(progress)?;
+        if progress.is_cancelled() {
+            return Err(LoadError::cancelled());
+        }
         progress.complete_phase(LoadingPhase::OpeningFile);
+        let mut attempt = 1;
+        loop {
+            let if_changed = IfChanged::of_attempt(attempt);
+            if let Some(result) = self.load_full_once(&path, progress, if_changed)? {
+                return Ok(result);
+            }
+            attempt += 1;
+        }
+    }
+
+    /// One read, the views computed from it, and the commit; `None` when the
+    /// commit refused the read because the file changed meanwhile.
+    fn load_full_once(
+        &self,
+        path: &Path,
+        progress: &mut ProgressEmitter,
+        if_changed: IfChanged,
+    ) -> Result<Option<LoadProjectFullResult>, LoadError> {
+        let cancelled = |progress: &ProgressEmitter| {
+            if progress.is_cancelled() {
+                Err(LoadError::cancelled())
+            } else {
+                Ok(())
+            }
+        };
         progress.start_phase(LoadingPhase::LoadingProjectData);
-        let opened = self.read_project_file(&path)?;
+        let opened = self.read_project_file(path)?;
         cancelled(progress)?;
         progress.complete_phase(LoadingPhase::LoadingProjectData);
         progress.start_phase(LoadingPhase::ComputingStations);
@@ -474,21 +580,23 @@ impl AppState {
             );
         }
         self.set_unrecognised_shot_kinds(progress.loading_id(), unrecognised);
-        let revision = self.commit_opened(opened);
+        let Ok(revision) = self.commit_opened(opened, if_changed) else {
+            return Ok(None);
+        };
         *self
             .derived
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(super::app_state::DerivedCache::new(revision, raw));
-        self.note_recent_project(&path);
+        self.note_recent_project(path);
         progress.complete_phase(LoadingPhase::Finalizing);
         tracing::info!(path = ?path, purpose = "load project for workspace", "Project loaded via load_project_full");
-        Ok(LoadProjectFullResult::from_envelope(
+        Ok(Some(LoadProjectFullResult::from_envelope(
             progress.loading_id(),
             envelope,
             warnings,
             display_settings,
             is_remote,
-        ))
+        )))
     }
 }

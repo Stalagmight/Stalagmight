@@ -51,6 +51,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use super::project_load::IfChanged;
 use super::robustness_kit::{
     adjusted_geometry_of, build_project, canonical, canonical_snapshot, derived_cache_is_coherent,
     random_offset, random_shot, read_targets, NullSink, Rng, COLORS,
@@ -995,6 +996,142 @@ fn a_display_toggle_racing_undo_never_writes_a_history_that_does_not_fit_the_bod
         broken.len(),
         broken[0]
     );
+}
+
+/// Whether the guard's fingerprint describes the open file's bytes.
+fn guard_describes_the_open_file(state: &AppState) -> Result<(), String> {
+    let path = state
+        .open_file_path()
+        .ok_or_else(|| "no file is open".to_string())?;
+    let expected = state
+        .with_file(|file| file.fingerprint.clone())
+        .ok_or_else(|| "the open file has no fingerprint".to_string())?;
+    let (_, on_disk) = Fingerprint::read(&path, u64::MAX).map_err(|e| e.to_string())?;
+    if on_disk.same_content(&expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the guard's fingerprint does not describe {}",
+            path.display()
+        ))
+    }
+}
+
+/// An open reads the file without a lock and commits it later. One of our
+/// own writes of that file in between (here a display toggle's local-only
+/// save of the open file, which takes no `command_lock`) left the commit
+/// installing the fingerprint of bytes no longer on disk, so the next save
+/// was refused as "changed by another program". Found by `concurrency_soak`
+/// (seeds 32000087 and 32000349, 4 threads x 800 ops). The interleaving is
+/// forced here: the read, the toggle, then the commit, which must refuse
+/// the read and change nothing.
+#[test]
+fn a_commit_refuses_a_read_our_own_write_made_stale() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(3, temp.path()).unwrap();
+    let path = &files.loads[0];
+    let opened = state.read_project_file(path).unwrap();
+    let (_, read) = Fingerprint::read(path, u64::MAX).unwrap();
+    let shown = state.get_display_setting("showGrid").unwrap();
+    let flipped = if shown.as_deref() == Some("true") {
+        "false"
+    } else {
+        "true"
+    };
+    state.save_display_setting("showGrid", flipped).unwrap();
+    let (_, toggled) = Fingerprint::read(path, u64::MAX).unwrap();
+    assert!(
+        !toggled.same_content(&read),
+        "the toggle must rewrite the file for this test to mean anything"
+    );
+    let revision = state.current_revision();
+    assert!(
+        state.commit_opened(opened, IfChanged::ReadAgain).is_err(),
+        "a read the file no longer holds was committed"
+    );
+    assert_eq!(
+        state.current_revision(),
+        revision,
+        "the refusal committed something"
+    );
+    guard_describes_the_open_file(&state).unwrap();
+    let saved = state.save_project(None);
+    assert!(saved.success, "{:?}", saved.error);
+    // The executor's open reads it again and commits what the file holds.
+    let reopened = state.execute(Command::OpenProject { path: path.clone() });
+    assert!(reopened.success, "{:?}", reopened.error);
+    guard_describes_the_open_file(&state).unwrap();
+}
+
+/// The same window through the IPC load, forced by the load's own progress
+/// event: a Save As of the open project onto the file being loaded lands
+/// between the load's read and its commit. The load reads the file again,
+/// opens what it now holds, and guards those bytes. Before the fix it opened
+/// the bytes the Save As replaced, guarded by their fingerprint, and the
+/// next save was refused.
+#[test]
+fn a_save_as_onto_the_file_being_loaded_is_read_again() {
+    struct SaveAsMidLoad {
+        state: std::sync::OnceLock<std::sync::Weak<AppState>>,
+        target: PathBuf,
+        fired: AtomicBool,
+    }
+    impl crate::core::events::EventSink for SaveAsMidLoad {
+        fn emit(&self, _event: &str, payload: serde_json::Value) {
+            let mid_load =
+                serde_json::to_value(crate::core::loading::LoadingPhase::ComputingStations).ok();
+            if payload.get("phase") != mid_load.as_ref() || self.fired.swap(true, Ordering::SeqCst)
+            {
+                return;
+            }
+            if let Some(state) = self.state.get().and_then(std::sync::Weak::upgrade) {
+                let saved = state.save_project(Some(self.target.clone()));
+                assert!(saved.success, "the Save As mid-load: {:?}", saved.error);
+            }
+        }
+
+        fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            false
+        }
+    }
+
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(4, temp.path()).unwrap();
+    // The open survey differs from the one load-b holds, so the Save As
+    // rewrites load-b.
+    let (line_id, _) = read_targets(&state).unwrap().lines[0].clone();
+    let edited = state.execute(Command::SetStationComment {
+        station_ref: StationRef::new(line_id, 0),
+        comment: Some("written by the Save As".to_string()),
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    let state = Arc::new(state);
+    let sink = Arc::new(SaveAsMidLoad {
+        state: std::sync::OnceLock::new(),
+        target: files.loads[1].clone(),
+        fired: AtomicBool::new(false),
+    });
+    let _ = sink.state.set(Arc::downgrade(&state));
+    state.set_event_sink(Arc::clone(&sink) as Arc<dyn crate::core::events::EventSink>);
+
+    let loaded = state.do_load_project_full(files.loads[1].clone());
+    assert!(loaded.is_ok(), "{:?}", loaded.err());
+    assert!(sink.fired.load(Ordering::SeqCst), "the Save As never ran");
+    guard_describes_the_open_file(&state).unwrap();
+    let on_disk = stalx_v2::decode(
+        &std::fs::read(&files.loads[1]).unwrap(),
+        &DecodeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        canonical(&on_disk.project),
+        canonical_snapshot(&state),
+        "the load opened bytes the file no longer holds"
+    );
+    let saved = state.save_project(None);
+    assert!(saved.success, "{:?}", saved.error);
 }
 
 /// The SOAK: more threads, more operations, minutes rather than seconds.
