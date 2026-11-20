@@ -58,7 +58,7 @@ pub struct Project {
     pub settings: ProjectSettings,        // validation, surface_elevation, default_azimuth_reference
     pub imported_file_hashes: Vec<String>,
     pub imported_line_hashes: Vec<String>,
-    pub counters: Counters,               // next_line_id, next_station_id, next_closure_id, next_section_id
+    pub counters: Counters,               // next_station_id, next_closure_id, next_section_id (next_line_id is derived: max + 1, as today, so MAX_LINE_ID never becomes a lifetime budget)
 
     // session-only
     #[serde(skip)] pub file_path: Option<PathBuf>,
@@ -107,13 +107,16 @@ pub struct Shot {
 
 pub struct ZeroDatum {
     pub station: StationId,
+    pub via: Option<LineId>,              // attachment hint: the line whose slot the datum was set on (5.2, 3.8)
     pub gps: GpsCoordinates,
     pub accuracy_m: Option<f64>,
     pub entrance: Option<bool>,
-    /// Legacy only: the horizontal displacement (local metres) between where an
-    /// older build placed this datum's piece and where its GPS says. Zero/None
-    /// for everything this build creates. Kept so an upgraded file opens with
-    /// every station where it was.
+    /// Horizontal displacement (local metres) between where this placement
+    /// datum's piece sits and where its GPS says, relative to the current
+    /// frame. A maintained field ("measure, do not re-derive", 4.5): set by
+    /// frame changes and Add .stalx so nothing moves; cleared by a GPS edit of
+    /// this datum and when it is demoted to a GPS fix. None for a datum that
+    /// sits exactly on its GPS.
     pub correction: Option<[f64; 2]>,
 }
 
@@ -124,8 +127,10 @@ pub struct Placement { pub station: StationId, pub x: f64, pub y: f64 }
 pub struct LoopClosure {
     pub id: ClosureId,
     pub a: StationId,
+    pub a_via: Option<LineId>,            // attachment hints (5.2)
     pub b: StationId,
-    pub strategy: ClosureStrategy,        // Batch, Move (snap), legacy variants kept for reading
+    pub b_via: Option<LineId>,
+    pub strategy: ClosureStrategy,        // Batch, Move (snap), Tie (legacy rigid tie, 3.6), legacy variants kept for reading
 }
 ```
 
@@ -149,12 +154,12 @@ Notes:
 4. Every station is on at least one line, or is a **lone station** (a line with zero shots has `start` only; stations on no line are not allowed).
 5. **Forest:** the graph whose nodes are stations and whose edges are shots is a forest per connected component. No cycle without an explicit loop closure. (Equivalently: lines + shared stations never close a loop. This is today's merge-forest invariant, now structural.)
 6. Placement: every connected component has exactly one anchor: its first placement datum in list order, else exactly one `Placement` whose station is in it. No `Placement` in a component that holds a datum.
-7. Closures: `a != b`; a closure never joins two stations of the same component *across exactly one shot* (refused at creation, as #737). A closure's ends may be in different components only if both components hold a datum (today's rule).
+7. Closures: `a != b`. A closure's ends may be in different components only if both components hold a datum (today's rule). "Across one shot" is NOT an invariant: it is refused at creation (#737) and otherwise derived as a skip set (today's knot rule over closures in list order, transitive through other closures and snaps) plus the `CLOSURE_ACROSS_ONE_SHOT` warning, exactly as today (old files, Combine, promotions and Add can produce such closures).
 8. Station names: unique within each line, across all stations on that line (5.3).
-9. Counters are above every id in use (monotonic, never reused).
+9. Stored counters are above every id in use (monotonic, never reused). `next_line_id` is derived on load (max + 1).
 10. Numbers finite.
 
-`validate` returns typed violations; load refuses a file with any (section 6.6), and commands roll back if they would introduce one (as the integrity guard does today).
+`validate` returns typed violations. The writer runs it before every save and refuses to write an invalid model (the in-memory state is kept). Load refuses a file with any violation unless opened through salvage (6.6). Commands roll back if they would introduce one (as the integrity guard does today). `validate` may only become stricter together with a format feature (`requires`) and a migration.
 
 ---
 
@@ -188,7 +193,7 @@ Hand moves (5.6) are legacy-only and absent from almost every file; without them
 
 ### 3.4 Depth (Z)
 
-As today: absolute, never walked. `Z(S)` = mean of the depth readings at S over every line through S (`depth_out` of the incoming shot, `depth_in` of the outgoing shot), plus the readings of stations tied to S by an **aligned snap** (3.6), summed in sorted order (#469). Slot Z = `Z(S) + hand(L, S).z`.
+As today: absolute, never walked. `Z(S)` = mean of the depth readings at S over every line through S (`depth_out` of the incoming shot, `depth_in` of the outgoing shot), plus the readings of every station tied to S, **transitively**, by aligned snaps and `Tie` closures (3.6), summed in sorted order (#469). Slot Z = `Z(S) + hand(L, S).z`.
 
 ### 3.5 Wire positions per slot
 
@@ -196,8 +201,9 @@ The wire carries one entry per slot (as today). Slot `(L, i)` with station S: XY
 
 ### 3.6 Closures: alignment and metrics
 
-- `is_aligned(c)` = `c.strategy == Move` AND horizontal gap between the ends < 1 cm AND the tie would not double-anchor. Recomputed every time (today it is stored and re-measured).
-- An aligned snap is a rigid tie for: depth co-location (3.4), Move tools' co-located sets, rigid groups, frozen shots, immovable stations, LSQ ties. It does not move raw XY (a snap always closes a loop inside a component, or joins two placed pieces, so it never places anything).
+- `is_aligned(c)`: for `Move`, horizontal gap between the ends < 1 cm AND the tie would not double-anchor (recomputed every time; today it is stored and re-measured). For `Tie` (legacy rigid tie): always true, never derived. Other strategies: false.
+- `Tie` exists only in migrated files: merges the migration could not collapse (cycle-closing, same-line, self) and legacy aligned non-`Move` closures (whose stored `is_aligned` today is trusted, never re-measured). New commands never create it. It keeps today's behaviour for those ties: depth co-location, rigidity, LSQ one-point tie.
+- An aligned closure (snap or tie) is a rigid tie for: depth co-location (3.4), Move tools' co-located sets, rigid groups, frozen shots, immovable stations, LSQ ties. It does not move raw XY (a snap always closes a loop inside a component, or joins two placed pieces, so it never places anything).
 - Metrics (`path_length`, `misclosure_distance`, `error_percentage`, `horizontal_misclosure`, `vertical_misclosure`) are recomputed from raw positions. `path_length` is the shortest path along shots between the ends (junctions are free, as one station; **closures are not traversable**). This replaces today's creation-time value that counted earlier closures as zero-length edges; values on old files can change and that is accepted.
 
 ### 3.7 Closures Computed View (least squares)
@@ -208,24 +214,45 @@ The current algorithm (`lsq.rs`) is kept, operating on stations instead of slots
 
 ### 3.8 Other derived values
 
-Datum roles (first datum per component = placement, others GPS fixes), entrance defaults (placement datum; else override; else first or last station of a line it is on), GPS gaps and their warnings, frozen shots, rigid groups, immovable stations, anchored lines, stats, survey graph for Plan/gas (junctions are one node; closures zero-cost edges as today), merge pairs for the wire (3.5 / 9.2).
+Datum roles (first datum per component = placement, others GPS fixes), entrance defaults (placement datum; else override; else first or last station of its `via` line, or of its station's first line when `via` is unset; migration writes explicit overrides wherever this default would differ from today's), GPS gaps and their warnings, frozen shots, rigid groups, immovable stations, anchored lines, stats, survey graph for Plan/gas (junctions are one node; closures zero-cost edges as today), merge pairs for the wire (3.5 / 9.2).
 
 ---
 
 ## 4. What stays still: placement rules on edit
 
-The traversal makes "the anchored side stays" automatic: every station's position is derived from its component's anchor. Edits change anchors only where the rules below say so.
+The traversal makes "the anchored side stays" automatic: every station's position is derived from its component's anchor. Edits change anchors only through the single post-edit algorithm in 4.1.
 
-1. **Datum piece:** the placement datum's station stays at its GPS. Nothing else needed.
-2. **Free piece, geometry edit to line L** (UpdateShot, insert, delete, prepend, split shot at distance): before the edit, record `pin = (L's first station, its position)`; after the edit, if that station still exists set the component's `Placement` to the pin; otherwise pin L's new first station at its pre-edit position. This reproduces today's "the edited line's station 0 stays" rule.
-3. **Merge two pieces** (5.1): the piece of `station_a` moves onto `station_b` unless A's piece is placed and B's is not (then B's moves), or both are placed (the piece whose placement datum is later in list order moves; its datum becomes a GPS fix by derivation). The moving piece's `Placement` (if any) is dropped.
-4. **A piece is cut off its anchor** (unmerge/detach, delete shot/range/line, split line): the piece that lost its anchor keeps every station where it was: it gets a `Placement` at its lowest-StationId station's pre-edit position. If it holds a datum, that datum becomes its placement datum and the piece moves onto its GPS (today's `settle_datum_layout` rule).
-5. **Frame change** (the first datum removed or a new first datum set): datum pieces are re-derived from GPS against the new frame; every `Placement` is translated by the frame correction so free pieces keep their place relative to the frame station's old position (today's `renormalize_frame`). Legacy `correction`s are kept.
-6. **Move Segment / Move Line:** translate the free piece's `Placement`; refused if the rigid group holds a datum (as today).
-7. **Move Station:** rewrite every shot incident to the station, on every line through it (a junction has three or more), so the station lands on the target and its neighbours stay (today's shot rewrite, generalised); if the station is its free piece's `Placement`, move the placement too; refused on datum stations (as today); deletes any hand move of the station.
-8. **Reverse line:** reverse the chain and flip each shot (today's `reversed_azimuths`, depth swap, pitch swap and negation, optional L/R swap). Positions do not change.
+### 4.1 One post-edit anchor algorithm
 
----
+Every command (and every bypass recipe) runs this after its mutation and before validation:
+
+1. Before the mutation, record `P_before(s)` for every station (raw positions; cheap, cached) and the set of components with their anchors.
+2. After the mutation, for each component of the new model:
+   - **holds a datum:** its first datum in list order places it (with its `correction`). If that datum was a GPS fix before (promotion because the old placement datum left the component), the piece moves onto its GPS (today's `settle_datum_layout`), correction None.
+   - **holds no datum:** choose the *still point* `s*`, the first that applies: (a) the command is a geometry edit of line L (UpdateShot, insert, delete, prepend, split shot at distance, range delete) and the component contains L's pre-edit first station: that station; (b) the component contains its old `Placement` station: that station; (c) the first surviving station of the edited line in it; (d) its lowest StationId. Lay the component out with a temporary anchor `s*` at `P_before(s*)`.
+   - Choose its `Placement` station `g`: its old `Placement` station if it survives in it (so the least-squares gauge never moves, 3.7); else, for a component formed by a merge, the stationary piece's `Placement` station; else its lowest StationId. Store `Placement = (g, laid-out position of g)`.
+3. A free piece that gains a datum (Set datum) drops its `Placement`. A piece that loses its last datum (Remove datum, detach, delete) gets a `Placement` by step 2 at its current position (nothing moves), unless it still holds a datum (then that one places it, step 2 first bullet).
+
+This reproduces today's rules: datum pieces stay on their datum; in a free piece the edited line's first station stays; merges move the piece of `station_a` onto `station_b` unless that would move a placed piece (4.2); cut-off pieces stay where they were unless a promoted GPS fix places them.
+
+### 4.2 Merge direction
+
+The piece of `station_a` moves onto `station_b`, unless A's piece is placed and B's is not (then B's moves), or both are placed (the piece whose placement datum is later in list order moves; its datum becomes a GPS fix by derivation and its `correction` is cleared). The moving piece's `Placement` (if any) is dropped.
+
+### 4.3 Frame change ("measure, do not re-derive")
+
+When the frame (first resolvable datum) changes, nothing moves relative to anything else; the survey is translated rigidly so the new frame station is at local (0, 0), exactly as today's `renormalize_frame`:
+- `T = -P_before(new frame station)`; every `Placement` is translated by `T`;
+- every placement datum `i` gets `correction_i := P_before(i) + T - gps_to_local(G_i, G_newframe)` (so the new frame's correction is 0 and every other piece keeps its place despite tangent-plane non-additivity);
+- corrections below 1e-9 m are stored as None.
+A GPS edit of a placement datum clears its correction and places its piece on the new GPS (the frame stays at (0, 0)); re-setting the frame's own GPS moves the other pieces by `current + new - old`, as today's `place_pieces_on_frame`. A datum demoted to a GPS fix has its correction cleared.
+
+### 4.4 Other rules
+
+- **Move Segment / Move Line:** translate the free piece's `Placement`; refused if the rigid group holds a datum (as today).
+- **Move Station:** rewrite every shot incident to the station, on every line through it (a junction has three or more), so the station lands on the target and its neighbours stay (today's shot rewrite, generalised); if the station is its free piece's `Placement` station, move the placement too; refused on datum stations (as today); deletes the station's hand moves on every line.
+- **Reverse line:** reverse the chain and flip each shot (today's `reversed_azimuths`, depth swap, pitch swap and negation, optional L/R swap). Positions do not change (up to the flip's documented ulp rounding).
+- **Add .stalx:** the copied pieces move rigidly by the same vector today's `place_by_datum` uses (the source's first datum station onto `gps_to_local(G_source, frame)` or the origin): copied `Placement`s are translated by that vector and copied corrections recomputed with the frame-change formula, so free pieces land next to their cave.
 
 ## 5. Topology operations
 
@@ -235,13 +262,15 @@ Each operation is expressed on the new model; previews (merge dialog, delete imp
 
 Refused when: same station; the two stations are already connected (shots, junctions or aligned snaps), so the user is routed to Create Loop Closure, as today; one station per line rule (a line may not pass through the merged station twice).
 
-Effect: station `b'` (the moving side's station, see rule 4.3) is replaced by the surviving station `s` everywhere (`line.start`, `shot.to`, datums, closures, placements, hand-move keys). The survivor keeps its id, name and comment; the retired station's id and name go to `s.aliases`; its comment is appended to the survivor's if both are non-empty and different (separated by a blank line), else whichever exists. Datums of both are kept (a station may carry more than one datum; the first in list order is the one the datum dialog edits). Closures between the two become `a == b` and are removed (#738). Names are re-uniquified on every line through `s` (letter suffix rule).
+Effect: station `b'` (the moving side's station, see rule 4.2) is replaced by the surviving station `s` everywhere (`line.start`, `shot.to`, datums, closures, placements, hand-move keys). The survivor keeps its id, name and comment; the retired station's id and name go to `s.aliases`; its comment is appended to the survivor's if both are non-empty and different (separated by a blank line), else whichever exists. Datums of both are kept (a station may carry more than one datum; the first in list order is the one the datum dialog edits). Closures between the two become `a == b` and are removed (#738). Names are re-uniquified on every line through `s` (letter suffix rule).
 
-**Survivor:** the station on the side that stays put (4.3). In the Merge dialog the user sees the same two stations as today.
+**Survivor:** the station on the side that stays put (4.2). In the Merge dialog the user sees the same two stations as today. Datums and closure ends keep their `via` line hints, so a later detach can give them back to the line they came from. The orphan-closure sweep runs after a merge (as today).
 
 ### 5.2 Unmerge (detach)
 
-`unmerge_station_pair(slotA, slotB)` detaches **slotB's line** from the shared station. `unmerge_stations(slot)` detaches that slot's line from every other line at that station. Detaching line L from station S: L's slot gets a new station S' (new id; name copied from S, then uniquified; no comment, datums, aliases or closures), placed exactly where S was; components split per 4.4; then the orphan-closure sweep (5.5) runs.
+`unmerge_station_pair(slotA, slotB)` detaches **slotB's line** from the shared station. `unmerge_stations(slot)` detaches that slot's line from every other line at that station. Detaching line L from station S: L's slot gets a new station S' (new id; name copied from S, then uniquified; no comment or aliases), placed exactly where S was. Datums and closure ends whose `via` is L move to S' (so today's unmerge results are reproduced: a fix that belonged to L's member promotes and places L's piece on its GPS; a closure that belonged to L's member becomes an orphan and is promoted by the sweep). L's hand move at S moves to S'. Components and anchors per 4.1; then the orphan-closure sweep (5.5) runs.
+
+Declared behaviour change: "Unmerge station" on a hub of three or more lines detaches the chosen slot's line only (today it removed every direct merge pair of that member, which could split a hub into three pieces). The user can detach further lines one at a time.
 
 ### 5.3 Station naming
 
@@ -252,17 +281,24 @@ The creation rules (End, Mid, Prepend, Combine prefix) are unchanged and apply t
 - **Create shot** (append, insert before/after, prepend, split shot at distance): a new station is minted for the new chain position (insert: the new shot ends at a new station and the following shot now starts there; prepend: new start station). Ids: `next_station_id`.
 - **Delete shot** removes one station from the line exactly as today (station 0 for the first shot, else the shot's end station; the following shot re-attaches to the shot's start). If the removed station is a junction it **stays** for the other lines (their connection is untouched); if it is on no other line it is deleted with its comment, datums and hand moves, and its closures are dropped. Then the sweep (5.5) runs. This makes #776 impossible by construction: closures on a junction stay on the junction; there is no replacement or promotion planning per closure.
 - **Delete shot range** (gap-close / split / prefix / suffix) and **delete line**: the same rule per removed station.
-- **Split line here** (at station k): the second half becomes a new line whose start is **the same station k** (a junction). This replaces today's duplicate co-located unmerged station: the two halves stay connected. Datums and comments stay on the one station.
-- **Combine lines:** append/prepend the other line's chain onto the kept line at their common station. If the join stations are distinct (side by side, or across a closure), they are first merged per 5.1 (the other line's piece moves) and any closure between them disappears. Torn ties: an edge that would close a loop becomes a `Batch` closure (today's tie-tearing rule, now much smaller).
+- **Split line here** (at station k): the second half becomes a new line whose start is **the same station k** (a junction). This replaces today's duplicate co-located unmerged station: the two halves stay connected. Datums and comments stay on the one station; the hand move at k is copied to the new line (`hand(L2, k) = hand(L1, k)`). Declared consequences: edits to one half now move the other, Move Segment on the second half is refused when the first half holds a datum, and merging the halves' far ends routes to the closure dialog.
+- **Combine lines** must reproduce today's results (`combine_plan.rs`, `combine_lines.rs`; the existing `combine_*_tests.rs` are ported first and are the oracle). Algorithm on the station graph:
+  1. Choose the moving side M by today's rule: the other line's side moves, unless its side is datum-held and the kept side is not, or (no datum deciding) its side holds the component's `Placement` station (the adjusted-view gauge) and the kept side does not.
+  2. If the two join stations are already connected (across a closure, or side by side within one component), detach the junction on the path between them nearest M (today's "the one nearest M, so the least moves"), giving the M-side line a new station, and record a `Batch` closure between the two stations of that torn junction.
+  3. If both sides are placed, detach the junctions from M towards the datum sides into `Batch` closures instead of merging two placed pieces; refuse only when both lines carry a datum on their own stations (as today).
+  4. Merge the other line's join station into the kept line's (5.1), then concatenate the chains (reversing the other line first if needed).
+  5. Snaps torn by the move become `Batch` (as today). The kept line's hand move wins at the join; the other line's hand moves move to the kept line.
+  6. A tie that would make the combined line pass a station twice is torn into a `Batch` closure (invariant 3).
+- **Delete datum / set datum, merge, detach, delete:** anchors per 4.1; the orphan-closure sweep runs after Merge, Unmerge/Detach, RemoveZeroDatum and every delete (as today).
 - **Reverse:** 4.8.
 
 ### 5.5 Closures
 
-Create (refusals as today: same station, already a closure for the pair, across one shot, unconnected unless both pieces are placed), remove by id. **Orphan-closure sweep** after topology edits (not on load): a closure whose ends are the same station is removed; a closure that is the sole connection between its two ends' components (no path over shots) is **promoted**: the two stations are merged (5.1, with the movable piece moving onto the other, refused if it would double-anchor), iterating in list order so a later closure sees an earlier promotion. Removed and promoted closures are reported as warnings, as today.
+Create (refusals as today: same station, already a closure for the pair, across one shot, unconnected unless both pieces are placed), remove by id. **Orphan-closure sweep** after topology edits (not on load): a closure whose ends are the same station is removed; a closure that is the sole connection between its two ends' components (no path over shots) is **promoted**: the two stations are merged (5.1, with the movable piece moving onto the other, refused if it would double-anchor), iterating in list order so a later closure sees an earlier promotion. Removed and promoted closures are reported as warnings, as today. Promotions never fire on load.
 
 ### 5.6 Hand moves (legacy)
 
-Only migrated files carry them (no current command creates one). Stored per (line, station) because merged members could carry different values. Move Station on a station deletes its hand moves on every line (folding them into the rewritten shots, as today).
+Only migrated files carry them (no current command creates one). Stored per (line, station) because merged members could carry different values. Move Station on a station deletes its hand moves on every line (folding them into the rewritten shots, as today). Split copies the split station's hand move to the new line; Detach moves it to the new station; Combine keeps the kept line's at the join and moves the other line's entries to the kept line.
 
 ### 5.7 Datums
 
@@ -270,7 +306,7 @@ Set (refusals as today; setting a datum on a piece that already has a placement 
 
 ### 5.8 Add `.stalx` / Merge projects
 
-Copy stations (ids offset by the target's `next_station_id`), lines, datums, placements, closures (ids re-minted), Sections, as today; no cross-source junctions are created (unchanged behaviour). Source files may be SQLite (migrated first, 7) or v2 JSON.
+Copy stations (ids offset by the target's `next_station_id`), lines, datums, placements, closures (ids re-minted), Sections, as today; no cross-source junctions are created (unchanged behaviour). The copy moves rigidly per 4.4 (placements translated, corrections recomputed). Source files may be SQLite (migrated first, 7) or v2 JSON.
 
 ---
 
@@ -279,7 +315,8 @@ Copy stations (ids offset by the target's `next_station_id`), lines, datums, pla
 ### 6.1 Container and sniffing
 
 - Extension stays `.stalx`. Content is UTF-8 JSON, no BOM.
-- Sniff: a file starting with `SQLite format 3\0` is legacy (7); a file starting with `{"format":"stalx","version":` is v2; anything else is refused as not a Stalagmight project. Every opener sniffs (load, Add .stalx, Recents metadata, foreign-copy probe, survey_geometry, recovery/backups, SpeleoDB pull/install/revisions/unwind, stalx-reader).
+- Sniff: a file starting with `SQLite format 3\0` is legacy (7); a file starting with `{"format":"stalx","version":` is v2; anything else is refused as not a Stalagmight project.
+- One `stalx::probe(path) -> Header { format, summary, speleodb, local }` API reads the cheap header of either format; every link reader and opener uses it or the full open: load, Add .stalx, Recents metadata, the foreign-copy probe, logout's forget-recents (`speleodb_logout.rs`), the cached-copies / local-state listing (`speleodb_local_state.rs`), the access probe (`speleodb_admin.rs`), `survey_geometry`, recovery/backups, create project and Merge Projects (no SQLite temp anymore), SpeleoDB pull/install/revisions/revision swap/unwind, stalx-reader.
 
 ### 6.2 Layout
 
@@ -330,18 +367,35 @@ The exact field lists and the shot-row column layout (including how LRUD and opt
 ### 6.4 Versioning and required features
 
 - `version` is the major format version (2). A higher major is refused with the existing "newer version" prompt, file untouched.
-- `requires` lists feature names this file uses that a reader must understand. This build understands its own list. An unknown name makes the project open **read-only** with a banner ("made with a newer Stalagmight"); saving is refused, Save As writes nothing either.
-- Unknown top-level members are preserved verbatim on re-save, in their original order after the known members; unknown keys inside records are refused (written by a newer minor version that should have declared a required feature) - list in docs which ones are optional.
+- `requires` lists feature names this file uses that a reader must understand. This build understands its own list. An unknown name makes the project open **read-only** with a banner ("made with a newer Stalagmight"); saving the body is refused (local-only saves, 6.5, still work).
+- Unknown content, three tiers:
+  1. Structural records (stations, lines, shots, datums, placements, closures, sections): an unknown key opens the project read-only with the same banner. Never a refusal.
+  2. `project`, `settings`, `speleodb`, `summary` and unknown top-level members: preserved verbatim on re-save (top-level members after the known ones, in their original order).
+  3. `local` and `history`: lenient. Unknown keys in `local` are dropped with a log line; an unreadable `history` is dropped whole with the existing banner, never making the project unopenable.
+  A newer writer must declare a `requires` feature for anything that changes meaning or references ids.
 - `conventions` is fixed for this version and checked on read (any other value is refused).
 - `summary` is a non-authoritative cache for Recents (name, counts, length, bounds, SpeleoDB id); a reader may use it without parsing the body; the writer always recomputes it; tests pin that it equals the recomputed value.
 
-### 6.5 Save path
+### 6.5 Save path and modes
 
-Serialize in memory; write `<file>.stalx.tmp`; `sync_all`; rename over the destination; fsync the parent directory. One write, one data fsync, one directory fsync. No in-place writes to the project file anywhere else: the per-edit SpeleoDB dirty bit, display toggles, warning ignores and Recents renames become in-memory state written by the next save; display toggles and ignores on an otherwise clean project trigger an immediate quiet save (same pipeline). Windows: no open handle on the destination.
+Pipeline: `validate`; serialize in memory; write `<file>.stalx.tmp`; `sync_all`; check the external-modification guard; rename over the destination; fsync the parent directory. One data fsync and one directory fsync. Windows: no open handle on the destination. The app keeps no live database handle (stream AS).
+
+Serializer modes:
+1. **Normal** save.
+2. **For push** (SpeleoDB): no `local`, no redo; undo only in Full mode, cut at the watermark and then by bytes so the whole file fits 5 MiB (newest entries kept).
+3. **Detached copy** (Save a Copy of a managed project): no `speleodb`, no SpeleoDB keys in `local`, no history inherited from the link (today's `copy_only`).
+4. **Local-only durable save:** rewrites `speleodb`, `local` and `history` while copying every other member of the last saved file verbatim. Used immediately for every SpeleoDB state change (push result, pull install, unwind chain, watermark, verify stamp, history cut, logout bookkeeping) and for display-setting toggles. Allowed on read-only projects and on files with an unknown `requires`. Never used on a legacy SQLite file that has not been upgraded yet (such changes stay in memory until the first real save).
+
+Rules:
+- A push first saves (normal), then serializes "for push" from that same in-memory snapshot.
+- Warning ignores are survey content: they mark the project dirty and ride the next save (today they were written into the file immediately; declared change: "Don't save" now discards them).
+- **Recents rename** of a closed file: v2: probe, replace `project.name` and `summary.name`, rewrite with every other member verbatim (local-only style). Legacy SQLite: upgrade (7) with the backup, then rename.
+- **External-modification guard:** remember size, mtime and a hash of the bytes last read or written. Before the rename, if the file on disk differs, refuse the autosave and ask (reload, overwrite, save as).
+- `-0.0` is written as `-0.0`; every number is parsed as `f64` (never through an integer path).
 
 ### 6.6 Load and validation
 
-Parse with size and count limits (port stalx-reader's `CountLimits`), check `format`/`version`/`conventions`/`requires`, build the model, run `validate` (section 2). Any violation of invariants 1-5 or 10 refuses the open with a precise message; invariant 6 (missing anchor) is a refusal too (the writer always writes one). Load never mutates the model (no heals); the in-memory project equals the file.
+Parse with size and count limits (port stalx-reader's `CountLimits`), check `format`/`version`/`conventions`/`requires`, build the model, run `validate` (section 2). A violation refuses the normal open with a precise message and offers **salvage**: open read-only with a report, plus a best-effort repair into a copy (drop dangling references, give anchorless pieces a `Placement`, break a cycle into a `Batch` closure), mirroring today's CORRUPT/Repair route. Load never mutates the model (no heals); the in-memory project equals the file.
 
 ---
 
@@ -356,20 +410,22 @@ Parse with size and count limits (port stalx-reader's `CountLimits`), check `for
 
 ### 7.2 Conversion
 
-1. **Stations:** union-find over the legacy merges. Self-merges, same-line merges and merges that would close a cycle (taken in the old cascade's BFS order) become `Batch` closures instead. Each group is one station. Survivor id = the member the map labelled (the label-representative rule: not a line's first station, then not its last, then line order, then index); others become aliases with their names. Names: survivor's, uniquified. Comments: distinct non-empty member comments joined in member order with a blank line. Datums: all kept, in list order.
+1. **Stations:** union-find over the legacy merges. Self-merges, same-line merges and merges that would close a cycle (taken in the old cascade's BFS order) become `Tie` closures instead, placed at the FRONT of the closure list (today merges are united before any closure, so later closures keep their skip verdicts). Each group is one station. Survivor id = the member the map labelled (the label-representative rule: not a line's first station, then not its last, then line order, then index); others become aliases with their names. Names: survivor's, uniquified. Comments: distinct non-empty member comments joined in member order with a blank line. Datums: all kept, in list order.
 2. **Lines:** shots in order with their uuids (the legacy load already made them project-unique; mint any still missing deterministically from line id and index), chain stations mapped.
 3. **Hand moves:** each legacy `station_offsets` entry goes to `line(key.line).hand_moves[station]`.
-4. **Closures:** ids, ends, strategy kept. Legacy aligned non-`Move` closures become `Move` (their alignment is then derived; reported).
+4. **Closures:** ids, ends, strategy kept. Legacy aligned non-`Move` closures become `Tie` (their stored alignment is trusted today and never re-measured; `Tie` keeps that).
 5. **Anchors:** per component: if it holds a datum, the first one in list order places it; `correction = legacy_raw(datum station) - gps_to_local(gps, frame.gps)`, stored when its magnitude exceeds 1e-9 m. Otherwise a `Placement` at the legacy gauge station (held gauge, else the legacy default gauge) at its legacy raw position.
-6. **Verify:** compute new raw and Closures Computed View positions and compare per slot with the legacy ones (raw within 1e-6 m, adjusted within 1e-6 m, Z within 1e-9 m). Mismatches are reported (log and MigrationReport); tests and the corpus run assert zero.
-7. **History:** dropped, with the existing "history discarded" banner (as v7/v13/v15/v16/v17 and #808 did).
-8. **Everything else** (settings, Sections, credits, ignores, import hashes, SpeleoDB link and per-machine state, display settings) carried over.
+6. **Entrances:** a datum whose new default entrance (3.8) differs from today's gets an explicit `entrance` override. `via` hints are filled from the legacy member that held each datum and closure end.
+7. **Verify:** compute new raw and Closures Computed View positions and compare per slot with the legacy ones. Tolerance: raw XY within `1e-6 m x (merge-tree depth of the slot's line + 1)` (the old cascade leaves up to 1e-6 m dust per hop), adjusted within 1e-6 m, Z within 1e-9 m. Expected-difference classes (drifted or torn legacy merges collapsed into one station) are reported separately with their maximum displacement; anything else is a mismatch. Mismatches are logged and in the MigrationReport; tests and the corpus run assert zero unexplained mismatches.
+8. **History:** dropped, with the existing "history discarded" banner (as v7/v13/v15/v16/v17 and #808 did).
+9. **Everything else** (settings, Sections, credits, import hashes, SpeleoDB link and per-machine state, display settings) carried over. Ignored warnings are re-keyed through the legacy load's shot-uuid backfill (pre-v8 rows keyed by session shot id included).
+10. **Backup:** on the first v2 write over a SQLite file, the original file and any `-journal`/`-wal` sidecar are moved into the app-data backups folder (silent; listed by `list_backups`, restorable) before the rename, so no old build can later roll a stale journal into the JSON file. When verification reported unexplained mismatches, the app shows one non-blocking notice ("Converted from the old file format; N stations moved by up to X m; the original is kept in Recovery").
 
-The result is held in memory; the original file is untouched until the first save writes v2 over it (silent upgrade), after which the stale `-journal` (if any) is removed.
+The result is held in memory; the original file is untouched until the first save writes v2 over it (silent upgrade).
 
 ### 7.3 MigrationReport
 
-Every normalisation and every conversion rule that fired, with counts: merges collapsed, aliases created, comments joined, cycle merges demoted, aligned closures converted, corrections stored, placements created, hand moves carried, verification mismatches. Logged; returned to tests; never shown raw to users.
+Every normalisation and every conversion rule that fired, with counts: merges collapsed, aliases created, stations renamed, comments joined, cycle/same-line/self merges demoted to `Tie`, aligned closures converted to `Tie`, corrections stored, placements created, entrance overrides written, hand moves carried, ignores re-keyed or dropped, expected-difference classes and their maximum displacement, verification mismatches. Logged; returned to tests; never shown raw to users.
 
 ---
 
@@ -398,8 +454,8 @@ pub enum Op {
 
 - Capture is generic: snapshot the model before the command, diff after the full epilogue (field-level images for touched entities only). No per-command capture code.
 - Apply checks preconditions (the live value equals the recorded `after` before an undo, `before` before a redo); a mismatch refuses the step and keeps the entry (as today's refusal semantics). Then recompute derived state once (undo_to/redo_to recompute once at the end).
-- Reverse Line on a long line must stay under the size gate: store it compactly (e.g. an op that records "reverse line L" when that transform is an exact involution, checked bitwise by a test; else field-level images).
-- The 1% size gate (`undo_size_gate_tests.rs`) is ported: every entry at most 1% of the v2 file on the 5k and 20k synthetic surveys, except actions that construct the whole file; undo/redo bit-exact.
+- Encoding must meet the existing gates on the (smaller) v2 file: `Shots` ops are per-line runs (index range plus one uuid anchor per run, verified on apply) with values as compact arrays; credit images are interned once per op; Reverse is `{line, swap_lr, exceptions: [(index, field, before_bits)]}` where the exceptions are computed at capture by re-applying the flip to the after-state and diffing (the flip is not an exact involution: #808's per-copy corrections are the precedent).
+- Gates ported (`undo_size_gate_tests.rs`): every entry at most 1% of the v2 file on the 5k and 20k synthetic surveys (except actions that construct the whole file), the 40-bytes-per-changed-cell paste gate, the credit and rename-1,000-stations gates; undo/redo bit-exact.
 
 ### 8.2 Kept as is (UX contract)
 
@@ -407,7 +463,7 @@ IPC (`undo`, `redo`, `undo_to`, `redo_to`, `can_*`, `get_undo_stack`, `get_redo_
 
 ### 8.3 Persistence
 
-`"history":{"undo":[...],"redo":[...]}` in the file, one entry per line: `{"t":timestamp,"cmd":<command for label/preview>,"ops":[...]}`. Pushes strip redo always and undo unless Full mode, cut at the watermark (as today). Histories from older files are dropped (7.2.7).
+`"history":{"undo":[...],"redo":[...]}` in the file, one entry per line: `{"t":timestamp,"k":<kind>,"label":<record-time resolved label>,"refs":{stations, lines, shots by uuid},"ops":[...]}`. The forward `Command` is never persisted (its payload holds session `ShotId`s and positional slots); labels and previews are resolved at record time or from ids and before-images. Pushes strip redo always and undo unless Full mode, cut at the watermark and then by bytes (6.5). The Full-mode in-file history budget is lowered from 32 MiB (sized for gzip in SQLite) to 4 MiB of JSON. Histories from older files are dropped (7.2.8).
 
 ---
 
@@ -431,6 +487,10 @@ A batch that moves several slots of one station (today's co-located `move_statio
 - Move tools: one move per station.
 - Split line: the halves share the split station (copy in the dialog).
 - Delete/combine impact panels: drop replacement-merge rows that can no longer happen.
+- `get_line_relationships`: `has_line_offset` becomes "the line's piece has a non-trivial Placement" (or false) and `station_offset_count` counts hand moves; the Delete Line confirm keeps working.
+- `plan_anchors_for_refs` / `plan_refs_for_anchors` are generated from the new model (StationId -> `AfterShot(uuid)` / `LineStart` keys).
+- `e2e-playwright/reverse-line.spec.ts` and the agent harness (`fuzzOracleCore.ts`, `undoPersistenceFuzz.ts`, `fixtures.ts` via `node:sqlite`) read or inject `line_offsets` or SQLite: updated with the wire change.
+- Add a shape check for identity-bearing commands in the mock-contract test (it checks only names today).
 - The e2e IPC mock: shared ids for merged slots, transitive `merged_with`, no fake auto-merge; the mock-contract test still gates command names.
 
 ---
@@ -476,25 +536,34 @@ Importers keep producing lines, placements and closures through the shared funne
 
 | Stream | Scope | Depends on |
 |---|---|---|
-| L | `crates/legacy`: frozen reader + load pipeline + positions; test-only writer | - |
-| M0 | `models::survey` skeleton: types, ids, slots, components, invariants/validate, positions (3.3-3.5), naming, identity, wire projection helpers | - |
+| L | `crates/legacy` (done): frozen reader + load pipeline + positions + test-only v18 writer; `crates/legacy-fidelity` proves bit-exactness against the live app | - |
+| K | Characterisation goldens recorded from the CURRENT build before `models::project` is deleted: history labels and previews per command kind, delete/combine/merge previews, IPC DTO shapes, export outputs (CSV, JSON, TML, SVG) for the synthetic projects | - |
+| M0 | `models::survey` skeleton: types, ids, slots, components, invariants/validate, positions (3.3-3.5), depth, anchors (4.1), naming, identity | - |
 | M1 | shots/lines/ranges/reverse/split/combine on M0 | M0 |
-| M2 | merge/detach/closures/sweep/datums/frame/placements/move tools on M0 | M0 |
-| M3 | derived views: LSQ port, closure metrics, roles/entrances/gaps, frozen shots, stats, pathfinding/distance/gas engine port | M0 |
-| F | v2 encoder/decoder, canonical rules, versioning, validation, `docs/file-format.md`, format property tests | M0 |
-| G | migration legacy -> survey + MigrationReport + property tests + corpus runner | L, M0 (M1-M3 for full verification) |
-| U | changeset undo engine + history persistence + size gate | M0 |
+| M2 | merge/detach/closures/sweep/datums/frame/placements/move tools/Add on M0 | M0 |
+| M3 | derived views: LSQ port, closure metrics and alignment, skip set, roles/entrances/gaps, frozen shots, stats, pathfinding/distance/gas engine port | M0 |
+| F | v2 encoder/decoder, canonical rules, tiers, versioning, validation, salvage, probe, serializer modes, `docs/file-format.md`, format property tests | M0 |
+| G | migration legacy -> survey + MigrationReport + property tests + corpus runner | L, M0-M3 |
+| U | changeset undo engine + history persistence + size gates | M0, F, then C for the AppState-level gates |
+| AS | AppState without a live database: every `self.database` use replaced (warnings, display settings, link, undo policy, revisions...), local-only durable saves, external-modification guard | F |
 | C | switch core (`AppState`) to `models::survey`: execute pipeline, every command family, queries, imports funnel, add/merge projects, dive plan resolver, warnings | M0-M3, U |
-| P | save/load/autosave/recents/recovery/backups on v2; SpeleoDB push/pull/cache/revisions | F, G, C |
+| P | save/load/autosave/recents/recovery/backups on v2 (incl. upgrade backup); SpeleoDB push/pull/cache/revisions/swap/unwind | F, G, C, AS |
 | X | exporters; stalx-reader | M0-M3 |
 | W | IPC handlers, wire DTOs, TS type generation, binary envelope | C |
 | FE | frontend changes (9.3) and the IPC mock | W |
-| T | fuzzers and harness ported; new property suites | all |
+| T | fuzzers and harness ported alongside each stream; new property suites | each stream |
 | D | docs: architecture, saving, closures, undo-redo, SPEC data model, SpeleoDB, testing; `docs/file-format.md`; `docs/survey-model.md` | all |
 
-The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first.
+The old `models::project` module and its tests are deleted once C compiles against `models::survey`; tests that pin user-visible behaviour are ported to the new model first, and K's goldens are compared after the switch (differences must be in the declared-change list).
 
----
+### 12.1 Rollout prerequisites outside this repository (called out in the PR)
+
+- The SpeleoDB server accepts v2 uploads (today it refuses non-SQLite), its Python reader reads v2, and ideally a minimum-client gate for projects whose HEAD is v2.
+- A small patch to the 0.5.x line that sniffs `{"format":"stalx"` and shows "made with a newer Stalagmight" instead of the corrupt-file route.
+
+### 12.2 Declared behaviour changes (to list in the PR)
+
+Junctions share one Station ID, name and comment (migration keeps the others as aliases); Split Line Here makes a junction; Unmerge detaches one line; closure metrics are recomputed (path length counts shots only); warning ignores ride the save instead of being written at once; CSV/JSON `from_id`/`to_id` at junctions; Ariane export station ids; anything else K's goldens show.
 
 ## Background (current-state findings this plan relies on)
 
