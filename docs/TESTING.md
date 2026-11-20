@@ -50,7 +50,10 @@ restart, a Playwright test cannot cover it. Write a Rust test.
 | A behavior that spans views, panels, or the map | Playwright spec |
 | New Tauri IPC command | Rust unit tests for the logic, **plus** a mock handler in `e2e-playwright/mocks/tauri-ipc.ts` (a vitest tripwire fails until you add one - see recipes) |
 | Backend logic (parser, model, solver) | Rust unit tests |
+| A survey operation or derived view (`models::survey`) | Rust test in `stalagmight-models` beside the operation, plus a case in its property test when it is a new kind of edit |
+| The `.stalx` format, or how an old file converts | Rust test in `stalagmight-persistence` (`stalx_v2/`, `migrate/`) |
 | Anything touching disk, persistence, or app restart | Rust command-layer test - no frontend tier can see it |
+| A user-visible behaviour change of the core | Rust test, **plus** the characterisation goldens: a new difference must be a declared one |
 | Bug fix | Regression test at the **lowest** tier that can catch it. Prefer unit/component over E2E |
 
 Component-local behavior ("clicking X calls Y", "dialog renders Z in state W")
@@ -58,6 +61,26 @@ belongs in a component test, not a Playwright spec: it runs in milliseconds
 instead of seconds, and it fails with a stack trace instead of a screenshot.
 Reach for Playwright when the assertion needs the real router, the real map, or
 two panels talking to each other.
+
+### The backend tiers of the survey
+
+The station-graph redesign put the survey, its file and its history in layers,
+each tested on its own and against the one below it:
+
+| Layer | Where | What its tests hold it to |
+|---|---|---|
+| Model (`models::survey`) | `crates/models/src/survey/*_tests.rs`, `edit/`, `changeset/` | `validate()` after every operation; refusals change nothing; seeds replay bit for bit; undo and redo exact to the bit; derived views deterministic under reordering |
+| File (`persistence::stalx_v2`) | `crates/persistence/src/persistence/stalx_v2/format_v2_*_tests.rs`, `decode_fuzz_tests.rs` | byte fixpoint, canonical form, versioning and `requires` gating, unknown content, hostile input, limits, crash timing |
+| Migration (`persistence::migrate`) | `crates/persistence/src/persistence/migrate/` | every old file converts to what the frozen 0.6.0 reader (`crates/legacy`) showed, within the declared classes; the wire payloads match 0.6.0's |
+| App core (`AppState`) | `crates/core/src/core/state/*_tests.rs` | the pipeline, every command family and recipe, open and save, SpeleoDB, recovery; the undo, metamorphic, format, crash, adversarial, concurrency and saving fuzzers |
+| Behaviour as a whole | `characterization_dump_tests.rs` (the K goldens) | 18 scenarios, compared with the 0.6.0 dump: every difference is declared (plan 12.2 and its Deviations) |
+
+Tests never read or commit a project file they did not write: surveys are built
+with the model's API or through `AppState` commands and saved into a `TempDir`;
+an old-format file is written at run time with the frozen 0.6.0 save (the legacy
+crate's `writer` feature) or copied from the tracked `e2e/fixtures/`. The
+commands and knobs for each gate are in
+[Testing Recipes](testing-recipes.md#the-rust-fuzz-and-property-gates).
 
 ## Smoke vs. full (Playwright only)
 
