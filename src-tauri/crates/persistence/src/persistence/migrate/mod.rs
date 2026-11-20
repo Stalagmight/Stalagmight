@@ -240,6 +240,32 @@ pub fn migrate_path_for_app(
     migrate_path_with(path, &options)
 }
 
+/// The caps an untrusted legacy file is read under (a SpeleoDB download, which
+/// any collaborator who can upload controls): the largest input, and value
+/// SQLite may produce, and how long the load's SQLite statements may run. 0.6.0
+/// validated a download under the same pair (`open_existing_untrusted`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UntrustedCaps {
+    pub max_file_bytes: u64,
+    pub sqlite_deadline: std::time::Duration,
+}
+
+/// [`migrate_path_for_app`] for an untrusted file, under `caps` instead of the
+/// local open's generous defaults (1 GiB, one hour; review G-speleodb-4).
+pub fn migrate_untrusted_path_for_app(
+    path: &Path,
+    adjustment: &ClosureAdjustmentConfig,
+    caps: UntrustedCaps,
+) -> Result<Migrated, MigrateError> {
+    let options = OpenOptions {
+        closure_adjustment: convert::legacy_closure_adjustment(adjustment),
+        max_file_bytes: caps.max_file_bytes,
+        sqlite_deadline: caps.sqlite_deadline,
+        ..OpenOptions::default()
+    };
+    migrate_path_with(path, &options)
+}
+
 /// Migrate a legacy `.stalx` held in memory.
 pub fn migrate_bytes(bytes: &[u8]) -> Result<Migrated, MigrateError> {
     migrate_bytes_with(bytes, &OpenOptions::default())

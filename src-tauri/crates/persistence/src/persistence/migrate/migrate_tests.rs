@@ -632,3 +632,41 @@ fn a_drift_the_old_load_never_resolved_is_collapsed_and_reported_as_a_move() {
     assert_eq!(moved.slots, 2, "both stations of C");
     assert!((moved.max_displacement_m - 5.0).abs() < 1e-9);
 }
+
+#[test]
+fn an_untrusted_file_is_migrated_under_its_caps() {
+    // Review G-speleodb-4: a SpeleoDB download is read under the caps 0.6.0 read
+    // it under, not the local open's one hour and 1 GiB.
+    use super::{migrate_untrusted_path_for_app, MigrateError, UntrustedCaps};
+    let mut p = project();
+    line(&mut p, "Main", &[(0.0, 10.0), (90.0, 12.0)]);
+    let bytes = write_v18(&p, &LegacyExtras::default()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("download.stalx");
+    std::fs::write(&path, &bytes).unwrap();
+    let adjustment = ClosureAdjustmentConfig::default();
+    let caps = UntrustedCaps {
+        max_file_bytes: 64 * 1024 * 1024,
+        sqlite_deadline: std::time::Duration::from_secs(30),
+    };
+    let migrated = migrate_untrusted_path_for_app(&path, &adjustment, caps).unwrap();
+    assert_eq!(migrated.project.lines().len(), 1);
+    let small = UntrustedCaps {
+        max_file_bytes: bytes.len() as u64 - 1,
+        ..caps
+    };
+    assert!(matches!(
+        migrate_untrusted_path_for_app(&path, &adjustment, small),
+        Err(MigrateError::Legacy(
+            stalagmight_legacy::LegacyError::TooLarge { .. }
+        ))
+    ));
+    let expired = UntrustedCaps {
+        sqlite_deadline: std::time::Duration::ZERO,
+        ..caps
+    };
+    assert!(
+        migrate_untrusted_path_for_app(&path, &adjustment, expired).is_err(),
+        "the deadline interrupts the load"
+    );
+}

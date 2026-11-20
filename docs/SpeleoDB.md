@@ -277,9 +277,13 @@ before anything is sent:
   caller can send one.
 
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
-installer and downloaded-revision policy probes open private copies through
-`open_existing_untrusted`, with a 64 MiB SQLite value limit and a 30-second
-processing deadline. The installer checks the schema, stages the replacement,
+installer reads a download of at most 64 MiB: a version 2 file through the
+decoder's limits, a legacy (SQLite) revision through the frozen 0.6.0 open and
+the migration, on a private copy, under the same caps 0.6.0 validated a download
+with (`migrate_untrusted_path_for_app`: a 64 MiB SQLite value limit and a
+30-second deadline for the load's SQLite statements, where a local open allows
+1 GiB and an hour). The downloaded-revision policy probe reads a legacy link row
+under the same pair. The installer checks the schema, stages the replacement,
 strips inherited undo unless an explicit Unwind requires it, and preserves local
 display preferences.
 The downloaded copy receives its validated SpeleoDB link before replacement. A
