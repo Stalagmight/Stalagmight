@@ -277,10 +277,10 @@ rather than through those doors:
 
 | Site | Behaviour past 42_949 lines |
 |------|-------------------------------|
-| `models/line.rs` `Line::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the `.stalx` open refuses first, and the persisted-undo `restore_line` replay is bounded identically |
+| `legacy/src/models/line.rs` `Line::new` (`next_shot_id`, the frozen 0.6.0 reader) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the frozen open refuses first |
 | `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
-| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a `section_id` with no `sections` row) still reaches this encode and saturates |
-| `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a `section_id` the open-refusal never vetted |
+| `legacy/src/persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a `section_id` with no `sections` row) still reaches this encode and saturates |
+| `legacy/src/persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a `section_id` the open-refusal never vetted |
 | `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
 | `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap. The SoA typed arrays feeding the renderer were widened from `Int32Array` to `Uint32Array` (#555), so the JS side is exact across the full `u32` range, not just the positive half of `i32` |
 

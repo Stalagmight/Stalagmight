@@ -5,7 +5,7 @@ characteristics, for both the Rust backend and the WebGL frontend.
 
 ## Loop Closure Adjustment - Sparse PCG Solver
 
-**File:** `src-tauri/crates/models/src/project/lsq.rs`, `adjust_least_squares()`
+**File:** `src-tauri/crates/models/src/survey/lsq.rs` (`solve_reduced_laplacian`), driven by `survey/adjust.rs` (`Project::adjusted_positions`)
 
 The loop closure adjustment solves a weighted least-squares system to distribute
 survey errors across the network. The normal equations form a weighted graph
@@ -74,7 +74,7 @@ On a project with ~500 lines (~10,000 stations):
 
 ## Frozen Shot Detection - Tarjan's Bridge-Finding
 
-**File:** `src-tauri/crates/models/src/project/distance.rs`, `compute_frozen_shots()`
+**File:** `src-tauri/crates/models/src/survey/frozen.rs`, `Project::frozen_shots()`
 
 A shot is "frozen" (its geometry cannot be edited) when removing it would not
 disconnect any zero datum station from the rest of the network. Equivalently: a

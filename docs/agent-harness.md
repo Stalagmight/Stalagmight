@@ -250,17 +250,13 @@ children). That default is a deliberate trade, not inertia.
 
 **What release costs you.** `debug_assertions` is off, so these stop running:
 
-- Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
-  four in `core/loading.rs`, `models/project/reverse.rs:379`,
-  `models/project/classify.rs:244`, `core/state/undo_restore.rs:264`,
-  `core/state/speleodb_pull.rs:1685`, `persistence/sqlite.rs:519`. Each is an
-  invariant check the app performs on itself during exactly the mutations a
-  fuzzer drives.
-- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:546`), whose
-  whole body is `#[cfg(debug_assertions)]`. In debug it emits a `tracing::error!`
-  when a merge ends up more than 5 cm out of alignment inside a single command;
-  that line rides the ring buffer into the harness's error-log oracle. In release
-  the check does not exist, so that class of drift becomes invisible.
+- Every `debug_assert!` in a live path - four in `core/loading.rs` (the load
+  progress phases), one in `core/state/config.rs` and three in
+  `models/disk_names.rs` (the `.plnx` on-disk vocabulary). Each is an
+  invariant check the app performs on itself. (The station-graph model checks
+  its invariants with `Project::validate` after every command, in release
+  too, so the old merge-alignment `debug_assert` has no successor: a junction
+  is one station and cannot drift.)
 - Rust's debug-only integer-overflow panics: an overflow that aborts loudly in
   debug wraps silently in release.
 - `[profile.release]` sets `strip = true`, so a crash marker's
@@ -563,8 +559,9 @@ history stacks are empty. Tracked fixtures ship with a stack
 (`undo_persist_limit`, 20 rows in the fractal fixture and 2 in naharon), and a
 scenario that models undo depth must not fuzz on top of somebody else's entries
 or burn the headroom below the 100-entry limit. `stripUndoHistory`
-(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the app's own
-`Database::clear_undo_history_at`, and refuses any path inside `e2e/fixtures/`
+(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the 0.6.0 app's
+`Database::clear_undo_history_at` (the tracked fixtures are old SQLite
+files), and refuses any path inside `e2e/fixtures/`
 so it can only ever touch a temp copy.
 
 | Env var | Effect |

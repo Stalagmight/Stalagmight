@@ -6,7 +6,7 @@ turn dots, the stage drops, the pressure gauges - is a view onto that answer.
 
 Plan is one of the three workspace modes, read-only over the survey
 ([SPEC.md 6.1](SPEC.md#61-workspace-modes)). The engine is
-`src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
+`src-tauri/crates/models/src/survey/gas.rs` (+ `survey/gas/*.rs`; the plan types in `models/src/gas.rs`),
 reached through the single `compute_gas_reach_field` command. Umbrella issue
 [#38](https://github.com/Stalagmight/Stalagmight/issues/38); its design PRD was
 removed from the repo before open-sourcing, so this page is the reference.
@@ -46,8 +46,9 @@ sub-metre amounts - same reasoning as the distance field, see
 
 ### What the graph contains
 
-`build_survey_graph_weighted` (`models/project/pathfinding.rs`) emits every shot,
-plus a zero-weight edge per station merge and per loop closure. Zero is correct
+`survey_graph_weighted` (`models/src/survey/graph.rs`) emits every shot, one
+node per station (a junction is one node, so a merge needs no edge), plus a
+zero-weight edge per loop closure. Zero is correct
 because both join points that are physically the same - which is also why the walk
 re-settles gas across zero-cost edges (`relax_zero_cost`). Without that, one node
 of a merged pair reads reachable and its twin, in the same spot, reads unreachable

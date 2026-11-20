@@ -732,7 +732,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 - **C11. Ignored warnings** are kept in memory, mark the project dirty and ride the save (declared change, 6.5); `shot_uuid_is_persisted` is "the shot exists" (every uuid is written with the ignore). The datum GPS-gap code pinning and the warnings computation itself are not ported yet (no warnings in C0). Resolved in wave A (N9).
 - **C12. History previews** are generic in C0 (the digest's fields, lines, datums, closures, Sections, and recorded rows); the 0.6.0 wording per command kind is the history-labels package, with the K goldens as the oracle. Labels are worded at record time with 0.6.0's `describe` rules. Resolved in wave A (N1).
 - **C13. `generator`** is `Stalagmight <app version>`, set by the app at startup (`core::state::set_generator`).
-- **C14. The legacy fidelity suite** (`crates/legacy-fidelity`) compares the frozen reader with the live 0.6.0 app, which the switch replaced; it is parked (it ran green before the cutover).
+- **C14. The legacy fidelity suite** (`crates/legacy-fidelity`) compares the frozen reader with the live 0.6.0 app, which the switch replaced; it is parked (it ran green before the cutover). Resolved in C22: the crate is deleted (Q6).
 
 ## Deviations (stream C, the command families and subsystems)
 
@@ -746,7 +746,7 @@ decisions above already use `C1`...).
 - **N3 (split, combine). A datum "on both halves" of a split is no longer refused** (it is on the one shared station); the split preview always reports nothing moved, merged or removed. Combine warnings name a torn junction by its two slots and its one name.
 - **N4 (topology). A slot that names no station answers 0.6.0's words** (Merge / Create Loop Closure: "One or both stations do not exist"; Set Zero Datum: "Station does not exist"; Remove Zero Datum: "Station is not a zero datum"; Unmerge Station Pair: "Stations are not directly merged"; Unmerge Stations: a no-op), not the model's. Unmerge off a junction keeps the redo branch. In a Batch, swept closures are named before each sub-command. Remove Zero Datum runs no heal. `get_segment_geometry` lists lines ascending by id (0.6.0's order was a `HashSet`'s).
 - **N5 (names, comments, moves). MoveComment onto the same station is a no-op** (0.6.0's set-then-clear deleted the comment). A repeated MoveStation in a batch moves the station once only when the offsets are equal. A name clash on a junction names the slot's own line when the name is taken there, else the station's first other line holding it. The no-op rename check runs inside batches too.
-- **N6 (imports). External ids are not stored yet** (`Station.external` stays empty: `ImportLineConfig` has no per-station external key). A reversed `Origin` / `Manual` line places the file's first station exactly. `track_imported_file` / `track_line_hashes` record an undo entry and are gated (0.6.0: unrecorded, ungated): the hash lists are changeset-captured content, and an unrecorded change would make the next undo of an import refuse. A stand-alone `UntrackImport` is undoable.
+- **N6 (imports). External ids are not stored yet** (`Station.external` stays empty: `ImportLineConfig` has no per-station external key). Resolved in C22 (Q1). A reversed `Origin` / `Manual` line places the file's first station exactly. `track_imported_file` / `track_line_hashes` record an undo entry and are gated (0.6.0: unrecorded, ungated): the hash lists are changeset-captured content, and an unrecorded change would make the next undo of an import refuse. A stand-alone `UntrackImport` is undoable.
 - **N7 (Add .stalx, Merge Projects).** The receipt warning that a source's ignored warnings could not be read cannot occur. A source this build would open read-only is refused with its own message, and unreadable sources get the open path's message. The size cap is checked from metadata, sidecars included; a version 2 source over the decoder's 256 MiB cap is refused by it. Only the read window of the mid-command swap remains. A refused add leaves everything as it was, allocators and `modified_at` included. A legacy source's pending Jump/Reference classification is finished by the frozen reader. Merge still carries neither the sources' ignored warnings nor their import hashes.
 - **N8 (dive plans). `.plnx` anchors gain an optional `station` (Station ID)**, trusted when the anchor's own shots vouch for it; 0.6.0 anchors read the migrated session's record parity, else literally; `upgrade_dive_plan_anchors` rewrites them on the upgrading save (after every successful non-detached save; a no-op without parity); `load_dive_plan` hands out fresh anchors; `AfterShot` keys are found project-wide.
 - **N9 (warnings).** The load result reads the opened file's ignores, never the previous file's. An ignore change is refused on a file opened read-only (`READ_ONLY_FILE`). Two GPS fixes shown on one slot share their row's (shot, code), the first naming the ignore. There are no position-keyed rows, no re-pinning after reverse, split or combine, and no renamed-uuid aliases: ignores are keyed by uuid, which travels with its shot.
@@ -755,3 +755,45 @@ decisions above already use `C1`...).
 - **N12 (recents, recovery). Attempt Repair writes in place behind a numbered `.backup`** (6.6 says "repair into a copy"): the damaged original IS kept as a copy, and the repaired file keeps the project's path, so the dialog's Open, Recents and a SpeleoDB link keep pointing at it. A read-only salvage open is not implemented (the load refuses an invalid file). The raw-data view is kept, over the saved v2 file's members. An open project's rename by path is durable at once and not undoable (0.6.0 parity), and writes only the name. Recents counts a version 2 file's stations as entities (a junction once), a legacy file's as slots. The survey preview positions are the workspace's (local metres from the frame datum's GPS, correction included).
 - **N13 (frontend).** The save prompt (`SaveConflictDialog`) answers `EXTERNALLY_MODIFIED` with Keep my version, Save as a new file, or Use the file's version (a SpeleoDB copy gets only the first); an autosave refusal goes to the autosave banner and pauses autosave. A read-only file gets a banner and a third `useEditingBlocked` term. The conversion notice is a banner until dismissed. After an Ignore the frontend asks `has_unsaved_changes`. Unmerge is "Detach Line from Station"; Station details list other lines' shots at a junction; one `move_station` per Station ID; the Split dialog has no side choices.
 - **N14 (app commands). With no project open, undo, redo and the jumps answer "No project open"** (0.6.0: "Nothing to undo" / "Invalid undo index"; the buttons are disabled then). UpdateShot / SetShotKind on a line that is gone say "That line no longer exists." (0.6.0: "That shot no longer exists.").
+
+## Deviations (stream C22, deleting `models::project`)
+
+`models::project`, the old-model code of the models root files, persistence's
+live SQLite layer, `core::stub` and `cfg(sg_unported)` are gone; old files are
+read only by the frozen crate and the migration. Labels `Q1`...
+
+- **Q1. `Station.external` is filled on import** (10.5, resolving N6).
+  `ImportLineConfig::station_external` (station index, id; file-order indices,
+  mirrored on a reversed import like `station_names`) is filled by the backend
+  importers: a Compass or Walls chain's station names (Walls' anonymous wall
+  endpoints none), every Ariane row's station ID (none for the cave start,
+  `FromID` -1). A station that already holds one, a junction the line joins,
+  keeps it (E7's rule). Not in the TS shape (`#[ts(skip)]`): the frontend's
+  importers (DMP, GPX) fill none, and Compass, Walls and Ariane imports run in
+  the backend. Station names themselves are unchanged (Compass, Walls and
+  Ariane names are still seeded by index, as in 0.6.0).
+- **Q2. A hostile legacy schema loads as `UNSAFE_FILE` again.** The frozen
+  crate's open reports it as `LegacyError::RefusedSchema` (a typed variant in
+  its own error type, not in the frozen code), which the load maps to
+  `LoadError::unsafe_file`; wave A reported `CORRUPT`.
+- **Q3. A legacy file's unreadable shot kinds reach the frontend again** (#27):
+  the migration carries the frozen open's report with the migrated shot ids and
+  the full load stores them under its loading id; wave A dropped them.
+- **Q4. Export Salvageable Data on a legacy file** reads each table as 0.6.0
+  did, but its full project comes from the frozen open, which runs 0.6.0's
+  integrity and foreign-key checks: on a file it refuses the error is listed
+  instead of a best-effort project (0.6.0 read the tables without the checks).
+  Attempt Repair is 0.6.0's (`persistence::recovery`).
+- **Q5. A closure from a junction to a station a closure already ties it to is
+  that closure.** 0.6.0 created a redundant second closure from the merged
+  twin; on the station graph the twin is the junction, so the merge check and
+  the command refuse the pair as a duplicate ("A loop closure already exists
+  between these stations.").
+- **Q6. Cross-checks against the frozen model.** The M3 cross-checks build
+  their surveys with the frozen 0.6.0 model and compare what it computes (raw
+  layout, Computed View, skip set, misclosures, rigid groups, immovable
+  stations, roles, entrances, GPS gaps, far fixes). The comparisons the frozen
+  crate cannot answer are retired: frozen shots, stats, penetration, distance
+  field, ruler and the gas differential (the gas golden tests stay, their
+  fixtures built with the frozen model). `crates/legacy-fidelity` is deleted:
+  its oracle, the live 0.6.0 app, no longer exists.

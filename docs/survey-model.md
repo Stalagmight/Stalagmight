@@ -56,7 +56,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 | `survey/gas.rs`, `survey/gas/` | The Plan-mode gas engine on the station graph (`gas_reach`, `GasReach`, `gas_reach_field_wire`). |
 | `survey/changeset.rs`, `survey/changeset/` | The undo engine (stream U): `Changeset`, `capture`, `undo` / `redo`, history entries, the preview digest, the shared test kit. See [Undo engine](#undo-engine-changeset). |
 | `survey/wire.rs`, `survey/wire/` | The wire projection (plan 9.2): `ProjectWire`, `LineWire`, `ProjectStateWire`, the per-slot `Station` list, preview and query DTOs, slot resolution, the load envelope input. See "Wire API" below. |
-| `survey/legacy_convert.rs` | Test only: converts a survey built with `models::project` for the cross-checks, plus a random legacy survey generator. |
+| `survey/legacy_convert.rs` | Test only: converts a survey built with the frozen 0.6.0 model (`stalagmight-legacy`) for the cross-checks, plus a random legacy survey generator. |
 | `survey/*_tests.rs`, `survey/test_helpers.rs` | Tests (see the end of this page). |
 
 ## Data and ids
@@ -669,8 +669,8 @@ The deviations each package made from the plan are in the plan's "Deviations
 | `positions_tests.rs` | Hand-built layouts (junction of three lines, free piece, datum corrections, frame at the origin, per-line hand moves, Tie and snap depth, double-anchor snaps), the shot vector against the legacy `Shot`, and determinism on a seeded random forest (same build, JSON round trip, reordered lines / closures / datums). |
 | `anchors_tests.rs` | Shot edits, explicit and undeclared placement changes, cut-off pieces, merges (free, placed, re-keyed placement), detach with and without a `via` fix, first and later datums, frame removal (translation and promotion), last datum, GPS edits, idempotence, declared corrections. |
 | `build_tests.rs` | Construction, refusals, ids, caches, naming, uuids, closure strategy spellings, stale attachments. |
-| `legacy_crosscheck_tests.rs` | Surveys built with `models::project` (merges, a merge at a line's last station, hand moves on merged members, datum pieces, a fix, free pieces, 40 seeded random surveys) lay out every slot within 1e-9 m of `compute_station_coordinates`. |
-| `graph_tests.rs` | Penetration, distance fields, the ruler, roles, entrances and GPS gaps against the legacy model (30 random legacy surveys). |
+| `legacy_crosscheck_tests.rs` | Surveys built with the frozen 0.6.0 model (merges, a merge at a line's last station, hand moves on merged members, datum pieces, a fix, free pieces, 40 seeded random surveys) lay out every slot within 1e-9 m of `compute_station_coordinates`. |
+| `graph_tests.rs` | Roles, entrances, GPS gaps and far fixes against the legacy model (30 random legacy surveys). The penetration, distance-field and ruler comparisons were retired with `models::project`: the frozen crate has no such queries. |
 | `adjust_tests.rs` | The Computed View per slot within 1e-6 m of `compute_adjusted_stations` (150 random legacy surveys), skip set, failures, alignment, new-closure verdicts, misclosures, path length, spurs, gauge, determinism, scale. |
 | `gama_tests.rs` | The GNU Gama gold standard (`tests/fixtures/gama_golden.json`) on networks built directly on the new model. |
 | `derived_tests.rs` | Frozen shots, rigid groups, anchored lines, immovable stations, stats against the legacy model; derived views bit-identical under shuffled lines. |
