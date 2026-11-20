@@ -509,4 +509,4 @@ really mutate, so "the second pass leaves one line" is measured rather than
 inferred from call counts. That a batch of `delete_line` is ONE undo entry is
 pinned in Rust: `batched_line_deletes_are_one_undo_entry`.
 
-Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
+Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/line_commands_tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

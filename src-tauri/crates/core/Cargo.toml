@@ -73,6 +73,6 @@ stalagmight-speleodb = { path = "../speleodb", features = ["test-support"] }
 stalagmight-legacy = { path = "../legacy", features = ["writer"] }
 tempfile = { workspace = true }
 libc = "0.2"
-# The profiling harnesses in `core::state::tests` install a real fmt
+# The TML profiling harness in `core::state::import_commands_tests` installs a real fmt
 # subscriber so the timing markers land on stdout.
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

@@ -111,11 +111,9 @@ pub(crate) const FROZEN_GEOMETRY: &str =
     "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.";
 
 /// Apply one command's mutation to `project` (no snapshot, no validation:
-/// the pipeline does both). Each family's `apply` lives in its own file, so
-/// the families are ported independently; a family not ported yet refuses
-/// with a typed "not yet ported" failure. `record` is the entry being
-/// recorded, for the preview rows or label refinements only the result can
-/// say.
+/// the pipeline does both). Each family's `apply` lives in its own file.
+/// `record` is the entry being recorded, for the preview rows or label
+/// refinements only the result can say.
 pub(crate) fn apply_command(
     project: &mut Project,
     record: &mut Record,

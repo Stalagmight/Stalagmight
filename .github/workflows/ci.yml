@@ -3,7 +3,7 @@ name: CI
 # includes `src/**` (excludes **/e2e/**), and cargo builds `src-tauri/`. The
 # Playwright suites are no-ops here.
 # NOTE: do NOT ignore all of `e2e/**` - cargo tests load `../e2e/fixtures/*.dmp`
-# (dmp.rs, core/state/tests.rs), so a fixture edit MUST still run `check`.
+# (dmp.rs, core/state/line_commands_tests.rs), so a fixture edit MUST still run `check`.
 # `e2e/agent/**` (the LLM-agent harness) MUST run `check` too: its only
 # automated gate is the `pnpm typecheck:agent` step below (the harness itself
 # is on-demand), so ignoring it here would let a type-broken harness land

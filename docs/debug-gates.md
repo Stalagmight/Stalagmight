@@ -88,26 +88,23 @@ and document that fact at the call site, the way that function does.
 
 ### Profile harnesses
 
-`profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/crates/core/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
-they never run with `cargo test` unless explicitly opted in:
+`profile_tml_import_full` lives in
+`src-tauri/crates/core/src/core/state/import_commands_tests.rs`. It is a unit test with
+`#[ignore]` - it never runs with `cargo test` unless explicitly opted in:
 
 ```bash
 # Profile a TML import end-to-end (parse + convert + execute_import_lines)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_tml_import_full -- --nocapture --ignored
-
-# Profile a stalx load end-to-end (open + load + station coords + warnings +
-# undo/redo + binary encode)
-STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
-  cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_stalx_load -- --nocapture --ignored
+  core::state::import_commands_tests::profile_tml_import_full -- --nocapture --ignored
 ```
 
+The 0.6.0 `profile_stalx_load` harness (a SQLite open) is retired with the
+SQLite file; a v2 open is one decode plus the derived views.
+
 Combine with `RUST_LOG=stalagmight=debug` to also get the in-code sub-phase
-timings. Both harnesses print a pretty per-phase table to stderr and exit
-clean - they're meant to be run on demand by hand.
+timings. The harness prints a pretty per-phase table to stderr and exits
+clean - it is meant to be run on demand by hand.
 
 ## TypeScript frontend
 
