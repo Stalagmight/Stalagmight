@@ -1179,6 +1179,10 @@ impl AppState {
     /// program changed goes through the save-conflict prompt first; a copy reopened
     /// from the stale disk recovers by ancestry, its BASE behind our own commit).
     /// Only a link that is gone is an error: then nothing was recorded at all.
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
     fn speleodb_record_landing(
         &self,
         open: Option<&crate::models::survey::Project>,

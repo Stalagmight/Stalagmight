@@ -161,6 +161,10 @@ fn newer_revision(dir: &Path, endpoint: &str) -> Vec<u8> {
         .into_bytes()
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the verb's own structured IPC error, asserted on as it is"
+)]
 fn restore(
     state: &AppState,
     hexsha: &str,
@@ -281,7 +285,7 @@ fn a_push_whose_save_is_refused_says_why() {
         assert!(state.read_only_reason().is_some());
         {
             let mut session = state.speleodb.lock().expect("session");
-            session.endpoint = Some(endpoint.clone());
+            session.endpoint = Some(endpoint);
             session.email = Some(ME.to_owned());
             session.token_store = TokenStore::from_in_memory_token("tok-1");
             session.rehydrate_attempted = true;

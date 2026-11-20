@@ -458,7 +458,7 @@ fn a_landed_push_whose_bookkeeping_save_fails_still_succeeds_and_clears_its_hist
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
         let path = cache_path_in(temp.path(), ID);
-        let (endpoint, seen) = server_touching(Upload::Accept, Some(path.clone()));
+        let (endpoint, seen) = server_touching(Upload::Accept, Some(path));
         let (_, state) = editing(temp.path(), &endpoint);
         reverse_the_line(&state);
 
@@ -549,7 +549,7 @@ fn publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice()
         );
         {
             let mut session = state.speleodb.lock().expect("session");
-            session.endpoint = Some(endpoint.clone());
+            session.endpoint = Some(endpoint);
             session.email = Some(ME.to_owned());
             session.token_store = TokenStore::from_in_memory_token("tok-1");
             session.rehydrate_attempted = true;
