@@ -1204,3 +1204,162 @@ fn move_station_rejects_non_finite_offset() {
     assert!(!r.success, "move_station must reject a non-finite offset");
     assert_eq!(canonical(&project(&state)), canonical(&before));
 }
+
+// === Import overlap (the import package's funnel; fixture-gated) ===
+
+/// Import kb5.dmp lines with overlap treatment and verify the interpolated
+/// shot values in the project state after import: line 002 at the origin,
+/// then line 001 (overlap shots removed) with `existing_shot_updates` that
+/// interpolate 002's overlap shots, all in one import call.
+#[test]
+#[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry; and C7's import funnel"]
+fn kb5_import_overlap_interpolation_integration() {
+    use crate::models::{ExistingShotUpdate, ImportLineConfig, ImportPlacement, ShotId, ShotUpdates};
+    use crate::parsers::dmp::{parse_dmp, DmpShotType};
+
+    fn circular_mean_deg(a: f64, b: f64) -> f64 {
+        let (a_r, b_r) = (a.to_radians(), b.to_radians());
+        let mean =
+            f64::atan2((a_r.sin() + b_r.sin()) / 2.0, (a_r.cos() + b_r.cos()) / 2.0).to_degrees();
+        if mean < 0.0 {
+            mean + 360.0
+        } else {
+            mean
+        }
+    }
+
+    fn avg_opt(a: Option<f64>, b: Option<f64>) -> Option<Option<f64>> {
+        match (a, b) {
+            (None, None) => None,
+            (Some(v), None) | (None, Some(v)) => Some(Some(v)),
+            (Some(a), Some(b)) => Some(Some((a + b) / 2.0)),
+        }
+    }
+
+    fn interp_update(
+        line_id: LineId,
+        shot_id: ShotId,
+        imp: &ShotData,
+        ext: &ShotData,
+    ) -> ExistingShotUpdate {
+        ExistingShotUpdate {
+            line_id,
+            shot_id,
+            updates: ShotUpdates {
+                azimuth_in: Some(circular_mean_deg(imp.azimuth_in, ext.azimuth_in)),
+                azimuth_out: Some(circular_mean_deg(imp.azimuth_out, ext.azimuth_out)),
+                length: Some((imp.length + ext.length) / 2.0),
+                depth_in: Some((imp.depth_in + ext.depth_in) / 2.0),
+                depth_out: Some((imp.depth_out + ext.depth_out) / 2.0),
+                pitch_in: avg_opt(imp.pitch_in, ext.pitch_in),
+                pitch_out: avg_opt(imp.pitch_out, ext.pitch_out),
+                left: avg_opt(imp.left, ext.left),
+                right: avg_opt(imp.right, ext.right),
+                up: avg_opt(imp.up, ext.up),
+                down: avg_opt(imp.down, ext.down),
+                ..Default::default()
+            },
+        }
+    }
+
+    let config = |name: &str, color: &str, shots: Vec<ShotData>, placement| ImportLineConfig {
+        cave_section: None,
+        reverse: false,
+        line_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: color.to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        station_comments: Vec::new(),
+        station_names: Vec::new(),
+        placement,
+        azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
+    };
+
+    let dmp_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
+    let dmp = parse_dmp(&dmp_path).unwrap();
+    let standard = |index: usize| -> Vec<ShotData> {
+        dmp.lines[index]
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| s.to_shot_data())
+            .collect()
+    };
+    let shots_001 = standard(0);
+    let shots_002 = standard(1);
+    assert_eq!(shots_001.len(), 107);
+    assert_eq!(shots_002.len(), 364);
+
+    // Step 1: import line 002 at the origin.
+    let state = new_state();
+    let result_002 = state.execute_import_lines(
+        vec![config(
+            "002",
+            "#4ecdc4",
+            shots_002.clone(),
+            ImportPlacement::Origin,
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        super::VirtualShotMode::Auto,
+    );
+    assert!(result_002.success, "import 002 failed: {:?}", result_002.error);
+    let p = project(&state);
+    let line_002_id = p.lines()[0].id;
+    assert_eq!(p.lines()[0].shots.len(), 364);
+
+    // Step 2: 001 -> 002 overlap: Back (impStn=107), Reverse, matched=2,
+    // exStn=182. Import shots 105, 106 are deleted; 002 shots 180, 181 get
+    // interpolated values.
+    let shot_180_id = p.lines()[0].shots[180].id;
+    let shot_181_id = p.lines()[0].shots[181].id;
+    let existing_updates = vec![
+        interp_update(line_002_id, shot_180_id, &shots_001[105], &shots_002[180]),
+        interp_update(line_002_id, shot_181_id, &shots_001[106], &shots_002[181]),
+    ];
+    let mut treated = shots_001.clone();
+    treated.remove(106);
+    treated.remove(105);
+    assert_eq!(treated.len(), 105);
+    let result_001 = state.execute_import_lines(
+        vec![config(
+            "001",
+            "#ff6b6b",
+            treated,
+            ImportPlacement::FromExisting {
+                import_station: 105,
+                existing_station: StationRef::new(line_002_id, 182),
+            },
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        existing_updates,
+        super::VirtualShotMode::Auto,
+    );
+    assert!(result_001.success, "import 001 failed: {:?}", result_001.error);
+
+    // Step 3: read back.
+    let p = project(&state);
+    assert_eq!(p.lines().len(), 2);
+    let sec_002 = p.line(line_002_id).unwrap();
+    let sec_001 = p.lines().iter().find(|s| s.id != line_002_id).unwrap();
+    assert_eq!(sec_001.shots.len(), 105);
+    assert_eq!(sec_002.shots.len(), 364);
+    let (actual_180, actual_181) = (&sec_002.shots[180], &sec_002.shots[181]);
+    let eps = 0.01;
+    assert!((actual_180.length - 5.665).abs() < eps, "{}", actual_180.length);
+    assert!((actual_180.azimuth_in - 322.4).abs() < 0.5, "{}", actual_180.azimuth_in);
+    assert!((actual_181.length - 12.375).abs() < eps, "{}", actual_181.length);
+    assert!((actual_181.azimuth_in - 349.75).abs() < 0.5, "{}", actual_181.azimuth_in);
+}
