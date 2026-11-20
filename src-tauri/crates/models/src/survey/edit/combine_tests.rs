@@ -410,3 +410,51 @@ fn shotless_lines_join_across_a_closure_their_tie_group_reaches() {
         (candidate.end_a, candidate.end_b)
     );
 }
+
+#[test]
+fn a_lettered_line_gives_the_next_letter_to_a_line_joined_at_its_junction() {
+    // 0.6.0's Lettered rule (`plan_combine_prefixes`): a kept line with two
+    // letter families gives the next free letter to an other line that has
+    // none (`A0 A1 A2 B1 B2` + `1 2` -> `.. C1 C2`). At a merged join the
+    // other line's join station is the kept line's own station (one name,
+    // `B2`): it is not one of the other line's names, as 0.6.0's retired
+    // member name was not (K golden combine-merged-join, second combine).
+    let mut p = empty();
+    let a = line(&mut p, "A", run("a", 90.0, 10.0, 2));
+    let b = line_at(&mut p, "B", [20.0, 0.0], run("b", 0.0, 5.0, 2));
+    ok(p.combine_lines(a, b, &options("AB")));
+    assert_eq!(names(&p, a), ["A0", "A1", "A2", "B1", "B2"]);
+    let end = st(&p, a, 4);
+    let c = line_from(&mut p, "C", end, run("c", 270.0, 5.0, 2));
+    assert_eq!(names(&p, c), ["B2", "1", "2"]);
+    let candidate = p.combine_candidate_for_lines(a, c).unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::Merged);
+    // The other line is lettered.
+    let renames = candidate.plan_keeping_a.station_renames.clone().unwrap();
+    assert_eq!(renames.reason, crate::CombineRenameReason::Lettered);
+    assert!(
+        renames.kept.is_none(),
+        "a lettered kept line keeps its letters"
+    );
+    let other = renames.other.unwrap();
+    assert_eq!(
+        (
+            other.count,
+            other.first_from.as_str(),
+            other.first_to.as_str()
+        ),
+        (2, "1", "C1")
+    );
+    assert_eq!(
+        (other.last_from.as_str(), other.last_to.as_str()),
+        ("2", "C2")
+    );
+    assert_eq!(renames.join_name, "B2");
+    let report = ok(p.combine_lines(a, c, &options("ABC")));
+    assert_eq!(
+        report.station_renames,
+        candidate.plan_keeping_a.station_renames
+    );
+    assert_eq!(names(&p, a), ["A0", "A1", "A2", "B1", "B2", "C1", "C2"]);
+    assert_valid(&p);
+}

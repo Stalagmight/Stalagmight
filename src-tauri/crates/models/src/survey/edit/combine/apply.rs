@@ -592,21 +592,31 @@ impl Project {
 
     /// The prefix plan (`station_naming::plan_combine_prefixes`) on the two
     /// lines' station names, `jo` being the other line's join station (its
-    /// name is retired).
+    /// name is retired). At a merged join `jo` is a station of the kept line
+    /// too, and its one name is the kept line's: it is left out of the other
+    /// line's names, as 0.6.0's retired member name was the other line's own,
+    /// so a lettered kept name there does not count as a letter family of the
+    /// other line (which would stop the kept line continuing its scheme).
     fn combine_prefix_plan(
         &self,
         kept: LineId,
         other: LineId,
         jo: StationId,
     ) -> crate::project::station_naming::CombinePrefixes {
-        let names = |line: LineId| -> Vec<String> {
-            self.line_stations(line)
-                .unwrap_or(&[])
+        let kept_chain = self.line_stations(kept).unwrap_or(&[]);
+        let shared_join = kept_chain.contains(&jo);
+        let names = |chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
+            chain
                 .iter()
+                .filter(|s| Some(**s) != skip)
                 .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
                 .collect()
         };
-        let (kept_names, other_names) = (names(kept), names(other));
+        let kept_names = names(kept_chain, None);
+        let other_names = names(
+            self.line_stations(other).unwrap_or(&[]),
+            shared_join.then_some(jo),
+        );
         let join_name = self.stations.get(&jo).map(|s| s.name.clone());
         plan_combine_prefixes(
             &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
