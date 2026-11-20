@@ -30,7 +30,7 @@ pub mod validation;
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod app_contract_tests;
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -39,7 +39,7 @@ mod app_contract_tests;
     clippy::float_cmp
 )]
 mod command_tests;
-#[cfg(all(test, unix))]
+#[cfg(sg_unported)]
 #[expect(
     clippy::expect_used,
     reason = "test module: a failed setup step is the point"

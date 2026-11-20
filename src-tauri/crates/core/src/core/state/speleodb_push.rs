@@ -1060,7 +1060,7 @@ impl AppState {
     /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
     pub(super) fn speleodb_clear_undo_after_push(&self, undo_cutoff: &str) {
         let _ = (&undo_cutoff,);
-        crate::core::stub::not_ported("speleodb_push::speleodb_clear_undo_after_push")
+        crate::core::stub::not_ported::<()>("speleodb_push::speleodb_clear_undo_after_push");
     }
 }
 

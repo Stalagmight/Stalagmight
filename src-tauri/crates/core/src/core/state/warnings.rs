@@ -24,7 +24,7 @@ use crate::persistence::ResolvedWarning;
 fn locate(project: &Project, uuid: &str) -> Option<(LineId, ShotId)> {
     let at = project.shot_by_uuid(uuid)?;
     let line = project.line(at.line)?;
-    let shot = line.shots.get(at.index as usize)?;
+    let shot = line.shots.get(at.index)?;
     Some((line.id, shot.id))
 }
 
@@ -161,7 +161,12 @@ impl AppState {
     /// datum GPS-gap codes are pinned to the datum's GPS in 0.6.0
     /// (`datum_gap_ignore_code`); that pinning is ported with the warnings
     /// computation. Until then: the code as given.
-    pub fn ignore_code_for(&self, _line_id: LineId, _shot_id: ShotId, warning_code: &str) -> String {
+    pub fn ignore_code_for(
+        &self,
+        _line_id: LineId,
+        _shot_id: ShotId,
+        warning_code: &str,
+    ) -> String {
         warning_code.to_string()
     }
 

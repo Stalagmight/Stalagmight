@@ -10,7 +10,6 @@ use crate::models::{
     LineUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
-
 impl AppState {
     /// Read-only: what can be combined at the point `station` ends at: the
     /// clicked line with each other line ending there first, then (at a

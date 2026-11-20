@@ -98,7 +98,7 @@ impl AppState {
         expected_generation: u64,
     ) {
         let _ = (&name, &project_id, &expected_generation);
-        crate::core::stub::not_ported("speleodb_project::speleodb_fold_local_name")
+        crate::core::stub::not_ported::<()>("speleodb_project::speleodb_fold_local_name");
     }
 
     /// [#207] Create the OPEN local project on SpeleoDB and push its first revision.
@@ -211,7 +211,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn publish_relocates_into_the_cache_before_it_stamps_the_link() {
         // save_project treats "linked + explicit destination" as Save a Copy (the

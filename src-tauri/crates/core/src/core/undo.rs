@@ -64,7 +64,9 @@ pub enum HistoryDropped {
 impl HistoryDropped {
     fn of(error: &EntryError) -> Self {
         match error {
-            EntryError::Version(found) if *found < u64::from(crate::models::survey::changeset::HISTORY_FORMAT_VERSION) => {
+            EntryError::Version(found)
+                if *found < u64::from(crate::models::survey::changeset::HISTORY_FORMAT_VERSION) =>
+            {
                 Self::EarlierVersion
             }
             _ => Self::Unreadable,

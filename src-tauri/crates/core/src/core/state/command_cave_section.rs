@@ -202,3 +202,36 @@ thread_local! {
 pub(super) fn set_between_section_locks_hook(hook: impl FnOnce(&AppState) + 'static) {
     BETWEEN_SECTION_LOCKS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
+
+/// The execute pipeline's mutation for the cave section family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &crate::core::Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        crate::core::Command::CreateCaveSection { .. } => {
+            Err(super::commands::not_ported("execute::create_cave_section"))
+        }
+        crate::core::Command::UpdateCaveSection { .. } => {
+            Err(super::commands::not_ported("execute::update_cave_section"))
+        }
+        crate::core::Command::DeleteCaveSection { .. } => {
+            Err(super::commands::not_ported("execute::delete_cave_section"))
+        }
+        crate::core::Command::MoveLinesToCaveSection { .. } => Err(super::commands::not_ported(
+            "execute::move_lines_to_cave_section",
+        )),
+        crate::core::Command::ApplyCaveSectionColor { .. } => Err(super::commands::not_ported(
+            "execute::apply_cave_section_color",
+        )),
+        _ => Err(format!(
+            "{} is not a cave section command",
+            crate::core::command_kind(cmd)
+        )),
+    }
+}

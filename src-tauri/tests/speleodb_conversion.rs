@@ -1,4 +1,8 @@
 //! Synthetic conversion contract; this separate process owns its temporary app dirs.
+// Parked by the station-graph switch (C0): written against the 0.6.0 model,
+// the SQLite database handle and the old undo engine; ported by a work
+// package of the C0 breakdown.
+#![cfg(sg_unported)]
 #![expect(clippy::expect_used, reason = "synthetic HTTP and SQLite test setup")]
 use std::io::{Read, Write};
 use std::net::TcpListener;

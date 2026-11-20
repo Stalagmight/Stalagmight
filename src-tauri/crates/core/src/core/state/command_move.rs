@@ -32,3 +32,30 @@ impl AppState {
         crate::core::stub::not_ported("command_move::move_station")
     }
 }
+
+/// The execute pipeline's mutation for the move family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &crate::core::Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        crate::core::Command::MoveLine { .. } => {
+            Err(super::commands::not_ported("execute::move_line"))
+        }
+        crate::core::Command::MoveSegment { .. } => {
+            Err(super::commands::not_ported("execute::move_segment"))
+        }
+        crate::core::Command::MoveStation { .. } => {
+            Err(super::commands::not_ported("execute::move_station"))
+        }
+        _ => Err(format!(
+            "{} is not a move command",
+            crate::core::command_kind(cmd)
+        )),
+    }
+}

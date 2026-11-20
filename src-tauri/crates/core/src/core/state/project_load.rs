@@ -93,7 +93,10 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
             }
         }
         other => {
-            tracing::warn!(class = other.class(), "a legacy project could not be migrated");
+            tracing::warn!(
+                class = other.class(),
+                "a legacy project could not be migrated"
+            );
             LoadError::corrupt(other.to_string(), &path_text(path))
         }
     }
@@ -103,15 +106,14 @@ impl AppState {
     /// Read the project file at `path` into memory (no state changes).
     pub(crate) fn read_project_file(&self, path: &Path) -> Result<Opened, LoadError> {
         let options = DecodeOptions::default();
-        let (bytes, fingerprint) = Fingerprint::read(path, options.max_file_bytes).map_err(|e| {
-            match e.kind() {
+        let (bytes, fingerprint) =
+            Fingerprint::read(path, options.max_file_bytes).map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => LoadError::not_found(&path_text(path)),
                 std::io::ErrorKind::PermissionDenied => {
                     LoadError::permission(e.to_string(), &path_text(path))
                 }
                 _ => LoadError::new("IO", e.to_string()),
-            }
-        })?;
+            })?;
         match sniff(&bytes) {
             Format::V2 => {
                 let decoded = decode(&bytes, &options).map_err(|e| decode_error(path, &e))?;
@@ -135,7 +137,10 @@ impl AppState {
                     .notes
                     .iter()
                     .any(|n| {
-                        matches!(n, crate::persistence::stalx_v2::DecodeNote::HistoryDropped { .. })
+                        matches!(
+                            n,
+                            crate::persistence::stalx_v2::DecodeNote::HistoryDropped { .. }
+                        )
                     })
                     .then_some(HistoryDropped::Unreadable);
                 file.dirty = false;
@@ -149,9 +154,11 @@ impl AppState {
             Format::Legacy => {
                 drop(bytes);
                 let config = self.get_config();
-                let migrated =
-                    crate::persistence::migrate::migrate_path_for_app(path, &config.closure_adjustment)
-                        .map_err(|e| migrate_error(path, &e))?;
+                let migrated = crate::persistence::migrate::migrate_path_for_app(
+                    path,
+                    &config.closure_adjustment,
+                )
+                .map_err(|e| migrate_error(path, &e))?;
                 let report = &migrated.report;
                 tracing::info!(
                     stations = report.stations,
@@ -162,7 +169,7 @@ impl AppState {
                 );
                 let mut project = migrated.project;
                 if !migrated.extras.validation_stored {
-                    project.settings.validation = config.validation.clone();
+                    project.settings.validation = config.validation;
                 }
                 project.file_path = Some(path.to_path_buf());
                 let file = FileState::from_migrated(
@@ -238,7 +245,9 @@ impl AppState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             stack.set_inherited_through(watermark);
-            stack.load_persisted(&history, &EntryLimits::default()).err()
+            stack
+                .load_persisted(&history, &EntryLimits::default())
+                .err()
         };
         self.note_history_dropped(dropped);
         self.initial_save_deferred
@@ -364,11 +373,12 @@ impl AppState {
             *self
                 .derived
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(super::app_state::DerivedCache {
-                revision,
-                raw,
-                adjusted: None,
-            });
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(super::app_state::DerivedCache {
+                    revision,
+                    raw,
+                    adjusted: None,
+                });
         }
         self.note_recent_project(&path);
         progress.complete_phase(LoadingPhase::Finalizing);

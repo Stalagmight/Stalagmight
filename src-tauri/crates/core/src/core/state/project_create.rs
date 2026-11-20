@@ -1,6 +1,6 @@
+use super::open_file::FileState;
 use super::AppState;
 use crate::core::CommandResult;
-use super::open_file::FileState;
 use crate::models::survey::Project;
 use anyhow::Result;
 use std::path::PathBuf;
@@ -131,8 +131,6 @@ impl AppState {
         }
     }
 
-
-
     /// The display settings a new project starts with (written into the
     /// file's `local` member).
     fn default_display_settings() -> Vec<(&'static str, String)> {
@@ -217,7 +215,7 @@ impl AppState {
         let linked = self.speleo_link().is_some();
         let result = self.run_recorded(
             |p| super::commands::Record::of(p, &crate::core::Command::UpdateProjectSettings),
-            |project| {
+            |project, _| {
                 if linked && project.name != name {
                     return Err("Linked project names are managed by SpeleoDB".to_string());
                 }
@@ -242,7 +240,7 @@ impl AppState {
         }
         let result = self.run_recorded(
             |p| super::commands::Record::of(p, &crate::core::Command::SetSurfaceElevation),
-            |project| {
+            |project, _| {
                 project.settings.surface_elevation = elevation;
                 Ok(())
             },

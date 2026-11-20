@@ -188,11 +188,19 @@ fn digest_rows(d: &Digest) -> Vec<FieldChange> {
         rows.push(row(format!("{:?}", c.field), shown(&c.old), shown(&c.new)));
     }
     for c in &d.station_fields {
-        rows.push(row(station_field_label(c.field), shown(&c.old), shown(&c.new)));
+        rows.push(row(
+            station_field_label(c.field),
+            shown(&c.old),
+            shown(&c.new),
+        ));
     }
     for c in &d.project {
         if c.field != ProjectField::Validation {
-            rows.push(row(project_field_label(c.field), shown(&c.old), shown(&c.new)));
+            rows.push(row(
+                project_field_label(c.field),
+                shown(&c.old),
+                shown(&c.new),
+            ));
         }
     }
     for line in &d.lines_created {

@@ -173,17 +173,11 @@ impl AppState {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.undo_stack
-            .lock()
-            .map(|s| s.can_undo())
-            .unwrap_or(false)
+        self.undo_stack.lock().is_ok_and(|s| s.can_undo())
     }
 
     pub fn can_redo(&self) -> bool {
-        self.undo_stack
-            .lock()
-            .map(|s| s.can_redo())
-            .unwrap_or(false)
+        self.undo_stack.lock().is_ok_and(|s| s.can_redo())
     }
 
     /// The undo history, most recent first: the record-time labels and the

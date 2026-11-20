@@ -3,6 +3,10 @@
 //!
 //! Synthetic throughout: a loopback SpeleoDB stub and databases built here. This
 //! separate process owns its temporary app dirs (the cache path is global).
+// Parked by the station-graph switch (C0): written against the 0.6.0 model,
+// the SQLite database handle and the old undo engine; ported by a work
+// package of the C0 breakdown.
+#![cfg(sg_unported)]
 #![expect(
     clippy::expect_used,
     clippy::panic,

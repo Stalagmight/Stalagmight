@@ -55,13 +55,6 @@ mod undo;
 mod undo_policy;
 mod warnings;
 
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod c0_foundation_tests;
 #[cfg(sg_unported)]
 mod adversarial_tests;
 #[cfg(sg_unported)]
@@ -79,6 +72,13 @@ mod azimuth_reference_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod batch_label_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod c0_foundation_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
@@ -394,7 +394,7 @@ mod undo_size_gate_tests;
 mod tests_support;
 
 pub use app_state::AppState;
+pub use command_import::VirtualShotMode;
 pub use open_file::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 pub use project_io::set_generator;
-pub use command_import::VirtualShotMode;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

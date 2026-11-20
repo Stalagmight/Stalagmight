@@ -140,7 +140,7 @@ pub async fn export_image(
     crate::core::stub::not_ported("export::export_image")
 }
 
-#[cfg(test)]
+#[cfg(sg_unported)]
 pub(crate) fn export_image_impl(
     state: &AppState,
     path: PathBuf,

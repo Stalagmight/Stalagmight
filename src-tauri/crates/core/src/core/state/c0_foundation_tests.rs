@@ -116,7 +116,11 @@ fn an_edit_undoes_and_redoes_in_the_session_and_after_a_reopen() {
     let items = state.get_undo_stack();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].command_type, "update_shot");
-    assert!(items[0].description.contains("Main"), "{}", items[0].description);
+    assert!(
+        items[0].description.contains("Main"),
+        "{}",
+        items[0].description
+    );
     assert!(items[0].preview_data.is_some());
 
     assert!(state.undo().success);
@@ -250,7 +254,11 @@ fn a_save_refuses_a_file_changed_on_disk_until_told_to_overwrite() {
         "{:?}",
         r.error
     );
-    assert_eq!(std::fs::read(&path).unwrap(), other, "the file is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        other,
+        "the file is untouched"
+    );
     let r = state.save_project_overwriting(None);
     assert!(r.success, "{:?}", r.error);
     let reopened = open(&path);
@@ -265,7 +273,12 @@ fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     state.save_display_setting("showGrid", "true").unwrap();
     let decoded = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
     assert_eq!(
-        decoded.extras.local.display.get("showGrid").map(String::as_str),
+        decoded
+            .extras
+            .local
+            .display
+            .get("showGrid")
+            .map(String::as_str),
         Some("true")
     );
     // And the next normal save still passes the guard.
@@ -340,12 +353,14 @@ fn the_project_state_and_the_binary_envelope_are_the_wire_projection() {
 fn a_new_project_is_written_as_version_2() {
     let dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
-    assert!(state
-        .execute(Command::CreateProject {
-            name: "Fresh".to_string(),
-            location: None,
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Fresh".to_string(),
+                location: None,
+            })
+            .success
+    );
     let path = dir.path().join("fresh.stalx");
     let r = state.execute(Command::SaveProject {
         path: Some(path.clone()),
@@ -384,7 +399,12 @@ fn a_legacy_file_opens_in_memory_and_its_first_save_upgrades_it_with_a_backup() 
     assert_eq!(stalx_v2::sniff(&upgraded), Format::V2);
     let decoded = stalx_v2::decode(&upgraded, &Default::default()).unwrap();
     assert_eq!(
-        decoded.extras.local.display.get("showGrid").map(String::as_str),
+        decoded
+            .extras
+            .local
+            .display
+            .get("showGrid")
+            .map(String::as_str),
         Some("true"),
         "the in-memory display toggle rides the upgrading save"
     );

@@ -6,7 +6,6 @@ use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONL
 use crate::models::survey::Project;
 use crate::persistence::stalx_v2::{write_atomic, Guard, Mode, WriteError};
 
-
 /// What a failed save actually was, once the error chain and the destination
 /// have both been consulted. Each variant except `Other` carries a marker the
 /// frontend keys on to pick the remediation it shows.
@@ -407,8 +406,7 @@ impl AppState {
             drop(proj_guard);
             self.note_recent_project(&target);
             tracing::info!(path = ?target, "Saved an unlinked copy of a SpeleoDB-managed project");
-            return CommandResult::success()
-                .with_unlinked_copy_path(target.display().to_string());
+            return CommandResult::success().with_unlinked_copy_path(target.display().to_string());
         }
         project.file_path = Some(target.clone());
         file.fingerprint = Some(fingerprint);

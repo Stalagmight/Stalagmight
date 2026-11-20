@@ -240,7 +240,7 @@ impl AppState {
         pair: &(Option<String>, Option<chrono::NaiveDate>),
     ) {
         let _ = (&line_id, &pair);
-        crate::core::stub::not_ported("command_shot::restore_consumed_legacy")
+        crate::core::stub::not_ported::<()>("command_shot::restore_consumed_legacy");
     }
 
     pub(super) fn remove_created_shot(
@@ -261,5 +261,58 @@ impl AppState {
     ) -> CommandResult {
         let _ = (&line_id, &shot_id, &kind);
         crate::core::stub::not_ported("command_shot::set_shot_kind")
+    }
+}
+
+/// The execute pipeline's mutation for the shot family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &crate::core::Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        crate::core::Command::CreateShot { .. } => {
+            Err(super::commands::not_ported("execute::create_shot"))
+        }
+        crate::core::Command::UpdateShot {
+            line_id,
+            shot_id,
+            updates,
+        } => {
+            // S12: the model does not refuse frozen shots; the command does.
+            if updates.touches_geometry() {
+                let index = project
+                    .line(*line_id)
+                    .and_then(|l| l.shots.iter().position(|s| s.id == *shot_id));
+                if index.is_some_and(|i| project.is_shot_frozen(*line_id, i)) {
+                    return Err(super::commands::FROZEN_GEOMETRY.to_string());
+                }
+            }
+            project
+                .update_shot(*line_id, *shot_id, updates)
+                .map_err(|e| e.to_string())?;
+            Ok(super::commands::Applied::default())
+        }
+        crate::core::Command::DeleteShot { .. } => {
+            Err(super::commands::not_ported("execute::delete_shot"))
+        }
+        crate::core::Command::SetShotKind {
+            line_id,
+            shot_id,
+            kind,
+        } => {
+            project
+                .set_shot_kind(*line_id, *shot_id, *kind)
+                .map_err(|e| e.to_string())?;
+            Ok(super::commands::Applied::default())
+        }
+        _ => Err(format!(
+            "{} is not a shot command",
+            crate::core::command_kind(cmd)
+        )),
     }
 }

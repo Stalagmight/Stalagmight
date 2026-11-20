@@ -35,3 +35,50 @@ impl AppState {
         crate::core::stub::not_ported("command_line::update_line")
     }
 }
+
+/// The execute pipeline's mutation for the line family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &crate::core::Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        crate::core::Command::CreateLine { .. } => {
+            Err(super::commands::not_ported("execute::create_line"))
+        }
+        crate::core::Command::DeleteLine { line_id } => {
+            project.delete_line(*line_id).map_err(|e| e.to_string())?;
+            Ok(super::commands::Applied::default())
+        }
+        crate::core::Command::UpdateLineMetadata { .. } => {
+            Err(super::commands::not_ported("execute::update_line_metadata"))
+        }
+        crate::core::Command::ReverseLine {
+            line_id,
+            swap_left_right,
+        } => {
+            let shot_count = project
+                .line(*line_id)
+                .map(|l| u32::try_from(l.shots.len()).unwrap_or(u32::MAX))
+                .ok_or_else(|| format!("Line {line_id} not found"))?;
+            project
+                .reverse_line(*line_id, *swap_left_right)
+                .map_err(|e| e.to_string())?;
+            Ok(super::commands::Applied {
+                reversed: vec![crate::core::ReversedLine {
+                    line_id: *line_id,
+                    shot_count,
+                }],
+                ..super::commands::Applied::default()
+            })
+        }
+        _ => Err(format!(
+            "{} is not a line command",
+            crate::core::command_kind(cmd)
+        )),
+    }
+}

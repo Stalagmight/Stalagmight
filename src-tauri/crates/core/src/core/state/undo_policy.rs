@@ -7,8 +7,8 @@
 //! answer has three inputs (is there a link, has its legacy NULL been initialized,
 //! what is the global default) and three chances to get the transition wrong.
 
-use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
+use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 #[cfg(test)]
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 

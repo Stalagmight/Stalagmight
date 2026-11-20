@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 use tauri::{Manager, State};
-use ts_rs::TS;
 
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    AdjustmentReport, AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata,
-    ProjectStats, RulerEndpoint, Station, StationRef,
+    AdjustmentReport, AlongLineResult, DistanceField, ProjectMetadata, RulerEndpoint, Station,
+    StationRef,
 };
 
 /// Update per-project settings (#57): project name + validation thresholds.

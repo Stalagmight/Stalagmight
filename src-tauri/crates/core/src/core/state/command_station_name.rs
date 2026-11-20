@@ -71,11 +71,32 @@ impl AppState {
     /// cannot change station identity skips it
     /// (`Command::can_change_station_identity`).
     pub(super) fn settle_station_identities(&self) {
-        crate::core::stub::not_ported("command_station_name::settle_station_identities")
+        crate::core::stub::not_ported::<()>("command_station_name::settle_station_identities");
     }
 }
 
 /// [`AppState::settle_station_identities`] on a project already held.
 pub(super) fn settle(project: &mut Project) {
     project.ensure_station_identities();
+}
+
+/// The execute pipeline's mutation for the station name family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        Command::SetStationName { .. } => {
+            Err(super::commands::not_ported("execute::set_station_name"))
+        }
+        _ => Err(format!(
+            "{} is not a station name command",
+            crate::core::command_kind(cmd)
+        )),
+    }
 }

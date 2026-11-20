@@ -15,7 +15,6 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
-use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::commands::survey_geometry::{
     GeometryShot, SurveyGeometry, SurveyGeometryError,
 };
@@ -50,6 +49,7 @@ use stalagmight_lib::models::placement_suggest::{
     CrossLineSuggestion, ImportLineForSuggestion, MatchDirection, OrphanPlacementSuggestion,
     PlacementSuggestion, SuggestionConfidence, TargetType,
 };
+use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,

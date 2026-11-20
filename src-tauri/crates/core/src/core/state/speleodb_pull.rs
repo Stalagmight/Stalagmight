@@ -545,7 +545,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn authentication_rejection_invalidates_downloads_without_closing_the_project() {
         crate::test_helpers::with_isolated_config(|| {
@@ -580,7 +579,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn a_newer_download_reservation_excludes_older_cache_installations() {
         crate::test_helpers::with_isolated_config(|| {
@@ -690,7 +688,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn delayed_download_cannot_close_a_newer_open_of_the_same_cache() {
         crate::test_helpers::with_isolated_config(|| {
@@ -741,7 +738,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn a_confirmed_native_transition_invalidates_older_downloads_even_without_a_commit() {
         crate::test_helpers::with_isolated_config(|| {
@@ -774,7 +770,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn a_pending_native_reader_excludes_cache_replacement() {
         crate::test_helpers::with_isolated_config(|| {
@@ -960,7 +955,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn first_download_creates_its_nested_cache_directory() {
         crate::test_helpers::with_isolated_config(|| {
@@ -1038,7 +1032,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn installed_download_keeps_remote_undo_policy_and_local_display_settings() {
         crate::test_helpers::with_isolated_config(|| {

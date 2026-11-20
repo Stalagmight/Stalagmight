@@ -29,7 +29,6 @@ pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<
 }
 
 impl AppState {
-
     /// The two halves' names of a delete-and-split of `line_id`, trimmed, or
     /// the refusal (`Project::validate_replacement_line_names`: empty, or
     /// another line's, as a rename is refused). A missing line or project is

@@ -145,7 +145,7 @@ impl AppState {
     /// the project keeps its ids, the newly created lines yield.
     pub(super) fn reassign_repeated_shot_uuids(&self, new_lines: &[LineId]) {
         let _ = (&new_lines,);
-        crate::core::stub::not_ported("command_import::reassign_repeated_shot_uuids")
+        crate::core::stub::not_ported::<()>("command_import::reassign_repeated_shot_uuids");
     }
 
     /// Execute a create-line-and-merge operation as a single atomic undo/redo unit.
@@ -195,7 +195,17 @@ impl AppState {
         _closure_strategy: ClosureStrategy,
         cave_section_id: Option<SectionId>,
     ) -> CommandResult {
-        let _ = (&name, &surveyor, &date, &color, &direction, &shots, &import_station_index, &target_station, &cave_section_id);
+        let _ = (
+            &name,
+            &surveyor,
+            &date,
+            &color,
+            &direction,
+            &shots,
+            &import_station_index,
+            &target_station,
+            &cave_section_id,
+        );
         crate::core::stub::not_ported("command_import::execute_create_and_merge_in_cave_section")
     }
 
@@ -265,7 +275,15 @@ impl AppState {
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
     ) -> CommandResult {
-        let _ = (&lines, &closures, &file_hash, &line_hashes, &existing_shot_updates, &mode, &surface_elevation);
+        let _ = (
+            &lines,
+            &closures,
+            &file_hash,
+            &line_hashes,
+            &existing_shot_updates,
+            &mode,
+            &surface_elevation,
+        );
         crate::core::stub::not_ported("command_import::execute_import_lines_inner")
     }
 }

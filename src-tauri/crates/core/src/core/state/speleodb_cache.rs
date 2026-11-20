@@ -301,7 +301,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn only_a_named_discard_gets_a_replace_past_un_pushed_edits() {
         // The behaviour the policy exists for, pinned from both sides: `Protect`
@@ -444,7 +443,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn failed_history_cleanup_leaves_the_existing_cache_untouched() {
         let seed_dir = tempfile::TempDir::new().expect("seed temp");
@@ -496,7 +494,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn a_clean_copy_is_replaced_without_any_waiver() {
         // The other half: `Protect` is not "always refuse". With nothing un-pushed

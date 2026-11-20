@@ -85,7 +85,7 @@ impl Applied {
 }
 
 /// The failure text of a command family C0 has not ported.
-fn not_ported(what: &'static str) -> String {
+pub(crate) fn not_ported(what: &'static str) -> String {
     tracing::warn!(
         what,
         "reached a command the station-graph switch has not ported yet"
@@ -93,78 +93,59 @@ fn not_ported(what: &'static str) -> String {
     NotPorted(what).to_string()
 }
 
-/// The message a frozen shot's geometry edit is refused with.
-const FROZEN_GEOMETRY: &str =
+/// The message a frozen shot's geometry edit is refused with (S12: the
+/// model's operations do not check it; the command layer does).
+pub(crate) const FROZEN_GEOMETRY: &str =
     "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.";
 
-/// Apply one command's mutation to `project` (no record, no validation: the
-/// pipeline does both). Every family not ported in C0 refuses with a typed
-/// "not yet ported" failure.
-pub(crate) fn apply_command(project: &mut Project, cmd: &Command) -> Result<Applied, String> {
+/// Apply one command's mutation to `project` (no snapshot, no validation:
+/// the pipeline does both). Each family's `apply` lives in its own file, so
+/// the families are ported independently; a family not ported yet refuses
+/// with a typed "not yet ported" failure. `record` is the entry being
+/// recorded, for the preview rows or label refinements only the result can
+/// say.
+pub(crate) fn apply_command(
+    project: &mut Project,
+    record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    use super::{
+        command_cave_section, command_comment, command_credit, command_line, command_move,
+        command_shot, command_station, command_station_name, import_tracking, project_add,
+    };
     match cmd {
-        Command::UpdateShot {
-            line_id,
-            shot_id,
-            updates,
-        } => {
-            if updates.touches_geometry() {
-                let index = project
-                    .line(*line_id)
-                    .and_then(|l| l.shots.iter().position(|s| s.id == *shot_id));
-                if index.is_some_and(|i| project.is_shot_frozen(*line_id, i)) {
-                    return Err(FROZEN_GEOMETRY.to_string());
-                }
-            }
-            project
-                .update_shot(*line_id, *shot_id, updates)
-                .map_err(|e| e.to_string())?;
-            Ok(Applied::default())
+        Command::CreateLine { .. }
+        | Command::DeleteLine { .. }
+        | Command::UpdateLineMetadata { .. }
+        | Command::ReverseLine { .. } => command_line::apply(project, record, cmd),
+        Command::CreateShot { .. }
+        | Command::UpdateShot { .. }
+        | Command::DeleteShot { .. }
+        | Command::SetShotKind { .. } => command_shot::apply(project, record, cmd),
+        Command::EditShotCredit { .. } => command_credit::apply(project, record, cmd),
+        Command::MergeStations { .. }
+        | Command::UnmergeStations { .. }
+        | Command::UnmergeStationPair { .. }
+        | Command::CreateLoopClosure { .. }
+        | Command::RemoveLoopClosure { .. }
+        | Command::SetZeroDatum { .. }
+        | Command::RemoveZeroDatum { .. } => command_station::apply(project, record, cmd),
+        Command::SetStationName { .. } => command_station_name::apply(project, record, cmd),
+        Command::SetStationComment { .. } | Command::MoveComment { .. } => {
+            command_comment::apply(project, record, cmd)
         }
-        Command::SetShotKind {
-            line_id,
-            shot_id,
-            kind,
-        } => {
-            project
-                .set_shot_kind(*line_id, *shot_id, *kind)
-                .map_err(|e| e.to_string())?;
-            Ok(Applied::default())
+        Command::MoveLine { .. } | Command::MoveSegment { .. } | Command::MoveStation { .. } => {
+            command_move::apply(project, record, cmd)
         }
-        Command::ReverseLine {
-            line_id,
-            swap_left_right,
-        } => {
-            let shot_count = project
-                .line(*line_id)
-                .map(|l| u32::try_from(l.shots.len()).unwrap_or(u32::MAX))
-                .ok_or_else(|| format!("Line {line_id} not found"))?;
-            project
-                .reverse_line(*line_id, *swap_left_right)
-                .map_err(|e| e.to_string())?;
-            Ok(Applied {
-                reversed: vec![ReversedLine {
-                    line_id: *line_id,
-                    shot_count,
-                }],
-                ..Applied::default()
-            })
+        Command::CreateCaveSection { .. }
+        | Command::UpdateCaveSection { .. }
+        | Command::DeleteCaveSection { .. }
+        | Command::MoveLinesToCaveSection { .. }
+        | Command::ApplyCaveSectionColor { .. } => {
+            command_cave_section::apply(project, record, cmd)
         }
-        Command::DeleteLine { line_id } => {
-            project.delete_line(*line_id).map_err(|e| e.to_string())?;
-            Ok(Applied::default())
-        }
-        Command::MergeStations {
-            station_a,
-            station_b,
-        } => {
-            let (a, b) = project
-                .resolve_slot_pair(*station_a, *station_b)
-                .map_err(|e| e.to_string())?;
-            project
-                .merge_stations(a.station, b.station)
-                .map_err(|e| e.to_string())?;
-            Ok(Applied::default())
-        }
+        Command::UntrackImport { .. } => import_tracking::apply(project, record, cmd),
+        Command::AddProjectFile { .. } => project_add::apply(project, record, cmd),
         Command::Batch { commands, .. } => {
             let mut applied = Applied::default();
             for sub in commands {
@@ -174,34 +155,10 @@ pub(crate) fn apply_command(project: &mut Project, cmd: &Command) -> Result<Appl
                         crate::core::command_kind(sub)
                     ));
                 }
-                applied.merge(apply_command(project, sub)?);
+                applied.merge(apply_command(project, record, sub)?);
             }
             Ok(applied)
         }
-        Command::CreateLine { .. } => Err(not_ported("execute::create_line")),
-        Command::UpdateLineMetadata { .. } => Err(not_ported("execute::update_line_metadata")),
-        Command::CreateShot { .. } => Err(not_ported("execute::create_shot")),
-        Command::DeleteShot { .. } => Err(not_ported("execute::delete_shot")),
-        Command::EditShotCredit { .. } => Err(not_ported("execute::edit_shot_credit")),
-        Command::UnmergeStations { .. } => Err(not_ported("execute::unmerge_stations")),
-        Command::UnmergeStationPair { .. } => Err(not_ported("execute::unmerge_station_pair")),
-        Command::CreateLoopClosure { .. } => Err(not_ported("execute::create_loop_closure")),
-        Command::RemoveLoopClosure { .. } => Err(not_ported("execute::remove_loop_closure")),
-        Command::SetZeroDatum { .. } => Err(not_ported("execute::set_zero_datum")),
-        Command::RemoveZeroDatum { .. } => Err(not_ported("execute::remove_zero_datum")),
-        Command::SetStationComment { .. } => Err(not_ported("execute::set_station_comment")),
-        Command::SetStationName { .. } => Err(not_ported("execute::set_station_name")),
-        Command::MoveLine { .. } => Err(not_ported("execute::move_line")),
-        Command::MoveSegment { .. } => Err(not_ported("execute::move_segment")),
-        Command::MoveStation { .. } => Err(not_ported("execute::move_station")),
-        Command::MoveComment { .. } => Err(not_ported("execute::move_comment")),
-        Command::UntrackImport { .. } => Err(not_ported("execute::untrack_import")),
-        Command::CreateCaveSection { .. }
-        | Command::UpdateCaveSection { .. }
-        | Command::DeleteCaveSection { .. }
-        | Command::MoveLinesToCaveSection { .. }
-        | Command::ApplyCaveSectionColor { .. } => Err(not_ported("execute::cave_sections")),
-        Command::AddProjectFile { .. } => Err(not_ported("execute::add_project_file")),
         Command::CreateProject { .. }
         | Command::OpenProject { .. }
         | Command::SaveProject { .. }
@@ -217,53 +174,6 @@ pub(crate) fn apply_command(project: &mut Project, cmd: &Command) -> Result<Appl
 }
 
 impl AppState {
-    fn is_lifecycle_passthrough(cmd: &Command) -> bool {
-        use Command::*;
-        match cmd {
-            CreateProject { .. }
-            | OpenProject { .. }
-            | SaveProject { .. }
-            | CloseProject
-            | MergeProjects { .. } => true,
-            CreateLine { .. }
-            | DeleteLine { .. }
-            | UpdateLineMetadata { .. }
-            | ReverseLine { .. }
-            | CreateShot { .. }
-            | UpdateShot { .. }
-            | DeleteShot { .. }
-            | SetShotKind { .. }
-            | EditShotCredit { .. }
-            | MergeStations { .. }
-            | UnmergeStations { .. }
-            | UnmergeStationPair { .. }
-            | CreateLoopClosure { .. }
-            | RemoveLoopClosure { .. }
-            | SetZeroDatum { .. }
-            | RemoveZeroDatum { .. }
-            | SetStationComment { .. }
-            | SetStationName { .. }
-            | MoveLine { .. }
-            | MoveSegment { .. }
-            | MoveStation { .. }
-            | MoveComment { .. }
-            | Batch { .. }
-            | UntrackImport { .. }
-            | CreateCaveSection { .. }
-            | UpdateCaveSection { .. }
-            | DeleteCaveSection { .. }
-            | MoveLinesToCaveSection { .. }
-            | ApplyCaveSectionColor { .. }
-            // Adding a file INTO the open project is an edit of it (#674),
-            // unlike MergeProjects, which writes a new file.
-            | AddProjectFile { .. }
-            | RepairIntegrity
-            | UpdateProjectSettings
-            | SetSurfaceElevation => false,
-        }
-    }
-
-
     pub(super) fn is_batch_allowed(cmd: &Command) -> bool {
         // The allowlist also prevents a path-bearing lifecycle command from being
         // nested inside an otherwise undoable Batch and uploaded in Full mode.
@@ -320,12 +230,12 @@ impl AppState {
     /// The pipeline's steps 2-7 (module docs) for one recorded edit. The
     /// caller holds `command_lock` and has passed the edit-session gate.
     /// `record` words the entry on the project before the edit; `mutate`
-    /// changes it (any partial change is rolled back on `Err`). `Ok(None)`
-    /// never happens; `Ok(Some(value))` whether or not anything changed.
+    /// changes it (any partial change is rolled back on `Err`) and may add
+    /// to the record (preview rows, a refined label) from what it did.
     pub(crate) fn run_recorded<T>(
         &self,
         record: impl FnOnce(&Project) -> Record,
-        mutate: impl FnOnce(&mut Project) -> Result<T, String>,
+        mutate: impl FnOnce(&mut Project, &mut Record) -> Result<T, String>,
     ) -> Result<T, CommandResult> {
         self.guard_file_writable()?;
         let mut guard = self
@@ -335,9 +245,9 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return Err(CommandResult::failure("No project open".to_string()));
         };
-        let record = record(project);
+        let mut record = record(project);
         let before = project.clone();
-        let value = match mutate(project) {
+        let value = match mutate(project, &mut record) {
             Ok(value) => value,
             Err(message) => {
                 *project = before;
@@ -430,7 +340,7 @@ impl AppState {
             purpose = "apply user action",
             "Executing command to update project state"
         );
-        match self.run_recorded(|p| Record::of(p, &cmd), |p| apply_command(p, &cmd)) {
+        match self.run_recorded(|p| Record::of(p, &cmd), |p, r| apply_command(p, r, &cmd)) {
             Ok(applied) => applied.into_result(),
             Err(failure) => failure,
         }

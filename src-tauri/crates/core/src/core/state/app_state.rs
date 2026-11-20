@@ -678,8 +678,7 @@ impl AppState {
     /// Unconditional assignment, not a set-on-failure: see [`Self::history_discarded`]
     /// for why every commit must write it.
     pub fn set_history_discarded(&self, discarded: bool) {
-        self.history_discarded
-            .store(discarded, Ordering::SeqCst);
+        self.history_discarded.store(discarded, Ordering::SeqCst);
         self.history_from_earlier_version
             .store(false, Ordering::SeqCst);
     }
@@ -692,20 +691,14 @@ impl AppState {
         let Some(reason) = dropped else {
             return;
         };
-        self.history_discarded
-            .store(true, Ordering::SeqCst);
-        self.history_from_earlier_version.store(
-            reason == HistoryDropped::EarlierVersion,
-            Ordering::SeqCst,
-        );
+        self.history_discarded.store(true, Ordering::SeqCst);
+        self.history_from_earlier_version
+            .store(reason == HistoryDropped::EarlierVersion, Ordering::SeqCst);
     }
 
     /// Whether [`Self::history_discarded`]'s history was an earlier version's.
     pub fn history_discarded_from_earlier_version(&self) -> bool {
-        self.history_discarded()
-            && self
-                .history_from_earlier_version
-                .load(Ordering::SeqCst)
+        self.history_discarded() && self.history_from_earlier_version.load(Ordering::SeqCst)
     }
 
     /// [#473] Whether the open project lost its edit history on load.
@@ -716,7 +709,6 @@ impl AppState {
     /// the same answer for as long as the project is open. Dismissal is the frontend's
     /// business, exactly as it is for the integrity banner.
     pub fn history_discarded(&self) -> bool {
-        self.history_discarded
-            .load(Ordering::SeqCst)
+        self.history_discarded.load(Ordering::SeqCst)
     }
 }

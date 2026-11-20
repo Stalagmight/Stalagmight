@@ -14,14 +14,9 @@ use crate::models::survey::Project;
 use crate::models::{CreditTargets, LineId, ShotKind, StationRef};
 
 /// The names a label reads, off the project as it is now.
+#[derive(Default)]
 pub(super) struct NameBook<'p> {
     project: Option<&'p Project>,
-}
-
-impl Default for NameBook<'_> {
-    fn default() -> Self {
-        Self { project: None }
-    }
 }
 
 impl<'p> NameBook<'p> {
@@ -58,7 +53,10 @@ pub(super) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
     let mut lines = HashSet::new();
     referenced_lines(cmd, &mut lines);
     let mut refs = HistoryRefs::default();
-    let mut lines: Vec<LineId> = lines.into_iter().filter(|l| project.line(*l).is_some()).collect();
+    let mut lines: Vec<LineId> = lines
+        .into_iter()
+        .filter(|l| project.line(*l).is_some())
+        .collect();
     lines.sort_unstable();
     refs.lines = lines;
     let mut slot = |sr: &StationRef| {
@@ -69,9 +67,19 @@ pub(super) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
         }
     };
     match cmd {
-        Command::MergeStations { station_a, station_b }
-        | Command::UnmergeStationPair { station_a, station_b }
-        | Command::CreateLoopClosure { station_a, station_b, .. } => {
+        Command::MergeStations {
+            station_a,
+            station_b,
+        }
+        | Command::UnmergeStationPair {
+            station_a,
+            station_b,
+        }
+        | Command::CreateLoopClosure {
+            station_a,
+            station_b,
+            ..
+        } => {
             slot(station_a);
             slot(station_b);
         }
@@ -92,9 +100,13 @@ pub(super) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
             .map(|s| s.uuid.clone())
     };
     match cmd {
-        Command::UpdateShot { line_id, shot_id, .. }
+        Command::UpdateShot {
+            line_id, shot_id, ..
+        }
         | Command::DeleteShot { line_id, shot_id }
-        | Command::SetShotKind { line_id, shot_id, .. } => {
+        | Command::SetShotKind {
+            line_id, shot_id, ..
+        } => {
             refs.shots.extend(shot(*line_id, *shot_id));
         }
         Command::RemoveLoopClosure { closure_id } => refs.closures.push(*closure_id),

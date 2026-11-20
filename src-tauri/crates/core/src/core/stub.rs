@@ -127,6 +127,9 @@ stub_default!((), bool, u32, u64, usize, i64, f64, String);
 /// The body of a stub: logs once per call that `what` was reached, then
 /// answers with [`Stub::not_ported`].
 pub fn not_ported<T: Stub>(what: &'static str) -> T {
-    tracing::warn!(what, "reached a function the station-graph switch has not ported yet");
+    tracing::warn!(
+        what,
+        "reached a function the station-graph switch has not ported yet"
+    );
     T::not_ported(what)
 }

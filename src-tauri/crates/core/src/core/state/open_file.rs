@@ -243,7 +243,10 @@ impl From<LocalSaveError> for String {
 
 /// Read the file at `path` and check it is still the one `expected`
 /// describes; returns its bytes.
-pub(super) fn read_unchanged(path: &Path, expected: &Fingerprint) -> Result<Vec<u8>, LocalSaveError> {
+pub(super) fn read_unchanged(
+    path: &Path,
+    expected: &Fingerprint,
+) -> Result<Vec<u8>, LocalSaveError> {
     match Fingerprint::read(path, expected.len) {
         Ok((bytes, found)) if found.same_content(expected) => Ok(bytes),
         Ok(_) => Err(LocalSaveError::ExternallyModified(format!(

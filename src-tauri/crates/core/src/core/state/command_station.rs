@@ -57,3 +57,51 @@ impl AppState {
         crate::core::stub::not_ported("command_station::remove_zero_datum")
     }
 }
+
+/// The execute pipeline's mutation for the station topology family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for rows only the result can say.
+pub(super) fn apply(
+    project: &mut crate::models::survey::Project,
+    record: &mut super::commands::Record,
+    cmd: &crate::core::Command,
+) -> Result<super::commands::Applied, String> {
+    let _ = (&mut *project, &mut *record);
+    match cmd {
+        crate::core::Command::MergeStations {
+            station_a,
+            station_b,
+        } => {
+            let (a, b) = project
+                .resolve_slot_pair(*station_a, *station_b)
+                .map_err(|e| e.to_string())?;
+            project
+                .merge_stations(a.station, b.station)
+                .map_err(|e| e.to_string())?;
+            Ok(super::commands::Applied::default())
+        }
+        crate::core::Command::UnmergeStations { .. } => {
+            Err(super::commands::not_ported("execute::unmerge_stations"))
+        }
+        crate::core::Command::UnmergeStationPair { .. } => {
+            Err(super::commands::not_ported("execute::unmerge_station_pair"))
+        }
+        crate::core::Command::CreateLoopClosure { .. } => {
+            Err(super::commands::not_ported("execute::create_loop_closure"))
+        }
+        crate::core::Command::RemoveLoopClosure { .. } => {
+            Err(super::commands::not_ported("execute::remove_loop_closure"))
+        }
+        crate::core::Command::SetZeroDatum { .. } => {
+            Err(super::commands::not_ported("execute::set_zero_datum"))
+        }
+        crate::core::Command::RemoveZeroDatum { .. } => {
+            Err(super::commands::not_ported("execute::remove_zero_datum"))
+        }
+        _ => Err(format!(
+            "{} is not a station topology command",
+            crate::core::command_kind(cmd)
+        )),
+    }
+}

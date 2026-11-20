@@ -908,7 +908,6 @@ mod tests {
     }
 
     #[test]
-
     #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn the_production_load_refuses_a_managed_file_before_it_opens_the_database() {
         // Guarded by ORDER in the source, the `the_pull_runs_the_local_guard_
