@@ -252,7 +252,7 @@ lines, shots, datums, placements, closures, Sections) - opens read-only, with
 the "made with a newer Stalagmight" banner. The backend refuses every edit,
 undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
 `useEditingBlocked` reports it as a project-level block, a refused save is
-worded for it (never routed to Review & Repair), and autosave pauses. The
+worded for it, and autosave pauses. The
 local-only durable saves still work on it and copy the survey members byte for
 byte.
 
@@ -330,9 +330,12 @@ and `history` members and copies every other member of the file on disk
 verbatim (`stalx_v2::rewrite_local`), behind the guard. Used at once, so these
 changes are durable without saving the survey:
 
-- every SpeleoDB state change: a push result, the dirty bit and `last_edit_at`
-  of a linked project's edit, a pull install, the Unwind chain and watermark,
-  the verify stamp, the history cut after a push, logout bookkeeping;
+- every SpeleoDB state change: a push result, the dirty bit of a linked
+  project's first edit, a pull install, the Unwind chain and watermark, the
+  verify stamp, the history cut after a push, logout bookkeeping. Only the flip
+  to dirty is written at once (`mark_remote_dirty`): later edits restamp
+  `last_edit_at` in memory, where the push fence and `local_copy_state` read
+  it, and the stamp reaches the file with the next save or local-only save;
 - display-setting toggles (`display_settings.rs`).
 
 A Recents rename of the open project is durable at once in the same way, but
@@ -371,7 +374,7 @@ mirrors the markers; `saveFeedback.ts` turns them into copy.
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
 | `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
-| `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only wording; never Review & Repair |
+| `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only wording |
 | (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 
 The version 2 writer reports typed I/O errors with the step that failed
