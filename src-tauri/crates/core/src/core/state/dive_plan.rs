@@ -37,11 +37,13 @@
 //!   reads that line's (unreversed) parity;
 //! - otherwise (a version 2 project, or an anchor this build wrote) the saved side is read
 //!   literally against the shot's current direction. An anchor this build writes records
-//!   `parity: false`; its id makes the parity moot except when its station is gone.
+//!   `parity: false`; its id makes the parity moot unless rule 2 places it.
 //!
-//! The record parity lives only in memory, so [`AppState::upgrade_dive_plan_anchors`]
-//! rewrites a migrated project's 0.6.0 pins in the station-graph form while the parity is
-//! still known (the first save of the upgraded project calls it).
+//! The record parity lives only in memory (a version 2 file has no place for it), so
+//! [`AppState::upgrade_dive_plan_anchors`] rewrites a migrated project's 0.6.0 pins in the
+//! station-graph form while the parity is still known. It is meant to run on the save that
+//! writes the upgraded `.stalx`; without it, a 0.6.0 one-neighbour pin on a line reversed
+//! after the pin was saved lands one station off once the upgraded file is reopened.
 //!
 //! Design: `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
 
