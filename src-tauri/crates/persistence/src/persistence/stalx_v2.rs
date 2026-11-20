@@ -37,7 +37,7 @@ mod tokens;
 mod types;
 mod write;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -45,12 +45,12 @@ mod write;
 )]
 mod test_helpers;
 
-#[cfg(any())]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point; one ignored test prints a sample"
 )]
 mod format_v2_roundtrip_tests;
 
