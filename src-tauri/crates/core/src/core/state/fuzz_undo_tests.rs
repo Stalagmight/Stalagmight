@@ -3814,9 +3814,10 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
             continue;
         }
         // 60 / 25 / 15 mutate / undo / redo; a horizon run CLIMBS (85 / 8 /
-        // 7) until its window slides, or it never reaches the limit.
+        // 7) until its window slides (the floor leaves 0), or it never
+        // reaches the limit - and draws jumps from then on.
         let roll = fuzzer.rng.below(100);
-        let sliding = plan.combined && fuzzer.floor > 0;
+        let sliding = fuzzer.floor > 0;
         let climbing = plan.horizon && !sliding && fuzzer.cursor - fuzzer.floor < depth_cap;
         let mut back = if climbing {
             (85..93).contains(&roll)
@@ -4258,6 +4259,8 @@ const fn combined_plan(iterations: usize) -> Plan {
     plan.horizon = true;
     plan.config_fuzz = true;
     plan.combined = true;
+    // A drawn limit above the persisted window would refuse every crossing.
+    plan.knobs.trim_crossings = true;
     plan
 }
 
@@ -4627,6 +4630,9 @@ fn undo_redo_fuzz_horizon() {
     let mut plan = Plan::from_env(iterations, persistence);
     plan.horizon = true;
     plan.jumps = true;
+    // A horizon history is far deeper than the persisted window: model the
+    // window, or no crossing is ever taken.
+    plan.knobs.trim_crossings |= persistence;
     let results = run_seed_jobs(&seeds, fuzz_threads(seeds.len()), |&seed| {
         run_fuzz(seed, plan)
     });
@@ -4707,9 +4713,24 @@ fn undo_redo_fuzz_soak() {
 #[ignore = "measurement: prints the solve-to-solve spread the derived oracle relies on"]
 fn measure_adjusted_solve_determinism() {
     let _config = isolated_config();
-    let mut fuzzer = Fuzzer::new(1, true);
-    for _ in 0..60 {
-        fuzzer.step_mutate();
+    // The loop the CLOSURES project starts with, plus soft closures across
+    // it: the least-squares solve itself runs, not only the raw walk.
+    let fuzzer = Fuzzer::new(1, true);
+    let lines: Vec<LineId> = fuzzer.live().lines().iter().map(|l| l.id).collect();
+    for (a, b, strategy) in [
+        ((lines[0], 1), (lines[4], 1), ClosureStrategy::Batch),
+        (
+            (lines[3], 1),
+            (lines[0], 2),
+            ClosureStrategy::LeastSquaresWeighted,
+        ),
+    ] {
+        let r = fuzzer.state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a.0, a.1),
+            station_b: StationRef::new(b.0, b.1),
+            closure_strategy: strategy,
+        });
+        println!("closure {a:?} - {b:?} ({strategy:?}): {:?}", r.error);
     }
     let project = fuzzer.live();
     let first = derived_text(&project, &fuzzer.adjust);
@@ -4726,6 +4747,10 @@ fn measure_adjusted_solve_determinism() {
         "{differing} of 64 re-solves differ from the first ({} closures, {} lines)",
         project.closures.len(),
         project.lines().len()
+    );
+    assert!(
+        project.closures.len() >= 2,
+        "the soft closures were refused"
     );
     assert_eq!(differing, 0, "the solve is not a function of the survey");
 }
