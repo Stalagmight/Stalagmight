@@ -28,7 +28,6 @@
 //! 5. SOMEONE ELSE'S LOCK (with `SDB_EMAIL2` / `SDB_PASSWORD2`): our un-uploaded
 //!    work on the server tip still opens locally with no prompt, read-only behind
 //!    the other account's lock, with the work kept.
-#![cfg(sg_unported)] // C13: being ported; removed when the port lands
 
 use std::path::{Path, PathBuf};
 
@@ -174,7 +173,9 @@ fn edit_and_save(state: &AppState, elevation: f64) {
 }
 
 fn elevation(state: &AppState) -> Option<f64> {
-    state.get_project_state().and_then(|p| p.surface_elevation)
+    state
+        .get_project_state()
+        .and_then(|p| p.settings.surface_elevation)
 }
 
 /// The three closes, exactly as `close_project_impl` performs them.
