@@ -7,7 +7,7 @@
 
 use serde_json::value::RawValue;
 
-use super::decode::{sniff_detail, Sniffed};
+use super::decode::{sniff_detail, Sniffed, INCOMPLETE_IS_TRUNCATED};
 use super::encode::{write_history, write_local, write_speleodb};
 use super::error::{DecodeError, EncodeError};
 use super::scan::{members, Member, MAX_SMALL_MEMBERS};
@@ -50,7 +50,13 @@ pub fn rename_project(original: &[u8], name: &str) -> Result<Vec<u8>, EncodeErro
     let text = complete_v2(original)?;
     let top = top_members(text)?;
     if let Some((_, raw)) = top.iter().find(|(k, _)| k == "requires") {
-        let requires: Vec<String> = serde_json::from_str(raw.get()).unwrap_or_default();
+        // Strict: a malformed list must not read as "requires nothing".
+        let requires: Vec<String> = serde_json::from_str(raw.get()).map_err(|e| {
+            EncodeError::Original(DecodeError::BadValue {
+                at: "the requires member".to_string(),
+                message: e.to_string(),
+            })
+        })?;
         if let Some(unknown) = requires
             .into_iter()
             .find(|f| !KNOWN_FEATURES.contains(&f.as_str()))
@@ -95,7 +101,19 @@ fn complete_v2(original: &[u8]) -> Result<&str, EncodeError> {
         },
         Sniffed::Legacy => return Err(EncodeError::Original(DecodeError::Legacy)),
         Sniffed::ByteOrderMark => return Err(EncodeError::Original(DecodeError::ByteOrderMark)),
-        Sniffed::V2(None) | Sniffed::Incomplete | Sniffed::NotStalx => {
+        Sniffed::V2(None) => {
+            return Err(EncodeError::Original(DecodeError::Truncated {
+                line: 1,
+                column: 1,
+            }))
+        }
+        Sniffed::Incomplete(matched) if matched >= INCOMPLETE_IS_TRUNCATED => {
+            return Err(EncodeError::Original(DecodeError::Truncated {
+                line: 1,
+                column: 1,
+            }))
+        }
+        Sniffed::Incomplete(_) | Sniffed::NotStalx => {
             return Err(EncodeError::Original(DecodeError::NotStalx))
         }
     }

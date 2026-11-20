@@ -421,3 +421,37 @@ fn a_flood_of_unknown_keys_is_refused() {
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }
+
+/// A file cut inside a multi-byte character, or inside its first tokens, is
+/// a truncated file, not bad text or another format.
+#[test]
+fn cuts_inside_a_character_or_the_prefix_are_truncations() {
+    let base = small_text(12);
+    let bytes = base.as_bytes();
+    let multi = (0..bytes.len()).find(|&i| bytes[i] >= 0xc0).unwrap();
+    assert!(matches!(
+        decode(&bytes[..=multi], &DecodeOptions::default()).unwrap_err(),
+        DecodeError::Truncated { .. }
+    ));
+    for cut in [
+        "{\"format\":\"stalx\"",
+        "{\"format\":\"stalx\",\"v",
+        "{\"format\":\"stalx\",\"version\":",
+    ] {
+        assert!(
+            matches!(open(cut).unwrap_err(), DecodeError::Truncated { .. }),
+            "{cut}"
+        );
+    }
+    assert_eq!(open("{\"form").unwrap_err(), DecodeError::NotStalx);
+    // Duplicate keys in the summary are refused like anywhere else.
+    let text = base.replacen(
+        "\"summary\":{\"name\":",
+        "\"summary\":{\"name\":\"x\",\"name\":",
+        1,
+    );
+    assert!(matches!(
+        open(&text).unwrap_err(),
+        DecodeError::DuplicateKey { .. }
+    ));
+}

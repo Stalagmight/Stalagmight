@@ -7,7 +7,7 @@
 //! closures, then names and counters. A later stage only sees a model whose
 //! earlier invariants hold, so repairs never fight each other.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::models::survey::{
@@ -262,16 +262,102 @@ fn stage(v: &Violation) -> u8 {
     }
 }
 
+/// Fresh ids and lookups for one pass, computed once so a pass stays linear
+/// however many violations it repairs.
+struct Pass {
+    next_station: StationId,
+    next_closure: ClosureId,
+    next_line: LineId,
+    aliases: BTreeSet<StationId>,
+    uuids: HashSet<String>,
+    /// Positions of each line id in the line list.
+    positions: HashMap<LineId, Vec<usize>>,
+}
+
+impl Pass {
+    fn of(p: &Project) -> Self {
+        let mut positions: HashMap<LineId, Vec<usize>> = HashMap::new();
+        for (i, line) in p.lines().iter().enumerate() {
+            positions.entry(line.id).or_default().push(i);
+        }
+        Self {
+            next_station: fresh_station_id(p),
+            next_closure: fresh_closure_id(p),
+            next_line: p
+                .lines()
+                .iter()
+                .filter(|l| l.id <= MAX_LINE_ID)
+                .map(|l| l.id.saturating_add(1))
+                .max()
+                .unwrap_or(0),
+            aliases: p
+                .stations
+                .values()
+                .flat_map(|s| s.aliases.iter().map(|a| a.id))
+                .collect(),
+            uuids: p
+                .lines()
+                .iter()
+                .flat_map(|l| l.shots.iter().map(|s| s.uuid.clone()))
+                .collect(),
+            positions,
+        }
+    }
+
+    fn station(&mut self, p: &mut Project, name: String) -> StationId {
+        let id = self.next_station;
+        self.next_station = id.saturating_add(1);
+        p.stations.insert(id, Station::new(id, name));
+        p.observe_station_id(id);
+        id
+    }
+
+    fn closure(&mut self, p: &mut Project) -> ClosureId {
+        let id = self.next_closure;
+        self.next_closure = id.saturating_add(1);
+        p.counters.next_closure_id = p.counters.next_closure_id.max(self.next_closure);
+        id
+    }
+
+    fn uuid(&mut self) -> String {
+        loop {
+            let uuid = uuid::Uuid::new_v4().to_string();
+            if self.uuids.insert(uuid.clone()) {
+                return uuid;
+            }
+        }
+    }
+
+    /// The `nth` position of line `id` (0: the first).
+    fn position(&self, id: LineId, nth: usize) -> Option<usize> {
+        self.positions.get(&id).and_then(|v| v.get(nth)).copied()
+    }
+}
+
+/// Edits to the line list, applied together at the end of a pass.
+#[derive(Default)]
+struct LineEdits {
+    uuids: Vec<(usize, usize, String)>,
+    /// (position, chain index, station)
+    slots: Vec<(usize, usize, StationId)>,
+    renumber: Vec<(usize, LineId)>,
+    drop: BTreeSet<usize>,
+    clear_section: Vec<usize>,
+}
+
 fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repair>) {
     let Some(first) = violations.iter().map(stage).min() else {
         return;
     };
+    let mut pass = Pass::of(p);
+    let mut edits = LineEdits::default();
+    let mut remap: BTreeMap<StationId, StationId> = BTreeMap::new();
     let mut drop_datums = BTreeSet::new();
     let mut drop_placements = BTreeSet::new();
     let mut drop_closures = BTreeSet::new();
     let mut stale = false;
-    // Within a stage, act on each line, closure id or station at most once
-    // per pass (later violations about it are re-checked next pass).
+    // Within a pass, act on each line at most once for chain repairs (later
+    // violations about it are re-checked next pass).
     let mut touched_lines = BTreeSet::new();
     for v in violations.iter().filter(|v| stage(v) == first) {
         match v {
@@ -287,19 +373,31 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             Violation::IdOutOfRange { kind, id } => match kind {
                 CounterKind::Station => {
                     if let Ok(from) = StationId::try_from(*id) {
-                        let to = fresh_station_id(p);
-                        remap_station(p, from, to);
-                        repairs.push(Repair::RenumberedStation { from, to });
+                        if let std::collections::btree_map::Entry::Vacant(slot) = remap.entry(from)
+                        {
+                            let to = pass.next_station;
+                            pass.next_station = to.saturating_add(1);
+                            slot.insert(to);
+                            repairs.push(Repair::RenumberedStation { from, to });
+                        }
                     }
                 }
                 CounterKind::Line => {
                     if let Ok(from) = LineId::try_from(*id) {
-                        renumber_line(p, from, true, repairs);
+                        for position in pass.positions.get(&from).cloned().unwrap_or_default() {
+                            renumber_line(&mut pass, &mut edits, position, from, repairs);
+                        }
                     }
                 }
                 CounterKind::Section => {
                     if let Ok(section) = SectionId::try_from(*id) {
-                        drop_section(p, section, repairs);
+                        p.sections.retain(|s| s.id != section);
+                        for (position, line) in p.lines().iter().enumerate() {
+                            if line.section_id == Some(section) {
+                                edits.clear_section.push(position);
+                            }
+                        }
+                        repairs.push(Repair::DroppedSection { id: section });
                     }
                 }
                 CounterKind::Closure => {}
@@ -317,14 +415,15 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             }
             Violation::DuplicateLineId { line } => {
                 if touched_lines.insert(*line) {
-                    renumber_line(p, *line, false, repairs);
+                    if let Some(position) = pass.position(*line, 1) {
+                        renumber_line(&mut pass, &mut edits, position, *line, repairs);
+                    }
                 }
             }
             Violation::DuplicateClosureId { closure } => {
-                let next = fresh_closure_id(p);
+                let next = pass.closure(p);
                 if let Some(c) = p.closures.iter_mut().filter(|c| c.id == *closure).nth(1) {
                     c.id = next;
-                    p.counters.next_closure_id = next.saturating_add(1);
                     repairs.push(Repair::RenumberedClosure {
                         from: *closure,
                         to: next,
@@ -349,9 +448,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 second: (line, index),
                 ..
             } => {
-                let uuid = p.mint_shot_uuid();
-                if let Some(shot) = p.line_mut(*line).and_then(|l| l.shots.get_mut(*index)) {
-                    shot.uuid.clone_from(&uuid);
+                if let Some(position) = pass.position(*line, 0) {
+                    let uuid = pass.uuid();
+                    edits.uuids.push((position, *index, uuid.clone()));
                     repairs.push(Repair::ReMintedShotUuid {
                         line: *line,
                         index: *index,
@@ -360,14 +459,21 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 }
             }
             Violation::DanglingLineStart { line, station } => {
-                restore_chain_station(p, *line, 0, *station, repairs);
+                restore_chain_station(p, &mut pass, &mut edits, (*line, 0), *station, repairs);
             }
             Violation::DanglingShotTarget {
                 line,
                 index,
                 station,
             } => {
-                restore_chain_station(p, *line, index + 1, *station, repairs);
+                restore_chain_station(
+                    p,
+                    &mut pass,
+                    &mut edits,
+                    (*line, index + 1),
+                    *station,
+                    repairs,
+                );
             }
             Violation::DanglingDatumStation { datum, .. } => {
                 drop_datums.insert(*datum);
@@ -386,8 +492,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             | Violation::StaleClosureVia { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
             Violation::DanglingSection { line, section } => {
-                if let Some(l) = p.line_mut(*line) {
-                    l.section_id = None;
+                if let Some(position) = pass.position(*line, 0) {
+                    edits.clear_section.push(position);
                     repairs.push(Repair::ClearedSection {
                         line: *line,
                         section: *section,
@@ -401,11 +507,12 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 ..
             } => {
                 if touched_lines.insert(*line) {
-                    let name = p
-                        .station(*station)
-                        .map_or_else(|| station.to_string(), |s| s.name.clone());
-                    let to = new_station(p, name);
-                    if set_chain_station(p, *line, *second, to) {
+                    if let Some(position) = pass.position(*line, 0) {
+                        let name = p
+                            .station(*station)
+                            .map_or_else(|| station.to_string(), |s| s.name.clone());
+                        let to = pass.station(p, name);
+                        edits.slots.push((position, *second, to));
                         repairs.push(Repair::ReplacedChainStation {
                             line: *line,
                             index: *second,
@@ -423,7 +530,29 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 line, index, to, ..
             } => {
                 if touched_lines.insert(*line) {
-                    break_cycle(p, *line, *index, *to, repairs);
+                    if let Some(position) = pass.position(*line, 0) {
+                        let name = p
+                            .station(*to)
+                            .map_or_else(|| to.to_string(), |s| s.name.clone());
+                        let new_station = pass.station(p, name);
+                        edits.slots.push((position, index + 1, new_station));
+                        let closure = pass.closure(p);
+                        p.closures.push(LoopClosure {
+                            id: closure,
+                            a: new_station,
+                            a_via: Some(*line),
+                            b: *to,
+                            b_via: None,
+                            strategy: ClosureStrategy::Batch,
+                        });
+                        repairs.push(Repair::BrokeCycle {
+                            line: *line,
+                            index: *index,
+                            station: *to,
+                            new_station,
+                            closure,
+                        });
+                    }
                 }
             }
             Violation::UnanchoredComponent { lowest_station } => {
@@ -445,6 +574,10 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             // No JSON number is non-finite; nothing to repair.
             Violation::NonFinite { .. } => {}
         }
+    }
+    apply_line_edits(p, edits);
+    if !remap.is_empty() {
+        remap_stations(p, &remap);
     }
     if stale {
         let dropped = p.drop_stale_attachments();
@@ -469,10 +602,48 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             });
         }
     }
-    for id in drop_closures {
-        if let Some(i) = p.closures.iter().position(|c| c.id == id) {
-            p.closures.remove(i);
-            repairs.push(Repair::DroppedClosure { id });
+    if !drop_closures.is_empty() {
+        p.closures.retain(|c| {
+            if drop_closures.contains(&c.id) {
+                repairs.push(Repair::DroppedClosure { id: c.id });
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+fn apply_line_edits(p: &mut Project, edits: LineEdits) {
+    let lines = p.lines_mut();
+    for (position, index, uuid) in edits.uuids {
+        if let Some(shot) = lines.get_mut(position).and_then(|l| l.shots.get_mut(index)) {
+            shot.uuid = uuid;
+        }
+    }
+    for (position, index, station) in edits.slots {
+        if let Some(line) = lines.get_mut(position) {
+            if index == 0 {
+                line.start = station;
+            } else if let Some(shot) = line.shots.get_mut(index - 1) {
+                shot.to = station;
+            }
+        }
+    }
+    for (position, id) in edits.renumber {
+        if let Some(line) = lines.get_mut(position) {
+            line.id = id;
+            line.assign_session_shot_ids();
+        }
+    }
+    for position in edits.clear_section {
+        if let Some(line) = lines.get_mut(position) {
+            line.section_id = None;
+        }
+    }
+    for position in edits.drop.into_iter().rev() {
+        if position < lines.len() {
+            lines.remove(position);
         }
     }
 }
@@ -491,14 +662,6 @@ fn fresh_station_id(p: &Project) -> StationId {
         .unwrap_or(0)
 }
 
-/// A new station named `name` (uniquified later if it clashes).
-fn new_station(p: &mut Project, name: String) -> StationId {
-    let id = fresh_station_id(p);
-    p.stations.insert(id, Station::new(id, name));
-    p.observe_station_id(id);
-    id
-}
-
 fn fresh_closure_id(p: &Project) -> ClosureId {
     p.closures
         .iter()
@@ -508,167 +671,86 @@ fn fresh_closure_id(p: &Project) -> ClosureId {
         .unwrap_or(1)
 }
 
-/// Replace station `from` by `to` everywhere it is referenced.
-fn remap_station(p: &mut Project, from: StationId, to: StationId) {
-    if let Some(mut station) = p.stations.remove(&from) {
-        station.id = to;
-        p.stations.insert(to, station);
+/// Replace every station of `remap` by its new id, in one sweep.
+fn remap_stations(p: &mut Project, remap: &BTreeMap<StationId, StationId>) {
+    let to = |s: StationId| remap.get(&s).copied().unwrap_or(s);
+    for (&from, &new) in remap {
+        if let Some(mut station) = p.stations.remove(&from) {
+            station.id = new;
+            p.stations.insert(new, station);
+        }
+        p.observe_station_id(new);
     }
-    p.observe_station_id(to);
     for line in p.lines_mut() {
-        if line.start == from {
-            line.start = to;
-        }
+        line.start = to(line.start);
         for shot in &mut line.shots {
-            if shot.to == from {
-                shot.to = to;
-            }
+            shot.to = to(shot.to);
         }
-        if let Some(hand) = line.hand_moves.remove(&from) {
-            line.hand_moves.insert(to, hand);
-        }
+        let hand = std::mem::take(&mut line.hand_moves);
+        line.hand_moves = hand.into_iter().map(|(s, h)| (to(s), h)).collect();
     }
     for datum in &mut p.datums {
-        if datum.station == from {
-            datum.station = to;
-        }
+        datum.station = to(datum.station);
     }
     for placement in &mut p.placements {
-        if placement.station == from {
-            placement.station = to;
-        }
+        placement.station = to(placement.station);
     }
     for closure in &mut p.closures {
-        if closure.a == from {
-            closure.a = to;
-        }
-        if closure.b == from {
-            closure.b = to;
-        }
+        closure.a = to(closure.a);
+        closure.b = to(closure.b);
     }
 }
 
-/// Give the second line with id `id` (the first when `any`) a fresh id.
-fn renumber_line(p: &mut Project, id: LineId, any: bool, repairs: &mut Vec<Repair>) {
-    let next = p
-        .lines()
-        .iter()
-        .filter(|l| l.id <= MAX_LINE_ID)
-        .map(|l| l.id.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    let skip = usize::from(!any);
-    let Some(position) = p
-        .lines()
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.id == id)
-        .nth(skip)
-        .map(|(i, _)| i)
-    else {
-        return;
-    };
+/// Give the line at `position` (id `from`) a fresh id, or drop it when no id
+/// is left.
+fn renumber_line(
+    pass: &mut Pass,
+    edits: &mut LineEdits,
+    position: usize,
+    from: LineId,
+    repairs: &mut Vec<Repair>,
+) {
+    let next = pass.next_line;
     if next > MAX_LINE_ID {
-        p.lines_mut().remove(position);
-        repairs.push(Repair::DroppedLine { id });
+        edits.drop.insert(position);
+        repairs.push(Repair::DroppedLine { id: from });
         return;
     }
-    if let Some(line) = p.lines_mut().get_mut(position) {
-        line.id = next;
-        line.assign_session_shot_ids();
-    }
-    repairs.push(Repair::RenumberedLine { from: id, to: next });
-}
-
-fn drop_section(p: &mut Project, section: SectionId, repairs: &mut Vec<Repair>) {
-    p.sections.retain(|s| s.id != section);
-    for line in p.lines_mut() {
-        if line.section_id == Some(section) {
-            line.section_id = None;
-        }
-    }
-    repairs.push(Repair::DroppedSection { id: section });
+    pass.next_line = next + 1;
+    edits.renumber.push((position, next));
+    repairs.push(Repair::RenumberedLine { from, to: next });
 }
 
 /// A chain references station `id`, which has no record: create it when the
 /// id can be a station, else put a fresh station in that chain slot.
 fn restore_chain_station(
     p: &mut Project,
-    line: LineId,
-    index: usize,
+    pass: &mut Pass,
+    edits: &mut LineEdits,
+    (line, index): (LineId, usize),
     id: StationId,
     repairs: &mut Vec<Repair>,
 ) {
     if p.stations.contains_key(&id) {
         return;
     }
-    if id < MAX_STATION_ID && !p.is_alias_id(id) {
+    if id < MAX_STATION_ID && !pass.aliases.contains(&id) {
         p.stations.insert(id, Station::new(id, id.to_string()));
         p.observe_station_id(id);
+        pass.next_station = pass.next_station.max(id.saturating_add(1));
         repairs.push(Repair::CreatedStation { id });
         return;
     }
-    let to = new_station(p, id.to_string());
-    if set_chain_station(p, line, index, to) {
-        repairs.push(Repair::ReplacedChainStation {
-            line,
-            index,
-            from: id,
-            to,
-        });
-    }
-}
-
-/// Set chain slot `index` of `line` (0 is the start) to `station`.
-fn set_chain_station(p: &mut Project, line: LineId, index: usize, station: StationId) -> bool {
-    let Some(l) = p.line_mut(line) else {
-        return false;
-    };
-    if index == 0 {
-        l.start = station;
-        return true;
-    }
-    match l.shots.get_mut(index - 1) {
-        Some(shot) => {
-            shot.to = station;
-            true
-        }
-        None => false,
-    }
-}
-
-/// Shot `index` of `line` closes a loop at `to`: end it at a new station and
-/// tie that station to `to` with a `Batch` closure.
-fn break_cycle(
-    p: &mut Project,
-    line: LineId,
-    index: usize,
-    to: StationId,
-    repairs: &mut Vec<Repair>,
-) {
-    let name = p
-        .station(to)
-        .map_or_else(|| to.to_string(), |s| s.name.clone());
-    let new_station = new_station(p, name);
-    if !set_chain_station(p, line, index + 1, new_station) {
+    let Some(position) = pass.position(line, 0) else {
         return;
-    }
-    let id = fresh_closure_id(p);
-    p.counters.next_closure_id = id.saturating_add(1);
-    p.closures.push(LoopClosure {
-        id,
-        a: new_station,
-        a_via: Some(line),
-        b: to,
-        b_via: None,
-        strategy: ClosureStrategy::Batch,
-    });
-    repairs.push(Repair::BrokeCycle {
+    };
+    let to = pass.station(p, id.to_string());
+    edits.slots.push((position, index, to));
+    repairs.push(Repair::ReplacedChainStation {
         line,
         index,
-        station: to,
-        new_station,
-        closure: id,
+        from: id,
+        to,
     });
 }
 

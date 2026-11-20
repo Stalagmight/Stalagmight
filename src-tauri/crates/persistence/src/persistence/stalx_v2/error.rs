@@ -130,6 +130,9 @@ pub enum EncodeError {
     NonFinite { at: String, value: f64 },
     /// An integer is above [`super::MAX_INTEGER`].
     IntegerTooLarge { at: String, value: u64 },
+    /// A value is past a bound the format holds (an alias id, a counter, the
+    /// shots on one line).
+    OutOfRange { at: String, value: u64, max: u64 },
     /// The project was opened read-only; only a local-only rewrite is allowed.
     ReadOnly(ReadOnly),
     /// `requires` names a feature this build does not know.
@@ -164,6 +167,12 @@ impl fmt::Display for EncodeError {
                 write!(
                     f,
                     "{at} is {value}, above the largest integer a .stalx file holds"
+                )
+            }
+            Self::OutOfRange { at, value, max } => {
+                write!(
+                    f,
+                    "{at} is {value}, past the most a .stalx file holds ({max})"
                 )
             }
             Self::ReadOnly(reason) => write!(f, "the project is read-only: {reason}"),

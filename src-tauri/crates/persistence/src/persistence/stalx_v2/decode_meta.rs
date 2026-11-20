@@ -12,7 +12,7 @@ use serde_json::value::RawValue;
 
 use crate::models::config::ValidationConfig;
 use crate::models::survey::{ClosureStrategy, LoopClosure, Placement, ProjectSettings, ZeroDatum};
-use crate::models::{GpsCoordinates, Section};
+use crate::models::{GpsCoordinates, Section, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::canon::{canonical_checked, CanonError};
 use super::decode_records::{AzimuthSeed, Ctx, Loc};
@@ -307,6 +307,19 @@ pub(super) fn read_counters(
         closure: fields.big("closure")?,
         section: fields.opt("section")?,
     };
+    // A counter at the bound means the ids are used up; past it, no id it
+    // could hand out is valid.
+    for (value, max, what) in [
+        (counters.station, MAX_STATION_ID, "station"),
+        (counters.section, MAX_SECTION_ID, "section"),
+    ] {
+        if let Some(value) = value.filter(|&v| v > max) {
+            return Err(DecodeError::BadValue {
+                at: format!("the counters member, field {what}"),
+                message: format!("{value} is above {max}"),
+            });
+        }
+    }
     fields.unknown_to(ctx)?;
     Ok(counters)
 }
@@ -622,9 +635,58 @@ pub(super) fn read_imports(
     ctx: &mut Ctx<'_>,
 ) -> Result<(Vec<String>, Vec<String>), DecodeError> {
     let mut f = Fields::of(raw, "the imports member", whole)?;
-    let files: Vec<String> = f.opt("files")?.unwrap_or_default();
-    let lines: Vec<String> = f.opt("lines")?.unwrap_or_default();
+    let mut lists = [Vec::new(), Vec::new()];
+    for (key, list) in ["files", "lines"].into_iter().zip(&mut lists) {
+        if let Some(value) = f.take(key) {
+            *list = read_strings(value, "imports", Limit::ImportHashes, ctx, whole)?;
+        }
+    }
     f.unknown_to(ctx)?;
-    ctx.count_typed(Limit::ImportHashes, files.len() + lines.len())?;
+    let [files, lines] = lists;
     Ok((files, lines))
+}
+
+/// An array of strings, counted against `limit` as the strings arrive (so a
+/// hostile list is refused before it is held in memory).
+pub(super) fn read_strings(
+    raw: &RawValue,
+    member: &'static str,
+    limit: Limit,
+    ctx: &mut Ctx<'_>,
+    whole: &str,
+) -> Result<Vec<String>, DecodeError> {
+    struct Strings<'c, 'l> {
+        ctx: &'c mut Ctx<'l>,
+        limit: Limit,
+    }
+    impl<'de> DeserializeSeed<'de> for Strings<'_, '_> {
+        type Value = Vec<String>;
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+            d.deserialize_seq(self)
+        }
+    }
+    impl<'de> Visitor<'de> for Strings<'_, '_> {
+        type Value = Vec<String>;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an array of strings")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(v) = seq.next_element::<String>()? {
+                self.ctx.count(self.limit, 1)?;
+                out.push(v);
+            }
+            Ok(out)
+        }
+    }
+    ctx.loc = Loc::Member(member);
+    ctx.field = "";
+    run(
+        raw.get(),
+        Strings {
+            ctx: &mut *ctx,
+            limit,
+        },
+    )
+    .map_err(|e| typed(e, ctx, whole, raw.get()))
 }

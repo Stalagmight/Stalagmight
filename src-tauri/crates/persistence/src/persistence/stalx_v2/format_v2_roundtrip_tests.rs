@@ -286,3 +286,45 @@ fn print_a_sample() {
     let bytes = encode(&p, &extras, Mode::Normal).unwrap();
     println!("{}", text_of(&bytes));
 }
+
+/// Dates outside 0001-9999 are clamped like times (every reader parses the
+/// result as `YYYY-MM-DD`).
+#[test]
+fn credit_dates_are_clamped_into_four_digit_years() {
+    let mut p = Project::new_at("Dates", None, Utc.timestamp_opt(0, 0).single().unwrap());
+    let credit = |year| {
+        std::sync::Arc::new(SurveyCredit {
+            surveyors: Vec::new(),
+            explorers: Vec::new(),
+            date: chrono::NaiveDate::from_ymd_opt(year, 6, 1),
+        })
+    };
+    let shots = [12_000, -5, 0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, year)| ShotData {
+            uuid: Some(format!("d{i}")),
+            length: 1.0,
+            credit: Some(credit(year)),
+            ..ShotData::default()
+        })
+        .collect();
+    let line = p
+        .add_line(
+            LineMeta::default(),
+            crate::models::survey::StartAt::New,
+            shots,
+        )
+        .unwrap();
+    let start = p.line(line).unwrap().start;
+    p.set_placement(start, 0.0, 0.0).unwrap();
+    let bytes = encode(&p, &Extras::default(), Mode::Normal).unwrap();
+    let text = text_of(&bytes);
+    assert!(text.contains("\"date\":\"9999-12-31\""), "{text}");
+    assert!(text.contains("\"date\":\"0001-01-01\""), "{text}");
+    let decoded = decode(&bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(
+        encode(&decoded.project, &decoded.extras, Mode::Normal).unwrap(),
+        bytes
+    );
+}

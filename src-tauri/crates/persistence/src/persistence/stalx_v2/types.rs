@@ -320,6 +320,8 @@ pub enum Limit {
     ImportHashes,
     CreditPeople,
     Preserved,
+    /// Shots on one line: fixed by the model ([`super::MAX_SHOTS_PER_LINE`]).
+    ShotsPerLine,
 }
 
 impl Limit {
@@ -338,10 +340,11 @@ impl Limit {
             Self::ImportHashes => limits.import_hashes,
             Self::CreditPeople => limits.credit_people,
             Self::Preserved => limits.preserved,
+            Self::ShotsPerLine => super::MAX_SHOTS_PER_LINE,
         }
     }
 
-    pub(super) const ALL: [Limit; 13] = [
+    pub(super) const ALL: [Limit; 14] = [
         Self::Stations,
         Self::Aliases,
         Self::Lines,
@@ -355,6 +358,7 @@ impl Limit {
         Self::ImportHashes,
         Self::CreditPeople,
         Self::Preserved,
+        Self::ShotsPerLine,
     ];
 }
 
@@ -374,6 +378,7 @@ impl fmt::Display for Limit {
             Self::ImportHashes => "import hashes",
             Self::CreditPeople => "credited people",
             Self::Preserved => "preserved unknown members",
+            Self::ShotsPerLine => "shots on one line",
         })
     }
 }

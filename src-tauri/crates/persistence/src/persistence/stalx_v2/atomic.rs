@@ -37,11 +37,27 @@ impl Fingerprint {
         }
     }
 
-    /// Read a file and fingerprint it in one go (what an open does).
-    pub fn read(path: &Path) -> std::io::Result<(Vec<u8>, Self)> {
-        let bytes = std::fs::read(path)?;
-        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        let fingerprint = Self::of(&bytes, modified);
+    /// Read a file of at most `max_bytes` and fingerprint it in one go (what
+    /// an open does). A larger file is refused before it is read.
+    pub fn read(path: &Path, max_bytes: u64) -> std::io::Result<(Vec<u8>, Self)> {
+        use std::io::Read as _;
+        let mut file = File::open(path)?;
+        let metadata = file.metadata()?;
+        let too_large = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("the file is over the {max_bytes}-byte limit"),
+            )
+        };
+        if metadata.len() > max_bytes {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        std::io::Read::take(&mut file, max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(too_large());
+        }
+        let fingerprint = Self::of(&bytes, metadata.modified().ok());
         Ok((bytes, fingerprint))
     }
 
@@ -70,10 +86,11 @@ pub enum WriteError {
         path: PathBuf,
         error: std::io::Error,
     },
-    /// The file on disk is not the one last read or written.
+    /// The file on disk is not the one last read or written. `found_len` is
+    /// its size now, `None` when it is gone.
     ExternallyModified {
         path: PathBuf,
-        found: Option<Fingerprint>,
+        found_len: Option<u64>,
     },
     /// [`Guard::Absent`], but a file is there.
     Exists { path: PathBuf },
@@ -104,7 +121,7 @@ impl fmt::Display for WriteError {
                     Stage::Rename => "moving the new file into place",
                 }
             ),
-            Self::ExternallyModified { path, found } => match found {
+            Self::ExternallyModified { path, found_len } => match found_len {
                 Some(_) => write!(
                     f,
                     "{} was changed by another program since it was opened",
@@ -134,34 +151,42 @@ pub fn temp_path(dest: &Path) -> PathBuf {
     dest.with_file_name(name)
 }
 
-/// Whether `path` still holds the content `expected` describes.
+/// Whether `path` still holds the content `expected` describes: the size
+/// first (no read when it differs), then the hash of a file of the same size.
 pub fn check_unchanged(path: &Path, expected: &Fingerprint) -> Result<(), WriteError> {
-    let found = match Fingerprint::read(path) {
-        Ok((_, found)) => found,
+    let guard_error = |error: std::io::Error| WriteError::Io {
+        stage: Stage::Guard,
+        path: path.to_path_buf(),
+        error,
+    };
+    let len = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(WriteError::ExternallyModified {
                 path: path.to_path_buf(),
-                found: None,
+                found_len: None,
             })
         }
-        Err(error) => {
-            return Err(WriteError::Io {
-                stage: Stage::Guard,
-                path: path.to_path_buf(),
-                error,
-            })
-        }
+        Err(error) => return Err(guard_error(error)),
     };
-    if found.same_content(expected) {
-        Ok(())
-    } else {
-        Err(WriteError::ExternallyModified {
-            path: path.to_path_buf(),
-            found: Some(found),
-        })
+    let changed = || WriteError::ExternallyModified {
+        path: path.to_path_buf(),
+        found_len: Some(len),
+    };
+    if len != expected.len {
+        return Err(changed());
+    }
+    match Fingerprint::read(path, expected.len) {
+        Ok((_, found)) if found.same_content(expected) => Ok(()),
+        Ok(_) => Err(changed()),
+        // Grew between the size check and the read.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Err(changed()),
+        Err(error) => Err(guard_error(error)),
     }
 }
 
+/// A symbolic link at the destination is replaced by the new file, not
+/// written through (as the SQLite project save and the exporters do).
 /// Write `bytes` to `dest` durably and atomically: afterwards `dest` holds
 /// either its old content or `bytes`, never a mix. Returns the new
 /// fingerprint for the next save's guard.

@@ -43,7 +43,7 @@ fn a_save_replaces_the_file_and_leaves_no_temp() {
     let (old, new) = files(1);
     let first = write_atomic(&dest, &old, Guard::Absent).unwrap();
     assert_eq!(std::fs::read(&dest).unwrap(), old);
-    let (_, read) = Fingerprint::read(&dest).unwrap();
+    let (_, read) = Fingerprint::read(&dest, u64::MAX).unwrap();
     assert!(first.same_content(&read));
     let second = write_atomic(&dest, &new, Guard::Expect(&first)).unwrap();
     assert_eq!(std::fs::read(&dest).unwrap(), new);
@@ -64,7 +64,9 @@ fn the_guard_refuses_an_externally_modified_file() {
     edited[at] = if edited[at] == b'1' { b'2' } else { b'1' };
     std::fs::write(&dest, &edited).unwrap();
     match write_atomic(&dest, &new, Guard::Expect(&saved)) {
-        Err(WriteError::ExternallyModified { found: Some(_), .. }) => {}
+        Err(WriteError::ExternallyModified {
+            found_len: Some(_), ..
+        }) => {}
         other => panic!("{other:?}"),
     }
     assert_eq!(
@@ -77,7 +79,10 @@ fn the_guard_refuses_an_externally_modified_file() {
     std::fs::remove_file(&dest).unwrap();
     assert!(matches!(
         write_atomic(&dest, &new, Guard::Expect(&saved)),
-        Err(WriteError::ExternallyModified { found: None, .. })
+        Err(WriteError::ExternallyModified {
+            found_len: None,
+            ..
+        })
     ));
     // A first save does not replace a file that appeared meanwhile.
     std::fs::write(&dest, b"someone else's").unwrap();
@@ -170,4 +175,15 @@ fn a_symlink_at_the_temp_name_is_removed_not_followed() {
     assert_eq!(std::fs::read(&dest).unwrap(), old);
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "the file keeps its permissions");
+}
+
+#[test]
+fn reading_a_fingerprint_is_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big.stalx");
+    std::fs::write(&path, vec![b' '; 4096]).unwrap();
+    assert!(Fingerprint::read(&path, 1024).is_err());
+    let (bytes, fingerprint) = Fingerprint::read(&path, 4096).unwrap();
+    assert_eq!(bytes.len(), 4096);
+    assert_eq!(fingerprint.len, 4096);
 }

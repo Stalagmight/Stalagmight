@@ -18,12 +18,12 @@ use super::canon::{canonical_checked, CanonError};
 use super::decode_meta::{
     preserve, read_closure, read_conventions, read_counters, read_datum, read_history, read_ignore,
     read_imports, read_local, read_placement, read_project, read_section, read_settings,
-    read_speleodb, records, run, typed, ProjectMeta, RawCounters,
+    read_speleodb, read_strings, records, run, typed, ProjectMeta, RawCounters,
 };
 use super::decode_records::{Ctx, LineBuild, LinesSeed, Loc, StationsSeed};
 use super::error::DecodeError;
 use super::salvage::{self, SalvageReport};
-use super::scan::{json_error, members, MAX_SMALL_MEMBERS};
+use super::scan::{json_error, members, ScanError, MAX_SMALL_MEMBERS};
 use super::summary::SUMMARY_KEYS;
 use super::types::{
     DecodeNote, DecodeOptions, Decoded, Extras, IgnoredWarning, Limit, RawJson, ReadOnly,
@@ -60,8 +60,9 @@ pub(super) enum Sniffed {
     ByteOrderMark,
     /// The version 2 prefix, with the version token when the bytes reach it.
     V2(Option<String>),
-    /// Too short to tell: a prefix of the version 2 prefix.
-    Incomplete,
+    /// Too short to tell: a prefix of the version 2 prefix, with how many of
+    /// its tokens are complete.
+    Incomplete(usize),
     NotStalx,
 }
 
@@ -84,7 +85,7 @@ pub(super) fn sniff_detail(bytes: &[u8]) -> Sniffed {
             *i += 1;
         }
     };
-    for token in [
+    let tokens = [
         &b"{"[..],
         b"\"format\"",
         b":",
@@ -92,12 +93,13 @@ pub(super) fn sniff_detail(bytes: &[u8]) -> Sniffed {
         b",",
         b"\"version\"",
         b":",
-    ] {
+    ];
+    for (matched, token) in tokens.into_iter().enumerate() {
         ws(&mut i);
         let rest = bytes.get(i..).unwrap_or_default();
         if rest.len() < token.len() {
             return if token.starts_with(rest) {
-                Sniffed::Incomplete
+                Sniffed::Incomplete(matched)
             } else {
                 Sniffed::NotStalx
             };
@@ -122,6 +124,10 @@ pub(super) fn sniff_detail(bytes: &[u8]) -> Sniffed {
     Sniffed::V2(Some(String::from_utf8_lossy(&bytes[start..i]).into_owned()))
 }
 
+/// How many prefix tokens (`{`, `"format"`, `:`, `"stalx"`) make a too-short
+/// file a truncated version 2 file rather than something else.
+pub(super) const INCOMPLETE_IS_TRUNCATED: usize = 4;
+
 /// The checks before the body is parsed: size, BOM, sniff, major version.
 fn preflight(bytes: &[u8], options: &DecodeOptions) -> Result<(), DecodeError> {
     let size = bytes.len() as u64;
@@ -134,7 +140,11 @@ fn preflight(bytes: &[u8], options: &DecodeOptions) -> Result<(), DecodeError> {
     match sniff_detail(bytes) {
         Sniffed::Legacy => Err(DecodeError::Legacy),
         Sniffed::ByteOrderMark => Err(DecodeError::ByteOrderMark),
-        Sniffed::NotStalx | Sniffed::Incomplete => Err(DecodeError::NotStalx),
+        // Cut after `"stalx"`: a torn version 2 file, not some other file.
+        Sniffed::Incomplete(matched) if matched >= INCOMPLETE_IS_TRUNCATED => {
+            Err(DecodeError::Truncated { line: 1, column: 1 })
+        }
+        Sniffed::NotStalx | Sniffed::Incomplete(_) => Err(DecodeError::NotStalx),
         Sniffed::V2(None) => Err(DecodeError::Truncated { line: 1, column: 1 }),
         Sniffed::V2(Some(token)) => match token.parse::<u64>() {
             Ok(VERSION) => Ok(()),
@@ -176,6 +186,10 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                 .rposition(|&b| b == b'\n')
                 .map_or(0, |i| i + 1)
             + 1;
+        if e.error_len().is_none() {
+            // The bytes end inside a character: a cut, not bad text.
+            return DecodeError::Truncated { line, column };
+        }
         DecodeError::Syntax {
             at: "the file".to_string(),
             line,
@@ -227,7 +241,7 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
                 solver = true;
             }
             "requires" => {
-                extras.requires = serde_json::from_str(text).map_err(|e| simple(e, "requires"))?;
+                extras.requires = read_strings(raw, "requires", Limit::Preserved, &mut ctx, whole)?;
             }
             "conventions" => {
                 read_conventions(raw, whole)?;
@@ -240,12 +254,21 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
             "summary" => {
                 // A cache: the values are never read here, but unknown keys
                 // are kept. Not an object: nothing to keep.
-                if let Ok(pairs) = members(text, MAX_SMALL_MEMBERS) {
-                    let rest = pairs
-                        .into_iter()
-                        .filter(|(k, _)| !SUMMARY_KEYS.contains(&k.as_ref()))
-                        .collect();
-                    extras.preserved.summary = preserve(rest, &at("summary"), &mut ctx)?;
+                match members(text, MAX_SMALL_MEMBERS) {
+                    Ok(pairs) => {
+                        let rest = pairs
+                            .into_iter()
+                            .filter(|(k, _)| !SUMMARY_KEYS.contains(&k.as_ref()))
+                            .collect();
+                        extras.preserved.summary = preserve(rest, &at("summary"), &mut ctx)?;
+                    }
+                    Err(ScanError::DuplicateKey(key)) => {
+                        return Err(DecodeError::DuplicateKey {
+                            at: at("summary"),
+                            key,
+                        })
+                    }
+                    Err(_) => {}
                 }
             }
             "project" => {

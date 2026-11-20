@@ -54,7 +54,19 @@ pub(super) fn parse_time(text: &str) -> Option<DateTime<Utc>> {
 
 /// Parse a stored date (`YYYY-MM-DD`; a sign before years outside 0-9999).
 pub(super) fn parse_date(text: &str) -> Option<NaiveDate> {
-    text.parse::<NaiveDate>().ok()
+    text.parse::<NaiveDate>().ok().map(normalized_date)
+}
+
+/// `day` clamped into 0001-01-01 ..= 9999-12-31, the dates every reader
+/// parses as `YYYY-MM-DD` (the dates' version of the #810 rule).
+pub(super) fn normalized_date(day: NaiveDate) -> NaiveDate {
+    match (
+        NaiveDate::from_ymd_opt(1, 1, 1),
+        NaiveDate::from_ymd_opt(9999, 12, 31),
+    ) {
+        (Some(first), Some(last)) => day.clamp(first, last),
+        _ => day,
+    }
 }
 
 /// A JSON string, escaped the canonical way.
@@ -137,7 +149,7 @@ pub(super) fn time(out: &mut Vec<u8>, at: DateTime<Utc>) {
 }
 
 pub(super) fn date(out: &mut Vec<u8>, day: NaiveDate) {
-    string(out, &day.format("%Y-%m-%d").to_string());
+    string(out, &normalized_date(day).format("%Y-%m-%d").to_string());
 }
 
 /// An object being written: `{`, then `"key":value` pairs, then `}`.

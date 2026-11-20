@@ -36,7 +36,7 @@ pub fn sniff(bytes: &[u8]) -> Format {
     match sniff_detail(bytes) {
         Sniffed::Legacy => Format::Legacy,
         Sniffed::V2(_) => Format::V2,
-        Sniffed::ByteOrderMark | Sniffed::Incomplete | Sniffed::NotStalx => Format::Unknown,
+        Sniffed::ByteOrderMark | Sniffed::Incomplete(_) | Sniffed::NotStalx => Format::Unknown,
     }
 }
 

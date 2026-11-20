@@ -102,7 +102,8 @@ every common date library (Python's `datetime.fromisoformat` included) parses
 them. The nanoseconds matter: a dive plan (`.plnx`) is matched to its project
 by the exact creation instant.
 
-**Dates** (survey credit dates) are `"YYYY-MM-DD"` strings.
+**Dates** (survey credit dates) are `"YYYY-MM-DD"` strings, clamped like
+times into 0001-01-01 to 9999-12-31.
 
 **Absent versus empty.** An optional member that is unset is left out; an
 empty list is left out. A member that is present holds a value, even an empty
@@ -217,9 +218,9 @@ north. Stored azimuths are always as measured; geometry adds `correction`.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `north` | `"magnetic"`, `"true"` or `"grid"` | What the readings are measured against. Descriptive. |
-| `correction` | float | Degrees to add to a stored azimuth to get a true bearing (declination, plus grid convergence for grid). |
-| `source` | `"unknown"`, `"file"`, `"manual"` or `"igrf"` | Where the correction came from. |
+| `north` | `"magnetic"`, `"true"` or `"grid"` | What the readings are measured against. Descriptive. Read as `"magnetic"` when absent. |
+| `correction` | float | Degrees to add to a stored azimuth to get a true bearing (declination, plus grid convergence for grid). Read as 0.0 when absent. |
+| `source` | `"unknown"`, `"file"`, `"manual"` or `"igrf"` | Where the correction came from. Read as `"unknown"` when absent. |
 | `epoch` | integer, only with `"igrf"` | The model year of an IGRF-derived declination. |
 
 A line or project without a reference uses `{"north":"magnetic","correction":0.0,"source":"unknown"}`.
@@ -314,8 +315,8 @@ first header is an error.
 | `id` | integer | Line id, unique. |
 | `name` | string, opt | Display name. |
 | `color` | string | Display colour. |
-| `direction` | `"in"` or `"out"` | Surveyed going into the cave or coming out. |
-| `quality` | float | Weight of the line's shots in a least-squares adjustment (1.0 normal). |
+| `direction` | `"in"` or `"out"` | Surveyed going into the cave or coming out. Read as `"in"` when absent. |
+| `quality` | float | Weight of the line's shots in a least-squares adjustment (1.0 normal). Read as 1.0 when absent. |
 | `section` | integer, opt | The Section the line belongs to. |
 | `azimuth` | azimuth reference, opt | Overrides `settings.azimuth` for this line. |
 | `surveyor` | string, opt | Legacy free-text surveyor (older files; a fallback for lines without shot credits). |
@@ -370,7 +371,7 @@ piece; later datums of a piece are GPS fixes (checks).
 | `station` | integer | The station. A station may hold several datums. |
 | `via` | integer, opt | The line the datum was set on (it passes through `station`): kept so a later detach gives the datum back to that line. |
 | `lat`, `lon` | float | WGS84 position (degrees). |
-| `depth` | float | Depth of the station below the surface at that point (m). |
+| `depth` | float | Depth of the station below the surface at that point (m). Read as 0.0 when absent. |
 | `accuracy` | float, opt | GPS accuracy (m); absent is a hard pin. |
 | `entrance` | boolean, opt | Overrides whether this datum is shown as an entrance. |
 | `correction` | `[dx, dy]`, opt | For the datum that places its piece: the horizontal offset (m, local east / north) between where the piece sits and where its GPS says. Kept so that nothing moves when the frame changes. Absent is zero. |
@@ -394,7 +395,7 @@ Loop closures between two stations, in list order (significant).
 | `id` | integer | Closure id, unique, never reused. |
 | `a`, `b` | integer | The two stations (different). |
 | `a_via`, `b_via` | integer, opt | The line each end was set on (it passes through that end). |
-| `strategy` | string | `"batch"`: a soft loop closure, adjusted only by the least-squares view. `"move"`: a snap; rigid while its ends are less than 1 cm apart. `"tie"`: a rigid tie (converted old files only). `"least_squares_weighted"`, `"proportional_by_length"`, `"equal_distribution"`: legacy names, read like `"batch"`. |
+| `strategy` | string | Read as `"batch"` when absent. `"batch"`: a soft loop closure, adjusted only by the least-squares view. `"move"`: a snap; rigid while its ends are less than 1 cm apart. `"tie"`: a rigid tie (converted old files only). `"least_squares_weighted"`, `"proportional_by_length"`, `"equal_distribution"`: legacy names, read like `"batch"`. |
 
 Closure metrics (misclosure, error percentage, path length) are not stored;
 they are derived.
@@ -567,6 +568,7 @@ A minimal reader, standard library only:
 
 ```python
 import json
+import math
 
 def read_stalx(path):
     with open(path, "rb") as f:
@@ -575,17 +577,25 @@ def read_stalx(path):
         raise ValueError("a legacy (SQLite) .stalx file")
     def no_constants(name):
         raise ValueError(f"{name} is not allowed in a .stalx file")
+    def finite(text):
+        value = float(text)
+        if math.isinf(value):
+            raise ValueError(f"{text} is out of range")
+        return value
     def no_duplicates(pairs):
         keys = [k for k, _ in pairs]
         if len(keys) != len(set(keys)):
             raise ValueError("duplicate key")
         return dict(pairs)
     doc = json.loads(raw.decode("utf-8"), parse_constant=no_constants,
-                     object_pairs_hook=no_duplicates)
-    if doc.get("format") != "stalx" or not isinstance(doc.get("version"), int):
+                     parse_float=finite, object_pairs_hook=no_duplicates)
+    version = doc.get("version")
+    if doc.get("format") != "stalx" or type(version) is not int:
         raise ValueError("not a .stalx file")
-    if doc["version"] > 2:
+    if version > 2:
         raise ValueError("made with a newer Stalagmight")
+    if version < 2:
+        raise ValueError("not a version 2 file")
     if doc.get("end") is not True:
         raise ValueError("incomplete file")
 
@@ -622,11 +632,13 @@ writes `-0.0`, which Python reads as the float `-0.0`.
 
 ## 11. Limits
 
-Stalagmight refuses, before allocating for them, files over 256 MiB and files
-holding more than 2,100,000 stations or aliases or hand moves or datums,
-100,000 lines, placements or Sections, 2,000,000 shots, ignored warnings,
-import hashes or credited people, 50,000 closures or 10,000 unknown keys and
-members.
+Stalagmight refuses, while it reads (before holding them in memory), files
+over 256 MiB and files holding more than 2,100,000 stations or aliases or
+hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
+ignored warnings, import hashes or credited people, 50,000 closures, 10,000
+unknown keys and members (and `requires` names) in all, or an object with
+more than 10,100 members. A line holds at most 99,999 shots (a limit of the
+model, refused by the writer too).
 Preserved unknown content nested deeper than 128 levels is refused. A history
 of more than 65,536 entries is dropped (not refused). Servers should apply
 caps that fit their own deadlines.
@@ -642,14 +654,19 @@ For context; nothing here changes the format.
   is always either the old or the new version, and a torn temp never reads as
   a project.
 - An upload to SpeleoDB writes the same survey without `local` and without
-  `redo`, with `undo` only when the project's undo mode is `full` (entries at
-  or before `local.speleodb.inherited_through` left out, then the oldest
-  entries until the file fits the 5 MiB upload limit).
+  `redo`, with `undo` only when the project's undo mode is `full` (never when
+  `speleodb.undo_mode` is `"disabled"`): entries at or before
+  `local.speleodb.inherited_through` are left out, then the oldest entries
+  until the file fits the 5 MiB upload limit. An Unwind position recorded
+  without a watermark ships no undo at all (the inherited extent is
+  unknown).
 - "Save a Copy" of a SpeleoDB project writes no `speleodb`, no
   `local.speleodb` and no undo entries inherited from the server.
 - Changes to the link, the sync state, display settings and the history alone
   rewrite those members and copy every other member byte for byte, even when
   the file is open read-only.
+- A symbolic link at the file's path is replaced by the saved file, not
+  written through.
 
 ## 13. A complete example
 

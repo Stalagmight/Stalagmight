@@ -240,3 +240,35 @@ fn an_invalid_model_is_never_written() {
         }
     }
 }
+
+/// The stored link state backs a push's options up: the watermark the file
+/// holds is used when the caller passes none, and a link whose undo mode is
+/// Disabled pushes no undo even when asked to.
+#[test]
+fn a_push_honours_the_stored_watermark_and_undo_mode() {
+    let (p, mut extras) = linked(10);
+    extras.local.speleodb.inherited_through = Some(stamp(&extras.history.undo[2]));
+    let options = PushOptions {
+        keep_undo: true,
+        watermark: None,
+        byte_cap: usize::MAX,
+    };
+    let (_, report) = encode_with_report(&p, &extras, Mode::ForPush(options)).unwrap();
+    assert_eq!(report.history.inherited_cut, 3);
+    let mut disabled = extras;
+    disabled.speleodb.as_mut().unwrap().undo_mode = Some(UndoMode::Disabled);
+    let (bytes, report) = encode_with_report(&p, &disabled, Mode::ForPush(options)).unwrap();
+    assert!(report.history.undo_dropped);
+    assert!(!text_of(&bytes).contains("\"history\""));
+}
+
+#[test]
+fn rename_refuses_a_malformed_requires_list() {
+    let (p, extras) = generate(11, SMALL);
+    let bytes = encode(&p, &extras, Mode::Normal).unwrap();
+    let malformed = text_of(&bytes).replacen("\"requires\":[]", "\"requires\":[\"future\",1]", 1);
+    assert!(matches!(
+        rename_project(malformed.as_bytes(), "x"),
+        Err(EncodeError::Original(_))
+    ));
+}

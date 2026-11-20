@@ -4,7 +4,11 @@
 //! record per physical line, leaves out what is unset and spells every scalar
 //! one way (`write.rs`), none of which a derived `Serialize` gives.
 
+use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash as _, Hasher as _};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
@@ -15,8 +19,13 @@ use super::error::EncodeError;
 use super::summary::Summary;
 use super::tokens;
 use super::types::{Extras, History, IgnoredWarning, LocalState, Mode, PushOptions, RawJson};
-use super::write::{boolean, date, float, integer, signed, small, string, time, Obj};
-use super::{CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION};
+use super::write::{
+    boolean, date, float, integer, normalized_date, signed, small, string, time, Obj,
+};
+use super::{
+    CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, MAX_SHOTS_PER_LINE, PREFIX, SOLVER, VERSION,
+};
+use crate::models::{UndoMode, MAX_SECTION_ID, MAX_STATION_ID};
 
 /// What an encode did beside writing the survey.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,6 +76,7 @@ pub fn encode_with_report(
     if !violations.is_empty() {
         return Err(EncodeError::Invalid { violations });
     }
+    check_bounds(project)?;
 
     let link = match mode {
         Mode::DetachedCopy => None,
@@ -117,6 +127,47 @@ pub fn encode_with_report(
     out.extend_from_slice(END);
     report.size = out.len();
     Ok((out, report))
+}
+
+/// What the decoder refuses and `validate` does not check: write nothing that
+/// cannot be opened again.
+fn check_bounds(project: &Project) -> Result<(), EncodeError> {
+    let out_of_range =
+        |at: String, value: u64, max: u64| EncodeError::OutOfRange { at, value, max };
+    for line in project.lines() {
+        if line.shots.len() > MAX_SHOTS_PER_LINE {
+            return Err(out_of_range(
+                format!("the number of shots of line {}", line.id),
+                line.shots.len() as u64,
+                MAX_SHOTS_PER_LINE as u64,
+            ));
+        }
+    }
+    for station in project.stations.values() {
+        if let Some(alias) = station.aliases.iter().find(|a| a.id >= MAX_STATION_ID) {
+            return Err(out_of_range(
+                format!("an alias of station {}", station.id),
+                u64::from(alias.id),
+                u64::from(MAX_STATION_ID - 1),
+            ));
+        }
+    }
+    let counters = &project.counters;
+    if counters.next_station_id > MAX_STATION_ID {
+        return Err(out_of_range(
+            "the station counter".to_string(),
+            u64::from(counters.next_station_id),
+            u64::from(MAX_STATION_ID),
+        ));
+    }
+    if counters.next_section_id > MAX_SECTION_ID {
+        return Err(out_of_range(
+            "the Section counter".to_string(),
+            u64::from(counters.next_section_id),
+            u64::from(MAX_SECTION_ID),
+        ));
+    }
+    Ok(())
 }
 
 /// A rough size, to allocate once.
@@ -505,11 +556,12 @@ fn write_lines(out: &mut Vec<u8>, project: &Project) -> Result<(), EncodeError> 
         if i > 0 {
             out.extend_from_slice(b",\n");
         }
-        let shared = line_credit(line);
-        write_line_header(out, line, shared)?;
+        let credits = line_credit(line);
+        write_line_header(out, line, credits.shared.as_deref())?;
         for (index, shot) in line.shots.iter().enumerate() {
             out.extend_from_slice(b",\n");
-            write_shot(out, line, index, shot, shared)?;
+            let credit_differs = credits.differs.get(index).copied().unwrap_or(true);
+            write_shot(out, line, index, shot, credit_differs)?;
         }
     }
     out.extend_from_slice(b"\n],\n");
@@ -579,7 +631,7 @@ fn write_shot(
     line: &Line,
     index: usize,
     shot: &Shot,
-    shared: Option<&SurveyCredit>,
+    credit_differs: bool,
 ) -> Result<(), EncodeError> {
     let at = |field: &str| format!("{field} of shot {index} of line {}", line.id);
     out.push(b'[');
@@ -606,7 +658,6 @@ fn write_shot(
         }
     }
     let own = shot.credit.as_deref();
-    let credit_differs = own != shared;
     if tokens::kind(shot.kind).is_some()
         || shot.pitch_in.is_some()
         || shot.pitch_out.is_some()
@@ -647,18 +698,84 @@ fn write_shot(
     Ok(())
 }
 
-/// The credit most of the line's shots carry (absence counts as a value); a
-/// tie goes to the one that comes first. Written once in the line header, so
-/// a row writes a credit only where it differs.
-pub(super) fn line_credit(line: &Line) -> Option<&SurveyCredit> {
-    let mut counts: HashMap<Option<&SurveyCredit>, (usize, usize)> = HashMap::new();
-    for (index, shot) in line.shots.iter().enumerate() {
-        counts.entry(shot.credit.as_deref()).or_insert((0, index)).0 += 1;
+/// The credit most of the line's shots carry, as written (absence counts as
+/// a value); a tie goes to the one that comes first. Written once in the line
+/// header, so a row writes a credit only where it differs.
+pub(super) struct LineCredits<'a> {
+    pub(super) shared: Option<Cow<'a, SurveyCredit>>,
+    /// Per shot: its credit is not the header's.
+    differs: Vec<bool>,
+}
+
+/// A credit as the file holds it: its date clamped like every date. Borrowed
+/// unless the date needed clamping (only an out-of-range date does).
+fn written_credit(credit: &SurveyCredit) -> Cow<'_, SurveyCredit> {
+    match credit.date {
+        Some(day) if normalized_date(day) != day => Cow::Owned(SurveyCredit {
+            date: Some(normalized_date(day)),
+            ..credit.clone()
+        }),
+        _ => Cow::Borrowed(credit),
     }
-    counts
-        .into_iter()
-        .max_by(|(_, (ca, ia)), (_, (cb, ib))| ca.cmp(cb).then(ib.cmp(ia)))
-        .and_then(|(credit, _)| credit)
+}
+
+/// Group the shots of `line` by credit as written, in one pass. Shots that
+/// share an allocation are grouped by pointer (the decoder shares one
+/// allocation per distinct credit, so this is the usual case); a new
+/// allocation is hashed once and compared by value only with the groups of
+/// its hash bucket. A save therefore costs one look at each credit's people,
+/// not one per shot.
+pub(super) fn line_credit(line: &Line) -> LineCredits<'_> {
+    let mut by_pointer: HashMap<*const SurveyCredit, usize> = HashMap::new();
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
+    // (credit as written, count, first shot index)
+    let mut groups: Vec<(Option<Cow<'_, SurveyCredit>>, usize, usize)> = Vec::new();
+    let mut none_group = None;
+    let mut shot_group = Vec::with_capacity(line.shots.len());
+    for (index, shot) in line.shots.iter().enumerate() {
+        let group = match &shot.credit {
+            None => *none_group.get_or_insert_with(|| {
+                groups.push((None, 0, index));
+                groups.len() - 1
+            }),
+            Some(shared) => {
+                let pointer = Arc::as_ptr(shared);
+                if let Some(&group) = by_pointer.get(&pointer) {
+                    group
+                } else {
+                    let written = written_credit(shared);
+                    let mut hasher = DefaultHasher::new();
+                    written.hash(&mut hasher);
+                    let bucket = buckets.entry(hasher.finish()).or_default();
+                    let found = bucket
+                        .iter()
+                        .copied()
+                        .find(|&g| groups[g].0.as_deref() == Some(&*written));
+                    let group = if let Some(g) = found {
+                        g
+                    } else {
+                        groups.push((Some(written), 0, index));
+                        bucket.push(groups.len() - 1);
+                        groups.len() - 1
+                    };
+                    by_pointer.insert(pointer, group);
+                    group
+                }
+            }
+        };
+        groups[group].1 += 1;
+        shot_group.push(group);
+    }
+    let header = groups
+        .iter()
+        .enumerate()
+        .max_by(|(_, (_, ca, ia)), (_, (_, cb, ib))| ca.cmp(cb).then(ib.cmp(ia)))
+        .map(|(g, _)| g);
+    let differs = shot_group.iter().map(|&g| Some(g) != header).collect();
+    LineCredits {
+        shared: header.and_then(|g| groups.swap_remove(g).0),
+        differs,
+    }
 }
 
 fn write_credit(out: &mut Vec<u8>, credit: &SurveyCredit) {
@@ -737,14 +854,25 @@ fn history_for<'a>(
         Mode::Normal => Ok((undo, redo)),
         Mode::ForPush(options) => {
             cut.redo_dropped = redo.len();
-            if !options.keep_undo || (options.watermark.is_none() && sync.unwound_from.is_some()) {
+            // The stored link state backs the options up: the watermark the
+            // file holds, and a link whose undo mode is Disabled.
+            let watermark = options.watermark.or(sync.inherited_through);
+            let allowed = extras
+                .speleodb
+                .as_ref()
+                .and_then(|l| l.undo_mode)
+                .is_none_or(UndoMode::pushes_history);
+            if !options.keep_undo
+                || !allowed
+                || (watermark.is_none() && sync.unwound_from.is_some())
+            {
                 // Without a watermark, a recorded Unwind step leaves the
                 // inherited extent unknown: ship no history rather than
                 // duplicate a loaded revision's operations (#303).
                 cut.undo_dropped = !undo.is_empty();
                 return Ok((&[], &[]));
             }
-            let inherited = match options.watermark {
+            let inherited = match watermark {
                 Some(watermark) => inherited_prefix(undo, watermark)
                     .map_err(|reason| EncodeError::History { reason })?,
                 None => 0,
