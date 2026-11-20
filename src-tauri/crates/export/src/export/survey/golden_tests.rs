@@ -195,7 +195,8 @@ fn export_scenario(stalx: &Path, out: &Path) {
         std::fs::write(dir.join(file), book.mask(text)).unwrap();
     }
 
-    let adjusted = project.adjusted_positions(&config);
+    let raw = project.raw_positions();
+    let adjusted = project.adjusted_positions_from(&raw, &config);
     // Per-slot positions (full precision), raw and Computed View, beside the
     // exports, so a rendering difference can be told from a layout one.
     let slots = |positions: &[crate::models::survey::SlotPosition]| -> Value {
@@ -211,7 +212,7 @@ fn export_scenario(stalx: &Path, out: &Path) {
             .collect()
     };
     let positions = serde_json::json!({
-        "raw": slots(&project.raw_positions().slots(&project)),
+        "raw": slots(&raw.slots(&project)),
         "adjusted": slots(&adjusted.slots(&project)),
     });
     let diagnostics = out.join("positions");
@@ -234,42 +235,10 @@ fn export_scenario(stalx: &Path, out: &Path) {
             include_reference_legs,
             ..Default::default()
         };
-        let svg = generate_svg_string_with_positions(&project, &options, &adjusted).unwrap();
+        let svg =
+            generate_svg_string_with_positions(&project, &options, &adjusted, &raw).unwrap();
         std::fs::write(dir.join(file), book.mask(&svg)).unwrap();
-        let crossed = legacy_render_at(stalx, &project, &adjusted, &config, &options);
-        std::fs::write(
-            diagnostics.join(format!("{scenario}-legacy-at-sg-positions-{file}")),
-            book.mask(&crossed),
-        )
-        .unwrap();
     }
-}
-
-/// Diagnostic (delete with `models::project`): the LEGACY renderer on the
-/// legacy reload of the same file, drawn at the station-graph positions, so
-/// a rendering difference can be split into "positions" (this matches the
-/// station-graph SVG) and "model" (it matches the golden).
-fn legacy_render_at(
-    stalx: &Path,
-    project: &crate::models::survey::Project,
-    adjusted: &crate::models::survey::AdjustedPositions,
-    config: &ClosureAdjustmentConfig,
-    options: &ExportImageOptions,
-) -> String {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let copy = tmp.path().join("legacy.stalx");
-    std::fs::copy(stalx, &copy).unwrap();
-    let db = stalagmight_persistence::persistence::sqlite::Database::open_existing(&copy).unwrap();
-    let mut legacy = db.load_project().unwrap();
-    legacy.assign_closure_ids();
-    legacy.redrive_offsets_after_load_reporting();
-    let mut stations = legacy.clone().into_adjusted_stations(config).stations;
-    for station in &mut stations {
-        if let Some([x, y, z]) = adjusted.slot(project, station.station_ref) {
-            station.coordinates = crate::models::Coordinates::new(x, y, z);
-        }
-    }
-    crate::export::generate_svg_string_with_stations(&legacy, options, stations).unwrap()
 }
 
 #[test]

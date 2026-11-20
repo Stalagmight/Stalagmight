@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::models::survey::{Project, StationPositions};
+use crate::models::survey::{Project, RawPositions, StationPositions};
 use crate::models::{Coordinates, LineId, Station, StationRef};
 
 use super::super::color_scale::{bin_values, ExportValueKind, ValueHistogram};
@@ -27,45 +27,55 @@ use super::super::image_sketch::{Measure, Sketch, SketchLine, SketchShot};
 
 /// Render the map from the measured (raw) positions.
 pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
-    generate_svg_string_with_positions(project, options, &project.raw_positions())
+    let raw = project.raw_positions();
+    generate_svg_string_with_positions(project, options, &raw, &raw)
 }
 
 /// Render the map from `positions` (the commands pass the Closures Computed
-/// View, `Project::adjusted_positions`, so the file matches the map).
+/// View, `Project::adjusted_positions`, so the file matches the map). `raw`
+/// is the measured layout of the same state, which the render's own
+/// derivations read (the closures aligned in it, the distance ramp); the
+/// commands pass the memoised one, so an export lays the survey out once.
 pub fn generate_svg_string_with_positions(
     project: &Project,
     options: &ExportImageOptions,
     positions: &impl StationPositions,
+    raw: &RawPositions,
 ) -> Result<String> {
-    let sketch = sketch(project, options.hidden_line_ids.as_deref(), positions);
-    Ok(render_svg(sketch, &GraphMeasure { project }, options))
+    let sketch = sketch(project, options.hidden_line_ids.as_deref(), positions, raw);
+    Ok(render_svg(sketch, &GraphMeasure { project, raw }, options))
 }
 
 /// Write the map from the measured positions to `path` in `options.format`.
 pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    export_image_with_positions(project, path, options, &project.raw_positions())
+    let raw = project.raw_positions();
+    export_image_with_positions(project, path, options, &raw, &raw)
 }
 
-/// Write the map from `positions` to `path` in `options.format`.
+/// Write the map from `positions` to `path` in `options.format` (`raw` as
+/// for [`generate_svg_string_with_positions`]).
 pub fn export_image_with_positions(
     project: &Project,
     path: &Path,
     options: &ExportImageOptions,
     positions: &impl StationPositions,
+    raw: &RawPositions,
 ) -> Result<()> {
     write_image(
-        &generate_svg_string_with_positions(project, options, positions)?,
+        &generate_svg_string_with_positions(project, options, positions, raw)?,
         path,
         options,
     )
 }
 
-/// Bin counts for the export's Levels slider: station depths (each station
-/// once) over the extent the render normalises across, or the distance from
-/// the entrances over the measured network (each station once).
+/// Bin counts for the export's Levels slider: station depths in `positions`
+/// (each station once) over the extent the render normalises across, or the
+/// distance from the entrances over the measured network `raw` (each station
+/// once).
 pub fn export_value_histogram(
     project: &Project,
     positions: &impl StationPositions,
+    raw: &RawPositions,
     kind: ExportValueKind,
     bins: usize,
     include_reference_legs: bool,
@@ -93,8 +103,7 @@ pub fn export_value_histogram(
             (extent, bin_values(depths, extent, bins))
         }
         ExportValueKind::Distance => {
-            let field =
-                project.distance_field(&project.raw_positions(), None, include_reference_legs);
+            let field = project.distance_field(raw, None, include_reference_legs);
             let max = field.max_reachable();
             let extent = (0.0, if max > 0.0 { max } else { 1.0 });
             let reachable = field.iter().map(|(_, d)| d).filter(|d| d.is_finite());
@@ -105,11 +114,12 @@ pub fn export_value_histogram(
 }
 
 /// What the renderer draws of `project` at `positions`, without the lines in
-/// `hidden`.
+/// `hidden` (`raw`: the measured layout, for the closures aligned in it).
 fn sketch(
     project: &Project,
     hidden: Option<&[LineId]>,
     positions: &impl StationPositions,
+    raw: &RawPositions,
 ) -> Sketch {
     let hidden: HashSet<LineId> = hidden.unwrap_or_default().iter().copied().collect();
     let drawn = |slot: &StationRef| !hidden.contains(&slot.line_id);
@@ -179,7 +189,7 @@ fn sketch(
             colocated.extend(slots.map(|other| (first, other)));
         }
     }
-    let aligned = project.closure_alignment(&project.raw_positions());
+    let aligned = project.closure_alignment(raw);
     for (closure, _) in project.closures.iter().zip(aligned).filter(|(_, a)| *a) {
         if let (Some(a), Some(b)) = (
             end_slot(closure.a, closure.a_via),
@@ -195,9 +205,11 @@ fn sketch(
     }
 }
 
-/// Distances on the station graph, along the whole survey.
+/// Distances on the station graph, along the whole survey (the distance
+/// ramp weighs shots by the measured layout `raw`, #34).
 struct GraphMeasure<'a> {
     project: &'a Project,
+    raw: &'a RawPositions,
 }
 
 impl Measure for GraphMeasure<'_> {
@@ -210,9 +222,7 @@ impl Measure for GraphMeasure<'_> {
     }
 
     fn distance_field(&self, include_reference: bool) -> (HashMap<StationRef, Option<f64>>, f64) {
-        let field =
-            self.project
-                .distance_field(&self.project.raw_positions(), None, include_reference);
+        let field = self.project.distance_field(self.raw, None, include_reference);
         let mut by_slot = HashMap::new();
         for line in self.project.lines() {
             for (index, station) in line.stations().enumerate() {
