@@ -52,7 +52,7 @@ import type { NewerSchema } from '../types/ipc/NewerSchema';
 import { newerSchemaMessage } from '../utils/newerSchema';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion } from '../types/commands';
 
 /** Additive import-receipt provenance (#391) - see `import_lines` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
@@ -134,12 +134,6 @@ function nextProjectTreeGeneration(): number {
   projectTreeGenerationCounter += 1;
   return projectTreeGenerationCounter;
 }
-
-// Monotonic sequence so overlapping fire-and-forget integrity checks are
-// last-issued-wins: an earlier check that resolves after a newer one was started
-// must not clobber the newer result (e.g. a manual save's check racing a Repair's
-// check on the same project, where the project-identity guard can't tell them apart).
-let integrityCheckSeq = 0;
 
 /**
  * Parsed error from Tauri backend.
@@ -277,9 +271,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   autosaveFailure: string | null;
   /**
    * What KIND of failure `autosaveFailure` describes (#517). The message is
-   * already user-ready, so this exists only for routing: the banner yields to
-   * the integrity banner for an ordinary failure, and must NOT yield for one
-   * Review & Repair cannot fix. Kept beside the message and cleared with it.
+   * already user-ready, so this exists only for routing: `useAutoSave` pauses on
+   * a failure no retry can fix and resumes when it clears. Kept beside the
+   * message and cleared with it.
    */
   autosaveFailureKind: SaveErrorKind | null;
   clearAutosaveFailure: () => void;
@@ -309,11 +303,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
    * Save the project. `isAutosave` marks a QUIET, BACKGROUND save - one the user
-   * did not ask for and is not waiting on - and suppresses two bits of UI churn
-   * for it: the save-permission dialog (which would otherwise reopen on every
-   * retry while folder access is denied) and the post-save integrity re-check
-   * (skipped unless the project entered the save already flagged, since the save
-   * path auto-heals some issues).
+   * did not ask for and is not waiting on - and suppresses the save-permission
+   * dialog for it (which would otherwise reopen on every retry while folder
+   * access is denied).
    *
    * It also crosses IPC, where it does exactly one thing: name the trigger in
    * the backend's log line (#429). The save itself is byte-for-byte identical
@@ -375,35 +367,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   loadAdjustedGeometry: () => Promise<boolean>;
   /** Check if a shot (by line_id + shot index) is frozen */
   isShotFrozen: (lineId: number, shotIndex: number) => boolean;
-  /** Structural-integrity issues found in the open project (empty = sound). */
-  integrityIssues: string[];
-  /** True once the user dismissed the integrity banner for the CURRENT issue set.
-   * Suppresses the banner so a re-check after a save (or a failed autosave) can't
-   * resurrect a banner the user explicitly dismissed; reset automatically when the
-   * issue set changes (genuinely new issues re-show). Ignored while
-   * `integritySaveBlocked` is true (a save-blocking project can't hide Repair). */
-  integrityDismissed: boolean;
-  /** True when the open project has unresolvable cross-references - the exact
-   * condition that refuses both manual and auto-save. While true the integrity
-   * banner stays shown and non-dismissable so the Repair entry point can't be
-   * hidden on a project that can't be saved. */
-  integritySaveBlocked: boolean;
-  /** Whether the "Review & Repair" integrity dialog is open. Lifted here (not
-   * App-local) so a blocked manual save can route the user straight to Repair
-   * instead of showing a generic error window. */
-  integrityDialogOpen: boolean;
-  /** Open the Review & Repair integrity dialog. */
-  openIntegrityDialog: () => void;
-  /** Close the Review & Repair integrity dialog. */
-  closeIntegrityDialog: () => void;
-  /** Re-check the open project's structural integrity, updating integrityIssues. */
-  checkProjectIntegrity: () => Promise<string[]>;
-  /** Repair structural integrity; returns {fixed, remaining} and refreshes
-   * integrityIssues from the true post-repair state (remaining>0 = detect-only
-   * issues that need manual attention). */
-  repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
-  /** Dismiss the integrity warning without repairing. */
-  dismissIntegrityIssues: () => void;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
   deleteProject: (path: string) => Promise<CommandResult>;
@@ -638,10 +601,6 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     isDirty: false,
     autosaveFailure: null,
     autosaveFailureKind: null,
-    integrityIssues: [],
-    integrityDismissed: false,
-    integritySaveBlocked: false,
-    integrityDialogOpen: false,
     ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
@@ -722,13 +681,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // alone was a no-op here - an unwound copy is already dirty - which left the
         // discard prompts offering to throw away the edit that just landed.
         useSpeleoStore.getState().markForwardEdit();
-        // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
-        // drifted loop closure clears its banner entry - so re-check, mirroring
-        // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
-        // may be an autosave (which skips its own post-save re-check to avoid churn),
-        // so without this the banner/dialog can keep showing an already-fixed issue
-        // until a manual save or reload.
-        await get().checkProjectIntegrity();
       } else {
         // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
         // no feedback). That left optimistic UI desynced from backend truth - the
@@ -817,7 +769,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // real round trip, and a project can open across it while `args` still name the outgoing
       // one. Returning from inside the `try` still runs the `finally`, which is correct rather
       // than merely tolerable: its remap and its aftermath carry the same guard and skip
-      // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
+      // themselves, and the refresh simply re-reads whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
       result = await invokeIpc<CommandResult>(command, args, meta);
@@ -871,11 +823,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (!lostProject(requestProjectKey)) {
         applyEditAftermath(reversedLines, get().project?.lines ?? [], edit);
       }
-      // Undo/redo can change which cross-references resolve - e.g. undoing a
-      // Repair restores the dropped dangling refs, redoing a delete removes a
-      // station an offset anchored on - so re-check integrity, otherwise the
-      // banner and save-block go stale (showing clean while the project isn't).
-      await get().checkProjectIntegrity();
     }
     return result;
   };
@@ -894,10 +841,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   frozenShots: [],
   warnings: [],
   recentProjects: [],
-  integrityIssues: [],
-  integrityDismissed: false,
-  integritySaveBlocked: false,
-  integrityDialogOpen: false,
   ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   config: null,
   loading: { ...initialLoadingState },
@@ -1086,15 +1029,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // A loaded project is backed by its on-disk database.
           databaseOpen: true,
           isDirty: false,
-          // Reset integrity state on project switch so a dismissal from the
-          // previous project can never carry over and suppress this one's banner.
-          // The post-load integrity-check effect in App.tsx (keyed on
-          // project.file_path + loading.isLoading) repopulates it for the new
-          // project once this load settles.
-          integrityIssues: [],
-          integrityDismissed: false,
-          integritySaveBlocked: false,
-          integrityDialogOpen: false,
           ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
         });
         const tSetDone = performance.now();
@@ -1356,11 +1290,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         frozenShots: [],
         warnings: [],
         isDirty: false,
-        // Reset integrity state on project switch (see loadProject).
-        integrityIssues: [],
-        integrityDismissed: false,
-        integritySaveBlocked: false,
-        integrityDialogOpen: false,
         ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
       });
 
@@ -1424,15 +1353,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       result = await get().saveProject();
     } catch (e) {
-      // A reject (e.g. IPC transport failure) means saveProject never ran its
-      // integrity recheck, so `integritySaveBlocked` may be stale -
-      // skipIntegrityRouting keeps the router from wrongly opening Review &
-      // Repair. The project stays dirty (close-guarded).
+      // A reject (e.g. IPC transport failure): the project stays dirty
+      // (close-guarded) and the error dialog says why.
       console.error('[import] save after import failed:', e);
       set({ isDirty: true });
-      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, {
-        skipIntegrityRouting: true,
-      });
+      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog);
       return false;
     }
     if (!result.success) {
@@ -1577,133 +1502,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       console.error('Failed to load recent projects:', e);
     }
   },
-
-  checkProjectIntegrity: async () => {
-    // The check is fire-and-forget (the post-load App effect, the after-every-
-    // command wrapper, a failed save) and the backend scans whatever project is
-    // currently loaded with no path argument. Correlate the result with the
-    // project that was active when it STARTED: if the user switches or closes
-    // projects while the check is in flight, a late-resolving result must not
-    // overwrite the new project's freshly-reset banner/save-block state.
-    // clientOpId bumps on every load (catches a switch); file_path catches a
-    // close (project → null).
-    const pathAtStart = get().project?.file_path ?? null;
-    const opAtStart = get().loading.clientOpId;
-    const mySeq = ++integrityCheckSeq;
-    try {
-      const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
-        purpose: 'check project structural integrity after load',
-      });
-      const cur = get();
-      if (
-        mySeq !== integrityCheckSeq ||
-        cur.project === null ||
-        (cur.project.file_path ?? null) !== pathAtStart ||
-        cur.loading.clientOpId !== opAtStart
-      ) {
-        // Drop this result if it has been superseded. Two ways:
-        // 1. A NEWER check was issued after this one started (last-issued-wins) -
-        //    so an earlier check can't clobber a fresher result even on the SAME
-        //    project (e.g. a save's fire-and-forget check racing a Repair's check,
-        //    which the project-identity guard below can't tell apart).
-        // 2. The project switched/closed mid-check. The explicit project===null
-        //    check is needed for the UNSAVED case: file_path stays null and
-        //    closeProject doesn't bump clientOpId, so without it a late result would
-        //    repopulate the banner with no project loaded (leaking onto the global view).
-        return [];
-      }
-      const issues = result.messages;
-      set((state) => {
-        // Keep a dismissal sticky across re-checks (e.g. after every save) as long
-        // as the issue SET is unchanged; reset it when the set genuinely changes so
-        // newly-appeared issues re-show the banner. Compare order-independently:
-        // the backend's message order isn't stable (orphan offset/comment messages
-        // come from HashMap iteration), so a positional compare could spuriously
-        // reset a dismissal - and thus resurface a banner - on a mere reorder.
-        const prev = [...state.integrityIssues].sort();
-        const next = [...issues].sort();
-        const unchanged =
-          prev.length === next.length && prev.every((v, i) => v === next[i]);
-        return {
-          integrityIssues: issues,
-          integritySaveBlocked: result.save_blocked,
-          integrityDismissed: unchanged ? state.integrityDismissed : false,
-          // Keep the Review & Repair dialog flag consistent with what's actually
-          // rendered (the dialog gate is integrityDialogOpen && issues.length > 0).
-          // When the last issue clears - via Repair or a command that resolved it -
-          // close the dialog explicitly, so the flag can't linger true-but-hidden
-          // and pop the dialog back open if a later issue reappears.
-          integrityDialogOpen: issues.length === 0 ? false : state.integrityDialogOpen,
-        };
-      });
-      return issues;
-    } catch (e) {
-      console.error('Failed to check project integrity:', e);
-      return [];
-    }
-  },
-
-  repairProjectIntegrity: async () => {
-    try {
-      const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
-        purpose: 'repair project structural integrity',
-      });
-      // Repair mutates the project; refresh derived state so the UI reflects it.
-      await get().refreshProjectState();
-      // Repair records a snapshot-pair undo entry, so refresh undo/redo
-      // availability - the Undo button must enable so the user can revert it.
-      await get().refreshUndoState();
-      // Re-check rather than assuming clean: some issues are detect-only and not
-      // auto-repairable (a drifted aligned loop closure - recompute/remove it;
-      // non-finite shot geometry - fix the data), so reflect the TRUE post-repair
-      // state instead of clearing the banner on issues that still exist.
-      await get().checkProjectIntegrity();
-      // A repair that actually changed the project leaves unsaved edits: mark the
-      // store dirty so auto-save runs and the close prompt fires. Otherwise a
-      // project that was clean (isDirty false) when the user clicked Repair still
-      // looks "saved", and the fix is silently lost on close/reopen.
-      //
-      // Key on `result.changed`, NOT `result.fixed > 0`: the repair always
-      // re-solves offsets, which heals sub-tolerance drift that never counted as a
-      // violation, so a genuine fix can report fixed === 0. `changed` is the
-      // backend's honest "the snapshot was mutated" signal (the same condition
-      // under which it records the undo entry), so it dirties on those silent
-      // fixes too while still leaving a true no-op repair clean.
-      if (result.changed) {
-        set({ isDirty: true });
-        // #204/fix 8: a repair that actually mutated the project makes a remote
-        // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
-        // executeCommand/executeUndoRedo do) so the SpeleoDB tab offers the upload &
-        // prompts for a commit message rather than reading "editing clean". No-op
-        // for a local project (no link).
-        // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
-        // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
-        // both halves.
-        useSpeleoStore.getState().markForwardEdit();
-      }
-      return result;
-    } catch (e) {
-      // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
-      // repair (an IPC rejection during window/app teardown, a serialization
-      // failure, or a backend panic - note the command itself is infallible, so a
-      // normal backend Err is not a trigger) must be distinguishable from a genuine
-      // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
-      // toast and swallows the error. Re-throw so the caller surfaces the failure
-      // and keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
-      // are untouched here, so the banner and save-block stay correct.)
-      console.error('Failed to repair project integrity:', e);
-      throw e;
-    }
-  },
-
-  // Hide the banner without clearing integrityIssues, so a re-check after a save
-  // (which re-detects the same set) can't resurrect it; the flag is reset when the
-  // issue set actually changes. Keeping the issues populated also lets the
-  // Review & Repair dialog still open them.
-  dismissIntegrityIssues: () => set({ integrityDismissed: true }),
-
-  openIntegrityDialog: () => set({ integrityDialogOpen: true }),
-  closeIntegrityDialog: () => set({ integrityDialogOpen: false }),
 
   removeFromRecentProjects: async (path: string) => {
     try {

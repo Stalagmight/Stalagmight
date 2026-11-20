@@ -738,7 +738,7 @@ define('eval', 'Run an async function body in the webview (page context) and ret
   ),
 );
 
-define('ipc', 'Invoke a Tauri command from the webview (e.g. get_recent_logs_since, check_project_integrity).', {
+define('ipc', 'Invoke a Tauri command from the webview (e.g. get_recent_logs_since, has_unsaved_changes).', {
   command: z.string(),
   args: z.record(z.string(), z.unknown()).optional(),
 }, (args) =>
@@ -1099,7 +1099,7 @@ defineDarwin(
 
 define(
   'check_problems',
-  'Run the full oracle sweep: crash markers, error/warn logs, error boundary, project integrity, leftover temp files, memory growth, and a responsiveness probe. Use after scenarios and before ending a session.',
+  'Run the full oracle sweep: crash markers, error/warn logs, error boundary, leftover temp files, memory growth, and a responsiveness probe. Use after scenarios and before ending a session.',
   {},
   async () => {
     try {

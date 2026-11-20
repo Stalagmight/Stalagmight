@@ -4,8 +4,6 @@ export * from './ipc/LockReleaseOutcome';
 export * from './ipc/ReversedLine';
 export * from './ipc/ImportReceipt';
 export * from './ipc/CommentHolder';
-export * from './ipc/IntegrityRepairResult';
-export * from './ipc/IntegrityCheckResult';
 export * from './ipc/ValidationWarning';
 export * from './ipc/WarningSeverity';
 export * from './ipc/DisplaySettings';

@@ -607,40 +607,6 @@ pub enum LockReleaseOutcome {
     Failed,
 }
 
-/// Result of an explicit "repair project integrity" action. `fixed` and
-/// `remaining` are the drop in the FULL violation set (structural + merge/
-/// closure alignment + orphan closures) measured before vs after the repair, so
-/// they stay consistent with the integrity banner's count - unlike summing
-/// per-operation counters that mix different units. `remaining` is whatever the
-/// repair could not auto-fix (detect-only: a drifted aligned loop closure to
-/// recompute/remove, or non-finite shot geometry to correct by hand).
-///
-/// `changed` is true when the repair actually mutated the project (an undo entry
-/// was recorded). It is a STRICTLY broader signal than `fixed > 0`: the repair
-/// always re-solves offsets, which heals sub-reporting-tolerance drift that never
-/// counted as a violation - so `fixed` can be 0 while the project genuinely
-/// changed. The frontend dirties the project on `changed` (not `fixed`) so that
-/// silent sub-tolerance fixes are still auto-saved / prompted on close.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct IntegrityRepairResult {
-    pub fixed: u32,
-    pub remaining: u32,
-    pub changed: bool,
-}
-
-/// Result of a structural-integrity check. `messages` is the human-readable
-/// violation list (critical first; empty = sound). `save_blocked` is true when
-/// the project currently has unresolvable cross-references - the exact condition
-/// that refuses a save (manual AND auto-save). The frontend uses it to keep the
-/// integrity banner non-dismissable while saving is blocked (so the Repair entry
-/// point can't be hidden on a project that can't be saved), while still allowing
-/// dismissal of detect-only issues that don't block saving.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-pub struct IntegrityCheckResult {
-    pub messages: Vec<String>,
-    pub save_blocked: bool,
-}
-
 /// Validation warning from command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationWarning {

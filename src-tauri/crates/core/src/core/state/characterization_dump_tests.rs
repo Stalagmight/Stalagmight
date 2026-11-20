@@ -496,8 +496,15 @@ fn query_closures(project: &Project, wire: &Value) -> Value {
 fn query_warnings(state: &AppState) -> Value {
     json!({
         "warnings": to_value(&state.open_project_warnings()),
-        "integrity": to_value(&state.integrity_check()),
+        // The record keeps the shape of the retired `check_project_integrity`
+        // answer, so the goldens recorded before its removal still compare.
+        "integrity": integrity_record(state),
     })
+}
+
+fn integrity_record(state: &AppState) -> Value {
+    let messages = state.integrity_violation_messages();
+    json!({ "messages": messages, "save_blocked": !messages.is_empty() })
 }
 
 fn query_history(state: &AppState) -> Value {

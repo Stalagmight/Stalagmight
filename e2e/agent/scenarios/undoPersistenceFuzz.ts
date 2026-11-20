@@ -55,9 +55,10 @@
  *
  * ## Oracles
  *
- * The same three the main fuzzer runs, through the same in-page bridge
- * (`undoRedoFuzzBridge.ts`): the exact canonical-state ROUNDTRIP per depth, the
- * ABSOLUTE invariant suite on every observed state, and the INTEGRITY DELTA.
+ * The same two the main fuzzer runs, through the same in-page bridge
+ * (`undoRedoFuzzBridge.ts`): the exact canonical-state ROUNDTRIP per depth and
+ * the ABSOLUTE invariant suite on every observed state. (The INTEGRITY DELTA
+ * is retired with `check_project_integrity`; `undoRedoFuzz.ts` says why.)
  * Plus two this scenario adds:
  *
  *   - COVERAGE. Every variant a guaranteed plan step promises must be present on
@@ -71,13 +72,12 @@
  * This scenario carried four tolerances, because the defects it hunted fired
  * near the TOP of the restored stack and would otherwise have masked everything
  * beneath them. Every one of those defects is fixed, so every tolerance is
- * DELETED and the whole walk is strict: any mismatch, any wedge, any integrity
- * divergence fails the run outright.
+ * DELETED and the whole walk is strict: any mismatch or wedge fails the run
+ * outright.
  *
  * The one subtraction still in the file is not a tolerance: the documented
  * save/reload attribution, which names on the record every change it absorbs and
- * the largest numeric move among them, resyncs the model at that depth (so the
- * integrity verdict the resync superseded is skipped rather than compared), and
+ * the largest numeric move among them, resyncs the model at that depth, and
  * is refused outright when the diff came back CAPPED, because a prefix cannot be
  * spoken for.
  *
@@ -274,7 +274,7 @@
  * replay the PLAN's own preconditions are skipped - id divergence, the
  * renumbering check, variant coverage, "the plan pushed no entries" - because a
  * shrunk trace is by construction not the plan. Every APP oracle still runs:
- * roundtrip, absolute invariants, integrity delta and stack survival.
+ * roundtrip, absolute invariants and stack survival.
  *
  * ## Determinism
  *
@@ -333,7 +333,6 @@ import {
   observeOnly,
   resyncModel,
   runStep,
-  type IntegrityVerdict,
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
@@ -756,7 +755,6 @@ async function runIteration(
     ctx.metric('actionMs', res.timing.actionMs);
     ctx.metric('observeMs', res.timing.observeMs);
     ctx.metric('canonicalMs', res.timing.canonicalMs);
-    ctx.metric('integrityMs', res.timing.integrityMs);
     ctx.metric('steps');
     return res;
   };
@@ -794,39 +792,14 @@ async function runIteration(
     }
   };
 
-  const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
-    a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
-
-  const assertIntegrityDelta = (res: StepResponse, what: string, resynced = false): void => {
-    const expected = res.integrityExpected;
-    if (expected === null) return;
-    // `resolveMismatch` just replaced the model's snapshot at this depth, and
-    // `resyncModel` moves the recorded integrity verdict with it. `expected`
-    // was computed IN THE PAGE at step time, i.e. against the snapshot that has
-    // since been superseded, so comparing it now would fail on precisely the
-    // difference the resync accepted.
-    if (resynced) {
-      ctx.metric('integrityResynced');
-      return;
-    }
-    ctx.metric('integrityCompared');
-    if (sameIntegrity(expected, res.integrity)) return;
-    const format = (verdict: IntegrityVerdict): string =>
-      `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
-    fail(
-      `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
-      `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
-    );
-  };
-
   /**
    * Resolve a mismatch the page reported. `consumed` is the commandType of the
    * entry the move applied (null for a save, a reload or a mutation); it is now
    * only ever reported, never used to pick a tolerance - there are none left.
    *
-   * Returns true when the model was RESYNCED, which the caller has to know:
-   * every expectation the page computed for this step - the integrity verdict
-   * included - was computed against the snapshot the resync replaced.
+   * Returns true when the model was RESYNCED: every expectation the page
+   * computed for this step was computed against the snapshot the resync
+   * replaced.
    */
   const resolveMismatch = async (
     headline: string,
@@ -850,7 +823,7 @@ async function runIteration(
     if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
       ctx.metric('resyncs');
       for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
-      top = await resyncModel(ctx, pair.index, res.integrity);
+      top = await resyncModel(ctx, pair.index);
       return true;
     }
     fail(headline, check.text);
@@ -990,8 +963,8 @@ async function runIteration(
   // Everything in this block asserts that the PLAN did its job. A replayed trace
   // is by construction not the plan - a shrink is allowed to remove the very
   // steps that produced the divergence - so these are skipped there. No app
-  // oracle is skipped: the roundtrip, invariant, integrity and stack-survival
-  // checks all run on both paths.
+  // oracle is skipped: the roundtrip, invariant and stack-survival checks all
+  // run on both paths.
   const targetLine = memo.createdLineId;
   if (!replay && targetLine === null) fail('the plan never identified its target line');
   const targetShots =
@@ -1051,15 +1024,14 @@ async function runIteration(
     assertInvariants(res, direction);
     assertModel(res, `${direction} left the page model where Node did not expect it`);
     assertStacks(`${direction} left the history stacks in an unexpected shape`, res);
-    const resynced =
-      res.verdict !== 'equal' &&
-      (await resolveMismatch(
+    if (res.verdict !== 'equal') {
+      await resolveMismatch(
         `${direction} did not restore the state recorded at depth ${cursor} ` +
           `(the entry it consumed was ${consumed ?? 'unknown'})`,
         res,
         consumed,
-      ));
-    assertIntegrityDelta(res, direction, resynced);
+      );
+    }
     record(res);
     ctx.metric(direction === 'undo' ? 'undos' : 'redos');
   };
@@ -1127,14 +1099,13 @@ async function runIteration(
     note(`${tag} reload -> depth ${cursor} (undo ${reloaded.undoLen}, redo ${reloaded.redoLen})`);
     assertInvariants(reloaded, 'reload');
     assertStacks('the persisted history did not come back intact', reloaded);
-    const resynced =
-      reloaded.verdict !== 'equal' &&
-      (await resolveMismatch(
+    if (reloaded.verdict !== 'equal') {
+      await resolveMismatch(
         'reopening the saved project did not restore the state it was saved at',
         reloaded,
         null,
-      ));
-    assertIntegrityDelta(reloaded, 'reload', resynced);
+      );
+    }
     record(reloaded);
     ctx.metric('reloads');
   };

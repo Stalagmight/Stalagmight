@@ -8,8 +8,7 @@
  * it from `TOAST_KEYS`.
  */
 export const TOAST_KEYS = {
-  // Integrity / undo-redo
-  INTEGRITY_REPAIR: 'integrity-repair',
+  // Edits / undo-redo
   EDIT_DISABLED: 'edit-disabled',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',

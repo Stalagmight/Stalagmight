@@ -4,9 +4,15 @@
  *  - cheapSweep: runs after every mutating tool call (goal < ~50 ms of extra
  *    WebDriver traffic). Crash markers (fs only), a React error-boundary probe,
  *    and new error/warn ring lines since an internal cursor.
- *  - fullSweep: cheapSweep plus project-integrity, leftover write-staging files,
- *    a memory-growth check against a session baseline, dialog residue, and a
- *    read-only responsiveness probe (command-lock deadlock detector).
+ *  - fullSweep: cheapSweep plus leftover write-staging files, a memory-growth
+ *    check against a session baseline, dialog residue, and a read-only
+ *    responsiveness probe (command-lock deadlock detector).
+ *
+ * The project's own integrity is not probed: the app runs `Project::validate`
+ * after every edit, import, load and file-decoded history step, and rolls back
+ * with an error log (which the cheap sweep reports) whatever would break it.
+ * The `check_project_integrity` command this sweep used to call could only
+ * ever answer "sound", and is gone.
  *
  * Oracles take a structural OracleTarget (AppSession satisfies it) so this
  * module does not import session.ts (no cycle). Findings are deduplicated by
@@ -219,29 +225,7 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
 export async function fullSweep(target: OracleTarget, state: OracleState): Promise<Finding[]> {
   const findings = await cheapSweep(target, state);
 
-  // 4. Project integrity.
-  try {
-    const integrity = await target.exclusive(() =>
-      invokeInApp<{ messages: string[]; save_blocked: boolean }>(target.browser, 'check_project_integrity'),
-    );
-    if (integrity.save_blocked) {
-      findings.push({
-        severity: 'fatal',
-        kind: 'integrity-save-blocked',
-        message: 'project integrity: saving is blocked (unresolvable cross-references)',
-        detail: integrity.messages,
-      });
-    } else if (integrity.messages.length > 0) {
-      findings.push({
-        severity: 'error',
-        kind: 'integrity-messages',
-        message: `project integrity reported ${integrity.messages.length} issue(s)`,
-        detail: integrity.messages,
-      });
-    }
-  } catch (err) {
-    findings.push({ severity: 'warning', kind: 'integrity-probe-failed', message: String(err) });
-  }
+  // 4. (Project integrity: the app's own, see the module docs.)
 
   // 5. Leftover write-staging temp files next to the project (atomic save, and
   //     the SpeleoDB dump extract - see LEFTOVER_TEMP_SUFFIXES).

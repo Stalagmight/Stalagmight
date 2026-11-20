@@ -347,7 +347,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState });
     useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -367,7 +367,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useProjectStore.setState({ loadProject, refreshProjectState });
     useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -397,7 +397,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useProjectStore.setState({ loadProject, refreshProjectState });
     useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -416,7 +416,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState });
     useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -440,7 +440,6 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
     useProjectStore.setState({
       loadProject,
       refreshProjectState,
-      checkProjectIntegrity: vi.fn(async () => []),
       checkHistoryDiscarded,
     });
     useSpeleoStore.setState({
@@ -952,7 +951,7 @@ it('manual refresh waits for fresh lock and permission status even when the revi
 describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => {
   it('reopens the server version without taking the lock back', async () => {
     const loadProject = vi.fn(async () => ({ success: true }));
-    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []) });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}) });
     useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus: vi.fn(async () => {}) });
     invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
     const { result } = renderHook(() => useSpeleoActions());

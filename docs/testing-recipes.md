@@ -906,7 +906,7 @@ for a non-null path and `false` for null, because the real load path does.
 The mock exposes `window.__MOCK_*` hooks - recorded call arrays
 (`__MOCK_MOVE_CALLS__`, `__MOCK_EXECUTE_BATCH_CALLS__`,
 `__MOCK_CREATE_SHOT_CALLS__`, `__MOCK_SPLIT_SHOT_CALLS__`, ...), setters that
-force a scenario (`__MOCK_SET_GEOMETRY_ERROR__`, `__MOCK_SET_INTEGRITY_ISSUES__`,
+force a scenario (`__MOCK_SET_GEOMETRY_ERROR__`, `__MOCK_SET_CLOSURE_ALIGNED__`,
 `__MOCK_CONNECTIVITY_RESULT__`, `__MOCK_IPC_OVERRIDES__`, ...), and matching
 resets. Grep the mock for `__MOCK_` for the current list; follow the existing
 naming when you add one.

@@ -23,20 +23,19 @@ describe('projectStore.saveProject detached-copy result', () => {
     vi.clearAllMocks();
     useProjectStore.setState({
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
       refreshProjectState: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
   });
 
   afterEach(() => {
-    useProjectStore.setState({ project: null, isDirty: false, integrityIssues: [] } as never);
+    useProjectStore.setState({ project: null, isDirty: false } as never);
   });
 
   it('does not re-point the project, does not clear isDirty, and toasts the copy path', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast } as never);
     const project = { file_path: '/cache/p1/project.stalx' } as never;
-    useProjectStore.setState({ project, isDirty: true, integrityIssues: [] } as never);
+    useProjectStore.setState({ project, isDirty: true } as never);
     invokeIpcMock.mockResolvedValue({
       success: true,
       unlinked_copy_path: '/home/diver/copy.stalx',
@@ -54,21 +53,18 @@ describe('projectStore.saveProject detached-copy result', () => {
       'speleodb-unlinked-copy',
       'warning'
     );
-    // Nothing was flagged, so nothing could have been healed - no extra fetch.
+    // The save heals nothing, so there is nothing to re-fetch.
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 
-  it('refreshes the mirror and marks the session dirty when the save healed the live project', async () => {
+  it('leaves a clean session clean and unrefreshed: the v2 save heals nothing', async () => {
     useUIStore.setState({ showToast: vi.fn() } as never);
     const project = { file_path: '/cache/p1/project.stalx' } as never;
-    // Clean session, flagged project: the save pipeline heals the LIVE project
-    // (duplicate shot UUIDs, non-finite geometry) before it decides to write only
-    // a copy, so the healed state never reaches the managed file on disk.
-    useProjectStore.setState({
-      project,
-      isDirty: false,
-      integrityIssues: ['duplicate_shot_uuid'],
-    } as never);
+    // 0.6.0's save healed the LIVE project (duplicate shot UUIDs, non-finite
+    // geometry) before it decided to write only a copy, so a flagged session had
+    // to be re-pulled and marked dirty. The `.stalx` v2 save writes the survey
+    // as every edit validated it, so the copy changes nothing in the session.
+    useProjectStore.setState({ project, isDirty: false } as never);
     invokeIpcMock.mockResolvedValue({
       success: true,
       unlinked_copy_path: '/home/diver/copy.stalx',
@@ -76,11 +72,9 @@ describe('projectStore.saveProject detached-copy result', () => {
 
     await useProjectStore.getState().saveProject('/home/diver/copy.stalx');
 
-    // The mirror is re-pulled from the mutated backend project...
-    expect(useProjectStore.getState().refreshProjectState).toHaveBeenCalled();
-    // ...and the managed session is dirty: its healed state is unsaved.
-    expect(useProjectStore.getState().isDirty).toBe(true);
-    // Still no re-point - the open project remains the managed file.
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    // No re-point - the open project remains the managed file.
     expect(useProjectStore.getState().project).toBe(project);
   });
 });

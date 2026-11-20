@@ -7,18 +7,15 @@ import { runProjectSwitch } from './projectTransition';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
 
 let refreshProjectState: ReturnType<typeof vi.fn>;
-let checkProjectIntegrity: ReturnType<typeof vi.fn>;
 let checkHistoryDiscarded: ReturnType<typeof vi.fn>;
 let refreshLinkStatus: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   refreshProjectState = vi.fn(async () => {});
-  checkProjectIntegrity = vi.fn(async () => []);
   checkHistoryDiscarded = vi.fn(async () => {});
   refreshLinkStatus = vi.fn(async () => {});
   useProjectStore.setState({
     refreshProjectState,
-    checkProjectIntegrity,
     checkHistoryDiscarded,
     historyDiscardedDismissed: true,
     isDirty: true,
@@ -73,7 +70,6 @@ describe('applySpeleoTreeReplacement', () => {
     expect(useGasPlanStore.getState().endpoint).toBeNull();
     expect(refreshProjectState).toHaveBeenCalledOnce();
     expect(useProjectStore.getState().isDirty).toBe(false);
-    expect(checkProjectIntegrity).toHaveBeenCalledOnce();
     expect(refreshLinkStatus).toHaveBeenCalledOnce();
   });
 
@@ -87,7 +83,6 @@ describe('applySpeleoTreeReplacement', () => {
     expect(useUIStore.getState().selection).not.toBeNull();
     expect(useGasPlanStore.getState().endpoint).not.toBeNull();
     expect(refreshProjectState).not.toHaveBeenCalled();
-    expect(checkProjectIntegrity).not.toHaveBeenCalled();
     expect(refreshLinkStatus).not.toHaveBeenCalled();
     expect(useProjectStore.getState().isDirty).toBe(true);
   });

@@ -417,8 +417,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return false;
         case 'get_project_warnings':
           return [];
-        case 'check_project_integrity':
-          return { messages: [], save_blocked: false };
         default:
           order = order.filter((id) => id !== 'b');
           return { success: true, warnings: [], error: null, line_ids: [] };
@@ -478,8 +476,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return false;
         case 'get_project_warnings':
           return [];
-        case 'check_project_integrity':
-          return { messages: [], save_blocked: false };
         case 'undo':
           order = ['a', 'b', 'c', 'd', 'e'];
           return { success: true, warnings: [], error: null, line_ids: [] };

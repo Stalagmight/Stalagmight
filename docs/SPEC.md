@@ -2781,7 +2781,9 @@ function useNetworkStatus() {
   (`PRAGMA quick_check`, the schema guard), then the migration verifies the
   converted positions
 - The open project always validates (every edit and undo step is checked), so
-  "Repair" of an open project has nothing to do
+  there is nothing to repair in it: 0.6.0's integrity banner, its Review &
+  Repair dialog and their `check_project_integrity` / `repair_project_integrity`
+  commands are gone
 
 #### Recovery Options (Always Ask User)
 1. Attempt Repair

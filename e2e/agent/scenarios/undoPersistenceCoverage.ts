@@ -18,9 +18,9 @@
  * ## Which variants the app can actually produce
  *
  * `AppState::generate_undo_data` / `finalize_undo_data`
- * (src-tauri/src/core/state/undo_capture.rs) plus the three paths that push
- * their own entry (`execute_batch`, `execute_move_comment`,
- * `repair_open_project_integrity`) are the ONLY producers. Measured against
+ * (src-tauri/src/core/state/undo_capture.rs) plus the two paths that push
+ * their own entry (`execute_batch`, `execute_move_comment`) are the ONLY
+ * producers (the integrity Repair, a third, is gone). Measured against
  * them, one `UndoData` variant never reaches a stack - see
  * `UNREACHABLE_VARIANTS`.
  *
@@ -107,7 +107,6 @@ export const VARIANT_BY_COMMAND_TYPE: Readonly<Record<string, UndoVariant>> = {
   move_station: 'Delta',
   move_comment: 'Delta',
   batch: 'Delta',
-  repair_integrity: 'Delta',
 };
 
 /**

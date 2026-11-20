@@ -69,7 +69,6 @@ beforeEach(() => {
   });
   useProjectStore.setState({
     refreshProjectState: vi.fn(async () => {}),
-    checkProjectIntegrity: vi.fn(async () => []),
   });
   useUIStore.setState({ openDialog: openDialogMock, showToast: showToastMock, setView: vi.fn() });
 });

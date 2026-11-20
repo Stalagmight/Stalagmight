@@ -50,11 +50,11 @@ async function main(): Promise<void> {
   const before = await session.exclusive(() => cursor.read('all'));
   check('get_recent_logs_since returns entries', before.newEntries.length >= 0, `${before.newEntries.length} lines, latestSeq=${before.latestSeq}`);
 
-  // IPC integrity command round-trips.
-  const integrity = await session.exclusive(() =>
-    invokeInApp(session.browser, 'check_project_integrity'),
+  // A read-only IPC command round-trips.
+  const unsaved = await session.exclusive(() =>
+    invokeInApp(session.browser, 'has_unsaved_changes'),
   );
-  check('check_project_integrity IPC works', integrity !== undefined, JSON.stringify(integrity).slice(0, 80));
+  check('has_unsaved_changes IPC works', typeof unsaved === 'boolean', JSON.stringify(unsaved));
 
   // Crash-oracle self-test: trigger a backend thread panic; the app must
   // survive, the ring buffer must get a PANIC line, and a crash marker file

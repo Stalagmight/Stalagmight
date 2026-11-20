@@ -79,7 +79,6 @@ beforeEach(() => {
     loadProject: loadProjectMock,
     project: null,
     isDirty: false,
-    checkProjectIntegrity: vi.fn(async () => []),
   });
   useSpeleoStore.setState({
     setLinkOnOpen: setLinkOnOpenMock,

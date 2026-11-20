@@ -76,11 +76,10 @@ export function newProjectGuarded(): void {
  * file already exists) or save directly. Carries the caller's "close after a
  * successful save" intent (Save and Close) through the deferred overwrite flow.
  *
- * A failed save is routed through `surfaceSaveFailure` (integrity blocks → Review
- * & Repair; permission denials already surfaced their own guidance dialog). The
- * guard is `!success`, NOT "has an error string": a blocked save can legitimately
- * carry a null error (the block is signaled via `integritySaveBlocked`), and must
- * still surface rather than be mistaken for a clean save.
+ * A failed save is routed through `surfaceSaveFailure` (a file changed on disk
+ * opens the save prompt; permission denials already surfaced their own guidance
+ * dialog). The guard is `!success`, NOT "has an error string", so a failure
+ * that carries no message is never mistaken for a clean save.
  */
 export async function saveProjectAs(opts?: {
   closeAfterSave?: boolean;
@@ -119,9 +118,7 @@ export async function saveProjectAs(opts?: {
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, {
-      skipIntegrityRouting: true,
-    });
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog);
     return null;
   }
 }
@@ -163,9 +160,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, {
-      skipIntegrityRouting: true,
-    });
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog);
     return false;
   }
 
@@ -188,7 +183,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     surfaceSaveFailure(
       getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
-      { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
+      { title: i18n.t('dialogs.saveFailure.detachTitle') },
     );
     return false;
   }

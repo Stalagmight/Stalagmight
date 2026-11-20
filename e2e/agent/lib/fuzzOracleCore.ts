@@ -306,7 +306,6 @@ export function oracleInjectionSource(): string {
     '  epoch: 0,',
     '  epochs: [],',
     '  snapshots: [],',
-    '  integrity: [],',
     '  lastExpected: null,',
     '  lastActual: null,',
     '  mismatchIndex: -1,',
@@ -326,23 +325,23 @@ export function oracleInjectionSource(): string {
  * every snapshot matches and nothing fires. These are the checks that do not
  * care what the previous state was.
  *
- * ## What lives here vs in `check_project_integrity`
+ * ## What lives here vs in `Project::validate`
  *
- * The app already has a structural-integrity checker
- * (`AppState::integrity_check` -> `Project::check_structural_integrity`,
- * `src-tauri/src/models/project/integrity.rs`). Duplicating it would be noise,
- * so this suite deliberately does NOT re-check what it owns:
+ * The app already has a structural-integrity checker, `Project::validate`
+ * (plan section 2), which it runs after every edit, import, load and
+ * file-decoded history step, rolling back (with an error log) whatever would
+ * break it. Duplicating it would be noise, so this suite deliberately does NOT
+ * re-check what it owns:
  *
  *   - non-finite (NaN/inf) shot geometry
  *   - two shots in ONE line sharing a uuid (note: the app's contract is
  *     per-line, not global - `ensure_unique_shot_uuids` dedupes per line -
  *     so global uniqueness is NOT asserted here either)
- *   - dangling merge / loop-closure / zero-datum refs, stale hand moves (on
- *     the station graph the checker is `Project::validate`, plan section 2)
+ *   - dangling merge / loop-closure / zero-datum refs, stale hand moves
  *
- * Those are covered instead by the integrity-DELTA oracle, which records the
- * checker's own verdict per depth and asserts undo/redo restores it. Two further
- * reasons not to duplicate them: several are `Warning`, i.e. states the app
+ * Those are covered by the app's own validation (its rollback logs an error,
+ * which the sweeps report) and by the strict roundtrip, which sees any state
+ * an undo or redo fails to restore. Two further reasons not to duplicate them: several are `Warning`, i.e. states the app
  * considers repairable rather than corrupt, and the ref checks are largely
  * unobservable from this payload anyway - `ProjectIpc` emits merges, closures
  * and datums through `filter_map(..._to_wire)`, so a dangling ref is DROPPED on
@@ -425,9 +424,9 @@ export function checkProjectInvariants(state: unknown): string[] {
     }
   }
 
-  // Every station ref ON THE WIRE must address a real station. The integrity
-  // checker validates StationKeys BEFORE the wire conversion drops the ones that
-  // do not resolve; this validates what consumers actually index into.
+  // Every station ref ON THE WIRE must address a real station. The model's
+  // validation checks its own references BEFORE the wire conversion drops the
+  // ones that do not resolve; this validates what consumers actually index into.
   const checkRef = (label: string, value: unknown): void => {
     const ref = (value ?? {}) as Record<string, unknown>;
     const lineId = Number(ref.line_id);

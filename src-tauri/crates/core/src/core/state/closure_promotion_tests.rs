@@ -104,7 +104,7 @@ fn near(a: [f64; 2], b: [f64; 2], what: &str) {
 /// line laid out on its own from its first station puts every one of its
 /// stations where the survey does (0.6.0's "merged stations N m apart").
 fn assert_sound(state: &AppState) {
-    let messages = state.integrity_check().messages;
+    let messages = state.integrity_violation_messages();
     assert!(messages.is_empty(), "{messages:?}");
     let p = project(state);
     let raw = p.raw_positions();

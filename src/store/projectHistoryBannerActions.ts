@@ -24,8 +24,8 @@ export interface ProjectHistoryBannerState {
    * so the banner can say the history was not damaged. */
   historyDiscardedEarlierVersion: boolean;
   /** True once the user dismissed the discarded-history banner for the OPEN project.
-   * Frontend-only, like `integrityDismissed`: the backend flag describes an ongoing
-   * condition and keeps answering true, so the dismissal has to live here. */
+   * Frontend-only: the backend flag describes an ongoing condition and keeps
+   * answering true, so the dismissal has to live here. */
   historyDiscardedDismissed: boolean;
 }
 
@@ -37,9 +37,9 @@ export interface ProjectHistoryBannerActions {
 }
 
 /**
- * Monotonic sequence so overlapping fire-and-forget checks are last-issued-wins, exactly
- * as `integrityCheckSeq` does for the integrity banner: an earlier check that resolves
- * after a newer one was started must not clobber the newer result.
+ * Monotonic sequence so overlapping fire-and-forget checks are last-issued-wins: an
+ * earlier check that resolves after a newer one was started must not clobber the newer
+ * result.
  */
 let historyDiscardedCheckSeq = 0;
 
@@ -69,8 +69,8 @@ export function createProjectHistoryBannerActions(
     // is itself a degraded read, and a second failure must not escalate into a
     // broken project view.
     checkHistoryDiscarded: async () => {
-      // Correlate the reply with the project that was active when the check STARTED,
-      // exactly as checkProjectIntegrity does and for the same reason. The backend flag is
+      // Correlate the reply with the project that was active when the check STARTED.
+      // The backend flag is
       // a live read of whatever project is in the slot, which makes the VALUE honest at
       // service time but says nothing about DELIVERY: project A discarded -> check in
       // flight -> user switches to B -> loadProject resets this to false -> A's reply lands

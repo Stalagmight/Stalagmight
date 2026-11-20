@@ -121,8 +121,10 @@
  *   S3 no project invariant breach (`fuzzOracleCore.ts`'s checker)
  *   S4 no error dialog from a move that has no business raising one
  *   S5 WEDGE: a non-idle screen with zero actionable controls
- *   plus `check_project_integrity` after any step that pushed an undo entry -
- *   `save_blocked`, or a non-finite-geometry message, is a hard failure
+ *   (An import that would leave the survey invalid is the app's to refuse: it
+ *   validates every import before it commits and logs the rollback as an
+ *   error, which S6's log read reports. The `check_project_integrity` probe
+ *   that ran after every undo-pushing step is retired with the command.)
  *
  * Seven inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
@@ -153,8 +155,9 @@
  * F3 receipt-vs-project accounting, F4 receipt rendering, F5 temp files.
  *
  * Per EPISODE: E1 teardown leaves no project, dialog, placement, context or
- * generated file; E2 the next episode's fixture opens integrity-clean; E3 DOM
- * growth is recorded as a metric.
+ * generated file; E2 (retired: the load itself refuses an invalid fixture, so
+ * an episode that opened one has already failed); E3 DOM growth is recorded
+ * as a metric.
  *
  * ## Progress forcing
  *
@@ -1427,25 +1430,9 @@ export const importDialogFuzz: Scenario = {
 
       // An import commits through `import_lines`, which pushes exactly one
       // undo entry per call - so a rise in depth is the cheap signal that
-      // something landed, and the moment to pay for the structural check.
+      // something landed.
       if (digest.undo >= 0 && lastUndoDepth >= 0 && digest.undo > lastUndoDepth) {
         ctx.metric('undoEntriesPushed', digest.undo - lastUndoDepth);
-        const verdict = (await ctx.ipc('check_project_integrity')) as {
-          save_blocked?: boolean;
-          messages?: string[];
-        } | null;
-        const messages = verdict?.messages ?? [];
-        const nonFinite = messages.filter((line) => line.includes('non-finite'));
-        if (verdict?.save_blocked === true || nonFinite.length > 0) {
-          fail(
-            'INTEGRITY: an import left the project in a state the app refuses to save',
-            [
-              `  after: ${move.label}`,
-              `  save_blocked=${verdict?.save_blocked === true}`,
-              ...messages.slice(0, 8).map((line) => `  ${line}`),
-            ].join('\n'),
-          );
-        }
       }
       if (digest.undo >= 0) lastUndoDepth = digest.undo;
     };
@@ -1956,26 +1943,13 @@ export const importDialogFuzz: Scenario = {
             'inert Place-on-Map button for the whole run',
         );
       }
-      // E2: the fixture this episode starts from must itself be sound, or every
-      // integrity verdict inside it is measured from a broken floor.
-      const opening = (await ctx.ipc('check_project_integrity')) as {
-        save_blocked?: boolean;
-        messages?: string[];
-      } | null;
-      if (opening?.save_blocked === true) {
-        throw new Error(
-          `E2 INTEGRITY: ${fixture} opened SAVE-BLOCKED at the start of episode ${episode + 1}: ` +
-            JSON.stringify(opening.messages ?? []),
-        );
-      }
       const domBefore = await ctx.eval<number>('return document.querySelectorAll("*").length;');
 
       // Some episodes run with NO project open, which is a different import
       // flow, not a smaller one: a `.dmp` with nothing loaded routes to
       // `new-project-for-import` instead of the selection dialog, so it is the
       // only way to reach `importContext='new-project'` and the DEFERRED
-      // initial save that context selects. The fixture is still opened first,
-      // so E2's integrity check on it runs either way.
+      // initial save that context selects. The fixture is still opened first.
       // On a REPLAY the recording's own choice is authoritative; a fresh run
       // draws it. `replayHeadless` is null for a trace written before the field
       // existed, which is warned about once at startup and treated as

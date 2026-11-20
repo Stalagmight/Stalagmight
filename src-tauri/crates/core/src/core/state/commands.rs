@@ -22,7 +22,7 @@
 //!    dirty bit and Unwind position updated.
 
 use super::AppState;
-use crate::core::{Command, CommandResult, IntegrityCheckResult, ReversedLine, ValidationWarning};
+use crate::core::{Command, CommandResult, ReversedLine, ValidationWarning};
 use crate::models::survey::changeset::{capture, HistoryRefs, RecordedPreview};
 use crate::models::survey::{HistoryEntry, Project};
 
@@ -370,12 +370,18 @@ impl AppState {
             Err(failure) => failure,
         }
     }
+}
 
+#[cfg(test)]
+impl AppState {
     /// The model's invariant violations (plan section 2) of the open project,
-    /// as messages. A loaded project is valid by construction (load refuses
-    /// an invalid file; salvage opens read-only), so this is empty unless a
-    /// bug let one through.
-    pub fn integrity_violation_messages(&self) -> Vec<String> {
+    /// as messages: the tests' integrity oracle. A loaded project is valid by
+    /// construction (load refuses an invalid file; salvage opens read-only)
+    /// and every edit and file-decoded history step validates before it
+    /// commits, so this is empty unless a bug let one through. (The app's
+    /// integrity banner and its `check_project_integrity` command read the
+    /// same and could never show anything; both are gone.)
+    pub(crate) fn integrity_violation_messages(&self) -> Vec<String> {
         let guard = self
             .project
             .lock()
@@ -383,13 +389,5 @@ impl AppState {
         guard.as_ref().map_or_else(Vec::new, |p| {
             p.validate().iter().map(ToString::to_string).collect()
         })
-    }
-
-    pub fn integrity_check(&self) -> IntegrityCheckResult {
-        let messages = self.integrity_violation_messages();
-        IntegrityCheckResult {
-            save_blocked: !messages.is_empty(),
-            messages,
-        }
     }
 }

@@ -611,11 +611,11 @@ impl Chain {
             ));
         }
         let violations = p.validate();
-        let messages = self.state.integrity_check().messages;
+        let messages = self.state.integrity_violation_messages();
         if !violations.is_empty() || !messages.is_empty() {
             return Err(fail(
                 "integrity",
-                format!("validate {violations:?}, integrity_check {messages:?}"),
+                format!("validate {violations:?}, integrity_violation_messages {messages:?}"),
             ));
         }
         for (i, (d, role)) in p.datums.iter().zip(&roles).enumerate() {

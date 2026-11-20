@@ -1,6 +1,6 @@
 //! Salvage (plan 6.6): the recovery dialog's "Attempt Repair" and "Export
-//! Salvageable Data" on a version 2 file the load refuses, the legacy SQLite
-//! route they keep, and the open project's integrity Repair.
+//! Salvageable Data" on a version 2 file the load refuses, and the legacy
+//! SQLite route they keep.
 //!
 //! All data is synthetic: projects built in memory, saved by this build, then
 //! damaged by editing the canonical text.
@@ -16,7 +16,6 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::events::EventSink;
-use crate::core::Command;
 use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::ShotData;
 use crate::persistence::stalx_v2::{self, Extras, Mode, SpeleoDbLink};
@@ -344,26 +343,4 @@ fn salvage_of_a_torn_file_reports_what_the_header_says() {
         "{:?}",
         salvaged.errors
     );
-}
-
-/// The open project always holds the invariants: the banner's Repair finds
-/// nothing, changes nothing and records no undo step.
-#[test]
-fn the_open_projects_repair_has_nothing_to_do() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("cave.stalx");
-    std::fs::write(&path, text(&Extras::default())).unwrap();
-    let state = AppState::new().unwrap();
-    assert!(state.execute(Command::OpenProject { path }).success);
-    let before = state.get_project_state().unwrap();
-
-    let result = state.repair_open_project_integrity();
-
-    assert_eq!(
-        (result.fixed, result.remaining, result.changed),
-        (0, 0, false)
-    );
-    assert_eq!(state.get_project_state().unwrap(), before);
-    assert!(!state.can_undo());
-    assert!(!state.has_unsaved_changes());
 }

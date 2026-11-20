@@ -836,7 +836,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // reply if the open project changed (switch / close / another load) while it was
       // in flight - so a stale status can't paint the previous project's lock holder /
       // remote-state / permission onto the newly-open one. Mirrors the load-time
-      // `take_unrecognised_shot_kinds` + `checkProjectIntegrity` staleness guards. (fix S3)
+      // `take_unrecognised_shot_kinds` + `checkHistoryDiscarded` staleness guards. (fix S3)
       const requestedPath = useProjectStore.getState().project?.file_path ?? null;
       // Also drop the reply when the link CHANGED under it, not just when the
       // project did. The backend reads the link row and then makes two network

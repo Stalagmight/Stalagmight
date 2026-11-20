@@ -556,7 +556,7 @@ pub fn take_unrecognised_shot_kinds(
 /// Peeking, not taking, unlike [`take_unrecognised_shot_kinds`]: that one drives a
 /// one-shot prompt the user answers, this describes an ongoing condition that lasts as
 /// long as the project is open (docs/notifications.md: banner-class). Dismissal is
-/// frontend state, as it is for the integrity banner.
+/// frontend state.
 ///
 /// No `loading_id` for the same reason: the flag is written under the same `project`
 /// mutex acquisition that commits the project, so it cannot describe a different one.

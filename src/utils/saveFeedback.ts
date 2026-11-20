@@ -1,4 +1,3 @@
-import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
@@ -18,53 +17,37 @@ import type { ToastKind } from '../store/uiStore';
 /**
  * Surface a failed (non-throwing) save to the user.
  *
- * Four classes of failure, in priority order:
- *  1. Unresolvable cross-references - NOT an error, an integrity problem the
- *     user can fix. Route them straight to the Review & Repair dialog instead
- *     of a scary "Save Failed" error window.
- *  2. Filesystem permission denial (e.g. macOS forgot folder access) - already
+ * Three classes of failure, in priority order:
+ *  1. Filesystem permission denial (e.g. macOS forgot folder access) - already
  *     surfaced by `saveProject` itself via the folder-access guidance dialog,
  *     so don't double up with a generic error window.
- *  3. A destination that is gone or unopenable (#429) - the error dialog, but
- *     saying what is actually wrong with the folder instead of relaying
- *     SQLite's "Failed to open database".
- *  4. Anything else (a real I/O error) - show the error dialog as before.
+ *  2. A destination that is gone or unopenable (#429) - the error dialog, but
+ *     saying what is actually wrong with the folder instead of relaying the
+ *     backend's raw text.
+ *  3. Anything else (a real I/O error) - show the error dialog as before.
  *
- * Ahead of all four: a file another program changed since it was opened
+ * Ahead of all three: a file another program changed since it was opened
  * (`EXTERNALLY_MODIFIED`, the `.stalx` v2 guard) opens the save prompt, where the
  * user keeps their version, saves it as a new file, or takes the file's. A
- * read-only file (made with a newer Stalagmight) gets the error dialog, reworded,
- * and never Review & Repair.
+ * read-only file (made with a newer Stalagmight) gets the error dialog, reworded.
  *
- * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
- * failure, so it is current by the time this runs. On an IPC-transport reject
- * that re-check never ran, so `integritySaveBlocked` may be stale - pass
- * `skipIntegrityRouting` there to go straight to the error dialog instead of
- * wrongly opening Review & Repair. `title` overrides the dialog title (e.g.
- * "Detach Failed") without leaving the router.
+ * `title` overrides the dialog title (e.g. "Detach Failed") without leaving the
+ * router.
  *
- * The integrity route is SKIPPED for a failure that names its own cause and has
- * no repair in that dialog (#517's unreadable ignore list). `saveProject` runs
- * `checkProjectIntegrity()` on EVERY failure, so a project carrying both
- * problems would otherwise always show Review & Repair - which cannot fix the
- * named one - and the refusal would never render anywhere.
+ * (0.6.0 also routed a save its integrity check had blocked to a Review &
+ * Repair dialog. On the station graph every edit and load validates the survey,
+ * so no save is blocked that way, and that dialog is gone.)
  */
 export function surfaceSaveFailure(
   error: string | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
-  opts?: { skipIntegrityRouting?: boolean; title?: string },
+  opts?: { title?: string },
 ): void {
   const kind = classifySaveError(error);
   // The file changed on disk (plan 6.5's guard): the user decides which version
-  // to keep, in the save prompt. Not an error, and not Review & Repair's.
+  // to keep, in the save prompt. Not an error.
   if (kind === 'externally-modified') {
     openDialog('save-conflict', { error });
-    return;
-  }
-  const routesToIntegrity =
-    !opts?.skipIntegrityRouting && kind !== 'ignores-unreadable' && kind !== 'read-only-file';
-  if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
-    useProjectStore.getState().openIntegrityDialog();
     return;
   }
   if (!error) return;
@@ -96,31 +79,6 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
     default:
       return error;
   }
-}
-
-/**
- * Whether the autosave-failure banner should render, given the integrity
- * banner's state (`App.tsx`).
- *
- * The default is to YIELD: when saving is integrity-blocked, the integrity
- * banner already tells the "saving is paused, here is the Repair button" story,
- * and docs/notifications.md asks for one surface per event.
- *
- * The exception is a failure Review & Repair cannot fix (#517's unreadable
- * ignore list). That is a DIFFERENT ongoing condition with a different remedy,
- * so the integrity banner is not telling its story - it is hiding it, and the
- * user would be left repairing cross-references while every save is refused for
- * an unrelated reason they were never shown.
- */
-export function shouldShowAutosaveBanner(state: {
-  autosaveFailure: string | null;
-  autosaveFailureKind: SaveErrorKind | null;
-  integritySaveBlocked: boolean;
-  integrityIssueCount: number;
-}): boolean {
-  if (state.autosaveFailure === null) return false;
-  if (state.autosaveFailureKind === 'ignores-unreadable') return true;
-  return !(state.integritySaveBlocked && state.integrityIssueCount > 0);
 }
 
 /**

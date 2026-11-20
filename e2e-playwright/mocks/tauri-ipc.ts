@@ -1115,32 +1115,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // so list_recent_projects reflects renames within a test.
       const recentNameOverrides: Record<string, string> = {};
 
-      // Structural-integrity issues returned by check_project_integrity. Tests
-      // seed these via __MOCK_SET_INTEGRITY_ISSUES__; repair fixes all but the
-      // trailing `mockIntegrityRemaining` detect-only issues.
-      let mockIntegrityIssues: string[] = [];
-      let mockIntegrityRemaining = 0;
-      // Whether the seeded issues block saving (unresolvable cross-references).
-      // Default false so the banner stays dismissable in existing tests.
-      let mockIntegritySaveBlocked = false;
-      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_ISSUES__ = (
-        issues: string[]
-      ) => {
-        mockIntegrityIssues = Array.isArray(issues) ? issues : [];
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_SAVE_BLOCKED__ = (
-        blocked: boolean
-      ) => {
-        mockIntegritySaveBlocked = !!blocked;
-      };
-      // Seed how many of the issues are detect-only (survive repair), so tests
-      // can exercise the "N need manual attention" path.
-      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_REMAINING__ = (
-        n: number
-      ) => {
-        mockIntegrityRemaining = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
-      };
-
       // [#473] Whether the loaded project's undo/redo history was unreadable and
       // discarded. Default false - every existing spec opens a project whose
       // history loads fine, and a banner appearing over them would be a false
@@ -5442,9 +5416,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_project_warnings':
             return [];
 
-          case 'check_project_integrity':
-            return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked };
-
           case 'history_discarded':
             // #473: whether the open project's edit history was unreadable and
             // replaced by an empty stack. A peek, not a take - the real command
@@ -5483,15 +5454,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Whether the discarded history was written by an earlier version of the
             // app (the format before compact undo entries) rather than unreadable.
             return mockHistoryDiscardedEarlier;
-
-          case 'repair_project_integrity': {
-            const total = mockIntegrityIssues.length;
-            const remaining = Math.min(mockIntegrityRemaining, total);
-            const fixed = total - remaining;
-            // Keep the trailing `remaining` issues as detect-only residue.
-            mockIntegrityIssues = mockIntegrityIssues.slice(total - remaining);
-            return { fixed, remaining };
-          }
 
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success

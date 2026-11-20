@@ -530,9 +530,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.save-permission",
     "dialog-cancel.save-permission",
     "dwell.dialog.save-permission",
-    // Structural-integrity IPC commands (check + repair).
-    "command.check_project_integrity",
-    "command.repair_project_integrity",
     // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
     // Only the non-default state ("closureAdjusted") is emitted.
     "action.toggle.geometryMode",
@@ -1226,7 +1223,10 @@ mod tests {
         //       command.take_conversion_notice, command.has_unsaved_changes,
         //       command.project_read_only_reason, and the full per-dialog set
         //       for save-conflict = 752.
-        assert_eq!(EVENT_NAMES.len(), 752);
+        //   - 2 the integrity banner's IPC, unreachable on the station graph
+        //       (every edit and load validates): command.check_project_integrity,
+        //       command.repair_project_integrity = 750.
+        assert_eq!(EVENT_NAMES.len(), 750);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

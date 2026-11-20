@@ -1,6 +1,5 @@
 //! Salvage (plan 6.6): the recovery dialog's "Attempt Repair" and "Export
-//! Salvageable Data" on a file the load refused, and the open project's
-//! integrity Repair.
+//! Salvageable Data" on a file the load refused.
 //!
 //! A version 2 file that parses but breaks the survey's invariants is refused
 //! by the load ("cannot be opened normally") and the recovery dialog offers
@@ -25,15 +24,14 @@
 //! 0.6.0 reader.
 //!
 //! The open project needs neither: the load refuses an invalid file and every
-//! edit validates before it commits, so [`AppState::repair_open_project_integrity`]
-//! has nothing to repair.
+//! edit validates before it commits, so there is nothing to repair in it (0.6.0's
+//! integrity banner and its Repair are gone).
 
 use std::path::{Path, PathBuf};
 
 use super::project_io::{generator, same_file};
 use super::project_restore::name;
 use super::AppState;
-use crate::core::IntegrityRepairResult;
 use crate::models::survey::Project;
 use crate::persistence::stalx_v2::{
     self, decode_salvage, encode, write_atomic, DecodeOptions, Extras, Fingerprint, Format, Guard,
@@ -45,20 +43,6 @@ use crate::persistence::{recovery, RepairResult, SalvagedData};
 const LISTED: usize = 5;
 
 impl AppState {
-    /// Repair the open project's integrity (the integrity banner's Repair).
-    /// The open project always holds the invariants (see the module docs), so
-    /// this reports what is left (nothing, unless a bug let an invalid model
-    /// in) and changes nothing.
-    pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
-        let remaining =
-            u32::try_from(self.integrity_violation_messages().len()).unwrap_or(u32::MAX);
-        IntegrityRepairResult {
-            fixed: 0,
-            remaining,
-            changed: false,
-        }
-    }
-
     /// The recovery dialog's "Attempt Repair" on the file at `path` (see the
     /// module docs). `Err` means nothing was written and says why; an `Ok`
     /// with `success: false` means the file could not be rebuilt (nothing

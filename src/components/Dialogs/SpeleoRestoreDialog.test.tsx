@@ -39,7 +39,6 @@ beforeEach(() => {
   useProjectStore.setState({
     refreshProjectState: refreshProjectStateMock,
     isDirty: false,
-    checkProjectIntegrity: vi.fn(async () => []),
   });
   useSpeleoStore.setState({
     remoteProjectId: 'p1',

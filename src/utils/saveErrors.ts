@@ -28,11 +28,10 @@ export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
  * (#517) - saving would have rebuilt the file without it. Mirrors
  * `IGNORES_UNREADABLE_CODE` in `src-tauri/crates/core/src/core/loading.rs`.
  *
- * Unlike the `FS_*` markers this one exists for ROUTING, not wording: an
- * unmarked failure is sent to Review & Repair whenever `integritySaveBlocked` is
- * set, and Review & Repair repairs cross-references, not a broken
- * `resolved_warnings` table - so without the marker this refusal reaches no
- * surface at all on a project that has both problems.
+ * The message after the marker is already a full sentence, so the surfaces
+ * strip the marker and show the backend's text (`saveFailureMessage`,
+ * `autosaveFailureMessage`). (0.6.0 also needed it for routing, to keep this
+ * refusal out of the integrity banner's Review & Repair, which is gone.)
  */
 export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
 
