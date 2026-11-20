@@ -98,6 +98,12 @@ mod validate_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod ops_closures_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod ops_detach_tests;
 #[cfg(test)]
 #[expect(
