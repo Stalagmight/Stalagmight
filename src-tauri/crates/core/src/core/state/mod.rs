@@ -313,6 +313,8 @@ mod open_undo_bugs_tests;
 )]
 mod partial_import_tests;
 #[cfg(test)]
+mod perf_bench_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
