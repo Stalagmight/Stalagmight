@@ -18991,7 +18991,7 @@ fn test_execute_import_lines_zero_datum_placement_at_non_origin_station() {
 }
 
 #[test]
-fn test_execute_import_lines_rollback_on_failure() {
+fn test_execute_import_lines_keeps_a_line_whose_merge_fails() {
     use crate::models::ImportLineConfig;
     use crate::models::ImportPlacement;
 
@@ -19001,7 +19001,8 @@ fn test_execute_import_lines_rollback_on_failure() {
         location: None,
     });
 
-    // First line succeeds, second fails (merge to nonexistent existing line)
+    // First line succeeds; the second's merge target does not exist. Since
+    // #814 that costs the second line its connection, not the import.
     let lines = vec![
         ImportLineConfig {
             cave_section: None,
@@ -19054,17 +19055,13 @@ fn test_execute_import_lines_rollback_on_failure() {
         Vec::new(),
         VirtualShotMode::Auto,
     );
-    assert!(
-        !result.success,
-        "should fail when merge target doesn't exist"
-    );
+    assert!(result.success, "{:?}", result.error);
 
-    // Project should be rolled back - no lines added
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.lines.len(),
-        0,
-        "rollback should remove all lines from failed import"
+    assert_eq!(project.lines.len(), 2, "both lines import");
+    assert!(
+        project.station_merges.is_empty(),
+        "the failed merge is not made"
     );
 }
 

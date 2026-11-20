@@ -11,12 +11,12 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=38a43fc9c516a4eb98aea76d27f488d1fd87b2a6e91b25ee21904e3a248b9b3d
+Cargo.lock=bf1de9fc3de458d046776ec8a4bad527a40f0d537781cd4719f40979496174dc
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
-gen-third-party-licenses.mjs=5450d2ab535a7ad141d28dd699d64e10b5b513487cfa5906454d4d8af24bd0ba
+gen-third-party-licenses.mjs=8c3d2913546a48e6d10ae3e3f415a3bb14b321e7e2c5b689ee4dea43caeefa9f
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
-vendored-data=28e20e512c62abb53e4b4d75db3e11f7d47115249317907fd3b09daf2eeacf5c
-bundle-body=2162dfed4f2d37973332011069dded30602e0a255ddbafde836825c35afb35ec
+vendored-data=bad1b327c327fe6282c67b53275285ab563b1f14e77e440f270d2b18153fe394
+bundle-body=0fe734427e3c9e538b53e075e7cfa9bc0460878c44bd0872a73909f5e1e3c5ff
 -->
 
 ## npm packages
@@ -1820,7 +1820,7 @@ The dependency graph of the release binary (telemetry features included, dev-dep
 
 ### GNU Affero General Public License v3.0 only
 
-Applies to: `speleodb-api 0.8.0`
+Applies to: `speleodb-api 0.9.0`
 
 ````text
 GNU AFFERO GENERAL PUBLIC LICENSE
@@ -4337,7 +4337,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `igrf 0.2.0`, `jni 0.22.4`, `jni-macros 0.22.4`, `jni-sys-macros 0.4.1`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `minisign-verify 0.2.5`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-osa-kit 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `r-efi 6.0.0`, `rsqlite-vfs 0.2.0`, `rustls-platform-verifier-android 0.2.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-plugin-updater 2.9.0`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
+Applies to: `block2 0.6.2`, `brotli-decompressor 5.0.0`, `cargo_toml 0.22.3`, `cesu8 1.1.0`, `chrono 0.4.42`, `convert_case 0.4.0`, `dispatch 0.2.0`, `dispatch2 0.3.0`, `dlopen2 0.8.2`, `dlopen2_derive 0.4.3`, `dpi 0.1.2`, `fxhash 0.2.1`, `jni 0.22.4`, `jni-macros 0.22.4`, `jni-sys-macros 0.4.1`, `libm 0.2.15`, `mac 0.1.1`, `match_token 0.1.0`, `minisign-verify 0.2.5`, `ndk 0.9.0`, `ndk-context 0.1.1`, `ndk-sys 0.6.0+11769913`, `objc2 0.6.3`, `objc2-app-kit 0.3.2`, `objc2-cloud-kit 0.3.2`, `objc2-core-data 0.3.2`, `objc2-core-foundation 0.3.2`, `objc2-core-graphics 0.3.2`, `objc2-core-image 0.3.2`, `objc2-core-text 0.3.2`, `objc2-core-video 0.3.2`, `objc2-encode 4.1.0`, `objc2-exception-helper 0.1.1`, `objc2-foundation 0.3.2`, `objc2-javascript-core 0.3.2`, `objc2-osa-kit 0.3.2`, `objc2-quartz-core 0.3.2`, `objc2-security 0.3.2`, `objc2-ui-kit 0.3.2`, `objc2-web-kit 0.3.2`, `phf 0.10.1`, `phf 0.8.0`, `phf_codegen 0.8.0`, `phf_generator 0.10.0`, `phf_generator 0.8.0`, `phf_macros 0.10.0`, `phf_shared 0.10.0`, `phf_shared 0.8.0`, `proj4rs 0.1.10`, `r-efi 5.3.0`, `r-efi 6.0.0`, `rsqlite-vfs 0.2.0`, `rustls-platform-verifier-android 0.2.0`, `siphasher 0.3.11`, `siphasher 1.0.1`, `tao-macros 0.1.3`, `tauri 2.9.5`, `tauri-build 2.5.3`, `tauri-codegen 2.5.2`, `tauri-macros 2.5.2`, `tauri-plugin 2.5.2`, `tauri-plugin-dialog 2.5.0`, `tauri-plugin-fs 2.4.5`, `tauri-plugin-opener 2.5.3`, `tauri-plugin-single-instance 2.3.7`, `tauri-plugin-updater 2.9.0`, `tauri-runtime 2.9.2`, `tauri-runtime-wry 2.9.3`, `tauri-utils 2.8.1`, `ts-rs 7.1.1`, `ts-rs-macros 7.1.1`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `wasip2 1.0.1+wasi-0.2.4`, `webview2-com 0.38.2`, `webview2-com-macros 0.8.1`, `webview2-com-sys 0.38.2`, `winapi-i686-pc-windows-gnu 0.4.0`, `winapi-x86_64-pc-windows-gnu 0.4.0`, `windows 0.56.0`, `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.56.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.56.0`, `windows-implement 0.60.2`, `windows-interface 0.56.0`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-result 0.1.2`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.45.0`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.60.2`, `windows-sys 0.61.2`, `windows-targets 0.42.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-targets 0.53.5`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_aarch64_gnullvm 0.42.2`, `windows_aarch64_gnullvm 0.48.5`, `windows_aarch64_gnullvm 0.52.6`, `windows_aarch64_gnullvm 0.53.1`, `windows_aarch64_msvc 0.42.2`, `windows_aarch64_msvc 0.48.5`, `windows_aarch64_msvc 0.52.6`, `windows_aarch64_msvc 0.53.1`, `windows_i686_gnu 0.42.2`, `windows_i686_gnu 0.48.5`, `windows_i686_gnu 0.52.6`, `windows_i686_gnu 0.53.1`, `windows_i686_gnullvm 0.52.6`, `windows_i686_gnullvm 0.53.1`, `windows_i686_msvc 0.42.2`, `windows_i686_msvc 0.48.5`, `windows_i686_msvc 0.52.6`, `windows_i686_msvc 0.53.1`, `windows_x86_64_gnu 0.42.2`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_gnu 0.53.1`, `windows_x86_64_gnullvm 0.42.2`, `windows_x86_64_gnullvm 0.48.5`, `windows_x86_64_gnullvm 0.52.6`, `windows_x86_64_gnullvm 0.53.1`, `windows_x86_64_msvc 0.42.2`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`, `windows_x86_64_msvc 0.53.1`, `zune-core 0.4.12`, `zune-jpeg 0.4.21`
 
 ````text
 MIT License
@@ -6360,6 +6360,34 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+````
+
+### MIT License
+
+Applies to: `igrf 0.2.0`
+
+````text
+MIT License
+
+Copyright (c) 2021 Markus Ast
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ````
 
 ### MIT License
@@ -11391,7 +11419,7 @@ the following restrictions:
 
 ## Vendored data
 
-Data bundled into the frontend that comes from no package manager. Provenance for each part is in the README beside its notice under `third_party/`.
+Data bundled into the app that comes from no package manager. Provenance for each part is in the README beside its notice under `third_party/`.
 
 ### Matplotlib License (colormap tables derived from matplotlib 3.10.7)
 
@@ -11648,4 +11676,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+````
+
+### IGRF-14 geomagnetic model coefficients (IAGA, via NOAA NCEI)
+
+Applies to: `src-tauri/vendor/igrf/data/igrf14coeffs.txt` (magnetic declination for survey imports)
+
+````text
+International Geomagnetic Reference Field, 14th generation (IGRF-14)
+
+Spherical harmonic coefficients produced by the International Association of
+Geomagnetism and Aeronomy (IAGA), Division V, Working Group V-MOD, and
+distributed by NOAA's National Centers for Environmental Information at
+https://www.ngdc.noaa.gov/IAGA/vmod/coeffs/igrf14coeffs.txt
+
+The coefficient file carries no license statement. It is used unmodified to
+compute magnetic declination for survey imports.
 ````

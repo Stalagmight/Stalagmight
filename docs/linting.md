@@ -26,16 +26,16 @@ pinned; do **not** add nightly-only keys (they'd diverge local vs CI).
 
 **Why a loop and not `--all`:** `cargo fmt --all` formats every *path
 dependency* as well as the workspace members, which would reformat the
-deliberately-unformatted vendored `src-tauri/vendor/compass_data` crate. The
+deliberately-unformatted vendored crates under `src-tauri/vendor/`. The
 per-manifest loop touches exactly the workspace's own packages.
 
 **Scope:** the gate formats the `stalagmight` package and the workspace
 members. The separate first-party `scripts/lib/slice-rs` helper crate and the
-vendored, locally-patched `src-tauri/vendor/compass_data` path-dependency are
-**not** gated (vendored code is left as-is on purpose; `compass_data` is also
-explicitly kept out of the workspace via `[workspace] exclude`, so
-`--workspace` commands never touch it) - don't assume `cargo fmt` touched
-them.
+vendored, locally-patched path-dependencies under `src-tauri/vendor/`
+(`compass_data`, and `igrf` carrying the IGRF-14 model) are **not** gated
+(vendored code is left as-is on purpose; both are also explicitly kept out of
+the workspace via `[workspace] exclude`, so `--workspace` commands never touch
+them) - don't assume `cargo fmt` touched them.
 
 The crate was adopted into rustfmt in one mechanical commit (recorded in
 `.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with

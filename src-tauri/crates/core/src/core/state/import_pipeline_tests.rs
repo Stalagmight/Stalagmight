@@ -1195,3 +1195,165 @@ fn a_bounded_virtual_shot_imports_as_a_jump_and_a_dangling_one_as_a_reference() 
         ]
     );
 }
+
+/// One Ariane row for the #812 tests, at a depth of 5 m, in the Ariane
+/// section (an import line) `line`. `length` is the raw
+/// `<Length>` text, so a test can write `NaN`; `excluded` is the `<Excluded>` flag.
+fn tml_row(id: i64, from: i64, ty: &str, line: &str, length: &str, excluded: bool) -> String {
+    tml_row_at(id, from, ty, line, length, excluded, 5.0)
+}
+
+/// [`tml_row`] with the row's `<Depth>` given.
+fn tml_row_at(
+    id: i64,
+    from: i64,
+    ty: &str,
+    line: &str,
+    length: &str,
+    excluded: bool,
+    depth: f64,
+) -> String {
+    format!(
+        r"<SurveyData>
+    <ID>{id}</ID><FromID>{from}</FromID><ClosureToID>-1</ClosureToID>
+    <Type>{ty}</Type><Section>{line}</Section>
+    <Azimut>90.0</Azimut><Length>{length}</Length><Depth>{depth}</Depth><DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination><Left>0.0</Left><Right>0.0</Right><Up>0.0</Up><Down>0.0</Down>
+    <Comment></Comment><Explorer>Tester</Explorer><Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color><Excluded>{excluded}</Excluded>
+    <Latitude>0.0</Latitude><Longitude>0.0</Longitude>
+</SurveyData>"
+    )
+}
+
+/// Runs `rows` through the real TML import into a fresh project and returns
+/// the project plus the importer's receipt warnings. Panics with the import
+/// error, so a red test names the failure the user saw.
+fn import_tml_rows(rows: &[String]) -> (crate::models::Project, Vec<String>) {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+
+    let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &rows.join("\n")));
+    let (lines, closures, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Zero Length".to_string(),
+        location: None,
+    });
+    let result = state.execute_tml_import_sections(
+        lines,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        None,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+    (state.get_project_state().unwrap(), warnings)
+}
+
+fn tie_warning(warnings: &[String]) -> Option<&String> {
+    warnings.iter().find(|w| w.contains("had no usable length"))
+}
+
+/// #812: one zero-length row in the middle of a line used to fail the
+/// whole import ("Shot N:2 has zero length") and leave the project empty. It
+/// now imports as a coincident tie, the shots on either side stay one chain,
+/// and the receipt says so once.
+#[test]
+fn a_zero_length_row_mid_line_imports_as_a_coincident_tie() {
+    let (project, warnings) = import_tml_rows(&[
+        tml_row(0, -1, "START", "Main", "0.0", false),
+        tml_row(1, 0, "REAL", "Main", "10.0", false),
+        tml_row(2, 1, "REAL", "Main", "0.0", false),
+        tml_row(3, 2, "REAL", "Main", "10.0", false),
+    ]);
+    assert_eq!(project.lines.len(), 1, "the line must import whole");
+    let lengths: Vec<f64> = project.lines[0].shots.iter().map(|s| s.length).collect();
+    assert_eq!(
+        lengths,
+        vec![10.0, crate::parsers::geo::COINCIDENT_TIE_EPSILON_M, 10.0]
+    );
+    let note = tie_warning(&warnings).expect("the receipt must name the nudged row");
+    assert!(note.starts_with("1 shot in the file "), "{note}");
+}
+
+/// #812: the zero-length row is the FIRST row of a branch line, the shape
+/// the user's error ("Shot 14:1") pointed at. Both lines import.
+#[test]
+fn a_zero_length_first_row_of_a_branch_imports_as_a_coincident_tie() {
+    let (project, warnings) = import_tml_rows(&[
+        tml_row(0, -1, "START", "Main", "0.0", false),
+        tml_row(1, 0, "REAL", "Main", "10.0", false),
+        tml_row(2, 1, "REAL", "Main", "10.0", false),
+        tml_row(3, 1, "REAL", "Branch", "0.0", false),
+        tml_row(4, 3, "REAL", "Branch", "10.0", false),
+    ]);
+    let shots: usize = project.lines.iter().map(|s| s.shots.len()).sum();
+    assert_eq!(shots, 4, "every REAL row must land as a shot");
+    let lengths: Vec<f64> = project
+        .lines
+        .iter()
+        .flat_map(|s| &s.shots)
+        .map(|s| s.length)
+        .collect();
+    assert!(
+        lengths.contains(&crate::parsers::geo::COINCIDENT_TIE_EPSILON_M),
+        "{lengths:?}"
+    );
+    assert!(tie_warning(&warnings).is_some(), "{warnings:?}");
+}
+
+/// #812: an unreadable length (`NaN`, which the parser reads as 0) takes the
+/// same path instead of failing the import; an EXCLUDED zero-length row is not
+/// imported, so it is not counted either.
+#[test]
+fn an_unreadable_length_is_a_tie_and_an_excluded_zero_row_is_not_counted() {
+    let (project, warnings) = import_tml_rows(&[
+        tml_row(0, -1, "START", "Main", "0.0", false),
+        tml_row(1, 0, "REAL", "Main", "NaN", false),
+        tml_row(2, 1, "REAL", "Main", "10.0", false),
+        tml_row(3, 2, "REAL", "Main", "0.0", true),
+    ]);
+    assert_eq!(project.lines[0].shots.len(), 2);
+    let note = tie_warning(&warnings).expect("the NaN row must be reported");
+    assert!(note.starts_with("1 shot in the file "), "{note}");
+}
+
+/// A file with no bad rows says nothing about ties: the receipt line is not a
+/// standing fixture of every import.
+#[test]
+fn a_clean_file_has_no_tie_warning() {
+    let (_, warnings) = import_tml_rows(&[
+        tml_row(0, -1, "START", "Main", "0.0", false),
+        tml_row(1, 0, "REAL", "Main", "10.0", false),
+    ]);
+    assert!(tie_warning(&warnings).is_none(), "{warnings:?}");
+}
+
+/// #812: a NEGATIVE length takes the tie path too (`create_line` rejects a
+/// negative shot just as it rejects a zero one), and a tie keeps the depth step
+/// its two ends record: only the horizontal offset collapses.
+#[test]
+fn a_negative_length_with_a_depth_step_is_a_tie_that_keeps_its_depth() {
+    let (project, warnings) = import_tml_rows(&[
+        tml_row_at(0, -1, "START", "Main", "0.0", false, 5.0),
+        tml_row_at(1, 0, "REAL", "Main", "10.0", false, 5.0),
+        tml_row_at(2, 1, "REAL", "Main", "-3.0", false, 8.0),
+        tml_row_at(3, 2, "REAL", "Main", "10.0", false, 8.0),
+    ]);
+    let shots = &project.lines[0].shots;
+    let lengths: Vec<f64> = shots.iter().map(|s| s.length).collect();
+    assert_eq!(
+        lengths,
+        vec![10.0, crate::parsers::geo::COINCIDENT_TIE_EPSILON_M, 10.0]
+    );
+    let step = shots[1].depth_out - shots[1].depth_in;
+    assert!(
+        (step - 3.0).abs() < 1e-9,
+        "the tie must keep its 3 m depth step, got {step}"
+    );
+    let note = tie_warning(&warnings).expect("the negative row must be reported");
+    assert!(note.starts_with("1 shot in the file "), "{note}");
+}

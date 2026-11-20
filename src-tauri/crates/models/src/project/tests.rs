@@ -14980,6 +14980,84 @@ fn count_unanchored_lines_counts_every_member_of_a_merged_orphan_component() {
     assert_eq!(project.count_unanchored_lines(&[a]), 2);
 }
 
+/// #814: an ALIGNED loop closure places a piece as a merge does (the offset
+/// cascade follows it), so a line tied to the placed survey only by one is
+/// not floating. An unaligned closure constrains nothing, so it still is.
+#[test]
+fn unanchored_line_groups_follows_aligned_closures_not_inert_ones() {
+    for (is_aligned, expected_floating) in [(true, 0), (false, 1)] {
+        let mut project = Project::new("Closure-tied".to_string(), None);
+        let placed = project
+            .add_line(LineData {
+                shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let tied = project
+            .add_line(LineData {
+                shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(placed, 0).into(),
+            gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
+        });
+        project.loop_closures.push(test_closure(
+            1,
+            StationRef::new(placed, 1).into(),
+            StationRef::new(tied, 0).into(),
+            ClosureStrategy::Move,
+            is_aligned,
+        ));
+        let floating = project.unanchored_line_groups();
+        assert_eq!(
+            floating.len(),
+            expected_floating,
+            "aligned={is_aligned}: {floating:?}"
+        );
+    }
+}
+
+/// #814: the groups list every member once, in project order, and a project
+/// with no datum has none.
+#[test]
+fn unanchored_line_groups_lists_each_floating_group_once() {
+    let mut project = Project::new("Groups".to_string(), None);
+    let ids: Vec<_> = (0..4)
+        .map(|_| {
+            project
+                .add_line(LineData {
+                    shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+                    ..Default::default()
+                })
+                .id
+        })
+        .collect();
+    assert!(
+        project.unanchored_line_groups().is_empty(),
+        "no datum anywhere"
+    );
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(ids[0], 0).into(),
+        gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
+    });
+    // ids[3] merged onto ids[1]: one floating group of two, plus ids[2].
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(ids[3], 0).into(),
+        station_b: StationRef::new(ids[1], 0).into(),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(
+        project.unanchored_line_groups(),
+        vec![vec![ids[1], ids[3]], vec![ids[2]]]
+    );
+}
+
 #[test]
 fn count_unanchored_lines_treats_a_datum_reached_through_a_merge_as_anchored() {
     let mut project = Project::new("MergedAnchored".to_string(), None);

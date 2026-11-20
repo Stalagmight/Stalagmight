@@ -27,11 +27,60 @@ pub enum VirtualShotMode {
 }
 use std::sync::Mutex;
 
+/// What an import does when one line cannot be created or placed (#814).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefusedLine {
+    /// Leave it out (or unconnected), name it in the receipt, import the rest.
+    SkipAndReport,
+    /// Roll the whole import back, as every import did before #814.
+    FailImport,
+}
+
 /// Which per-station text map an import config entry lands in.
 #[derive(Clone, Copy)]
 enum StationText {
     Comment,
     Name,
+}
+
+/// How a line the file names reads in an import receipt (#814): its name
+/// from the file, sanitised like every file-controlled receipt string, or its
+/// position when it has none.
+fn receipt_line_name(config: &crate::models::ImportLineConfig, idx: usize) -> String {
+    crate::models::sanitize_display_text(
+        &config
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Line {}", idx + 1)),
+        crate::core::command::MAX_FILE_NAME_LEN,
+    )
+}
+
+/// The receipt entry for a line that imported but whose placement failed.
+fn unplaced_problem(line_name: &str, what: &str, error: Option<String>) -> String {
+    match error {
+        Some(reason) if !reason.is_empty() => {
+            format!("Line \"{line_name}\" was imported, but {what}: {reason}")
+        }
+        _ => format!("Line \"{line_name}\" was imported, but {what}"),
+    }
+}
+
+/// The failure message when no line of the file could be imported, naming
+/// the first few reasons (#814).
+fn nothing_imported_message(skipped: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut message = "Nothing was imported: no line in the file could be imported.".to_string();
+    for line in skipped.iter().take(SHOWN) {
+        message.push(' ');
+        message.push_str(line);
+        message.push('.');
+    }
+    if skipped.len() > SHOWN {
+        let more = skipped.len() - SHOWN;
+        message = format!("{message} ({more} more lines were not imported.)");
+    }
+    message
 }
 
 /// Tally closure-creation results from a `create_loop_closures_batch` call,
@@ -372,6 +421,33 @@ impl AppState {
             existing_shot_updates,
             mode,
             None,
+            RefusedLine::SkipAndReport,
+        )
+    }
+
+    /// [`Self::execute_import_lines`] for the DMP import wizard, which
+    /// still needs the whole import or nothing: it maps the returned
+    /// `line_ids` onto its configs by position, records a content hash per
+    /// selected line, and sends overlap edits to existing shots that belong
+    /// to particular incoming lines. A skipped or unconnected line would
+    /// break all three, so here any one rolls the import back (#814).
+    pub fn execute_import_lines_all_or_nothing(
+        &self,
+        lines: Vec<crate::models::ImportLineConfig>,
+        file_hash: Option<String>,
+        line_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+    ) -> CommandResult {
+        self.execute_import_lines_inner(
+            lines,
+            Vec::new(),
+            file_hash,
+            line_hashes,
+            existing_shot_updates,
+            mode,
+            None,
+            RefusedLine::FailImport,
         )
     }
 
@@ -397,6 +473,7 @@ impl AppState {
             existing_shot_updates,
             mode,
             surface_elevation,
+            RefusedLine::SkipAndReport,
         )
     }
 
@@ -409,6 +486,7 @@ impl AppState {
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
+        on_refused: RefusedLine,
     ) -> CommandResult {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
@@ -792,6 +870,15 @@ impl AppState {
         // claim of completeness the receipt doesn't back up.
         let mut zero_datum_created: Option<String> = None;
         let mut zero_datum_count: u32 = 0;
+        // Receipt entries for what one bad line cost (#814): lines the
+        // project refused and skipped, and lines imported but left
+        // unconnected because their placement could not be made.
+        let mut skipped_lines: Vec<String> = Vec::new();
+        let mut unconnected_lines: Vec<String> = Vec::new();
+        // Shots in the lines that landed, for the receipt: a skipped
+        // line's shots were never imported, so summing the configs would
+        // overstate a partial import.
+        let mut imported_shot_count: u32 = 0;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -914,17 +1001,29 @@ impl AppState {
             };
 
             // Step 1: Create the line
+            let line_name = receipt_line_name(config, idx);
             let t_create_start = std::time::Instant::now();
             let create_result = self.create_line(line_data.clone());
             create_total += t_create_start.elapsed();
             if !create_result.success {
-                // Rollback to before-snapshot
-                self.rollback_project(&before_snapshot);
-                return CommandResult::failure(format!(
-                    "Failed to create line \"{}\": {}",
-                    config.name.as_deref().unwrap_or("unnamed"),
-                    create_result.error.unwrap_or_default()
-                ));
+                // One line the project cannot hold costs the user that
+                // line, never the rest of the file (#814). `create_line`
+                // refuses before it adds anything, so there is nothing to undo:
+                // skip it, say so in the receipt, and import the others.
+                let reason = create_result.error.unwrap_or_default();
+                tracing::debug!(
+                    line = idx,
+                    %reason,
+                    purpose = "import every line that can be imported (#814)",
+                    "Line refused; skipping it and importing the rest"
+                );
+                skipped_lines.push(format!("Line \"{line_name}\" was not imported: {reason}"));
+                // All-or-nothing gives up on the first problem; the rest of
+                // the file would only be built to be rolled back.
+                if on_refused == RefusedLine::FailImport {
+                    break;
+                }
+                continue;
             }
 
             let Some(line_id) = create_result.line_id else {
@@ -958,6 +1057,7 @@ impl AppState {
 
             created_ids.insert(config.line_index, line_id);
             all_line_ids.push(line_id);
+            imported_shot_count += config.shots.len() as u32;
             all_warnings.extend(create_result.warnings);
 
             // Keep a reversed line where the un-reversed import would have put
@@ -1055,152 +1155,158 @@ impl AppState {
 
             // Step 2: Apply placement
             let t_placement_start = std::time::Instant::now();
-            match &config.placement {
-                ImportPlacement::Origin => {
-                    // No-op - line starts at origin
-                }
-
-                ImportPlacement::ZeroDatum {
-                    coordinates,
-                    station_index,
-                } => {
-                    let station_ref = StationRef::new(line_id, *station_index);
-                    let result = self.set_zero_datum(station_ref, *coordinates, None, None);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to set zero datum for line \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
+            // A placement that cannot be made leaves the line imported where
+            // `create_line` put it, unconnected, with a receipt line (#814):
+            // each command below refuses before it changes anything, so breaking
+            // out here leaves nothing half-done. The failed command is not
+            // recorded in `batch_commands`.
+            'placement: {
+                match &config.placement {
+                    ImportPlacement::Origin => {
+                        // No-op - line starts at origin
                     }
-                    all_warnings.extend(result.warnings);
-                    zero_datum_count += 1;
-                    if zero_datum_created.is_none() {
-                        // Sanitized HERE, where the raw file-controlled name is
-                        // born, not only in `decorate_receipt`: the DMP
-                        // wizard's `import_lines` IPC command never calls
-                        // `decorate_receipt` (it overwrites source_format/
-                        // file_name/lines_found directly), so that route's
-                        // receipt would otherwise carry a raw
-                        // `ImportLineConfig::name` straight from the parsed
-                        // file end to end. `sanitize_display_text` is
-                        // idempotent (filter then clamp), so decorate_receipt
-                        // sanitizing this value again for the routes that DO
-                        // call it is a harmless no-op, not a second transform.
-                        zero_datum_created = Some(crate::models::sanitize_display_text(
-                            &config
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| format!("Line {}", idx + 1)),
-                            crate::core::command::MAX_FILE_NAME_LEN,
-                        ));
-                    }
-                    batch_commands.push(Command::SetZeroDatum {
-                        station_ref,
-                        coordinates: *coordinates,
-                        accuracy_m: None,
-                        entrance: None,
-                    });
-                }
 
-                ImportPlacement::FromExisting {
-                    import_station,
-                    existing_station,
-                } => {
-                    let import_ref = StationRef::new(line_id, *import_station);
-                    let result = self.merge_stations(import_ref, *existing_station);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to merge line \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
-                    }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: *existing_station,
-                    });
-                }
-
-                ImportPlacement::FromImporting {
-                    import_station,
-                    target_line_index,
-                    target_station_index,
-                } => {
-                    let Some(&target_line_id) = created_ids.get(target_line_index) else {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Line \"{}\" references import line index {} which has not been created yet",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            target_line_index
-                        ));
-                    };
-                    let import_ref = StationRef::new(line_id, *import_station);
-                    let target_ref = StationRef::new(target_line_id, *target_station_index);
-                    let result = self.merge_stations(import_ref, target_ref);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to merge line \"{}\" with imported line: {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
-                    }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: target_ref,
-                    });
-                }
-
-                ImportPlacement::Manual {
-                    align_station_index: _,
-                    offset,
-                } => {
-                    if let Some(offset) = offset {
-                        let result = self.move_line(line_id, *offset);
+                    ImportPlacement::ZeroDatum {
+                        coordinates,
+                        station_index,
+                    } => {
+                        let station_ref = StationRef::new(line_id, *station_index);
+                        let result = self.set_zero_datum(station_ref, *coordinates, None, None);
                         if !result.success {
-                            self.rollback_project(&before_snapshot);
-                            return CommandResult::failure(format!(
-                                "Failed to move line \"{}\": {}",
-                                config.name.as_deref().unwrap_or("unnamed"),
-                                result.error.unwrap_or_default()
+                            unconnected_lines.push(unplaced_problem(
+                                &line_name,
+                                "its zero datum could not be set",
+                                result.error,
                             ));
+                            break 'placement;
                         }
                         all_warnings.extend(result.warnings);
-                        batch_commands.push(Command::MoveLine {
-                            line_id,
-                            offset: *offset,
+                        zero_datum_count += 1;
+                        if zero_datum_created.is_none() {
+                            // Sanitized where the raw file-controlled name is
+                            // born (`receipt_line_name`), not only in
+                            // `decorate_receipt`: the DMP
+                            // wizard's `import_lines` IPC command never calls
+                            // `decorate_receipt` (it overwrites source_format/
+                            // file_name/lines_found directly), so that route's
+                            // receipt would otherwise carry a raw
+                            // `ImportLineConfig::name` straight from the parsed
+                            // file end to end. `sanitize_display_text` is
+                            // idempotent (filter then clamp), so decorate_receipt
+                            // sanitizing this value again for the routes that DO
+                            // call it is a harmless no-op, not a second transform.
+                            zero_datum_created = Some(line_name.clone());
+                        }
+                        batch_commands.push(Command::SetZeroDatum {
+                            station_ref,
+                            coordinates: *coordinates,
+                            accuracy_m: None,
+                            entrance: None,
+                        });
+                    }
+
+                    ImportPlacement::FromExisting {
+                        import_station,
+                        existing_station,
+                    } => {
+                        let import_ref = StationRef::new(line_id, *import_station);
+                        let result = self.merge_stations(import_ref, *existing_station);
+                        if !result.success {
+                            unconnected_lines.push(unplaced_problem(
+                                &line_name,
+                                "its connection to the existing survey could not be made",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: *existing_station,
+                        });
+                    }
+
+                    ImportPlacement::FromImporting {
+                        import_station,
+                        target_line_index,
+                        target_station_index,
+                    } => {
+                        // The line it joins may have been refused above (or come
+                        // later in the list): this one still imports, on its own.
+                        let Some(&target_line_id) = created_ids.get(target_line_index) else {
+                            unconnected_lines.push(format!(
+                                "Line \"{line_name}\" was imported on its own: the line \
+                                 it joins was not imported"
+                            ));
+                            break 'placement;
+                        };
+                        let import_ref = StationRef::new(line_id, *import_station);
+                        let target_ref = StationRef::new(target_line_id, *target_station_index);
+                        let result = self.merge_stations(import_ref, target_ref);
+                        if !result.success {
+                            unconnected_lines.push(unplaced_problem(
+                                &line_name,
+                                "its connection to the line it joins could not be made",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: target_ref,
+                        });
+                    }
+
+                    ImportPlacement::Manual {
+                        align_station_index: _,
+                        offset,
+                    } => {
+                        if let Some(offset) = offset {
+                            let result = self.move_line(line_id, *offset);
+                            if !result.success {
+                                unconnected_lines.push(unplaced_problem(
+                                    &line_name,
+                                    "it could not be moved to where it was placed",
+                                    result.error,
+                                ));
+                                break 'placement;
+                            }
+                            all_warnings.extend(result.warnings);
+                            batch_commands.push(Command::MoveLine {
+                                line_id,
+                                offset: *offset,
+                            });
+                        }
+                    }
+
+                    ImportPlacement::ManualSnap {
+                        align_station_index,
+                        snapped_to_station,
+                    } => {
+                        let snap_index = (*align_station_index).min(config.shots.len() as u32);
+                        let import_ref = StationRef::new(line_id, snap_index);
+                        let result = self.merge_stations(import_ref, *snapped_to_station);
+                        if !result.success {
+                            unconnected_lines.push(unplaced_problem(
+                                &line_name,
+                                "it could not be snapped to its station",
+                                result.error,
+                            ));
+                            break 'placement;
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MergeStations {
+                            station_a: import_ref,
+                            station_b: *snapped_to_station,
                         });
                     }
                 }
-
-                ImportPlacement::ManualSnap {
-                    align_station_index,
-                    snapped_to_station,
-                } => {
-                    let snap_index = (*align_station_index).min(config.shots.len() as u32);
-                    let import_ref = StationRef::new(line_id, snap_index);
-                    let result = self.merge_stations(import_ref, *snapped_to_station);
-                    if !result.success {
-                        self.rollback_project(&before_snapshot);
-                        return CommandResult::failure(format!(
-                            "Failed to snap line \"{}\": {}",
-                            config.name.as_deref().unwrap_or("unnamed"),
-                            result.error.unwrap_or_default()
-                        ));
-                    }
-                    all_warnings.extend(result.warnings);
-                    batch_commands.push(Command::MergeStations {
-                        station_a: import_ref,
-                        station_b: *snapped_to_station,
-                    });
-                }
             }
             placement_total += t_placement_start.elapsed();
+            if on_refused == RefusedLine::FailImport && !unconnected_lines.is_empty() {
+                break;
+            }
             let _ = t_line_start;
 
             // [perf-debug] Periodic log: emit every `report_every` lines.
@@ -1238,6 +1344,37 @@ impl AppState {
             purpose = "TML import loop summary",
             "execute_import_lines per-line loop done"
         );
+
+        // One log line per import, not per refused line: a hostile file
+        // controls how many lines it refuses.
+        if !skipped_lines.is_empty() || !unconnected_lines.is_empty() {
+            tracing::warn!(
+                refused = skipped_lines.len(),
+                unconnected = unconnected_lines.len(),
+                purpose = "import every line that can be imported (#814)",
+                "Some lines were left out or imported unconnected"
+            );
+        }
+
+        // A caller that needs the whole import or nothing gets it: the first
+        // thing that went wrong becomes the error, and nothing is kept.
+        if on_refused == RefusedLine::FailImport {
+            if let Some(first) = skipped_lines.iter().chain(&unconnected_lines).next() {
+                self.rollback_project(&before_snapshot);
+                return CommandResult::failure(format!(
+                    "The import was undone and nothing was kept, because one line \
+                     could not be imported whole. {first}"
+                ));
+            }
+        }
+
+        // Every line refused: there is no partial import to keep, so this is
+        // the one per-line outcome that still fails the import, naming why
+        // (#814). The rollback also undoes the overlap updates applied above.
+        if all_line_ids.is_empty() {
+            self.rollback_project(&before_snapshot);
+            return CommandResult::failure(nothing_imported_message(&skipped_lines));
+        }
 
         // Lift the deferral (clears the flag now so `cascade_connection_offsets`
         // is allowed to run) and execute ONE cascade across every newly
@@ -1339,7 +1476,10 @@ impl AppState {
             closures_failed += failed;
         }
 
-        // Track file hash if provided (before after-snapshot so it's part of the undo)
+        // Track file hash if provided (before after-snapshot so it's part of the undo).
+        // Kept on a partial import, unlike the line hashes: part of the
+        // file did land, so re-importing the same unchanged file should be
+        // flagged; a file fixed to bring the lost line in hashes differently.
         if let Some(ref hash) = file_hash {
             let track_result = self.track_imported_file(hash.clone());
             if !track_result.success {
@@ -1352,8 +1492,11 @@ impl AppState {
             }
         }
 
-        // Track line content hashes (before after-snapshot so undo reverts them)
-        if !line_hashes.is_empty() {
+        // Track line content hashes (before after-snapshot so undo reverts them).
+        // Not when a line was skipped: the list is per selected line, not
+        // per landed one, and recording a refused line as imported would
+        // hide it from the next import of the same file (#814).
+        if !line_hashes.is_empty() && skipped_lines.is_empty() {
             let track_result = self.track_line_hashes(line_hashes);
             if !track_result.success {
                 tracing::warn!(
@@ -1481,8 +1624,12 @@ impl AppState {
         // project. Set-only; no-op for local-only.
         self.mark_remote_forward_edit();
 
-        let shot_count: u32 = lines.iter().map(|s| s.shots.len() as u32).sum();
+        let shot_count = imported_shot_count;
         let closures_requested = closures.len() as u32;
+        // What the file lost has its own receipt field, which the dialog shows
+        // in full above the warnings: it is what the user most needs to read.
+        let mut line_problems = skipped_lines;
+        line_problems.extend(unconnected_lines);
         let mut receipt_warnings = Vec::new();
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
@@ -1524,6 +1671,7 @@ impl AppState {
             warnings: receipt_warnings,
             info: Vec::new(),
             zero_datum_created,
+            line_problems: (!line_problems.is_empty()).then_some(line_problems),
         };
         receipt.cap_warnings();
 

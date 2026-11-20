@@ -250,9 +250,10 @@ pub fn import_lines(
         purpose = "batch import with overlap updates",
         "import_lines called",
     );
-    let mut result = state.execute_import_lines(
+    // The DMP wizard's route: still the whole import or nothing (#814), see
+    // `execute_import_lines_all_or_nothing`.
+    let mut result = state.execute_import_lines_all_or_nothing(
         lines,
-        Vec::new(),
         file_hash,
         line_hashes.unwrap_or_default(),
         updates,
@@ -936,6 +937,7 @@ mod receipt_tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            line_problems: None,
         })
     }
 
