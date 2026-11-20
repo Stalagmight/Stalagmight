@@ -325,7 +325,11 @@ fn a_display_toggle_rewrites_from_the_kept_bytes_and_reads_the_file_once() {
         f.saved_bytes = Some((other, std::sync::Arc::from(&b"other"[..])));
     });
     state.save_display_setting("showGrid", "false").unwrap();
-    let decoded = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
+    let decoded = stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(decoded.project.name, "K0");
     assert_eq!(
         decoded

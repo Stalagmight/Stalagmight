@@ -789,10 +789,16 @@ fn restore_chain_station(
 /// `name (n)`, the suffix Add .stalx gives a colliding name.
 fn rename_section(p: &mut Project, id: SectionId, name: &str, repairs: &mut Vec<Repair>) {
     let taken: BTreeSet<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
-    let fresh = (2u64..)
-        .map(|n| format!("{name} ({n})"))
-        .find(|candidate| !taken.contains(candidate.as_str()));
-    let (Some(fresh), Some(section)) = (fresh, p.sections.iter_mut().find(|s| s.id == id)) else {
+    // `taken` is finite, so some suffix is free.
+    let mut n = 2u64;
+    let fresh = loop {
+        let candidate = format!("{name} ({n})");
+        if !taken.contains(candidate.as_str()) {
+            break candidate;
+        }
+        n += 1;
+    };
+    let Some(section) = p.sections.iter_mut().find(|s| s.id == id) else {
         return;
     };
     section.name.clone_from(&fresh);

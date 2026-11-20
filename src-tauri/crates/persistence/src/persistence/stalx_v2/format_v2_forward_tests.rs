@@ -78,7 +78,7 @@ fn a_new_key_on_every_record_opens_read_only_at_any_size() {
         text_of(&encode(&survey(over, 3), &Extras::default(), Mode::Normal).unwrap()).to_string();
     let shots = with_row_extras(&base, r#"{"zz_future":1}"#);
     let decoded = open(&shots);
-    let reason = decoded.read_only().expect("read-only, not refused");
+    let reason = decoded.read_only().unwrap();
     assert_eq!(reason.unknown_content_total, over);
     assert_eq!(decoded.project.lines()[0].shots.len(), over);
 
@@ -93,7 +93,7 @@ fn a_new_key_on_every_record_opens_read_only_at_any_size() {
     .to_string();
     let sections = base.replace("\"#123456\"}", "\"#123456\",\"zz_future\":1}");
     let decoded = open(&sections);
-    let reason = decoded.read_only().expect("read-only, not refused");
+    let reason = decoded.read_only().unwrap();
     assert_eq!(reason.unknown_content_total, over);
     assert_eq!(decoded.project.sections.len(), over);
 }
@@ -285,7 +285,7 @@ fn the_closure_counter_is_range_checked() {
     let mut past = p.clone();
     past.counters.next_closure_id = MAX_CLOSURE_ID + 1;
     assert!(!past.is_valid());
-    let mut last_id = p.clone();
+    let mut last_id = p;
     last_id.closures[0].id = MAX_CLOSURE_ID;
     assert!(last_id.validate().contains(&Violation::IdOutOfRange {
         kind: CounterKind::Closure,
@@ -365,7 +365,7 @@ fn a_different_solver_is_surfaced_only_through_requires() {
 
     let visible = bumped.replacen("\"requires\":[]", "\"requires\":[\"solver-2-layout\"]", 1);
     let decoded = open(&visible);
-    let reason = decoded.read_only().expect("read-only with the banner");
+    let reason = decoded.read_only().unwrap();
     assert_eq!(reason.unknown_features, vec!["solver-2-layout".to_string()]);
     assert!(reason
         .to_string()
