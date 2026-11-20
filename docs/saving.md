@@ -103,10 +103,11 @@ modification time and SHA-256: the save guard below), and sniffs it
   the global config. The history is always dropped, with the
   "earlier version" banner. When the verification found stations that moved
   (a torn legacy merge collapsed into one station) or an unexplained raw
-  difference, a one-time conversion notice is kept (Computed View differences
-  are logged and in the report, not in the notice): "Converted from the old file format; N
-  stations moved by up to X m; the original is kept in Recovery."
-  (`AppState::take_conversion_notice`, shown as a banner).
+  difference, a one-time conversion notice is kept: "Converted from the old
+  file format; N stations moved by up to X m; the original is kept in
+  Recovery." (`AppState::take_conversion_notice`, shown as a banner).
+  Computed View differences are logged and kept in the migration report,
+  never in the notice.
 
 Load is pure: the project in memory is exactly what the file says. Nothing is
 healed, re-solved or rewritten on open; a legacy file stays untouched until a
