@@ -54,10 +54,14 @@
 //! ```
 //!
 //! `STALAGMIGHT_CHAR_ONLY=name,name` runs only the named scenarios. A step
-//! whose outcome differs from its expectation, or a scenario that panics, is
-//! listed in `mismatches.json` and fails the test once everything is
-//! written. Compare two output directories with
-//! `node scripts/dev/compare-characterization.mjs <old> <new>`.
+//! whose outcome differs from its expectation, a scenario that panics, or a
+//! full undo/redo round trip that does not come back identical is listed in
+//! `mismatches.json` and fails the test once everything is written. Compare
+//! two output directories with
+//! `node scripts/dev/compare-characterization.mjs <old> <new>` (`--canon`
+//! across the station-graph switch). The same scenarios also run in the
+//! normal test run, into a temporary directory, as a gate on those three
+//! failure kinds (`every_characterisation_scenario_does_what_it_expects`).
 //!
 //! The scenario functions only speak `Command`, the `AppState` recipes and
 //! positional handles (`StationRef` slots, line ids, shots by position); they
@@ -1029,6 +1033,11 @@ impl Script {
             self.rec.mismatch(format!(
                 "roundtrip: undone {undone}, redone {redone}, undo errors {undo_errors:?}, \
                  redo errors {redo_errors:?}"
+            ));
+        }
+        if !differing.is_empty() {
+            self.rec.mismatch(format!(
+                "roundtrip: {differing:?} differ after undoing and redoing everything"
             ));
         }
         let value = json!({
@@ -2228,30 +2237,21 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("credit-edits", credit_edits),
 ];
 
-#[test]
-#[ignore = "on demand: writes characterisation goldens to $STALAGMIGHT_CHAR_OUT"]
-fn characterization_dump() {
-    let out = PathBuf::from(
-        std::env::var("STALAGMIGHT_CHAR_OUT")
-            .expect("set STALAGMIGHT_CHAR_OUT to an output directory"),
-    );
-    std::fs::create_dir_all(&out).expect("create the output directory");
-    let only: Option<Vec<String>> = std::env::var("STALAGMIGHT_CHAR_ONLY")
-        .ok()
-        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+/// Run the scenarios (all, or the ones named in `only`) into `out`, write
+/// `manifest.json` and `mismatches.json` there, and return the scenarios run
+/// and the mismatches.
+fn dump_scenarios(out: &Path, only: Option<&[String]>) -> (Vec<&'static str>, Vec<String>) {
+    std::fs::create_dir_all(out).expect("create the output directory");
     let temp = TempDir::new().expect("temp dir");
 
     let mut ran = Vec::new();
     let mut mismatches = Vec::new();
     for (name, scenario) in SCENARIOS {
-        if only
-            .as_ref()
-            .is_some_and(|only| !only.iter().any(|o| o == name))
-        {
+        if only.is_some_and(|only| !only.iter().any(|o| o == name)) {
             continue;
         }
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut script = Script::new(&out, temp.path(), name);
+            let mut script = Script::new(out, temp.path(), name);
             scenario(&mut script);
             script.finish()
         }));
@@ -2284,12 +2284,44 @@ fn characterization_dump() {
     let mut text = serde_json::to_string_pretty(&mismatches).expect("serialize mismatches");
     text.push('\n');
     std::fs::write(out.join("mismatches.json"), text).expect("write mismatches");
+    (ran, mismatches)
+}
 
+#[test]
+#[ignore = "on demand: writes characterisation goldens to $STALAGMIGHT_CHAR_OUT"]
+fn characterization_dump() {
+    let out = PathBuf::from(
+        std::env::var("STALAGMIGHT_CHAR_OUT")
+            .expect("set STALAGMIGHT_CHAR_OUT to an output directory"),
+    );
+    let only: Option<Vec<String>> = std::env::var("STALAGMIGHT_CHAR_ONLY")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+    let (ran, mismatches) = dump_scenarios(&out, only.as_deref());
     println!(
         "characterisation: {} scenarios -> {}",
         ran.len(),
         out.display()
     );
+    assert!(
+        mismatches.is_empty(),
+        "steps that did not do what they expected:\n{}",
+        mismatches.join("\n")
+    );
+}
+
+/// The gate the dump leaves in the normal test run: every scenario's steps
+/// do what they expect (each command succeeds or is refused as in 0.6.0 and
+/// moves the undo stack by one, or not at all), no scenario panics, and
+/// undoing and redoing everything gives back the same history, stations,
+/// Computed View, closures, wire project and warnings (all 18 did on
+/// 0.6.0). The output is compared with the goldens on demand
+/// (`characterization_dump`, `scripts/dev/compare-characterization.mjs`).
+#[test]
+fn every_characterisation_scenario_does_what_it_expects() {
+    let out = TempDir::new().expect("temp dir");
+    let (ran, mismatches) = dump_scenarios(out.path(), None);
+    assert_eq!(ran.len(), SCENARIOS.len());
     assert!(
         mismatches.is_empty(),
         "steps that did not do what they expected:\n{}",
