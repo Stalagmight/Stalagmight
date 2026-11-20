@@ -91,7 +91,10 @@ modification time and SHA-256: the save guard below), and sniffs it
     the project **read-only** (see [Read-only files](#read-only-files)).
   - A survey that breaks an invariant is refused through the corrupt route
     ("cannot be opened normally"), which offers Attempt Repair (see
-    [SPEC 14.4](SPEC.md#144-file-corruption-recovery)).
+    [SPEC 14.4](SPEC.md#144-file-corruption-recovery)). When the file also
+    requires a feature this build does not know, the feature may be what
+    relaxes the invariant: it gets the "saved by a newer version" refusal
+    (`NEWER_SCHEMA`, `DecodeError::NewerFeatures`) and no repair offer.
   - Each history entry is decoded; if any one fails, the whole history is
     dropped and the history-discarded banner says so (an entry of an earlier
     history version: "written by an earlier version"; anything else: "could

@@ -308,6 +308,52 @@ fn a_file_with_an_unknown_required_feature_opens_read_only() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), patched);
 }
 
+/// A file that requires an unknown feature and breaks an invariant without it
+/// gets the "saved by a newer Stalagmight" refusal (`NEWER_SCHEMA`, no
+/// repair offer), never the corrupt route (review finding C-file-format-2).
+/// The same file without the feature is still corrupt. Injection: mapping
+/// `DecodeError::NewerFeatures` to `LoadError::corrupt` fails the first
+/// assertion.
+#[test]
+fn a_rule_broken_under_an_unknown_feature_is_refused_as_newer_not_corrupt() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let text = std::fs::read_to_string(&path).unwrap();
+    // A station on no line: an invariant a future feature could relax.
+    let station_counter = "\"counters\":{\"station\":";
+    let at = text.find(station_counter).unwrap() + station_counter.len();
+    let end = at + text[at..].find(',').unwrap();
+    let next: u32 = text[at..end].parse().unwrap();
+    let broken = format!(
+        "{}{}{}",
+        &text[..at],
+        next + 1,
+        &text[end..].replacen(
+            "\n],\n\"lines\":",
+            &format!(",\n[{next},\"Off line\"]\n],\n\"lines\":"),
+            1
+        )
+    );
+    assert!(broken.contains("\"Off line\""));
+    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+
+    std::fs::write(&path, newer.as_bytes()).unwrap();
+    let state = AppState::new().unwrap();
+    let error = state.read_project_file(&path).err().unwrap();
+    assert_eq!(error.code, "NEWER_SCHEMA", "{}", error.message);
+    assert!(
+        error.message.contains("newer version of Stalagmight")
+            && error.message.contains("x-from-the-future"),
+        "{}",
+        error.message
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+
+    std::fs::write(&path, broken.as_bytes()).unwrap();
+    let error = state.read_project_file(&path).err().unwrap();
+    assert_eq!(error.code, "CORRUPT", "{}", error.message);
+}
+
 #[test]
 fn the_project_state_and_the_binary_envelope_are_the_wire_projection() {
     let dir = TempDir::new().unwrap();

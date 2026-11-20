@@ -173,3 +173,54 @@ fn unknown_local_keys_survive_every_rewrite_of_this_machine() {
         assert!(!text_of(&out).contains("zz_"), "{mode:?}");
     }
 }
+
+/// The documented example with a station on no line (an invariant this
+/// version holds, which a future feature could relax).
+fn example_with_an_off_line_station() -> String {
+    let (p, extras) = example();
+    let text = text_of(&encode(&p, &extras, Mode::Normal).unwrap()).to_string();
+    let edited = text
+        .replacen("\"station\":8,", "\"station\":10,", 1)
+        .replacen("[6,\"C1\"]\n", "[6,\"C1\"],\n[9,\"Z9\"]\n", 1);
+    assert_eq!(edited.matches("Z9").count(), 1);
+    edited
+}
+
+/// A file that requires a feature this build does not know is read as far as
+/// this build can; when its survey then breaks an invariant, the refusal says
+/// "made with a newer Stalagmight", never that the file is damaged: the
+/// feature may be what relaxes the rule (review finding C-file-format-2).
+/// Unknown survey keys alone do not change the verdict, since tier 1 never
+/// changes meaning. Injection: returning `DecodeError::Invalid` whatever the
+/// `requires` list says fails the first assertion.
+#[test]
+fn a_rule_broken_under_an_unknown_feature_is_newer_not_damaged() {
+    let broken = example_with_an_off_line_station();
+    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+    match decode(newer.as_bytes(), &DecodeOptions::default()) {
+        Err(super::DecodeError::NewerFeatures {
+            features,
+            violations,
+        }) => {
+            assert_eq!(features, vec!["zz-future".to_string()]);
+            assert!(!violations.is_empty());
+        }
+        other => panic!("not refused as newer: {other:?}"),
+    }
+    let message = decode(newer.as_bytes(), &DecodeOptions::default())
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("newer Stalagmight"), "{message}");
+    assert!(message.contains("zz-future"), "{message}");
+
+    // The same survey without the unknown feature is damaged.
+    assert!(matches!(
+        decode(broken.as_bytes(), &DecodeOptions::default()),
+        Err(super::DecodeError::Invalid { .. })
+    ));
+    let tier_one = broken.replacen("[9,\"Z9\"]", "[9,\"Z9\",{\"zz_future\":1}]", 1);
+    assert!(matches!(
+        decode(tier_one.as_bytes(), &DecodeOptions::default()),
+        Err(super::DecodeError::Invalid { .. })
+    ));
+}

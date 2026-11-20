@@ -50,6 +50,14 @@ pub enum DecodeError {
     DuplicateStation { id: StationId },
     /// The survey breaks the model invariants (plan section 2).
     Invalid { violations: Vec<Violation> },
+    /// The file requires features this build does not know, and read without
+    /// them its survey breaks the model invariants: made with a newer
+    /// Stalagmight, not damaged (a feature may relax a rule). Never offered a
+    /// repair.
+    NewerFeatures {
+        features: Vec<String>,
+        violations: Vec<Violation>,
+    },
 }
 
 impl fmt::Display for DecodeError {
@@ -112,6 +120,22 @@ impl fmt::Display for DecodeError {
                 }
                 if violations.len() > 5 {
                     write!(f, " (and {} more)", violations.len() - 5)?;
+                }
+                Ok(())
+            }
+            Self::NewerFeatures {
+                features,
+                violations,
+            } => {
+                write!(
+                    f,
+                    "the file was made with a newer Stalagmight: it requires features this \
+                     version does not know ({}), and read without them its survey does not \
+                     hold together",
+                    features.join(", ")
+                )?;
+                if let Some(first) = violations.first() {
+                    write!(f, " ({first})")?;
                 }
                 Ok(())
             }

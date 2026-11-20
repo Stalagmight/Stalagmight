@@ -31,12 +31,31 @@ use super::types::{
 use super::{KNOWN_FEATURES, SOLVER, SQLITE_MAGIC, VERSION};
 
 /// Decode a version 2 file.
+///
+/// A file that requires a feature this build does not know is read as far
+/// as this build can; when what it reads then breaks an invariant, the
+/// refusal is [`DecodeError::NewerFeatures`] ("made with a newer
+/// Stalagmight"), never [`DecodeError::Invalid`]: the feature may be what
+/// relaxes the rule, so the file is not damaged, only beyond this build
+/// (review finding C-file-format-2).
 pub fn decode(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded, DecodeError> {
     let doc = parse(bytes, options)?;
     let (project, extras, notes) = doc.assemble(None)?;
     let violations = project.validate();
     if !violations.is_empty() {
-        return Err(DecodeError::Invalid { violations });
+        let features = extras
+            .read_only
+            .as_ref()
+            .map(|r| r.unknown_features.clone())
+            .unwrap_or_default();
+        return Err(if features.is_empty() {
+            DecodeError::Invalid { violations }
+        } else {
+            DecodeError::NewerFeatures {
+                features,
+                violations,
+            }
+        });
     }
     Ok(Decoded {
         project,

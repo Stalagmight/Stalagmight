@@ -131,6 +131,12 @@ fn decode_error(path: &Path, error: &DecodeError) -> LoadError {
             format!("The project breaks an invariant and cannot be opened normally: {error}"),
             &path_text(path),
         ),
+        // Not damaged: a feature this build does not know may relax the rule
+        // it breaks here. The newer-version prompt, never the repair offer
+        // (review finding C-file-format-2).
+        DecodeError::NewerFeatures { features, .. } => {
+            LoadError::newer_features(&file_name(path), features, &path_text(path))
+        }
         other => LoadError::corrupt(other.to_string(), &path_text(path)),
     }
 }

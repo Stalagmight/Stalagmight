@@ -122,9 +122,13 @@ comment.
 
 Version 2.0 defines no `requires` features; files written by this version have
 `"requires":[]`. A later writer adds a feature name whenever it stores
-something an older reader would misread (a new meaning, or a member that
-references ids), and bumps `version` only for changes no older reader could
-open at all.
+something an older reader would misread (a new meaning, a member that
+references ids, or a relaxed rule of section 6), and bumps `version` only for
+changes no older reader could open at all. A reader that meets an unknown
+feature reads the rest as far as it can: when the survey it reads then breaks
+a rule of section 6, the feature may be what relaxes the rule, so the file is
+reported as made with a newer Stalagmight, never as damaged (Stalagmight
+refuses it with its "saved by a newer version" message and no repair offer).
 
 **Conventions** (the object is always exactly this):
 
@@ -441,7 +445,9 @@ Always `true`, always last.
 
 Stalagmight refuses to open a file whose survey breaks these rules (and offers
 a repair that keeps the damaged file as a backup copy, section 12), and never
-writes one:
+writes one. A file that also requires a feature Stalagmight does not know is
+refused as made with a newer version instead, without the repair (section 3).
+The rules:
 
 1. Ids are unique: station ids, line ids, shot uuids (project-wide), closure
    ids, Section ids. Alias ids are not live station ids and appear once.

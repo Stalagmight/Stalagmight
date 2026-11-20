@@ -744,7 +744,10 @@ with its reason, is the plan's "Status (final)" section:
 - **The file is JSON.** An old SQLite file opens as before and is upgraded on
   its first save, its original kept (Recent Projects: right-click the project, Restore an earlier copy); its undo history is not kept.
   A file with moved stations shows a one-time conversion notice. A file made
-  with a newer Stalagmight opens read-only. A save refuses a file another
+  with a newer Stalagmight opens read-only when it only uses features this
+  version does not know, and is refused (update Stalagmight) when it is a
+  newer major format or cannot be read correctly without those features. A
+  save refuses a file another
   program changed since it was opened and asks which version to keep. An older
   Stalagmight cannot open a file this version saved, and SpeleoDB pushes send
   the new file, which needs the updated server.
@@ -3021,7 +3024,9 @@ interrupted save never leaves a half-written project - see
 - `requires` lists features a reader must understand: a file naming one this
   build does not know opens read-only ("made with a newer Stalagmight"), as
   does unknown content in a survey record; a higher `version` is refused with
-  the newer-version prompt.
+  the newer-version prompt, and so is a file naming an unknown feature whose
+  survey breaks a rule without it (the feature may relax the rule: it is not
+  offered a repair).
 - `summary` is a non-authoritative header (name, counts, length, bounds,
   SpeleoDB id) that Recents and Global View read without parsing the body.
 - `speleodb` (the link, rides uploads) and `local` (per-machine state: display

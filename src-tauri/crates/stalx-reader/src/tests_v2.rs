@@ -289,6 +289,33 @@ fn malformed_truncated_and_inconsistent_json_is_corrupt() {
     }
 }
 
+/// A file that requires a feature this crate does not know and, read without
+/// it, breaks a rule is made with a newer Stalagmight, never corrupt (review
+/// finding C-file-format-2); without the unknown feature the same survey is.
+#[test]
+fn a_rule_broken_under_an_unknown_feature_is_newer_not_corrupt() {
+    let (project, _) = hub_project();
+    let bytes = encoded(&project);
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    let closure_line = text
+        .lines()
+        .find(|l| l.contains("\"strategy\""))
+        .unwrap()
+        .to_string();
+    let dangling = closure_line.replacen("\"b\":", "\"b\":999999,\"was_b\":", 1);
+    let broken = edited(&bytes, &closure_line, &dangling);
+    let newer = edited(&broken, "\"requires\":[]", "\"requires\":[\"zz-future\"]");
+    let err = read_bytes(&newer, &ReadOptions::default()).unwrap_err();
+    assert_eq!(
+        invalid_kind(&err),
+        Some(InvalidKind::NewerFeatures),
+        "{err}"
+    );
+    assert!(err.to_string().contains("newer Stalagmight"), "{err}");
+    let err = read_bytes(&broken, &ReadOptions::default()).unwrap_err();
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Corrupt), "{err}");
+}
+
 #[test]
 fn json_caps_refuse_with_the_readers_limit_names() {
     let (project, _) = hub_project();
