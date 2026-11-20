@@ -2345,7 +2345,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
         let dir = TempDir::new().unwrap();
         // Force the deferred save to fail: point it at a path whose PARENT directory
         // doesn't exist, so the atomic save can't create the temp `.stalx.tmp`
-        // (`Database::open` returns "Failed to create save file"). NB a directory
+        // (the save refuses up front: the folder no longer exists). NB a file
         // squatting the *exact* reserved path does NOT fail - the first implicit save
         // auto-renames around a collision (`next_available_project_path`) and
         // succeeds; and a read-only dir wouldn't fail under the root-in-container CI
@@ -2537,9 +2537,10 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
 }
 
 // #429: the scenario the test above used to run on - a DIRECTORY squatting the
-// atomic-save temp path (`<stem>.stalx.tmp`), which makes `Database::open`
-// report SQLite's generic "unable to open database file" while the destination
-// folder exists and is perfectly writable. That is not a denial, and calling it
+// atomic-save temp path (`<stem>.stalx.tmp`), which made the 0.6.0 SQLite save
+// report the generic "unable to open database file" (and which the version 2
+// atomic write cannot clear either) while the destination folder exists and is
+// perfectly writable. That is not a denial, and calling it
 // one is what put Windows users in front of macOS folder-access instructions.
 // The deferred-import warning must therefore carry the plain failure, with no
 // marker of any kind in it.
