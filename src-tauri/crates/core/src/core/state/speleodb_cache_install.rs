@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::open_file::FileState;
+use super::open_file::{ConversionNotice, FileState};
 use super::project_load::Opened;
 use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
@@ -100,6 +100,9 @@ pub(super) struct PreparedDownload {
     pub(super) history_dropped: Option<HistoryDropped>,
     /// A migrated legacy revision's record parity (dive-plan pins, plan 10.3).
     legacy_parity: Option<LegacyParity>,
+    /// A migrated legacy revision's conversion notice (stations the upgrade
+    /// moved), as a local upgrade raises it (review finding G-speleodb-1).
+    pub(super) conversion: Option<ConversionNotice>,
 }
 
 impl PreparedDownload {
@@ -125,11 +128,13 @@ impl PreparedDownload {
             extras,
             history_dropped,
             legacy_parity,
+            conversion,
             ..
         } = self;
         project.file_path = Some(dest);
         let mut file = FileState::from_v2(extras, fingerprint);
         file.legacy_parity = legacy_parity;
+        file.conversion = conversion;
         let history = file.saved_history.clone();
         Opened {
             project,
@@ -163,6 +168,7 @@ impl AppState {
                 }
                 _ => SpeleoDbError::Io(format!("could not read the downloaded project: {e}")),
             })?;
+        let mut conversion = None;
         let (project, mut extras, original, unreadable, legacy_parity) = match sniff(&bytes) {
             Format::V2 => {
                 let decoded = decode(&bytes, options).map_err(|e| decode_refusal(&e))?;
@@ -201,6 +207,7 @@ impl AppState {
                     purpose = "install a downloaded legacy revision",
                     "speleodb: migrated a legacy revision in memory; the cache gets version 2"
                 );
+                conversion = ConversionNotice::of(&migrated.report.verification);
                 let mut project = migrated.project;
                 if !migrated.extras.validation_stored {
                     project.settings.validation = config.validation;
@@ -258,6 +265,7 @@ impl AppState {
             link,
             history_dropped,
             legacy_parity,
+            conversion,
         })
     }
 
@@ -349,6 +357,13 @@ impl AppState {
         };
         let bytes = prepared.cache_bytes(display)?;
         super::speleodb_reload::install_cache_bytes(dest, &bytes)?;
+        // The frontend opens the cache path next; the file is version 2 by
+        // then, so the open has nothing to compare: hand it the notice.
+        *self
+            .pending_download_notice
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            prepared.conversion.take().map(|n| (dest.to_path_buf(), n));
         if replaces_open {
             self.close_open_project_locked(&mut project);
         } else {

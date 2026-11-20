@@ -323,6 +323,24 @@ impl AppState {
             history_dropped,
             unrecognised_shot_kinds: _,
         } = opened;
+        // A pull that migrated a legacy revision into this cache path left its
+        // conversion notice for this open (`replace_cache_for_session`). Any
+        // other open drops a pending notice: it described another install.
+        let pending = self
+            .pending_download_notice
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some((path, notice)) = pending {
+            if file.conversion.is_none()
+                && project
+                    .file_path
+                    .as_deref()
+                    .is_some_and(|p| super::project_io::same_file(p, &path))
+            {
+                file.conversion = Some(notice);
+            }
+        }
         // A legacy NULL undo mode is materialized from this machine's default
         // on first open, and made durable (#303).
         let mut link = file.speleo_link();

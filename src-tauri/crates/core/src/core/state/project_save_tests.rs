@@ -859,35 +859,8 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// open offers the conversion notice once, and a clean legacy file none.
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
-    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
-
     crate::app_dirs::init_for_test();
     let dir = TempDir::new().unwrap();
-    let flat = |azimuth: f64| ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length: 10.0,
-        ..ShotData::default()
-    };
-    let build = |drift: bool| {
-        let mut p = Legacy::new("Drift".to_string(), None);
-        let mut add = |shots: Vec<ShotData>| {
-            p.add_line(old::LineData {
-                shots: shots.iter().map(frozen).collect(),
-                quality: 1.0,
-                ..Default::default()
-            })
-            .id
-        };
-        let a = add(vec![flat(90.0)]);
-        let b = add(vec![flat(0.0), flat(0.0)]);
-        let c = add(vec![flat(90.0)]);
-        p.merge_stations(slot(c, 0), slot(b, 1)).unwrap();
-        if drift {
-            p.adjust_line_offset(c, 5.0, 0.0);
-        }
-        (p, a, b)
-    };
     let open = |path: &Path| {
         let state = AppState::new().unwrap();
         let opened = state.execute(Command::OpenProject {
@@ -897,18 +870,8 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
         state
     };
 
-    let (drifted, a, b) = build(true);
     let path = dir.path().join("drifted.stalx");
-    write_legacy_file(&path, &drifted);
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "INSERT INTO station_merges (station_a_section, station_a_index, \
-             station_b_section, station_b_index, merged_at) \
-             VALUES (?1, 999, ?2, 0, '2023-11-14T22:13:20+00:00')",
-            [a, b],
-        )
-        .unwrap();
+    write_legacy_drift(&path, true);
     let state = open(&path);
     let notice = state.take_conversion_notice().expect("a conversion notice");
     assert!(
@@ -917,8 +880,49 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     );
     assert_eq!(state.take_conversion_notice(), None, "offered once");
 
-    let (clean, _, _) = build(false);
     let path = dir.path().join("clean.stalx");
-    write_legacy_file(&path, &clean);
+    write_legacy_drift(&path, false);
     assert_eq!(open(&path).take_conversion_notice(), None);
+}
+
+/// A 0.6.0 file whose merge of C onto B the migration moves (`drift`: C's
+/// line offset drifted 5 m and a dangling merge row names A, the cascade's
+/// seed), or the same survey clean.
+pub(super) fn write_legacy_drift(path: &Path, drift: bool) {
+    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
+
+    let flat = |azimuth: f64| ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length: 10.0,
+        ..ShotData::default()
+    };
+    let mut p = Legacy::new("Drift".to_string(), None);
+    let mut add = |shots: Vec<ShotData>| {
+        p.add_line(old::LineData {
+            shots: shots.iter().map(frozen).collect(),
+            quality: 1.0,
+            ..Default::default()
+        })
+        .id
+    };
+    let a = add(vec![flat(90.0)]);
+    let b = add(vec![flat(0.0), flat(0.0)]);
+    let c = add(vec![flat(90.0)]);
+    p.merge_stations(slot(c, 0), slot(b, 1)).unwrap();
+    if drift {
+        p.adjust_line_offset(c, 5.0, 0.0);
+    }
+    write_legacy_file(path, &p);
+    if drift {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute(
+                "INSERT INTO station_merges (station_a_section, station_a_index, \
+                 station_b_section, station_b_index, merged_at) \
+                 VALUES (?1, 999, ?2, 0, '2023-11-14T22:13:20+00:00')",
+                [a, b],
+            )
+            .unwrap();
+    }
 }

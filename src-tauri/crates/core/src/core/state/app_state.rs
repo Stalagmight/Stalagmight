@@ -214,6 +214,12 @@ pub struct AppState {
     /// returning `HistoryDropped::EarlierVersion`), not because it was unreadable. The
     /// banner says which. Reset with the flag it qualifies.
     pub(super) history_from_earlier_version: AtomicBool,
+    /// A legacy SpeleoDB revision the pull migrated into the cache at this
+    /// path: its conversion notice, for the open of that path that follows
+    /// (the cache then holds version 2, so the open has nothing to compare).
+    /// Taken by the next commit of an open of the same path.
+    pub(super) pending_download_notice:
+        Mutex<Option<(PathBuf, super::open_file::ConversionNotice)>>,
     /// The SpeleoDB SESSION generation: bumped on every session boundary - a
     /// project committed into (or cleared from) the `project` slot, and logout -
     /// and ONLY while holding the `project` mutex. Captured by Start Editing at
@@ -298,6 +304,7 @@ impl AppState {
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
             history_from_earlier_version: AtomicBool::new(false),
+            pending_download_notice: Mutex::new(None),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
             speleodb_reverify: Mutex::new(None),

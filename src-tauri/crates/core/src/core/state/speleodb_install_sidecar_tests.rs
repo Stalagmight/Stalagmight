@@ -331,3 +331,31 @@ fn set_aside_sidecars_round_trip_and_discard() {
         "the database itself is untouched"
     );
 }
+
+/// A legacy revision the pull migrates raises the conversion notice a local
+/// upgrade raises, on the open of the cache that follows (review finding
+/// G-speleodb-1): the cache holds version 2 by then, so the open alone has
+/// nothing to compare. A clean revision raises none.
+#[test]
+fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
+    crate::test_helpers::with_isolated_config(|| {
+        crate::app_dirs::init_for_test();
+        for (drift, expected) in [(true, true), (false, false)] {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            super::project_save_tests::write_legacy_drift(&source, drift);
+            let dest = dir.path().join("cache").join("project.stalx");
+            std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
+            let state = AppState::new().expect("state");
+            install(&state, &source, &dest, LocalEditsPolicy::Discard).expect("install");
+            let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
+            assert!(opened.success, "{:?}", opened.error);
+            let notice = state.take_conversion_notice();
+            assert_eq!(notice.is_some(), expected, "drift={drift}: {notice:?}");
+            if let Some(notice) = notice {
+                assert!(notice.contains("2 stations moved"), "{notice}");
+            }
+            assert_eq!(state.take_conversion_notice(), None, "offered once");
+        }
+    });
+}
