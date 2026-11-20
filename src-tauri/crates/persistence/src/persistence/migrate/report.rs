@@ -279,7 +279,9 @@ pub enum ExpectedClass {
     /// attachment group's solved position; with shots of kilometres (a
     /// cross-axis weight of 1e-7 next to hundreds) that position carries
     /// rounding of up to 1e-4 m, where the station graph lays spurs out from
-    /// their measured shots. Bounded, unlike the other Computed View classes.
+    /// their measured shots. Bounded by that precision; every class is also
+    /// bounded by what the migrated solve can move the component
+    /// (`verify::class_bound`).
     LegacySolvePrecision,
 }
 

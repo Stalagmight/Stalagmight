@@ -241,6 +241,53 @@ fn the_merge_the_old_cascade_left_torn_is_the_one_demoted() {
     assert!(out.report.verification.is_clean());
 }
 
+/// A declared Computed View class explains a difference only as large as the
+/// migrated solve can move anything in its component (review finding
+/// D-migration-upgrade-7): here the torn C~B tie of 17.5 m is the only
+/// misclosure, so a solver regression that moves the whole view a kilometre
+/// is a mismatch, not `TieSolved`. A regression smaller than the misclosures
+/// stays inside the class: the bound is the maximum principle, not a
+/// prediction. Injection: drop the bound from `verify_adjusted` (accept any
+/// magnitude, as before) and the kilometre is explained.
+#[test]
+fn a_declared_class_never_explains_more_than_the_component_can_move() {
+    let mut p = project();
+    let a = line(&mut p, "A", &[(90.0, 10.0), (90.0, 10.0)]);
+    let b = line(&mut p, "B", &[(0.0, 10.0)]);
+    let c = line(&mut p, "C", &[(0.0, 10.0), (90.0, 7.5)]);
+    raw_merge(&mut p, at(c, 2), at(b, 1));
+    raw_merge(&mut p, at(b, 0), at(a, 1));
+    raw_merge(&mut p, at(c, 0), at(a, 2));
+    let legacy = open(&p, &LegacyExtras::default());
+    let view = |shift_m: f64| {
+        super::verify::INJECTED_SHIFT_M.with(|s| s.set(shift_m));
+        let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
+        super::verify::INJECTED_SHIFT_M.with(|s| s.set(0.0));
+        let AdjustedCheck::Compared(view) = out.report.verification.adjusted else {
+            panic!("the Computed View was compared");
+        };
+        view
+    };
+
+    let honest = view(0.0);
+    assert!(honest.mismatches.is_empty(), "{:?}", honest.mismatches);
+    assert!(honest.expected.contains_key(&ExpectedClass::TieSolved));
+
+    let regressed = view(1000.0);
+    assert!(
+        !regressed.mismatches.is_empty(),
+        "a kilometre is not a torn tie of 17.5 m: {:?}",
+        regressed.expected
+    );
+    assert!(regressed
+        .mismatches
+        .iter()
+        .all(|m| m.displacement_m > 900.0));
+
+    let small = view(1.0);
+    assert!(small.mismatches.is_empty(), "{:?}", small.mismatches);
+}
+
 #[test]
 fn same_line_self_and_repeated_merges() {
     let mut p = project();

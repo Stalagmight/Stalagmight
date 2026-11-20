@@ -63,6 +63,19 @@
 //! compared; the bounded one explains a slot only up to its bound. The D11
 //! classes are detected from the demoted merges and the migrated solve's
 //! across-one-shot skips.
+//!
+//! **Bounded classes** (review finding D-migration-upgrade-7). A class is
+//! decided per component, so on its own it would explain a difference of any
+//! size there, a regression of the migrated solve included. Every class
+//! therefore explains a slot only within `class_bound`: what the migrated
+//! solve can move anything in the component (the maximum principle of the
+//! least squares, a resistor network driven only by the misclosures it
+//! distributes: closure gaps, GPS fix offsets, any shot the raw layout does
+//! not satisfy; the misclosure budget per component, depth from the closures'
+//! depth gaps), plus the slot's raw difference, plus what 0.6.0's view moved
+//! the slot from its own raw position. Beyond it the slot is a mismatch. The
+//! bound is the triangle inequality, not a prediction: a regression smaller
+//! than the component's misclosures still reads as the class.
 //! The components each solve failed (and showed measured) must be the same,
 //! except a legacy failure the merges 0.6.0 united first (D11), degenerate
 //! legacy weights or a failed rewrite explains.
@@ -470,6 +483,8 @@ fn verify_adjusted(
         }
     }
 
+    let budgets = misclosure_budgets(project, raw, facts.len(), |s| solve_of_station(s));
+
     for (position, line) in project.lines().iter().enumerate() {
         let (hops, _) = lines.get(position).copied().unwrap_or((1, 0.0));
         let tolerance = ADJUSTED_TOLERANCE_M + DUST_PER_HOP_M * f64::from(hops);
@@ -478,11 +493,12 @@ fn verify_adjusted(
         let precision = k.map_or(0.0, |k| {
             legacy_solve_precision_m(facts[k].weights, facts[k].scale_m)
         });
+        let budget = k.and_then(|k| budgets.get(k)).copied().unwrap_or_default();
         for index in 0..line.station_count() {
             let slot = StationRef::new(line.id, index as u32);
             v.slots_checked += 1;
             let (Some(new), Some(old)) = (
-                adjusted.slot(project, slot),
+                adjusted.slot(project, slot).map(injected_regression),
                 old_adjusted.get(&old_slot(slot)),
             ) else {
                 v.mismatches
@@ -501,8 +517,37 @@ fn verify_adjusted(
             let z_out = dz.is_nan() || dz > DEPTH_TOLERANCE_M;
             match class {
                 Some(class) if xy_out || z_out => {
-                    let d = if xy_out { dxy.max(dz) } else { dz };
-                    expect_in(&mut v.expected, class, d);
+                    // A class explains a difference only as large as the
+                    // migrated solve can move anything in the component
+                    // (module docs, "Bounded classes").
+                    let bound = class_bound(
+                        &budget,
+                        raw.slot(project, slot),
+                        legacy.raw_positions.get(&old_slot(slot)).copied(),
+                        old,
+                    );
+                    let xy_beyond = !within(dxy, tolerance + bound[0]);
+                    let z_beyond = !within(dz, DEPTH_TOLERANCE_M + bound[1]);
+                    if xy_beyond {
+                        v.mismatches.push(mismatch(
+                            slot,
+                            Axis::Horizontal,
+                            dxy,
+                            tolerance + bound[0],
+                        ));
+                    }
+                    if z_beyond {
+                        v.mismatches.push(mismatch(
+                            slot,
+                            Axis::Depth,
+                            dz,
+                            DEPTH_TOLERANCE_M + bound[1],
+                        ));
+                    }
+                    if !xy_beyond && !z_beyond {
+                        let d = if xy_out { dxy.max(dz) } else { dz };
+                        expect_in(&mut v.expected, class, d);
+                    }
                 }
                 Some(_) => {}
                 None if xy_out && !z_out && dxy <= tolerance + precision => {
@@ -522,6 +567,143 @@ fn verify_adjusted(
         }
     }
     AdjustedCheck::Compared(v)
+}
+
+/// What the migrated Closures Computed View of one least-squares component
+/// can move a station by, from the misclosures its solve distributes (module
+/// docs, "Bounded classes"): horizontally the sum of every closure's raw gap,
+/// every GPS fix's offset from its raw station and any shot the raw layout
+/// does not satisfy; in depth the sum of every closure's raw depth gap (the
+/// solve gives the ends of the closures it adjusts their tie group's mean
+/// depth). Plus the solve's own precision, `1e-6 + 1e-9` of the component's
+/// largest raw coordinate (the conjugate gradient's tolerance at that scale).
+#[derive(Debug, Clone, Copy, Default)]
+struct Budget {
+    xy_m: f64,
+    z_m: f64,
+    scale_m: f64,
+}
+
+/// [`Budget`] per least-squares component, `component_of` naming each
+/// station's.
+fn misclosure_budgets(
+    project: &Project,
+    raw: &RawPositions,
+    components: usize,
+    component_of: impl Fn(StationId) -> Option<usize>,
+) -> Vec<Budget> {
+    use crate::models::{gps_to_local, DatumRole};
+    let mut budgets = vec![Budget::default(); components];
+    let gap = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let mut add = |station: StationId, xy: f64, z: f64| {
+        if let Some(budget) = component_of(station).and_then(|k| budgets.get_mut(k)) {
+            budget.xy_m += xy;
+            budget.z_m += z;
+            if let Some([x, y]) = raw.xy(station) {
+                budget.scale_m = budget.scale_m.max(x.abs()).max(y.abs());
+            }
+        }
+    };
+    for c in &project.closures {
+        let xy = match (raw.xy(c.a), raw.xy(c.b)) {
+            (Some(a), Some(b)) => gap(a, b),
+            _ => 0.0,
+        };
+        let z = match (raw.z(c.a), raw.z(c.b)) {
+            (Some(a), Some(b)) => (a - b).abs(),
+            _ => 0.0,
+        };
+        add(c.a, xy, z);
+    }
+    for line in project.lines() {
+        let reference = project.azimuth_reference_for(line);
+        let hand = |s| line.hand_moves.get(&s).copied().unwrap_or([0.0; 3]);
+        for (k, shot) in line.shots.iter().enumerate() {
+            let (Some(from), Some(to)) = (line.station(k), line.station(k + 1)) else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (raw.xy(from), raw.xy(to)) else {
+                continue;
+            };
+            let v = shot.vector(reference);
+            let (ha, hb) = (hand(from), hand(to));
+            let observed = [a[0] + v[0] + hb[0] - ha[0], a[1] + v[1] + hb[1] - ha[1]];
+            add(from, gap(b, observed), 0.0);
+            add(to, 0.0, 0.0);
+        }
+    }
+    if let Some(frame) = project.frame_datum().and_then(|f| project.datums.get(f)) {
+        for (datum, role) in project.datums.iter().zip(project.datum_roles()) {
+            if role != Some(DatumRole::GpsFix) {
+                continue;
+            }
+            let (east, north) = gps_to_local(&datum.gps, &frame.gps);
+            if let (true, Some(r)) = (east.is_finite() && north.is_finite(), raw.xy(datum.station))
+            {
+                add(datum.station, gap([east, north], r), 0.0);
+            }
+        }
+    }
+    budgets
+}
+
+/// How far a declared class may explain a slot's Computed View difference
+/// (horizontal, depth), beyond the comparison's tolerance: by the triangle
+/// inequality, `|new adjusted - old adjusted|` is at most what the migrated
+/// solve moved the slot (its component's [`Budget`]), plus the raw
+/// difference at the slot (already verified: dust, or a torn merge's gap),
+/// plus what 0.6.0's view moved it from its own raw position (data: a
+/// measured component moved nothing; a degenerate 0.6.0 solve may have moved
+/// it by kilometres). Unknown or non-finite inputs bound nothing.
+fn class_bound(
+    budget: &Budget,
+    new_raw: Option<[f64; 3]>,
+    old_raw: Option<[f64; 3]>,
+    old_adjusted: &[f64; 3],
+) -> [f64; 2] {
+    let (Some(new_raw), Some(old_raw)) = (new_raw, old_raw) else {
+        return [f64::INFINITY; 2];
+    };
+    let xy = |a: [f64; 3], b: &[f64; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let slack = 1e-6 + 1e-9 * budget.scale_m;
+    let bound = [
+        budget.xy_m + xy(new_raw, &old_raw) + xy(old_raw, old_adjusted) + slack,
+        budget.z_m + (new_raw[2] - old_raw[2]).abs() + (old_raw[2] - old_adjusted[2]).abs() + slack,
+    ];
+    if bound.iter().all(|b| b.is_finite()) {
+        bound
+    } else {
+        [f64::INFINITY; 2]
+    }
+}
+
+/// `d <= bound`, a NaN difference never within.
+fn within(d: f64, bound: f64) -> bool {
+    matches!(
+        d.partial_cmp(&bound),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A solver regression a test injects: every slot of the migrated
+    /// Computed View moved this many metres east before the comparison.
+    pub(super) static INJECTED_SHIFT_M: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+#[cfg(test)]
+fn injected_regression(p: [f64; 3]) -> [f64; 3] {
+    [
+        p[0] + INJECTED_SHIFT_M.with(std::cell::Cell::get),
+        p[1],
+        p[2],
+    ]
+}
+
+#[cfg(not(test))]
+const fn injected_regression(p: [f64; 3]) -> [f64; 3] {
+    p
 }
 
 fn mismatch(slot: StationRef, axis: Axis, displacement_m: f64, tolerance_m: f64) -> Mismatch {
