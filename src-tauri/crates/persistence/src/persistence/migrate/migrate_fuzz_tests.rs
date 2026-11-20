@@ -249,9 +249,10 @@ fn odd_azimuth(rng: &mut Rng) -> f64 {
     VALUES[rng.below(VALUES.len())]
 }
 
-/// Whether `azimuth` lies on a grid axis (0, 90, 180, 270 degrees, mod 360).
-fn cardinal(azimuth: f64) -> bool {
-    (azimuth.rem_euclid(90.0)).abs() < 1e-9 || (90.0 - azimuth.rem_euclid(90.0)).abs() < 1e-9
+/// Whether `azimuth` is within 2 degrees of a grid axis (0, 90, 180, 270).
+fn near_grid(azimuth: f64) -> bool {
+    let off = azimuth.rem_euclid(90.0);
+    off < 2.0 || 90.0 - off < 2.0
 }
 
 fn credit(rng: &mut Rng) -> Option<Arc<m::SurveyCredit>> {
@@ -274,17 +275,39 @@ fn credit(rng: &mut Rng) -> Option<Arc<m::SurveyCredit>> {
     }))
 }
 
-/// One shot of a hostile line. Unless `degenerate_lsq`, a length under 1 mm
-/// is never drawn on a grid axis: such a shot has a zero (or, below about
-/// 1e-150 m, non-finite) least-squares weight on one axis, which leaves that
-/// axis to each solver's warm start and numbering (finding C24-F2, pinned by
-/// `zero_length_shots_on_a_grid_axis_keep_the_computed_view`).
+/// Generator switches. The default draws everything but the degenerate
+/// least-squares case (C24-F2); the explain runner can turn the extreme
+/// values off to tell solver numerics from conversion differences (the rng
+/// stream is the same either way).
+#[derive(Debug, Clone, Copy)]
+struct Knobs {
+    degenerate_lsq: bool,
+    extremes: bool,
+    /// Shot lengths of 10 km and more, and depth changes of 10 km and more
+    /// on one shot (C24-F3).
+    huge_lengths: bool,
+}
+
+const DEFAULT_KNOBS: Knobs = Knobs {
+    degenerate_lsq: false,
+    extremes: true,
+    huge_lengths: false,
+};
+
+/// One shot of a hostile line. Unless the knobs ask for them, a shot under
+/// 20 cm never lies within 2 degrees of a grid axis, none is over 1 km long
+/// and none goes below 2.2 km: a short shot near a grid axis has a huge to
+/// infinite (or, at zero length, no) least-squares weight on one axis
+/// (sigma = length x sigma_az against sin(azimuth) x sigma_length), and such
+/// shots beside the others make the solve ill-conditioned, where 0.6.0's
+/// Computed View is not reproducible (findings C24-F2 and C24-F3, pinned by
+/// `ill_conditioned_least_squares_keeps_the_computed_view`).
 fn hostile_shot(
     rng: &mut Rng,
     uuids: &mut u64,
     seed: u64,
     extreme_values: bool,
-    degenerate_lsq: bool,
+    knobs: Knobs,
 ) -> ShotData {
     *uuids += 1;
     let lrud = |rng: &mut Rng| match rng.below(4) {
@@ -308,8 +331,21 @@ fn hostile_shot(
             depth + rng.range(-2.0, 2.0),
         )
     };
-    let azimuth = if !degenerate_lsq && length.abs() < 1e-3 && cardinal(azimuth) {
-        azimuth + 12.5
+    // Over 1 km, unless asked for: 10 to 123 km become 400 to 510 m (the
+    // same rng stream either way, so a seed replays with the knob on).
+    let length = if !knobs.huge_lengths && length > 1e3 {
+        length.log10() * 100.0
+    } else {
+        length
+    };
+    // The deepest caves are about 2.2 km deep.
+    let (depth_in, depth_out) = if knobs.huge_lengths {
+        (depth_in, depth_out)
+    } else {
+        (depth_in.min(2_200.0), depth_out.min(2_200.0))
+    };
+    let azimuth = if !knobs.degenerate_lsq && length.abs() < 0.2 && near_grid(azimuth) {
+        (azimuth + 12.5) % 360.0
     } else {
         azimuth
     };
@@ -417,7 +453,8 @@ fn raw_closure(
     clippy::too_many_lines,
     reason = "one block per hostile feature; splitting it scatters the generator"
 )]
-fn hostile_case(seed: u64, degenerate_lsq: bool) -> Option<Hostile> {
+fn hostile_case(seed: u64, knobs: Knobs) -> Option<Hostile> {
+    let extremes = knobs.extremes;
     let base = random_case(seed);
     let mut rng = Rng::new(seed ^ 0x0C24_C24C_24C2_4C24);
     let mut p = base.project;
@@ -433,9 +470,9 @@ fn hostile_case(seed: u64, degenerate_lsq: bool) -> Option<Hostile> {
             1 => 1,
             _ => 2 + rng.below(5),
         };
-        let extreme_values = rng.chance(0.5);
+        let extreme_values = rng.chance(0.5) && extremes;
         let data = (0..shots)
-            .map(|_| hostile_shot(&mut rng, &mut uuids, seed, extreme_values, degenerate_lsq))
+            .map(|_| hostile_shot(&mut rng, &mut uuids, seed, extreme_values, knobs))
             .collect();
         let id = p
             .add_line(LineData {
@@ -1197,7 +1234,7 @@ fn transition_properties(
 }
 
 fn run_seed(seed: u64) -> Result<Outcome, Failure> {
-    let built = catch_unwind(|| hostile_case(seed, false))
+    let built = catch_unwind(|| hostile_case(seed, DEFAULT_KNOBS))
         .map_err(|p| fail("generator-panic", panic_text(p.as_ref())))?;
     let Some(hostile) = built else {
         return Ok(Outcome::Unbuilt);
@@ -1511,7 +1548,7 @@ fn migration_fuzz_corpus() {
 /// that is not SQLite, a truncated SQLite header, a newer schema.
 #[test]
 fn refusals_of_broken_legacy_bytes_are_typed() {
-    let Some(hostile) = hostile_case(3, false) else {
+    let Some(hostile) = hostile_case(3, DEFAULT_KNOBS) else {
         panic!("seed 3 builds");
     };
     let bytes = hostile.bytes;
@@ -1538,17 +1575,29 @@ fn refusals_of_broken_legacy_bytes_are_typed() {
     );
 }
 
-/// Finding C24-F2: a zero-length (or sub-1e-150 m) shot on a grid axis has a
-/// zero (or non-finite) least-squares weight on one axis, in 0.6.0 and in the
-/// port alike. That axis is then left to each solver's warm start and
-/// numbering (D13), so the Closures Computed View differs from 0.6.0 by up to
-/// the tear of the group it reaches (seed 0: 3.7 m, seed 19: 90 m). Ignored
-/// until the solver weights such shots (or the migration declares a class).
+/// Findings C24-F2 and C24-F3: ill-conditioned least squares. A shot
+/// shorter than a few centimetres on a grid axis has a zero (or a 1e7 to
+/// infinite) least-squares weight on one axis, and shots of 10 km and more
+/// beside short ones spread the weights over 1e8, in 0.6.0 and in the port
+/// alike; and 0.6.0's destructive solve rewrites each shot's length from the
+/// solved horizontal and the stored depth change, which loses the horizontal
+/// to cancellation when a shot's depth changes by 10 km and more. There 0.6.0's Closures Computed View is not reproducible from one
+/// run to the next (its unknowns follow `HashMap` order and the solve stops
+/// early), and the port's deterministic solve differs from it by up to
+/// 1e2 m and more (seeds 0, 19, 310, 878 with both knobs on); the migration
+/// reports such slots as unexplained and shows the conversion notice.
+/// Ignored until the solvers condition such shots or the migration declares
+/// a class.
 #[test]
-#[ignore = "finding C24-F2: degenerate least-squares weights of zero-length shots on a grid axis"]
-fn zero_length_shots_on_a_grid_axis_keep_the_computed_view() {
-    for seed in [0, 19] {
-        let Some(hostile) = hostile_case(seed, true) else {
+#[ignore = "findings C24-F2/F3: ill-conditioned least squares (short shots on a grid axis, very long shots)"]
+fn ill_conditioned_least_squares_keeps_the_computed_view() {
+    for seed in [0, 19, 310, 878, 1635, 1642] {
+        let knobs = Knobs {
+            degenerate_lsq: true,
+            huge_lengths: true,
+            ..DEFAULT_KNOBS
+        };
+        let Some(hostile) = hostile_case(seed, knobs) else {
             panic!("seed {seed} builds");
         };
         let (legacy, migrated) = match open_and_migrate(&hostile.bytes) {
@@ -1570,7 +1619,7 @@ fn zero_length_shots_on_a_grid_axis_keep_the_computed_view() {
 #[test]
 fn out_of_range_legacy_dates_migrate_as_the_file_holds_them() {
     for seed in [2, 7, 13] {
-        let Some(hostile) = hostile_case(seed, false) else {
+        let Some(hostile) = hostile_case(seed, DEFAULT_KNOBS) else {
             panic!("seed {seed} builds");
         };
         let (legacy, migrated) = match open_and_migrate(&hostile.bytes) {
@@ -1587,6 +1636,37 @@ fn out_of_range_legacy_dates_migrate_as_the_file_holds_them() {
         }
         if let Err(e) = check(&legacy, &migrated) {
             panic!("seed {seed}: {e}");
+        }
+    }
+}
+
+/// `STALAGMIGHT_FUZZ_SEED_START=<s> [STALAGMIGHT_FUZZ_SEEDS=<n>]
+/// [STALAGMIGHT_FUZZ_NO_EXTREMES=1] cargo test -p stalagmight-persistence
+/// --lib migration_fuzz_explain -- --ignored --nocapture`: for each seed of
+/// the window, the hostile features, the migration report and the check's
+/// verdict (synthetic data), to triage a failing seed.
+#[test]
+#[ignore = "triage aid: prints one seed's features, report and verdict"]
+fn migration_fuzz_explain() {
+    let (start, count) = window(1);
+    let knobs = Knobs {
+        extremes: std::env::var_os("STALAGMIGHT_FUZZ_NO_EXTREMES").is_none(),
+        huge_lengths: std::env::var_os("STALAGMIGHT_FUZZ_HUGE_LENGTHS").is_some(),
+        degenerate_lsq: std::env::var_os("STALAGMIGHT_FUZZ_DEGENERATE_LSQ").is_some(),
+    };
+    for seed in start..start + count {
+        let Some(hostile) = hostile_case(seed, knobs) else {
+            eprintln!("seed {seed}: the legacy writer refused the case");
+            continue;
+        };
+        eprintln!("seed {seed} features: {:?}", hostile.features.counts);
+        match open_and_migrate(&hostile.bytes) {
+            Ok(Ok((legacy, migrated))) => {
+                eprintln!("{}", migrated.report.summary());
+                eprintln!("seed {seed} check: {:?}", check(&legacy, &migrated));
+            }
+            Ok(Err(class)) => eprintln!("seed {seed}: refused {class}"),
+            Err(f) => eprintln!("seed {seed}: {} {}", f.class, f.detail),
         }
     }
 }

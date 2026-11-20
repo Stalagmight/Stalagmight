@@ -137,6 +137,14 @@ mod format_v2_doc_tests;
 )]
 mod format_v2_limits_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: a failing seed prints its replay line, a sweep its verdicts"
+)]
+mod decode_fuzz_tests;
+
 pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, Stage, WriteError};
 pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
