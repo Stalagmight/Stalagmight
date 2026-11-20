@@ -35,7 +35,9 @@
 //! 9. **Per-file state** (7.2.9): [`MigratedExtras`].
 //!
 //! Every rule that fires is counted in the [`MigrationReport`]. The result
-//! is held in memory; the original file is never written.
+//! is held in memory. [`migrate_path`] reads the original through a private
+//! copy and never writes it; the app's open can roll a hot journal back into
+//! it before (docs/saving.md, "What an open writes").
 
 mod assemble;
 mod convert;

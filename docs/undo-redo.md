@@ -246,8 +246,11 @@ what its undo stack holds at push time is what that commit stores forever. Two
 policies, resolved by `AppState::undo_policy` (`core/state/undo_policy.rs`)
 from the link's `undo_mode` (per project, in the file's `speleodb` member, so it
 rides to the server) then `SpeleoDbConfig.undo_mode` (the application
-default). A legacy NULL mode is materialized with the default on open and saved
-at once. Existing per-project values continue to load and apply; the workspace
+default). A missing (legacy NULL) mode is materialized with the default on
+open and saved at once by a local-only save that copies the file's history
+byte for byte (the open never cuts it to the persisted window; a version 2
+file only, a legacy file keeps it for its upgrading save; see
+[saving.md](saving.md#what-an-open-writes)). Existing per-project values continue to load and apply; the workspace
 no longer offers a policy editor:
 
 | | `Full` (default) | `Disabled` | Local project |

@@ -366,6 +366,18 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(false)
+    }
+
+    /// [`Self::persist_local_state`] for the write an OPEN makes (a
+    /// materialized undo mode): it copies the file's `history` member byte
+    /// for byte, so an open never changes the history on disk, whatever the
+    /// persisted window (review finding J-docs-tests-truth-3).
+    pub(super) fn persist_local_state_keeping_history(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(true)
+    }
+
+    fn persist_local_state_guarded(&self, keep_history: bool) -> Result<(), LocalSaveError> {
         // Under the `project` guard, for the whole save: every change of the
         // survey, of the stacks and of the dirty flag happens under it (an
         // undo pops its entry before it marks the project dirty), so only
@@ -375,7 +387,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = guard.as_ref().and_then(|p| p.file_path.clone());
-        let result = self.persist_local_state_at(path);
+        let result = self.persist_local_state_with(path, keep_history);
         drop(guard);
         result
     }
@@ -387,6 +399,16 @@ impl AppState {
     pub(crate) fn persist_local_state_at(
         &self,
         path: Option<PathBuf>,
+    ) -> Result<(), LocalSaveError> {
+        self.persist_local_state_with(path, false)
+    }
+
+    /// [`Self::persist_local_state_at`]; `keep_history` copies the file's
+    /// `history` member verbatim (the open's write).
+    fn persist_local_state_with(
+        &self,
+        path: Option<PathBuf>,
+        keep_history: bool,
     ) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
@@ -402,7 +424,7 @@ impl AppState {
         };
         let original = read_unchanged(&path, &expected)?;
         let mut extras = file.extras.clone();
-        let keep_file_history = !file.dirty && file.history_unread;
+        let keep_file_history = keep_history || !file.dirty && file.history_unread;
         extras.history = if file.dirty || keep_file_history {
             file.saved_history.clone()
         } else {

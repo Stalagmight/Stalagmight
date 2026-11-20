@@ -101,17 +101,51 @@ modification time and SHA-256: the save guard below), and sniffs it
   least-squares config, converts it and verifies every slot's position
   against 0.6.0's. Validation thresholds the file never stored are seeded from
   the global config. The history is always dropped, with the
-  "earlier version" banner. When the verification found stations that moved
-  (a torn legacy merge collapsed into one station) or an unexplained raw
-  difference, a one-time conversion notice is kept: "Converted from the old
-  file format; N stations moved by up to X m; the original is kept in
-  Recovery." (`AppState::take_conversion_notice`, shown as a banner).
-  Computed View differences are logged and kept in the migration report,
-  never in the notice.
+  "earlier version" banner. When the conversion changed what the user sees, a
+  one-time conversion notice is kept (`AppState::take_conversion_notice`,
+  shown as a banner): "Converted from the old file format; N stations moved
+  by up to X m; M stations changed depth by up to Z m; K stations could not
+  be placed; the original is kept (Recent Projects: right-click, Restore an
+  earlier copy)", each part only when its count is not zero. A move is a
+  torn legacy merge collapsed into one station or an unexplained horizontal
+  difference; a depth change is a snap whose derived alignment changed a
+  depth tie, or an unexplained one; a slot with no finite position is never
+  a move "by up to inf m". Computed View differences are logged and kept in
+  the migration report, never in the notice (plan C4).
+  - A file the conversion refuses although it is not damaged (the migrated
+    project breaks an invariant, an id space is exhausted, it is over the
+    frozen reader's 1 GiB) opens as `CANNOT_CONVERT`: "This file needs
+    converting from the Stalagmight 0.6.0 file format, and this version
+    cannot convert it: <reason>. The file was not changed, and Stalagmight
+    0.6.0 still opens it." Never `CORRUPT`: the recovery dialog and its
+    Attempt Repair are for damage. The SQLite repair runs only on a file the
+    open refuses for damage, and reports success only when the open then
+    accepts the file (`project_salvage.rs`).
 
-Load is pure: the project in memory is exactly what the file says. Nothing is
-healed, re-solved or rewritten on open; a legacy file stays untouched until a
-save.
+### What an open writes
+
+The project in memory is exactly what the file says: nothing is healed,
+re-solved or converted back to disk on open, and a legacy file is upgraded
+only by a save (or a Recents rename or link strip, below). Two writes can
+happen during an open, both of state the file already implies:
+
+- **A hot journal rolled back.** The app's open (`load_project_full`) first
+  probes the file's SpeleoDB link (`speleodb_foreign`, the one-local-copy
+  guard). For a legacy file an old build was killed writing, the read-only
+  probe cannot read past the hot `-journal`, so it opens the original
+  read-write, and SQLite rolls the journal back into it in place and deletes
+  it, as 0.6.0's own open did. This happens before the fingerprint is read
+  and before any backup: the original's bytes change, the survey 0.6.0
+  committed does not. Where that read-write open is not possible (a
+  write-protected file) the journal stays, and the first save's upgrade
+  settles it (below).
+- **A materialized undo mode.** A linked version 2 file whose `speleodb`
+  member has no `undo_mode` (a file from another writer; this build always
+  writes it) gets this machine's default, written at once by a local-only
+  save ([below](#local-only-durable-saves)) that copies every other member,
+  the history included, byte for byte, so an open never cuts or rewrites the
+  history. A read-only file gets it too (local-only saves work there); a
+  legacy file keeps it in memory for the upgrading save.
 
 ## Save Pipeline
 
@@ -131,7 +165,10 @@ save.
 5. Pick the guard: the open file must still hold what was last read or
    written; a project never written expects nothing at its path; an explicit
    Save As destination is overwritten (the dialog confirmed)
-6. First save of a legacy file: keep the original in the backups folder
+6. A write over a legacy file (the open file's first save, or a Save As onto
+   another legacy file) goes through legacy_upgrade::upgrade, which settles
+   the original in place, removes its sidecars and keeps it in the backups
+   folder, then runs step 7 (see Upgrading a legacy file)
 7. write_atomic: <file>.tmp, sync, guard check, rename, folder sync
 8. Update file_path, the fingerprint, origin (now version 2), clear the dirty
    and local_pending flags, remember the history just written
@@ -140,8 +177,12 @@ save.
 11. Return CommandResult with saved_path (or unlinked_copy_path)
 ```
 
-Nothing is written before step 7, and step 7 either replaces the file whole or
-leaves it as it was.
+Except on a legacy file, nothing is written before step 7, and step 7 either
+replaces the file whole or leaves it as it was. Over a legacy file, step 6
+writes first: it can rename a settled copy over the original (its bytes
+change, its survey does not), remove its `-journal` / `-wal` / `-shm` and
+write the backup, and a failure after the settle leaves the original settled,
+with the session's guard following its new bytes.
 
 The first implicit save of a project never written (a deferred new project's
 reserved path) moves to the next free name (`<name>_1.stalx`, ...) when a file
@@ -321,7 +362,15 @@ and ride the upgrading save.
 
 Other writes to a closed legacy file upgrade it the same way, with the same
 backup: a Recents rename (`set_project_name_for_path`) and the removal of a
-foreign copy's SpeleoDB link (`speleodb_remove_link_at`).
+foreign copy's SpeleoDB link (`speleodb_remove_link_at`). Each owes what the
+upgrading save does (`AppState::finish_closed_upgrade`): the `.plnx` beside
+the file has its 0.6.0 pins rewritten with the record parity of the
+migration that was written (step 10 of the save pipeline), and when that
+conversion changed what the user sees, its notice is kept for the next open
+of the file in this session. A Save As (or Save a Copy) onto a legacy file
+other than the open one goes through the upgrade too: the JSON file never
+lands beside that file's sidecars, and the 0.6.0 file it replaces is kept in
+Recovery under the destination's name.
 
 ## Local-only durable saves
 

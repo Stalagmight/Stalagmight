@@ -1293,3 +1293,53 @@ fn same_named_projects_in_different_folders_keep_separate_originals() {
     assert_eq!(kept_originals(&stem).len(), 2);
     forget_backups(&stem);
 }
+
+/// The app's open (`load_project_full`, the IPC) of a 0.6.0 file an old build
+/// was killed writing: its SpeleoDB-link probe cannot read the file read-only
+/// past the hot journal, so it opens the original read-write, and SQLite rolls
+/// the journal back into it in place, as 0.6.0's own open did. That is one of
+/// the two writes an open makes (saving.md, "What an open writes"; review
+/// finding D-migration-upgrade-11): the session then reads the survey 0.6.0
+/// committed, and the first save upgrades a file with no sidecar left, so the
+/// settle step above runs only where this rollback cannot (a write-protected
+/// original, an open that skips the probe such as `Command::OpenProject`, the
+/// STAGED and REAL engines here).
+#[test]
+fn the_app_open_rolls_a_hot_journal_back_before_the_first_save() {
+    struct NullSink;
+    impl crate::core::events::EventSink for NullSink {
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+        fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            false
+        }
+    }
+    let _config = isolated_config();
+    crate::app_dirs::init_for_test();
+    let original = Original::build(11, Kind::HotJournal).unwrap();
+    let dir = TempDir::new().unwrap();
+    let stem = unique_stem("app-open-hot");
+    let path = original
+        .place(dir.path(), &format!("{stem}.stalx"))
+        .unwrap();
+    assert!(has_hot_journal(&path), "the fixture is a hot pair");
+    let state = AppState::new().unwrap();
+    state.set_event_sink(std::sync::Arc::new(NullSink));
+
+    state.do_load_project_full(path.clone()).unwrap();
+
+    assert!(
+        !sidecar_path(&path, "-journal").exists(),
+        "the open rolled the journal back and removed it"
+    );
+    assert_eq!(
+        opened_as(&path).as_deref(),
+        Ok(original.survey.as_str()),
+        "into the survey 0.6.0 committed"
+    );
+    assert!(state.save_project(None).success);
+    assert_eq!(entries(dir.path()), [format!("{stem}.stalx")]);
+    let kept = kept_originals(&stem);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(opened_as(&kept[0]).as_deref(), Ok(original.survey.as_str()));
+    forget_backups(&stem);
+}

@@ -14,7 +14,14 @@
 //!   dropped with the existing banner; the conversion notice is kept when
 //!   the verification moved slots or left anything unexplained.
 //!
-//! Load is pure: the project in memory is exactly the file's (no heals).
+//! Load is pure: the project in memory is exactly the file's (no heals), and
+//! nothing derived is written back. An open writes at most two things, both
+//! state the file already implies (docs/saving.md, "What an open writes"):
+//! the link probe of `load_project_full` rolls a legacy file's hot journal
+//! back into it in place (SQLite's own recovery, as 0.6.0's open did), and a
+//! linked file whose undo mode was never set gets this machine's, by a
+//! local-only save that copies the history byte for byte
+//! ([`AppState::persist_pending_local_state`]).
 //!
 //! The read runs without any lock (a legacy migration takes seconds), so the
 //! file can change between the read and the commit: one of our own writes
@@ -424,11 +431,13 @@ impl AppState {
     }
 
     /// Write durable state the commit changed in memory only (a materialized
-    /// undo mode), now that no guard is held. A failure leaves it in memory
+    /// undo mode), now that no guard is held. The one write an open of a
+    /// version 2 file makes; it copies the file's history byte for byte
+    /// (review finding J-docs-tests-truth-3). A failure leaves it in memory
     /// for the next save.
     pub(super) fn persist_pending_local_state(&self) {
         if self.with_file(|f| f.local_pending) {
-            if let Err(e) = self.persist_local_state() {
+            if let Err(e) = self.persist_local_state_keeping_history() {
                 tracing::warn!(error = %e, "Could not write the materialized undo mode; it stays in memory");
             }
         }
