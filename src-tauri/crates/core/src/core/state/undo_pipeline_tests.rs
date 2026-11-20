@@ -2435,3 +2435,43 @@ fn test_undo_actually_works_after_project_reopen() {
         "the reopened undo lands exactly",
     );
 }
+
+/// An entry is recorded within the limits the next open reads it with:
+/// more references than an entry may carry (an Add of thousands of lines), a
+/// long name in the label and preview, and more preview rows are cut, so a
+/// reopen loads the history instead of dropping it whole (review finding
+/// E-undo-pipeline-3). The changeset itself is untouched: the entry steps.
+#[test]
+fn a_recorded_entry_always_reads_back_on_the_next_open() {
+    use crate::models::survey::changeset::{EntryLimits, PreviewRow};
+
+    let state = new_state();
+    let line_id = create(&state, "Line", vec![test_shot_data(5.0)]);
+    let limits = EntryLimits::default();
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        let mut entry = stack.pop_undo().unwrap().entry().clone();
+        entry.refs.lines = (0..limits.max_refs as u32 + 5).collect();
+        entry.label = "L".repeat(limits.max_text_chars + 10);
+        entry.preview.rows = (0..limits.max_preview_rows + 3)
+            .map(|i| PreviewRow {
+                field: format!("row {i}"),
+                old: "x".repeat(limits.max_text_chars + 1),
+                new: String::new(),
+            })
+            .collect();
+        stack.record(entry).unwrap();
+        let mut reread = crate::core::UndoStack::new();
+        reread
+            .load_persisted(&stack.persisted(), &limits)
+            .expect("the next open reads the history");
+        assert_eq!(reread.len(), 1);
+        let back = reread.undo_entries().next().unwrap().entry().clone();
+        assert_eq!(back.refs.lines.len(), limits.max_refs);
+        assert_eq!(back.label.chars().count(), limits.max_text_chars);
+        assert_eq!(back.preview.rows.len(), limits.max_preview_rows);
+        assert_eq!(back.preview.more, 3);
+    }
+    assert!(state.undo().success, "the entry still steps");
+    assert!(project(&state).line(line_id).is_none());
+}

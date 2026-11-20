@@ -53,6 +53,48 @@ pub struct HistoryEntry {
     pub changes: Changeset,
 }
 
+impl HistoryEntry {
+    /// Cut what only labels and previews the entry to what [`decode_entry`]
+    /// accepts under `limits`: references of each kind, shot uuids, preview
+    /// rows (the rest counted in `more`) and strings. The changeset is not
+    /// touched. Recording calls it, so an entry the session holds is never
+    /// one the next open refuses, which would drop the whole history (review
+    /// finding E-undo-pipeline-3).
+    pub fn fit_limits(&mut self, limits: &EntryLimits) {
+        let cut = |text: &mut String| {
+            if text.chars().count() > limits.max_text_chars {
+                let keep = limits.max_text_chars.saturating_sub(1);
+                *text = text
+                    .chars()
+                    .take(keep)
+                    .chain(std::iter::once('…'))
+                    .collect();
+            }
+        };
+        cut(&mut self.kind);
+        cut(&mut self.label);
+        let refs = &mut self.refs;
+        refs.shots
+            .retain(|u| u.chars().count() <= MAX_SHOT_UUID_CHARS);
+        refs.lines.truncate(limits.max_refs);
+        refs.stations.truncate(limits.max_refs);
+        refs.shots.truncate(limits.max_refs);
+        refs.closures.truncate(limits.max_refs);
+        refs.sections.truncate(limits.max_refs);
+        let rows = &mut self.preview.rows;
+        if rows.len() > limits.max_preview_rows {
+            let dropped = rows.len() - limits.max_preview_rows;
+            rows.truncate(limits.max_preview_rows);
+            self.preview.more = self.preview.more.saturating_add(dropped as u64);
+        }
+        for row in rows.iter_mut() {
+            cut(&mut row.field);
+            cut(&mut row.old);
+            cut(&mut row.new);
+        }
+    }
+}
+
 /// Entities an entry names, by stable id (never session ids or slots).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

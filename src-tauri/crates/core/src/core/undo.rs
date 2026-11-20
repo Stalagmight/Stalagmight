@@ -83,7 +83,8 @@ pub struct UndoEntry {
 
 impl UndoEntry {
     /// Encode `entry` (the text a save writes).
-    pub fn new(entry: HistoryEntry) -> Result<Self, EntryError> {
+    pub fn new(mut entry: HistoryEntry) -> Result<Self, EntryError> {
+        entry.fit_limits(&EntryLimits::default());
         let text = encode_entry(&entry)?;
         let raw = RawJson::parse(&text).map_err(EntryError::Syntax)?;
         Ok(Self { entry, raw })
