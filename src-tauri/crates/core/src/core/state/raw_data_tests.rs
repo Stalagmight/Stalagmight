@@ -4,7 +4,6 @@
 //! All data is synthetic: projects built in memory and saved by this build.
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 

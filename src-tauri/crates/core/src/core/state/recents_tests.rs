@@ -7,7 +7,6 @@
 //! All data is synthetic: projects built in memory and saved by this build.
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point; the metadata is the \
               stored figures, compared bit for bit"
@@ -125,7 +124,7 @@ fn open(path: &Path) -> AppState {
 /// The survey members of a version 2 file, decoded, with the name blanked:
 /// what a rename must leave as it was.
 fn body_without_name(bytes: &[u8]) -> (Project, Extras) {
-    let mut decoded = stalx_v2::decode(bytes, &Default::default()).unwrap();
+    let mut decoded = stalx_v2::decode(bytes, &stalx_v2::DecodeOptions::default()).unwrap();
     decoded.project.name = String::new();
     decoded.project.file_path = None;
     (decoded.project, decoded.extras)
@@ -179,7 +178,11 @@ fn the_listing_does_not_decode_the_body() {
     let at = text.find("\"datums\":[").unwrap();
     let end = at + text[at..].find("],\n").unwrap() + 3;
     std::fs::write(&path, format!("{}{}", &text[..at], &text[end..])).unwrap();
-    assert!(stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).is_err());
+    assert!(stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default()
+    )
+    .is_err());
     let state = AppState::new().unwrap();
 
     let recent = recents_of(&state, &[&path]);
@@ -344,7 +347,7 @@ fn renaming_a_closed_legacy_file_upgrades_it_with_a_backup() {
     assert!(r.success, "{:?}", r.error);
     let upgraded = std::fs::read(&path).unwrap();
     assert_eq!(stalx_v2::sniff(&upgraded), Format::V2);
-    let decoded = stalx_v2::decode(&upgraded, &Default::default()).unwrap();
+    let decoded = stalx_v2::decode(&upgraded, &stalx_v2::DecodeOptions::default()).unwrap();
     assert_eq!(decoded.project.name, "Upgraded");
     let mut expected = opened_before;
     expected.name = "Upgraded".to_string();
@@ -414,7 +417,11 @@ fn renaming_the_open_project_is_durable_without_saving_its_edits() {
 
     assert!(r.success, "{:?}", r.error);
     assert_eq!(state.get_project_state().unwrap().name, "Renamed");
-    let on_disk = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
+    let on_disk = stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(on_disk.project.name, "Renamed");
     assert_eq!(
         on_disk.project.lines()[0].shots[0].length,
@@ -430,7 +437,11 @@ fn renaming_the_open_project_is_durable_without_saving_its_edits() {
 
     let saved = state.execute(Command::SaveProject { path: None });
     assert!(saved.success, "{:?}", saved.error);
-    let on_disk = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
+    let on_disk = stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(on_disk.project.name, "Renamed");
     assert_eq!(on_disk.project.lines()[0].shots[0].length, 11.0);
 }

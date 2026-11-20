@@ -10,6 +10,7 @@
     clippy::expect_used,
     clippy::float_cmp,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "test module: panics on a failed assumption are the point; shot fields are \
               compared bit for bit"
 )]
@@ -85,7 +86,11 @@ fn open(path: &Path) -> AppState {
 }
 
 fn decoded(path: &Path) -> Decoded {
-    stalx_v2::decode(&std::fs::read(path).unwrap(), &Default::default()).unwrap()
+    stalx_v2::decode(
+        &std::fs::read(path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap()
 }
 
 /// Set the first shot's length (one undo step).
@@ -222,7 +227,7 @@ fn test_close_project_succeeds_with_a_poisoned_file_state_lock() {
     });
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = state.file.lock().unwrap();
-        std::panic::panic_any("poison the file-state lock");
+        panic!("poison the file-state lock");
     }));
 
     let result = state.close_project();

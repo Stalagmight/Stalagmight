@@ -120,7 +120,7 @@ fn ignores_after_the_upgrading_save(path: &std::path::Path) -> (Vec<IgnoredWarni
     assert!(saved.success, "save failed: {:?}", saved.error);
 
     let bytes = std::fs::read(path).unwrap();
-    let decoded = stalx_v2::decode(&bytes, &Default::default()).unwrap();
+    let decoded = stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).unwrap();
     assert_eq!(
         decoded.extras.ignored_warnings, live,
         "the save writes the ignores the open read"

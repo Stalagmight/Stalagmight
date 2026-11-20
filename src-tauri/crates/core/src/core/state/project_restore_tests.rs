@@ -178,7 +178,7 @@ fn the_restored_project_opens_as_the_backup() {
         .unwrap();
 
     let opened = state();
-    opened.do_load_project_full(project.clone()).unwrap();
+    opened.do_load_project_full(project).unwrap();
     assert_eq!(opened.get_project_state().unwrap().name, "Older");
 }
 
@@ -406,7 +406,7 @@ fn a_legacy_backup_restores_over_a_version_2_project() {
     assert_eq!(label(&project), "Older");
     assert_eq!(std::fs::read(pre_restore_path(&project)).unwrap(), before);
     let opened = state();
-    opened.do_load_project_full(project.clone()).unwrap();
+    opened.do_load_project_full(project).unwrap();
     assert_eq!(opened.get_project_state().unwrap().name, "Older");
 }
 

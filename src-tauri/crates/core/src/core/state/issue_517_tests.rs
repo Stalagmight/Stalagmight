@@ -143,10 +143,13 @@ fn ignores_in_memory(state: &AppState) -> Vec<IgnoredWarning> {
 }
 
 fn ignores_on_disk(path: &Path) -> Vec<IgnoredWarning> {
-    stalx_v2::decode(&std::fs::read(path).unwrap(), &Default::default())
-        .unwrap()
-        .extras
-        .ignored_warnings
+    stalx_v2::decode(
+        &std::fs::read(path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap()
+    .extras
+    .ignored_warnings
 }
 
 /// A file name no other test shares (the upgrade backups folder is shared).
@@ -425,8 +428,12 @@ fn on_write_protected_media_saves_are_refused_and_nothing_is_lost() {
         path: Some(dest.clone()),
     });
     assert!(saved.success, "{:?}", saved.error);
-    let copy = stalx_v2::decode(&std::fs::read(&dest).unwrap(), &Default::default()).unwrap();
-    assert_eq!(copy.project.lines()[0].shots[0].length, 3.5);
+    let copy = stalx_v2::decode(
+        &std::fs::read(&dest).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
+    assert!((copy.project.lines()[0].shots[0].length - 3.5).abs() < 1e-12);
     assert_eq!(
         copy.extras
             .local

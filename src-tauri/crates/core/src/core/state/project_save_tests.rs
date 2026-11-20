@@ -11,6 +11,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
+    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 
@@ -49,7 +50,7 @@ fn survey(name: &str) -> Project {
 fn poison_mutex<T>(mutex: &std::sync::Mutex<T>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = mutex.lock().unwrap();
-        std::panic::panic_any("poison mutex for lock failure coverage");
+        panic!("poison mutex for lock failure coverage");
     }));
 }
 
@@ -259,8 +260,8 @@ fn sqlite_cannot_open_alone_is_not_a_permission_denial() {
     assert!(mentions_unopenable_database(&err));
     // ...including when it is buried in an anyhow context chain, which is how
     // `Database::open` reports it ("Failed to open database" on top).
-    let chained = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
-        .context("Failed to open database");
+    let chained =
+        anyhow::anyhow!("unable to open database file").context("Failed to open database");
     assert!(!is_permission_denied(&chained));
     assert!(mentions_unopenable_database(&chained));
 }
@@ -335,8 +336,7 @@ fn save_failure_tags_a_vanished_folder_with_the_path_code() {
     let temp_dir = TempDir::new().unwrap();
     // Nothing was ever created at `gone/`, so the destination folder is absent.
     let target = temp_dir.path().join("gone").join("cave.stalx");
-    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
-        .context("Failed to open database");
+    let err = anyhow::anyhow!("unable to open database file").context("Failed to open database");
 
     let result = super::project_io::save_failure("Failed to create save file", &target, &err);
 
@@ -357,8 +357,7 @@ fn save_failure_leaves_a_generic_open_failure_unclassified() {
     // Privacy & Security (or claim their drive is unplugged).
     let temp_dir = TempDir::new().unwrap();
     let target = temp_dir.path().join("cave.stalx");
-    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
-        .context("Failed to open database");
+    let err = anyhow::anyhow!("unable to open database file").context("Failed to open database");
 
     let result = super::project_io::save_failure("Failed to create save file", &target, &err);
 
@@ -431,8 +430,7 @@ fn save_failure_tags_an_over_max_path_destination_as_too_long() {
     let temp_dir = TempDir::new().unwrap();
     let long_name = format!("{}.stalx", "n".repeat(300));
     let target = temp_dir.path().join(long_name);
-    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
-        .context("Failed to open database");
+    let err = anyhow::anyhow!("unable to open database file").context("Failed to open database");
 
     let result = super::project_io::save_failure("Failed to create save file", &target, &err);
 
@@ -697,7 +695,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
     let blocked = dir.path().join("blocked.stalx");
     std::fs::create_dir_all(&blocked).unwrap();
 
-    let result = state.save_project(Some(blocked.clone()));
+    let result = state.save_project(Some(blocked));
 
     assert!(!result.success);
     assert_eq!(std::fs::read(&original).unwrap(), before);
@@ -817,7 +815,7 @@ fn the_stalx_round_trip_is_a_byte_fixpoint() {
 
     assert_eq!(once, saved, "open then save writes the same bytes");
     assert_eq!(twice, saved, "and again");
-    let decoded = stalx_v2::decode(&saved, &Default::default()).unwrap();
+    let decoded = stalx_v2::decode(&saved, &stalx_v2::DecodeOptions::default()).unwrap();
     assert_eq!(decoded.extras.history.undo.len(), 1);
     assert_eq!(decoded.project.closures.len(), 1);
     assert_eq!(decoded.project.lines()[1].hand_moves.len(), 1);

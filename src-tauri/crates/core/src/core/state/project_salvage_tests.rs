@@ -6,7 +6,6 @@
 //! damaged by editing the canonical text.
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 
@@ -128,7 +127,7 @@ fn attempt_repair_repairs_in_place_behind_a_backup() {
         result.message
     );
     let opened = state();
-    opened.do_load_project_full(path.clone()).unwrap();
+    opened.do_load_project_full(path).unwrap();
     let repaired = opened.get_project_state().unwrap();
     assert_eq!(repaired.placements.len(), 1);
     assert_eq!(repaired.lines().len(), 2);
@@ -175,7 +174,11 @@ fn a_repaired_managed_copy_is_marked_unpushed() {
 
     assert!(state().repair_project_file(&path).unwrap().success);
 
-    let decoded = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
+    let decoded = stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(decoded.extras.speleodb, extras.speleodb);
     assert!(decoded.extras.local.speleodb.unpushed_edits);
 }
@@ -351,11 +354,7 @@ fn the_open_projects_repair_has_nothing_to_do() {
     let path = dir.path().join("cave.stalx");
     std::fs::write(&path, text(&Extras::default())).unwrap();
     let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::OpenProject { path: path.clone() })
-            .success
-    );
+    assert!(state.execute(Command::OpenProject { path }).success);
     let before = state.get_project_state().unwrap();
 
     let result = state.repair_open_project_integrity();

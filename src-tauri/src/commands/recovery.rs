@@ -301,7 +301,7 @@ mod tests {
                         .into_owned()
                 })
                 .collect();
-        let mut sorted = offered.clone();
+        let mut sorted = offered;
         sorted.sort();
         assert_eq!(
             sorted,
@@ -334,7 +334,7 @@ mod tests {
         );
         assert_eq!(std::fs::read(&result.backup_path).unwrap(), damaged);
         let repaired = std::fs::read(&path).unwrap();
-        assert!(stalx_v2::decode(&repaired, &Default::default()).is_ok());
+        assert!(stalx_v2::decode(&repaired, &stalx_v2::DecodeOptions::default()).is_ok());
     }
 
     /// Export Salvageable Data on a damaged version 2 file: the repaired
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(salvaged.project_name.as_deref(), Some("Damaged"));
         assert_eq!((salvaged.line_count, salvaged.shot_count), (1, 1));
         let full = salvaged.full_project_json.unwrap();
-        assert!(stalx_v2::decode(full.as_bytes(), &Default::default()).is_ok());
+        assert!(stalx_v2::decode(full.as_bytes(), &stalx_v2::DecodeOptions::default()).is_ok());
         assert!(
             salvaged.errors.iter().any(|e| e.starts_with("Repaired: ")),
             "{:?}",
