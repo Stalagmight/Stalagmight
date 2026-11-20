@@ -202,6 +202,33 @@ pub enum ExpectedClass {
     /// which the solve ties as one point or skips (and reports), and the
     /// component is adjusted by its other closures and GPS fixes.
     TieNoLongerFails,
+    /// Closures Computed View only (plan Deviations G9, C24 finding F2): the
+    /// component holds a shot shorter than `sigma_len` within about
+    /// `sigma_az` of a grid axis, whose least-squares sigma the solve floors
+    /// at `sigma_len x sigma_az` (`models::survey::ShotSigmas`). 0.6.0
+    /// weighed it with the bare first-order sigma, a huge, infinite or zero
+    /// weight, so its solve there was singular or ill-conditioned (a
+    /// connector opened by the whole misclosure, stations moved by up to
+    /// thousands of kilometres). Detected from the legacy shots.
+    LegacyWeightsDegenerate,
+    /// Closures Computed View only (G9, C24 F3): 0.6.0's solve failed the
+    /// component with "inconsistent line translation" (shown measured), and
+    /// its shots hold a near-vertical one whose depth change 0.6.0's
+    /// destructive rewrite cannot carry to the check's 1e-6 m (shots and
+    /// depth changes of kilometres; `verify::legacy_rewrite_precision_m`).
+    /// The station graph solves without rewriting shots, so the component is
+    /// adjusted now.
+    LegacyRewriteFailed,
+    /// Closures Computed View only (G9, C24 F3): a slot within the tolerance
+    /// plus the precision of 0.6.0's solve of its component,
+    /// `eps x (largest / smallest shot weight) x the largest coordinate`
+    /// (`verify::legacy_solve_precision_m`). 0.6.0 solved spur stations
+    /// through the normal equations too and placed an all-spur line by its
+    /// attachment group's solved position; with shots of kilometres (a
+    /// cross-axis weight of 1e-7 next to hundreds) that position carries
+    /// rounding of up to 1e-4 m, where the station graph lays spurs out from
+    /// their measured shots. Bounded, unlike the other Computed View classes.
+    LegacySolvePrecision,
 }
 
 impl ExpectedClass {
@@ -212,6 +239,9 @@ impl ExpectedClass {
             Self::LegacyNotFinite => "legacy-not-finite",
             Self::TieSolved => "tie-solved",
             Self::TieNoLongerFails => "tie-no-longer-fails",
+            Self::LegacyWeightsDegenerate => "legacy-weights-degenerate",
+            Self::LegacyRewriteFailed => "legacy-rewrite-failed",
+            Self::LegacySolvePrecision => "legacy-solve-precision",
         }
     }
 }

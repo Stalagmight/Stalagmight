@@ -275,7 +275,7 @@ impl<'a> Case<'a> {
         if moved {
             if self.positions_may_move(adjusted) {
                 self.tally.note(if adjusted {
-                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails)"
+                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision)"
                 } else {
                     "raw: slot moved by a migration class (torn merge collapsed)"
                 });

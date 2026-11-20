@@ -36,12 +36,27 @@
 //! - else, in a component 0.6.0 showed measured without a failure (every
 //!   legacy adjusted slot equals its raw one) that holds a migrated `Tie`:
 //!   [`ExpectedClass::TieSolved`] (D10: a `Tie` is eligible);
+//! - else, in a component holding a shot whose least-squares sigma the
+//!   solve floors ([`ShotSigmas`], plan Deviations G9, C24 F2), which 0.6.0
+//!   weighed with a huge, infinite or zero weight:
+//!   [`ExpectedClass::LegacyWeightsDegenerate`];
+//! - else, in a component 0.6.0's solve failed with "inconsistent line
+//!   translation" whose shots 0.6.0's destructive rewrite cannot hold to
+//!   the check's 1e-6 m ([`legacy_rewrite_precision_m`], G9, C24 F3):
+//!   [`ExpectedClass::LegacyRewriteFailed`];
 //! - else, in a component with a raw [`ExpectedClass::TornMergeCollapsed`]
 //!   slot: that class;
+//! - else, horizontally within the tolerance plus the precision of 0.6.0's
+//!   solve of the component ([`legacy_solve_precision_m`], G9, C24 F3):
+//!   [`ExpectedClass::LegacySolvePrecision`];
 //! - anything else: a mismatch.
 //!
+//! The three G9 classes are detected from the legacy inputs (its shots, its
+//! raw layout and its solve's own failure), never from the positions
+//! compared; the bounded one explains a slot only up to its bound.
 //! The components each solve failed (and showed measured) must be the same,
-//! except a legacy translation failure a demoted merge explains (D11).
+//! except a legacy failure a demoted merge behind a translation failure
+//! (D11), degenerate legacy weights or a failed rewrite explains.
 //! A slot counts once per class (the larger of its two axes' differences
 //! when only one axis is out).
 
@@ -50,7 +65,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use stalagmight_legacy::LegacySurvey;
 
 use crate::models::config::ClosureAdjustmentConfig;
-use crate::models::survey::{ClosureStrategy, Project, RawPositions, Topology};
+use crate::models::survey::{ClosureStrategy, Project, RawPositions, ShotSigmas, Topology};
 use crate::models::{LineId, StationId, StationRef};
 
 use super::assemble::{Built, TieOrigin};
@@ -75,6 +90,60 @@ pub const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
 /// translated consistently (`adjustment_report.rs`, frozen).
 const INCONSISTENT_TRANSLATION: &str =
     "Least squares adjustment produced inconsistent line translation";
+
+/// How closely 0.6.0's destructive Closures Computed View can show a shot
+/// where its solve put it, metres (plan Deviations G9, C24 finding F3).
+///
+/// 0.6.0 writes each solved shot back as a slope length
+/// `L = sqrt(h^2 + dz^2)` from the solved horizontal `h` and the stored depth
+/// change, then shows the survey from those shots, re-deriving
+/// `h' = sqrt(L^2 - dz^2)`. Rounding (unit `eps`) moves `h'^2` by at most
+/// about `3 eps L^2`, so `h'` by at most `3 eps L^2 / h`, and by up to
+/// `sqrt(3 eps) L` when the shot is near vertical (`h` near 0: a small
+/// correction is lost or quantised); the bearing's round trip through
+/// degrees adds a few `eps L`. Bounded here with margin, from the shot as
+/// the file holds it (`h` its measured horizontal, `L` the larger of its
+/// slope length and depth change): an ordinary shot holds a few 1e-15 of its
+/// length, a 34 m vertical one 1e-6 m, a 100 km one 3e-3 m. A non-finite
+/// reading gives 0 (such a slot is [`ExpectedClass::LegacyNotFinite`]).
+pub(super) fn legacy_rewrite_precision_m(length: f64, depth_change: f64, horizontal: f64) -> f64 {
+    let slope = length.abs().max(depth_change.abs());
+    if !(slope.is_finite() && horizontal.is_finite()) {
+        return 0.0;
+    }
+    let eps = f64::EPSILON;
+    let near_vertical = 2.0 * eps.sqrt() * slope;
+    let rounding = if horizontal > 0.0 {
+        4.0 * eps * slope * slope / horizontal
+    } else {
+        f64::INFINITY
+    };
+    rounding.min(near_vertical) + 8.0 * eps * slope
+}
+
+/// How far 0.6.0's floating-point solve of one component can stray from
+/// the exact least squares, metres (plan Deviations G9, C24 finding F3):
+/// `eps x kappa x scale`, the form of an elimination's forward-error bound,
+/// with `kappa` the spread of the component's per-axis shot weights (largest
+/// over smallest), which sets the normal matrix's condition number, and
+/// `scale` its largest raw coordinate. The weights are the floored ones
+/// ([`ShotSigmas::axes`]): they are 0.6.0's wherever no shot is under the
+/// floor, and a component with one is [`ExpectedClass::LegacyWeightsDegenerate`]
+/// (a degenerate weight would make this bound vacuous). 0.6.0 solved
+/// spur stations through the normal equations too and placed an all-spur
+/// line by its attachment group's solved position, which carries that
+/// rounding; the station graph lays spurs out from their measured shots. An
+/// ordinary survey's weights span about 1e3 (1e-11 m at 100 m, 2e-10 m at
+/// 1 km). A 100 km shot's cross-axis weight is 1e-7 next to hundreds or more
+/// along short shots: there the bound is a worst case of metres, where the
+/// fuzz saw 1e-5 to 2e-4 m.
+pub(super) fn legacy_solve_precision_m(weights: (f64, f64), scale: f64) -> f64 {
+    let (smallest, largest) = weights;
+    if !(smallest > 0.0 && largest.is_finite() && scale.is_finite()) {
+        return 0.0;
+    }
+    f64::EPSILON * (largest / smallest) * scale
+}
 
 pub(super) fn verify(
     built: &Built,
@@ -157,9 +226,35 @@ struct SolveFacts {
     new_failed: bool,
     /// One of its slots moved in the raw view (a torn merge collapsed).
     torn: bool,
+    /// One of its legacy shots has a least-squares sigma under the floor:
+    /// 0.6.0's weight there was huge, infinite or zero (C24 F2).
+    degenerate_weights: bool,
+    /// The sum of its legacy shots' rewrite precisions
+    /// ([`legacy_rewrite_precision_m`]): how far 0.6.0's rewrite of its
+    /// solve can stray (C24 F3).
+    rewrite_precision_m: f64,
+    /// The smallest and largest finite per-axis weight of its legacy shots
+    /// (floored, [`legacy_solve_precision_m`]).
+    weights: (f64, f64),
+    /// Its largest raw horizontal coordinate (absolute, legacy).
+    scale_m: f64,
 }
 
 impl SolveFacts {
+    /// 0.6.0's line-translation check (1e-6 m per axis) can fail from its
+    /// shot rewrite's precision alone.
+    fn rewrite_imprecise(&self) -> bool {
+        self.rewrite_precision_m > ADJUSTED_TOLERANCE_M
+    }
+
+    /// Whether a legacy failure the new solve does not repeat is explained.
+    fn legacy_failure_explained(&self) -> bool {
+        self.new_failed
+            || self.merge_tie && self.legacy_translation_failed
+            || self.degenerate_weights
+            || self.legacy_translation_failed && self.rewrite_imprecise()
+    }
+
     fn class(&self) -> Option<ExpectedClass> {
         if self.new_failed {
             None
@@ -167,6 +262,10 @@ impl SolveFacts {
             Some(ExpectedClass::TieNoLongerFails)
         } else if self.tie && self.legacy_measured && !self.legacy_failed {
             Some(ExpectedClass::TieSolved)
+        } else if self.degenerate_weights {
+            Some(ExpectedClass::LegacyWeightsDegenerate)
+        } else if self.legacy_translation_failed && self.rewrite_imprecise() {
+            Some(ExpectedClass::LegacyRewriteFailed)
         } else if self.torn {
             Some(ExpectedClass::TornMergeCollapsed)
         } else {
@@ -210,6 +309,7 @@ fn verify_adjusted(
         let k = *index_of_root.entry(root).or_insert_with(|| {
             facts.push(SolveFacts {
                 legacy_measured: true,
+                weights: (f64::INFINITY, 0.0),
                 ..SolveFacts::default()
             });
             facts.len() - 1
@@ -238,6 +338,43 @@ fn verify_adjusted(
             facts[k].torn = true;
         }
     }
+    // From the legacy shots, as 0.6.0 weighed and rewrote them.
+    let lp = &legacy.project;
+    for line in &lp.lines {
+        let Some(&k) = solve_of_line.get(&line.id) else {
+            continue;
+        };
+        let reference = lp.azimuth_reference_for(line);
+        let f = &mut facts[k];
+        for shot in &line.shots {
+            let azimuth = shot.average_azimuth_true_rad(reference);
+            let sigmas = ShotSigmas::of(adjustment, line.quality, shot.length, azimuth);
+            f.degenerate_weights |= sigmas.floored();
+            for sigma in sigmas.axes {
+                let weight = 1.0 / (sigma * sigma);
+                if weight.is_finite() && weight > 0.0 {
+                    f.weights = (f.weights.0.min(weight), f.weights.1.max(weight));
+                }
+            }
+            f.rewrite_precision_m += legacy_rewrite_precision_m(
+                shot.length,
+                shot.depth_change(),
+                shot.horizontal_length(),
+            );
+        }
+        for index in 0..=line.shots.len() {
+            let slot = stalagmight_legacy::Slot {
+                line_id: line.id,
+                station_index: index as u32,
+            };
+            if let Some(p) = legacy.raw_positions.get(&slot) {
+                let magnitude = p[0].abs().max(p[1].abs());
+                if magnitude.is_finite() {
+                    f.scale_m = f.scale_m.max(magnitude);
+                }
+            }
+        }
+    }
     let mut v = AdjustedVerification {
         failures_legacy: legacy.adjustment_failures.len(),
         failures_new: adjusted.failures().len(),
@@ -260,10 +397,11 @@ fn verify_adjusted(
         }
     }
     // A legacy failure the new solve does not repeat is explained only by a
-    // demoted merge behind a translation failure (D11); else both must fail.
+    // demoted merge behind a translation failure (D11), by degenerate legacy
+    // weights, or by a translation failure the rewrite's precision explains
+    // (G9); else both must fail.
     for (k, lines) in legacy_failed_lines {
-        let f = &facts[k];
-        if !(f.new_failed || f.merge_tie && f.legacy_translation_failed) {
+        if !facts[k].legacy_failure_explained() {
             v.failure_mismatches.push(lines);
         }
     }
@@ -287,7 +425,11 @@ fn verify_adjusted(
     for (position, line) in project.lines().iter().enumerate() {
         let (hops, _) = lines.get(position).copied().unwrap_or((1, 0.0));
         let tolerance = ADJUSTED_TOLERANCE_M + DUST_PER_HOP_M * f64::from(hops);
-        let class = solve_of_line.get(&line.id).and_then(|&k| facts[k].class());
+        let k = solve_of_line.get(&line.id).copied();
+        let class = k.and_then(|k| facts[k].class());
+        let precision = k.map_or(0.0, |k| {
+            legacy_solve_precision_m(facts[k].weights, facts[k].scale_m)
+        });
         for index in 0..line.station_count() {
             let slot = StationRef::new(line.id, index as u32);
             v.slots_checked += 1;
@@ -315,6 +457,9 @@ fn verify_adjusted(
                     expect_in(&mut v.expected, class, d);
                 }
                 Some(_) => {}
+                None if xy_out && !z_out && dxy <= tolerance + precision => {
+                    expect_in(&mut v.expected, ExpectedClass::LegacySolvePrecision, dxy);
+                }
                 None => {
                     if xy_out {
                         v.mismatches

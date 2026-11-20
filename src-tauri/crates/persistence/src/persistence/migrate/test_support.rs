@@ -845,6 +845,7 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
             "a Computed View difference blamed on a demoted merge, without one".to_string(),
         );
     }
+    legacy_precision_classes_hold(legacy, a)?;
 
     // Deterministic.
     let again = migrate(legacy, &ClosureAdjustmentConfig::default())
@@ -861,6 +862,87 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     let (a, b) = (json(&again.project)?, json(&migrated.project)?);
     if a != b {
         return Err("migrating twice serialized differently".to_string());
+    }
+    Ok(())
+}
+
+/// The G9 classes (C24 F2 and F3) against the whole legacy project: a class
+/// blamed on 0.6.0's weights or rewrite needs a shot that has them, and the
+/// solve-precision class stays within the project-wide bound (the largest
+/// weight spread and coordinate, so at least any component's).
+fn legacy_precision_classes_hold(
+    legacy: &LegacySurvey,
+    a: &super::AdjustedVerification,
+) -> Result<(), String> {
+    use super::verify::{
+        legacy_rewrite_precision_m, legacy_solve_precision_m, ADJUSTED_TOLERANCE_M, DUST_PER_HOP_M,
+    };
+    use crate::models::survey::ShotSigmas;
+    let config = ClosureAdjustmentConfig::default();
+    let lp = &legacy.project;
+    let (mut floored, mut rewrite) = (false, 0.0_f64);
+    let mut weights = (f64::INFINITY, 0.0_f64);
+    for line in &lp.lines {
+        let reference = lp.azimuth_reference_for(line);
+        for shot in &line.shots {
+            let azimuth = shot.average_azimuth_true_rad(reference);
+            let sigmas = ShotSigmas::of(&config, line.quality, shot.length, azimuth);
+            floored |= sigmas.floored();
+            for sigma in sigmas.axes {
+                let w = 1.0 / (sigma * sigma);
+                if w.is_finite() && w > 0.0 {
+                    weights = (weights.0.min(w), weights.1.max(w));
+                }
+            }
+            rewrite += legacy_rewrite_precision_m(
+                shot.length,
+                shot.depth_change(),
+                shot.horizontal_length(),
+            );
+        }
+    }
+    if a.expected
+        .contains_key(&ExpectedClass::LegacyWeightsDegenerate)
+        && !floored
+    {
+        return Err(
+            "a Computed View difference blamed on 0.6.0's weights, without a shot under the floor"
+                .to_string(),
+        );
+    }
+    if a.expected.contains_key(&ExpectedClass::LegacyRewriteFailed)
+        && !(rewrite > ADJUSTED_TOLERANCE_M
+            && legacy
+                .adjustment_failures
+                .iter()
+                .any(|f| f.error.contains("inconsistent line translation")))
+    {
+        return Err(
+            "a Computed View difference blamed on 0.6.0's rewrite, without a failed check it explains"
+                .to_string(),
+        );
+    }
+    if let Some(stats) = a.expected.get(&ExpectedClass::LegacySolvePrecision) {
+        let scale = legacy
+            .raw_positions
+            .values()
+            .map(|p| p[0].abs().max(p[1].abs()))
+            .filter(|m| m.is_finite())
+            .fold(0.0_f64, f64::max);
+        let hops = f64::from(u32::try_from(lp.lines.len()).unwrap_or(u32::MAX));
+        let bound =
+            ADJUSTED_TOLERANCE_M + DUST_PER_HOP_M * hops + legacy_solve_precision_m(weights, scale);
+        // NaN on either side fails too.
+        let within = matches!(
+            stats.max_displacement_m.partial_cmp(&bound),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        );
+        if !within {
+            return Err(format!(
+                "a Computed View difference of {:e} m blamed on 0.6.0's solve precision, over its bound {bound:e} m",
+                stats.max_displacement_m
+            ));
+        }
     }
     Ok(())
 }
