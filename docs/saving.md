@@ -2,7 +2,24 @@
 
 ## Overview
 
-Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
+A project is one `.stalx` file in format version 2: canonical, line-oriented
+JSON ([file-format.md](file-format.md)). The app keeps no file handle open:
+the survey lives in memory (`AppState::project`) beside what else the file
+holds (`FileState`, `core/state/open_file.rs`), and every write builds the
+whole file in memory and replaces the old one atomically. Older files are
+SQLite databases with the same extension ("legacy"); they are read through the
+frozen 0.6.0 reader and converted in memory, and the first save writes
+version 2 over them after keeping the original (see
+[Upgrading a legacy file](#upgrading-a-legacy-file)).
+
+Saves are triggered manually (Ctrl+S), automatically via a frontend debounced
+timer, or by the first import into a new project whose initial save was
+deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A
+failed deferred-import save degrades to a successful import carrying a
+warning, never a hard failure, so the imported data stays in memory under the
+close-guard. Some state is saved at once without a save of the survey: the
+SpeleoDB sync state and the display toggles (see
+[Local-only durable saves](#local-only-durable-saves)).
 
 Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Save Changes action share
 `dispatchProjectSave`. Local projects use the existing local save flow. Linked
@@ -47,321 +64,109 @@ fresh download retains the already-created managed project for Reload Project,
 so recovery does not repeat the server creation. The original local file remains
 a separate local copy. Account recovery returns to the form without publishing.
 
-Every import-into-new-project flow now creates its project deferred, so the
-`.stalx` appears on the first import rather than at the moment the name is typed
-(#394 F14) - a wizard abandoned before then leaves no empty file and no Recent
-Projects entry. Because that write happens on the BACKEND, the frontend has to be
-told: `noteImportResolvedDeferredSave` (`projectStore.ts`) flips `databaseOpen`
-after any successful import command unless the result carries the deferred save's
-own `SYSTEM` failure or `DATABASE_NOT_REOPENED`. Without it only the DMP route
-knew - it goes on to call `saveAfterImport` - and the TML/Compass/Walls/GPX
-dialogs, which finish through `completeImportToSingleView`, left the DB-backed
-surfaces (warning resolution, dive-plan persistence) disabled over a file that
-existed.
+Every import-into-new-project flow creates its project deferred, so the
+`.stalx` appears on the first import rather than at the moment the name is
+typed (#394 F14) - a wizard abandoned before then leaves no empty file and no
+Recent Projects entry. Because that write happens on the BACKEND, the frontend
+has to be told: `noteImportResolvedDeferredSave` (`projectStore.ts`) flips
+`databaseOpen` (the store's name for "the project has a file") after any
+successful import command unless the result carries the deferred save's own
+`SYSTEM` failure. Without it only the DMP route knew - it goes on to call
+`saveAfterImport` - and the TML/Compass/Walls/GPX dialogs, which finish
+through `completeImportToSingleView`, left the file-backed surfaces (warning
+resolution, dive-plan persistence) disabled over a file that existed.
 
-## Schema version and pre-release files
+## Opening a project
 
-The `.stalx` schema version lives in `SCHEMA_VERSION` (`persistence/sqlite.rs`);
-opening an older file runs the migration chain in `ensure_schema_version`.
+`project_load.rs` reads the file once, remembers its fingerprint (size,
+modification time and SHA-256: the save guard below), and sniffs it
+(`stalx_v2::sniff`):
 
-**`.stalx` files written before the first release are test artifacts, and no
-migration path is provided for them.** Migrations exist for the shapes that ship;
-a pre-release file that a bump cannot read is expected to be re-imported from its
-source survey, not repaired.
+- **Version 2.** `stalx_v2::decode` with the reader's size and count limits,
+  checking `format`, `version`, `conventions` and `requires`, then
+  `Project::validate`.
+  - A higher `version` gets the existing "made with a newer version" prompt
+    (`NEWER_SCHEMA`); the file is not touched.
+  - An unknown `requires` feature, or an unknown key in a survey record, opens
+    the project **read-only** (see [Read-only files](#read-only-files)).
+  - A survey that breaks an invariant is refused through the corrupt route
+    ("cannot be opened normally"), which offers Attempt Repair (see
+    [SPEC 14.4](SPEC.md#144-file-corruption-recovery)).
+  - Each history entry is decoded; if any one fails, the whole history is
+    dropped and the history-discarded banner says so (an entry of an earlier
+    history version: "written by an earlier version"; anything else: "could
+    not be read").
+- **Legacy SQLite.** `migrate::migrate_path_for_app` opens a private copy
+  through the frozen 0.6.0 reader (`crates/legacy`), with the user's
+  least-squares config, converts it and verifies every slot's position
+  against 0.6.0's. Validation thresholds the file never stored are seeded from
+  the global config. The history is always dropped, with the
+  "earlier version" banner. When the verification found stations that moved
+  (a torn legacy merge collapsed into one station) or anything unexplained,
+  a one-time conversion notice is kept: "Converted from the old file format; N
+  stations moved by up to X m; the original is kept in Recovery."
+  (`AppState::take_conversion_notice`, shown as a banner).
 
-## Persisted names: lines are `sections` on disk
-
-The code calls a continuous run of shots a **Line** (`Line`, `LineId`,
-`Project.lines`, `Project.line_offsets`); it was called a Section until the
-rename. The rename stops at the file boundary, so a file this build writes
-reads the same in an older build and in SpeleoDB's reader:
-
-- **SQL.** The `.stalx` tables and columns keep their names: `sections`,
-  `section_id`, `section_offsets`, `imported_section_hashes`,
-  `station_merges.station_a_section` / `station_b_section`, the
-  `credit_sections` side table, and so on. SpeleoDB's Python `stalagmight_lib`
-  pins schema v18 with explicit column lists, so renaming any of them would be a
-  schema change. The reader and writer map these rows onto the `Line` types.
-- **Persisted JSON.** Serde names derived from Rust identifiers would have
-  changed with the rename, so the JSON the file holds crosses the boundary
-  through `models::disk_names` (`src-tauri/crates/models/src/disk_names.rs`):
-  `to_disk` / `to_disk_string` on write, `from_disk` / `from_disk_str` on read.
-  They rename the listed object keys (`line_id` <-> `section_id`, `lines` <->
-  `sections`, `line_offsets` <-> `section_offsets`, `CreatedLineSnapshot` <->
-  `CreatedSectionSnapshot`, ...) and enum tags (`create_line` <->
-  `create_section`, `LineStart` <-> `SectionStart`, ...) and nothing else, never
-  a user value, including inside the JSON documents nested as strings. The
-  shapes that go through it: the undo/redo rows (`command_json`, and the whole
-  `{"v2": ...}` envelope of `undo_data_json` with the compact deltas, snapshots
-  and `values_json` it carries; `core/undo/persistence.rs`), the `held_gauges` project setting
-  (`persistence/sqlite/read.rs` / `write.rs`) and the dive-plan sidecar snapshot
-  (`core/state/dive_plan.rs`).
-- **Display settings.** The Line names toggle is `showLineNames` in the store,
-  but its `display_settings` row keeps the key `showSectionNames`
-  (`src/store/displaySettingKeys.ts`; the backend reads and writes the row under
-  that name in `core/loading.rs` and `core/state/project_create.rs`).
-
-A new persisted field or enum tag whose name contains `line`/`Line` needs its
-disk name added to `disk_names`, and a new concept must not reuse a disk name
-(`sections`, `section_id`, ...) as its own key; `debug_assert!`s in the
-translation check both. The Section concept (a grouping of lines, #327, see
-[Sections](#sections-groupings-of-lines)) was born after the rename, so it is
-`cave_sections`, `next_cave_section_id` and `cave_section_id` in every JSON
-shape, its commands are tagged `*_cave_section`, and its two names that
-contain `line` (`line_ids`, `move_lines_to_cave_section`) map to themselves. `core/state/pre_line_rename_disk_tests.rs` replays undo
-rows, `held_gauges` and a dive-plan snapshot captured on the commit before the
-rename (`core/undo/testdata/pre_line_rename_rows.json`): each must parse and
-serialize back to the same JSON.
-
-## Station names and Station IDs
-
-Every station has a name (unique within its line) and a project-unique
-Station ID ([SPEC 4.2](SPEC.md#42-station-identification)). Both are stored
-positionally, keyed `(section_id, station_index)` like `station_comments`, in
-side tables that carry no schema bump (SpeleoDB's reader pins the schema
-version, exactly 18 before its 0.0.2, and ignores tables it does not know):
-
-- `station_names (section_id, station_index, name)` - written for every
-  station (`persistence/sqlite/station_texts.rs`);
-- `station_ids (section_id, station_index, station_id)`, primary key
-  `(section_id, station_index)`, plain DDL (`persistence/sqlite/station_ids.rs`);
-- the `project_settings` row `next_station_id`, the allocation counter.
-
-The read is tolerant: a missing table or key reads as none, a `station_ids` of
-another shape gives none (with a warning), an unreadable row is skipped and
-counted. Whatever is missing is re-minted on open by
-`Project::ensure_station_identities`, which allocates in line order then station
-order - so a file an older build rewrote without the table (an older build saves
-by writing a fresh file, which drops tables it does not know) opens with the same
-ids every time, and the names survive (older builds since #676 keep
-`station_names`). SQLite failing for a reason of its own still fails the open.
-A v18 file from before the tables takes the version fast path, so `save_project`
-creates them inside its transaction. `station_ids_tests.rs` pins the round trip,
-the degradations, and that no table the outside reader reads changes beyond the
-`next_station_id` key it never asks for.
-
-The whole-project undo snapshots carry `station_ids` and `next_station_id` in
-the project serde (sorted pairs, `serde(default)`), so a snapshot restore puts
-the counter back with the ids it allocated. A snapshot recorded before the ids
-existed adopts the live project's ids for the stations it shares
-(`core/state/project_io.rs` `adopt_station_identities`).
-
-## Per-shot survey credit
-
-Surveyors, explorers and the survey date are stored per shot, in two side
-tables that carry no schema bump (SpeleoDB's reader pins the schema version,
-exactly 18 before its 0.0.2, and ignores tables it does not know): `credit_people (id, name, email)` and
-`shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
-`(section_id, shot_uuid)`, the people columns
-comma-joined `credit_people` ids (`section_id` is the SQL name of the line
-id, see [Persisted names](#persisted-names-lines-are-sections-on-disk)). The
-legacy `sections.surveyor` and `sections.date` columns are still written, as
-the line aggregate: the earliest shot
-date, and the distinct surveyor names joined with `", "` (`"; "` for exactly
-two one-word names, which the free-text `Last, First` rule would otherwise
-read as one person) - or, when anyone explored the line, the Ariane
-`"explorers / surveyors"` form, both halves name lists joined with `", "`
-(`"Ida Ice /"` when nobody surveyed, which survives the trim an older build's
-Edit Section dialog does on save), with a `" / "` inside a name written `" - "`. A
-`,` or `;` inside one name cannot come back as one person after an older
-build's save; this build's per-shot rows keep it exact. A stored text
-this build would not write the same way (a list longer than a role keeps, a
-name past the length clamp, another spelling) is written back verbatim while
-nobody's credit in the line has changed since the file was opened. A shot
-WITHOUT a row reads its credit from those two columns through the legacy
-splitter, which is the migration for older files; the writer therefore writes
-a row only where that fallback would read back something else.
-
-A released build (0.5.3 and older) saves by writing a fresh file and renaming
-it over the project, so it drops the three credit tables: after such a save
-every shot reads the legacy columns. That is why the surveyor column carries
-both roles (#718): each line still lists its explorers and surveyors. What
-collapses: per-shot differences, later dates and emails go to the line
-aggregate; same-named people become one name; names come back as the legacy
-text spells them (a `/` next to a space as `-`, a name with `,` or `;` as
-several people, a placeholder-only name such as `?` or `unknown` as nobody);
-and a 0.5.3 Ariane
-TML export and re-import collapses identical halves (`"Jo Diver / Jo Diver"`
-becomes the surveyor `Jo Diver` alone). Older Ariane imports stored only the
-two-halves form, and only with two distinct, non-empty halves. A third table, `credit_sections (section_id, surveyor, date)`,
-records the legacy pair this build wrote; when the tables survive next to a
-pair retyped in place (a hand edit, another tool), a line whose pair no
-longer matches the record ignores its rows (the retyped text wins). A credit
-table of another shape gives no rows, with a warning, never a failed open; SQLite
-failing for a reason of its own (busy, I/O, corrupt) still fails the open, so a
-save cannot then drop the rows for good (#717). All three
-tables are project data and ride in SpeleoDB pushes. See
-`persistence/sqlite/shot_credits.rs`.
-
-## Sections (groupings of lines)
-
-Sections - named, coloured groupings of lines (#327) - live in two side tables
-with no schema bump, like `station_names` (SpeleoDB's Python reader pins the
-schema version, exactly 18 before its 0.0.2, and reads only the tables it
-knows, by explicit column lists):
-
-- `cave_sections (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT
-  NULL, position INTEGER NOT NULL)`: one row per Section, `position` its place
-  in the Sections panel;
-- `cave_section_lines (line_id INTEGER PRIMARY KEY REFERENCES sections(id) ON
-  DELETE CASCADE, cave_section_id INTEGER NOT NULL REFERENCES cave_sections(id)
-  ON DELETE CASCADE)`: one row per grouped line (`sections` is the lines table).
-
-Plain DDL only (`schema_guard` refuses CHECKs other than `id = 1`, partial or
-expression indexes, `DEFAULT (expr)`, views and triggers). Every save drops and
-recreates both inside its transaction, after the lines, so a v18 file opened
-through the fast path gets them on its first save. The id counter is not
-stored: a load derives it from the highest id, like `next_line_id`. Reading
-tolerates the tables missing (a file older than them, a read-only open) and
-being of another shape (no Sections, with a warning, never a failed open);
-SQLite failing for a reason of its own still fails the open. A row that cannot
-be read, or names a line or Section the file does not hold, is skipped (the
-open's foreign-key check already refuses such a file); repeated names are made
-unique on read. See `persistence/sqlite/cave_sections.rs`.
-
-An older build drops both tables on its next save (it writes a fresh file), so
-the lines come back ungrouped. Both tables are project data and ride in
-SpeleoDB pushes. Which Sections are hidden on the map is a view setting, the
-`hiddenSections` row of `display_settings` (a JSON array of Section ids), which
-is machine-local and stripped from pushes like every display setting.
-
-## Zero datum fixes
-
-A merge-connected survey can hold several zero datums (#741). Their roles are
-derived from list order, never stored: the first datum of a component places
-it, every later one is a GPS fix. `zero_datums` keeps exactly what an older
-build expects, the placement datums (at most one per merge component) in list
-order, so SpeleoDB's reader (a pinned schema version, explicit column lists) and older
-builds see nothing new. GPS fixes and accuracies live in a side table with no
-schema bump, `zero_datum_extras (position, section_id, station_index,
-shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m,
-start_shot_uuid)`: one row per saved datum, placement and fix alike, keyed by
-its place in the list. `in_zero_datums` says whether its GPS is the
-`zero_datums` row at that station (a placement datum) or the row's own (a fix);
-`accuracy_m` is NULL for the default; `shot_uuid` is the uuid of the shot
-ending at the station (NULL for station 0), and `start_shot_uuid`, for station
-0 only, the uuid of the line's first shot, the one starting there. The rows are written only when the project has a fix or a
-stored accuracy, so a file without them reads from `zero_datums` alone, which
-is the migration for every older file.
-
-An older build drops the table on its next save (it writes a fresh file), so it
-loses the fixes and accuracies and keeps the placements. Neither build can tell
-afterwards, so a save of a project that holds a fix or a stored accuracy
-(`holds_datum_extras`, the same test the writer uses) carries the
-`OLDER_BUILDS_DROP_GPS_FIXES` warning, and the frontend shows it as a warning
-toast once per project per session (`src/utils/gpsFixSaveNotice.ts`). A save into the live
-connection (the SpeleoDB rename path), a repair or another tool can instead
-rewrite `zero_datums` and the shots in place and leave the table beside them.
-So the table is used only while its placement rows name exactly the
-`zero_datums` stations; otherwise it is ignored as a whole, with a warning, and
-the project loads as that older build saw it. A row whose `shot_uuid` no longer
-matches its station is skipped, and so is a station 0 row whose
-`start_shot_uuid` is no longer the line's first shot (a writer reversed the
-line in place, or put a shot before its start). A station 0 row without
-`start_shot_uuid` (written before the column existed) is checked by its line
-alone. Corrupt rows are skipped and counted, an
-unusable accuracy reads as the default, and a table of another shape or with
-more rows than the file has stations is ignored: never a failed open. SQLite
-failing for a reason of its own still fails the open, as for the credit
-tables. See `persistence/sqlite/datum_extras.rs`.
-
-No build writes two datums on one station: setting a datum on a station that
-holds one is refused, and Combine refuses a join that would fold two datums
-onto one station. A row that names a station already holding a datum is
-therefore skipped on load. Opening a file moves no station: an older file
-whose merge was torn between two datum-placed pieces has that merge turned
-back into a loop closure before the offset re-solve (see
-[closures.md](closures.md)).
+Load is pure: the project in memory is exactly what the file says. Nothing is
+healed, re-solved or rewritten on open; a legacy file stays untouched until a
+save.
 
 ## Save Pipeline
 
-### Backend (`save_project` in `project_io.rs`)
+### Backend (`save_with` in `project_io.rs`)
 
 ```
-1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
-   destination folder is not reachable (see Failure classification below)
-2. Load display settings from current database or in-memory cache
-3. Write project data to temp file (file.stalx.tmp)
-4. Copy display settings to temp database
-5. Persist undo/redo stacks synchronously into the temp database
-6. Close temp database, atomically rename to final path
-7. Reopen database at final path
-8. Update project.file_path
-9. Swap in the new database handle
-10. Update recent projects list in config
-11. Return CommandResult with saved_path
+1. Lock project; resolve the destination (the open file, or an explicit path,
+   which always gets the .stalx extension); refuse early if the destination
+   folder is not reachable (FS_PATH_NOT_FOUND, see Failure classification)
+2. validate(): a survey that breaks an invariant is refused ("Can't save: ..."),
+   the project in memory is kept
+3. Refuse a read-only file (READ_ONLY_FILE)
+4. Build the file in memory: stalx_v2::encode(project, extras, mode) with the
+   generator "Stalagmight <version>" and the persisted window of the history;
+   mode is DetachedCopy for an explicit destination of a SpeleoDB project
+   (Save a Copy), Normal otherwise
+5. Pick the guard: the open file must still hold what was last read or
+   written; a project never written expects nothing at its path; an explicit
+   Save As destination is overwritten (the dialog confirmed)
+6. First save of a legacy file: keep the original in the backups folder
+7. write_atomic: <file>.tmp, sync, guard check, rename, folder sync
+8. Update file_path, the fingerprint, origin (now version 2), clear the dirty
+   and local_pending flags, remember the history just written
+9. Update recent projects in config
+10. Rewrite a migrated project's 0.6.0 dive-plan pins (never fails the save)
+11. Return CommandResult with saved_path (or unlinked_copy_path)
 ```
 
-Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo stacks while the file is still staged, so a partial rewrite is never renamed into place.
+Nothing is written before step 7, and step 7 either replaces the file whole or
+leaves it as it was.
+
+The first implicit save of a project never written (a deferred new project's
+reserved path) moves to the next free name (`<name>_1.stalx`, ...) when a file
+appeared at that path meanwhile, and writes over an empty file there (Android's
+document picker creates one before it returns the path).
 
 ### An unchanged project saves to the same bytes
 
-Saving, opening and saving again with no edit writes the survey data byte for
-byte the same. SpeleoDB keeps every push in git, so a page that changes for no
-reason is a page every push uploads and stores. What keeps it:
+The format is canonical: the same model gives the same bytes
+([file-format.md section 8](file-format.md#8-canonical-form)), so saving,
+opening and saving again with no edit writes the file byte for byte the same,
+history included. SpeleoDB keeps every push in git, so a line that changes for
+no reason is a line every push uploads and stores. A one-shot edit changes a
+handful of lines (the shot, `summary`, `project.modified`, one history entry).
+Times are RFC 3339 UTC with nanoseconds, kept in years 0001-9999 (a `.plnx`
+matches its project by the `created_at` instant).
 
-- The station side tables (`station_ids`, `station_names`, `station_comments`,
-  `station_offsets`) and `section_offsets` are written in station order (line
-  id, then station index), not in the order of the in-memory `HashMap`s, which
-  changes on every open. The insert order decides a table's rowids and how its
-  pages and its key index split, so map order rewrote most of those pages on
-  every save. The app's save writes `display_settings` in key order for the
-  same reason.
-- `sections.created_at` is written back as the file held it
-  (`Line::loaded_created_at`); builds before this one stamped it with the time
-  of each save. A line with no usable stored time gets the project's
-  `created_at`: a line new this session, a line an undo re-creates after a
-  delete, or a stored value that is not RFC 3339 text or not a time every
-  reader parses (below). Restoring a whole-project snapshot (undo or redo)
-  carries each live line's time across by line id.
-- Every time the file stores (the project's `created_at` and `modified_at`,
-  each line's `created_at`, station merge and resolved-warning times) is read
-  and written through `persistence/sqlite/stored_times.rs`, which keeps it in
-  years 0001-9999 in UTC with no leap second, the range SpeleoDB's Python
-  reader parses. `to_rfc3339` would write a time past that range (only a
-  crafted file or undo entry holds one) as `-0001-...` or `+10000-...`, and a
-  file saved with that never opened again. Normalizing on the read as well
-  keeps the value in memory equal to the one on disk, which matters because a
-  `.plnx` matches its project by the `created_at` string.
-
-`a_resave_with_no_edit_writes_the_same_bytes` (`station_ids_tests.rs`) pins
-this for `Database::save_project` on a project without undo history. The undo
-rows are written by their own path and are not covered. An edit still rewrites
-what it moves: inserting or deleting a shot mid-line shifts every later row of
-the `shots` table.
-
-### `section_offsets` rows are never all-zero
-
-The `section_offsets` table (the on-disk name of `Project.line_offsets`) records
-lines that are **actually displaced**. A
-value within `Project::OFFSET_DUST_M` (a micrometre) of the origin is not a
-position and is never written - the invariant is stated on
-`Project::write_line_offset` and explained in
-[Undo/Redo](undo-redo.md#a-dust-zero-line_offsets-entry-is-unrepresentable-413-finding-27).
-The save writes the in-memory map as it stands, so the rule holds on disk because
-it holds in memory.
-
-A file written by a build that predates the invariant can still carry such a row.
-It is dropped at the load boundary (`Project::redrive_offsets_after_load`), so the
-project opens without it and the **next save omits it** - a one-time settle, after
-which the file is stable. Nothing observable changes: every consumer reads the map
-through `Project::line_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
-an absent row and an all-zero one are the same geometry.
-
-This does not disturb the file-format fixpoint property the format gate checks: the
-app never writes such a row, so save-load-save on a file this app wrote is a
-fixpoint, and a legacy file is one from its first save onward.
-
-For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
-below), the pipeline diverges after step 5: the copy is written and renamed into
-place, recorded in Recent Projects, and the function returns with
-`CommandResult.unlinked_copy_path` set - steps 7, 8 and 9 are skipped on
-purpose, because the session stays on the managed file.
+The format gates pin this: `persistence/stalx_v2/format_v2_canonical_tests.rs`
+and `format_v2_roundtrip_tests.rs` on the codec, and the AppState-level
+file-format gate (`core/state/format_property_tests.rs`, see
+[Testing Recipes](testing-recipes.md#the-file-format-gate-rust-tier)) on save,
+open and save again.
 
 ### Frontend (`saveProject` in `projectSaveActions.ts`)
 
 ```
-1. invoke('save_project', { path })
+1. invoke('save_project', { path })  (or 'save_project_overwriting', below)
 2. If unlinked_copy_path in result: toast the copy's location and stop - the
    open project was NOT saved (a detached copy was written elsewhere), so
    file_path and isDirty are left untouched
@@ -373,58 +178,177 @@ purpose, because the session stays on the managed file.
 Save completion checks the original project identity and load generation before
 updating paths or dirty state. A late result cannot repaint a replacement project.
 
-The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
+A save never changes the survey (no save-time heals), so it needs no
+`refreshProjectState()`; the store still refreshes after a save of a project
+the integrity check had flagged, as a cheap safety net. The only state that
+changes is `file_path` (on first save or Save As), which the backend returns
+via `CommandResult.saved_path`. When the save produced a detached copy instead
+(see Save a Copy below), the path comes back in `unlinked_copy_path` and
+`saved_path` is absent.
 
 ## Atomic Save (Temp File + Rename)
 
-All saves use a temp file with atomic rename to prevent data loss on crash or power failure:
+Every write of a project file, the local-only ones included, goes through
+`stalx_v2::write_atomic` (`persistence/stalx_v2/atomic.rs`):
 
-1. Write to `file.stalx.tmp` (new SQLite database)
-2. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
-3. On failure: delete `file.stalx.tmp`, original file untouched
+1. A leftover `<file>.tmp` from an interrupted save is removed (the name is
+   ours; a symbolic link there is removed, never followed)
+2. Write `<file>.tmp` beside the destination (on Unix with the destination's
+   permissions) and `sync_all` it: one data sync
+3. Check the guard (below)
+4. `rename(<file>.tmp, <file>)` - atomic on POSIX, nearly atomic on Windows; no
+   handle on the destination is open across it
+5. Sync the folder (Unix; a failure is logged, not returned: the file is
+   already in place)
+6. On any failure before the rename: delete the temp; the destination is
+   untouched
 
-If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
+A symbolic link at the project's path is replaced by the saved file, not
+written through. A torn temp never reads as a project: the format's last
+member is `"end":true`, so a truncated file is refused, and the recovery
+dialog never offers one (it offers a complete temp, which restores as the
+interrupted save).
 
-That gate (`src-tauri/crates/core/src/core/state/crash_property_tests.rs`, see [Testing Recipes](testing-recipes.md)) is what holds this promise up: it constructs the exact files a kill at each pipeline boundary would leave and asserts the destination comes back as EXACTLY the old project or EXACTLY the new one, never a blend, and that the next save recovers cleanly.
+The crash-timing gate (`src-tauri/crates/core/src/core/state/crash_property_tests.rs`,
+see [Testing Recipes](testing-recipes.md)) holds this promise up: it builds the
+exact files a kill at each step would leave, the legacy upgrade's steps
+included, and asserts the destination comes back as EXACTLY the old project or
+EXACTLY the new one, and that the next save succeeds.
+
+## The external-modification guard
+
+The open file's `FileState` remembers the fingerprint of the bytes last read or
+written. Just before the rename, a destination whose length or SHA-256 differs
+(another program, a sync client, a second Stalagmight wrote it, or it was moved
+or deleted) refuses the save with `EXTERNALLY_MODIFIED: <path> was changed by
+another program since it was opened`; nothing is written and the edits stay in
+memory. A touch or a rewrite with the same bytes is no change. The
+local-only saves are guarded the same way.
+
+The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
+
+- **Keep my version**: `save_project_overwriting` writes over the changed file
+  (`AppState::save_project_overwriting`, the guard skipped);
+- **Save as a new file**: the Save As flow, which leaves the changed file alone
+  and moves the session to the new one;
+- **Use the file's version**: reopen the file as it is now, discarding the
+  unsaved changes;
+- **Decide later**: keep editing.
+
+A SpeleoDB-managed copy gets only Keep my version: its reload belongs to the
+sync. An autosave refused this way raises no modal: the autosave banner says
+the file was changed by another program and autosave pauses until a save
+lands; the banner's Save opens the prompt.
+
+## Read-only files
+
+A version 2 file this build cannot rewrite without losing something - an
+unknown `requires` feature, or an unknown key in a survey record (stations,
+lines, shots, datums, placements, closures, Sections) - opens read-only, with
+the "made with a newer Stalagmight" banner. The backend refuses every edit,
+undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
+`useEditingBlocked` reports it as a project-level block, a refused save is
+worded for it (never routed to Review & Repair), and autosave pauses. The
+local-only durable saves still work on it and copy the survey members byte for
+byte.
+
+## Upgrading a legacy file
+
+The first save of a migrated legacy file (its origin is `Legacy` in
+`FileState`) writes version 2 over it. Before the write,
+`UpgradeBackup::take` (`project_io.rs`):
+
+1. copies the SQLite original to `<app data>/backups/<stem>.<UTC stamp>.pre-v2.stalx`;
+2. MOVES any `-journal` / `-wal` / `-shm` sidecar beside that copy, so no old
+   build can later roll a stale journal into the JSON file.
+
+If the write fails, the sidecars are moved back beside the untouched original.
+The Recovery dialog lists the kept originals with the project's own backups
+(`list_project_backups`), and Restore puts one back. The save itself is
+silent; the conversion notice (above) was shown at open when the conversion
+moved anything. Until that first save nothing is written to a legacy file:
+display toggles and SpeleoDB state changes wait in memory (`local_pending`)
+and ride the upgrading save.
+
+Other writes to a closed legacy file upgrade it the same way, with the same
+backup: a Recents rename (`set_project_name_for_path`) and the removal of a
+foreign copy's SpeleoDB link (`speleodb_remove_link_at`).
+
+## Local-only durable saves
+
+`AppState::persist_local_state` rewrites the open file's `speleodb`, `local`
+and `history` members and copies every other member of the file on disk
+verbatim (`stalx_v2::rewrite_local`), behind the guard. Used at once, so these
+changes are durable without saving the survey:
+
+- every SpeleoDB state change: a push result, the dirty bit and `last_edit_at`
+  of a linked project's edit, a pull install, the Unwind chain and watermark,
+  the verify stamp, the history cut after a push, logout bookkeeping;
+- display-setting toggles (`display_settings.rs`).
+
+A Recents rename of the open project is durable at once in the same way, but
+rewrites only the name (`stalx_v2::rename_project` behind the guard,
+`recent_projects.rs`); it is not an undo step, and unsaved survey edits stay
+unsaved.
+
+While the survey has unsaved changes, a local-only save writes the history the
+file last held, never the in-memory stacks (they describe a body the file does
+not have). It works on read-only files. On a legacy file or a project never
+saved it only marks `local_pending`; the next real save writes it. A caller
+that already holds the `project` guard uses `persist_local_state_at`
+(`Mutex` is not reentrant).
+
+## Unsaved changes
+
+`FileState.dirty` is the backend's "changes no save has written":
+`AppState::has_unsaved_changes()` (IPC `has_unsaved_changes`). It is set by
+every recorded edit, by undo and redo, and by an Ignore or Unignore of a
+warning (ignored warnings are survey content: they ride the next save, and
+"Don't save" discards them). It is not set by display toggles or SpeleoDB
+state changes, which are durable at once. A save clears it. The frontend keeps
+its own `isDirty` for the indicator and the close guard, and asks the backend
+after an Ignore.
 
 ## Failure classification
 
 Every failing save goes through `save_failure` (`project_io.rs`), which logs the
 whole `anyhow` chain at WARN and prefixes the `CommandResult.error` with the
 marker that tells the frontend which remediation to show. `src/utils/saveErrors.ts`
-mirrors the three markers; `saveFeedback.ts` turns them into copy.
+mirrors the markers; `saveFeedback.ts` turns them into copy.
 
 | Marker | Means | Surface |
 |---|---|---|
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
-| (none) | Everything else - disk full, corruption | Error dialog, backend message verbatim |
+| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
+| `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only wording; never Review & Repair |
+| (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 
-SQLite reports ALL of these as the same errno-free "unable to open database
-file" (`SQLITE_CANTOPEN`), so that message alone classifies nothing (#429). It is
-corroborated instead: by the destination folder's own answer (gone, refuses a
-probe file, or accepts one) and, on Windows, by the destination's length -
-`MAX_PATH` binds SQLite's `CreateFileW` while Rust's std calls go through `\\?\`
-verbatim paths and stat the parent perfectly happily.
+The version 2 writer reports typed I/O errors with the step that failed
+(creating, writing or flushing the temp, checking the file on disk, moving
+the new file into place), so a permission denial or a missing path classifies
+from the error chain itself. The destination-folder probe (gone, refuses a
+probe file, or accepts one) and the Windows `MAX_PATH` measure remain for an
+error that names neither (#429).
 
 ## Save a Copy (SpeleoDB-managed projects)
 
-A project carrying a `speleo_link` row lives at exactly one usable path: the
+A project carrying a SpeleoDB link lives at exactly one usable path: the
 pull cache (`<cache>/speleodb/<project_id>/project.stalx` - see
 `core/state/speleodb_foreign.rs` for the invariant). Save As on such a project
-therefore does not relocate the session; it writes a detached copy:
+therefore does not relocate the session; it writes a detached copy
+(`Mode::DetachedCopy`):
 
-- The copy carries display settings, resolved warnings and the undo/redo
-  stacks, but NOT the `speleo_link` row - it is a plain unmanaged project.
-- The session stays on the managed file: `project.file_path`, the database
-  handle and the dirty state are untouched. The backend reports the copy via
+- The copy carries the survey, display settings, ignored warnings and the
+  undo/redo stacks, but no `speleodb` member, no SpeleoDB keys in `local` and
+  no undo entries inherited from the server - it is a plain unmanaged project.
+- The session stays on the managed file: `project.file_path`, the guard and
+  the dirty state are untouched. The backend reports the copy via
   `CommandResult.unlinked_copy_path` and deliberately leaves `saved_path`
   unset so the frontend cannot re-point itself at the copy.
 - The copy is added to Recent Projects.
-- Saving a copy onto the managed file itself (its own path, or an alias of the
-  cache path) is refused - that would strip the managed project's link in
-  place.
+- An explicit destination that IS the managed file is an ordinary save of it.
 - Implicit saves (Ctrl+S, auto-save, the pre-push flush) are unaffected: they
   carry the link forward as always.
 
@@ -452,6 +376,10 @@ Auto-save only fires when all of these are true:
 - The project has a `file_path` (has been saved at least once)
 - `isDirty` is true
 - No save is already in progress
+- It is not paused: a save refused as `EXTERNALLY_MODIFIED` or `READ_ONLY_FILE`
+  pauses it (retrying would fail the same way) until a save lands or the
+  failure banner is dismissed; an integrity save-block pauses it until the
+  block clears
 
 ### Configuration
 
@@ -472,33 +400,62 @@ A manual Ctrl+S while a timer is pending cancels the auto-save timer (since `isD
 
 ## Undo/Redo Persistence
 
-Undo and redo stacks are persisted to the SQLite database synchronously on each save, using the same database connection.
+Both stacks ride the file's `history` member
+([file-format.md 5.15](file-format.md#515-history)), one entry per line, each
+the canonical text the stack already holds (`UndoEntry`, `core/undo.rs`), so a
+save copies text and re-encodes nothing.
 
-### Flow
+- **What a save keeps** (`AppState::history_to_persist`): the newest
+  `general.undo_persist_limit` (default 20) entries of each stack on a local
+  project or a SpeleoDB project in Disabled mode; both stacks whole in Full
+  mode, where the in-memory depth is the byte budget instead
+  (`UNDO_BYTE_BUDGET_BYTES`, 4 MiB of persisted JSON over both stacks, oldest
+  first). In memory a local project keeps `general.undo_history_limit`
+  (default 100) entries per stack.
+- **On open** every entry is decoded as untrusted input (size, version, strict
+  layout, structural rules); one that fails drops the whole history with the
+  banner, because an entry is only meaningful on the exact state the one
+  before it left. An entry from the file has no session shot ids; its steps
+  mint them.
+- **Pushes** strip redo always and send undo only in Full mode, cut at the
+  inherited-history watermark and then by bytes so the file fits the 5 MiB
+  upload limit (newest entries kept).
+- **A legacy file's** history is dropped on open (plan 7.2.8); a detached copy
+  carries no history inherited from the server.
+- On project close, stacks are cleared from memory.
+- See [Undo/Redo](undo-redo.md) for the engine, the hybrid SpeleoDB mode and
+  when the stack is cleared.
 
-1. While the undo stack lock is held, entries are collected and serialized
-2. Entries are written to the database synchronously (no background thread)
-3. A failed write is logged via `tracing::warn`, both stacks are cleared, and the save result carries an `UNDO_HISTORY_DROPPED` warning; if clearing also fails, the save is aborted with `save_failure` and the temp file is removed
+## Persisted names
 
-### Details
+The code calls a continuous run of shots a **Line** and a named grouping of
+lines a **Section** (#327). The version 2 file uses the same words: `lines`
+are lines and `sections` are Sections. A legacy SQLite file used the
+pre-rename names (its `sections` table holds the lines, `cave_sections` the
+Sections); only the frozen reader reads them now. Two places keep a pre-rename
+spelling on purpose:
 
-- Only the last N entries are persisted (configurable via `general.undo_persist_limit`, default 20) - EXCEPT for a Full-mode SpeleoDB project, which persists its whole history since the last commit under a byte budget instead (#303)
-- Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`, in
-  the pre-rename vocabulary (`section_id`, `create_section`, ...; see
-  [Persisted names](#persisted-names-lines-are-sections-on-disk))
-- Serialization uses gzip compression
-- A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
-- On project open, persisted stacks are restored from the database
-- A whole-project snapshot (`ProjectSnapshotPair`) mirrors the
-  `zero_datum_extras` split (#741): its `zero_datums` holds the placement and
-  dangling datums only, and each GPS fix rides beside it under
-  `zero_datum_fixes` with its place in the whole list. An older build reads a
-  persisted snapshot as a plain `Project` and ignores that key, so an Undo there
-  restores the placements alone, never two datums in one merge component; this
-  build merges the fixes back in list order (`core/undo/snapshot_fixes.rs`). A
-  snapshot without the key, including one written before it, restores its
-  `zero_datums` as they are. Fixes that cannot be read refuse the restore.
-- See [Undo/Redo](undo-redo.md) for the full undo system documentation, including the hybrid SpeleoDB mode and when the stack is cleared
+- **Display settings.** The Line names toggle is `showLineNames` in the store,
+  but its key in `local.display` stays `showSectionNames`
+  (`src/store/displaySettingKeys.ts`; the backend reads and writes it under
+  that name in `core/loading.rs` and `core/state/project_create.rs`), so a
+  migrated file keeps its toggle.
+- **The dive-plan sidecar.** The `.plnx` JSON goes through `models::disk_names`
+  (`core/state/dive_plan.rs`), which renames `line_id` <-> `section_id` and the
+  other listed keys and tags on the way in and out.
+
+## Legacy files and pre-release files
+
+A legacy file is read by `crates/legacy` exactly as the 0.6.0 app opened it:
+its schema migration chain, its side tables (station names and Station IDs,
+per-shot credit, Sections, GPS fixes and accuracies) and its load pipeline,
+then converted by `persistence::migrate` ([plan section 7](plans/2026-11-20_station-graph-model.md#7-migration-from-sqlite-legacy)).
+The app never writes SQLite.
+
+**`.stalx` files written before the first release are test artifacts, and no
+migration path is provided for them.** A pre-release file that the frozen
+reader cannot read is expected to be re-imported from its source survey, not
+repaired.
 
 ## CommandResult.saved_path
 
@@ -512,11 +469,17 @@ The `save_project` backend command returns the save path as a string in `Command
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
+| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend save, the guard choice, the legacy upgrade backup, close |
+| `src-tauri/crates/core/src/core/state/project_load.rs` | Open: sniff, decode or migrate, commit |
+| `src-tauri/crates/core/src/core/state/open_file.rs` | `FileState`, the local-only durable save, the conversion notice |
+| `src-tauri/crates/persistence/src/persistence/stalx_v2/atomic.rs` | `write_atomic`, `Fingerprint`, `Guard` |
+| `src-tauri/crates/persistence/src/persistence/stalx_v2/encode.rs` | The serializer and its modes (normal, for push, detached copy) |
+| `src-tauri/crates/persistence/src/persistence/migrate/mod.rs` | Legacy open and conversion |
 | `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
 | `src/store/projectSaveActions.ts` | Frontend `saveProject()` action and completion ownership |
+| `src/components/Dialogs/SaveConflictDialog.tsx` | The prompt for a file changed on disk |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
-| `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
+| `docs/file-format.md` | The file format |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
 | `docs/configuration.md` | Auto-save config options |
 
