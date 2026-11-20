@@ -38,9 +38,9 @@ import type { TargetingDigest } from '../lib/fuzzOracleCore';
 /**
  * `src-tauri/src/models/id_stride.rs`. The loader renumbers every shot to
  * `line_id * FEATURE_ID_STRIDE + sequence_order`
- * (persistence/sqlite/read.rs), and the in-session allocator hands out ids from
- * the same space - which is why a stale persisted id COLLIDES rather than
- * missing. Mirrored here so the scenario can prove, before it saves, that the
+ * (`Line::assign_session_shot_ids`), and the in-session allocator hands out ids
+ * from the same space - which is why a stale persisted id would COLLIDE rather
+ * than miss (0.6.0's file persisted them; a v2 history names shots by uuid). Mirrored here so the scenario can prove, before it saves, that the
  * ids it is about to persist really have diverged from positional order.
  */
 export const FEATURE_ID_STRIDE = 100_000;
@@ -866,9 +866,9 @@ export const GUARANTEED_VARIANTS: readonly UndoVariant[] = [
 /**
  * True when `shotIds` no longer equals what the LOADER would renumber them to.
  *
- * `line_id * FEATURE_ID_STRIDE + sequence_order` is both what
- * `persistence/sqlite/read.rs` writes on load and where the in-session allocator
- * draws from, so ids that still match positional order would survive a reload
+ * `line_id * FEATURE_ID_STRIDE + sequence_order` is both what the load assigns
+ * (`Line::assign_session_shot_ids`) and where the in-session allocator draws
+ * from, so ids that still match positional order would survive a reload
  * unchanged and a stale persisted id would address the same shot it always did.
  * The divergence is the whole precondition, so the scenario asserts it rather
  * than assuming the plan produced it.

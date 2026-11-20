@@ -500,15 +500,15 @@ describe('X2 the open project survives', () => {
     expectRefusal: true,
   };
 
-  it('passes a refused store-route attempt that left the database alone', () => {
+  it('passes a refused store-route attempt that left the project file alone', () => {
     expect(() => checkProjectFileSurvived(base, REPRO)).not.toThrow();
   });
 
-  it('fails when the database bytes changed', () => {
+  it('fails when the project file bytes changed', () => {
     expect(() => checkProjectFileSurvived({ ...base, after: 'sha-after' }, REPRO)).toThrow(/MODIFIED/);
   });
 
-  it('fails when the database is gone', () => {
+  it('fails when the project file is gone', () => {
     expect(() => checkProjectFileSurvived({ ...base, after: null }, REPRO)).toThrow(/GONE/);
   });
 

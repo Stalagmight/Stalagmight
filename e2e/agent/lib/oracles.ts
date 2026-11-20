@@ -69,21 +69,20 @@ export function newOracleState(): OracleState {
  * Suffixes of the write-staging files that a crashed/aborted write can strand
  * beside the project. Every producer of one belongs here:
  *
- *  - `.stalx.tmp`        - the atomic save (`core/save.rs`), `<file>.tmp`.
- *  - `.download.tmp`     - the SpeleoDB dump extract
- *    (`speleodb/dump.rs::download_temp_path`), which appends to the WHOLE file
- *    name, so an open remote project stages at `project.stalx.download.tmp`.
- *    That does not end in `.stalx.tmp`, so matching only the save suffix let a
- *    leaked download temp pass `check_problems` in silence - and the directory
- *    it lands in is exactly the one this oracle scans (an open SpeleoDB
+ *  - `.stalx.tmp`        - the atomic `.stalx` v2 write
+ *    (`persistence::stalx_v2::write_atomic`), `<file>.tmp`: every save, Save a
+ *    Copy, salvage and SpeleoDB copy goes through it.
+ *  - `.download.tmp`     - 0.6.0's SpeleoDB dump extract, which appended to the
+ *    WHOLE file name, so an open remote project staged at
+ *    `project.stalx.download.tmp` - a name that does not end in `.stalx.tmp`,
+ *    and in exactly the directory this oracle scans (an open SpeleoDB
  *    project's path IS `<cache>/speleodb/<uuid>/project.stalx`).
- *  - `.vacuum.tmp`       - the push snapshot's SQLite compaction
- *    (`persistence/sqlite/repair.rs::vacuum_temp_path`), which likewise appends to
- *    the whole file name, so the push stages at `snapshot.stalx.vacuum.tmp` in
- *    that same directory. Cleaned on every in-process exit from `VACUUM INTO`
- *    (success renames it away, both failure arms unlink it) and self-healed by the
- *    next push, so it only survives a crash or kill mid-compaction - which is
- *    precisely what the adversarial runs provoke, and what this oracle is for.
+ *  - `.vacuum.tmp`       - 0.6.0's push snapshot, a SQLite `VACUUM INTO`
+ *    staged at `snapshot.stalx.vacuum.tmp` in that same directory.
+ *
+ * The last two have no producer in this build (the native transfer and the
+ * v2 file replaced both); they stay listed, so a regression back to either, or
+ * a leftover reaching a run's project folder, is still reported.
  *
  * Note the app's own recovery scanner (`commands/recovery.rs`) treats ANY trailing
  * `.tmp` as leftover, so it needs no such list; this narrower allowlist is the
@@ -118,9 +117,8 @@ export function newOracleState(): OracleState {
  * writes no file at all.
  *
  * So a `.tmp` seen during an export run belongs to a SAVE, not to the export -
- * `project_io.rs:535` (`.stalx.tmp`), `project_merge.rs:311`, `speleodb/dump.rs:194`
- * (`.download.tmp`), `sqlite/repair.rs:387` (`.vacuum.tmp`) - and the three
- * suffixes below already cover all of them. This paragraph is the record that
+ * `write_atomic` (`.stalx.tmp`, for the save, Merge and every other project
+ * write) - and the suffixes below already cover it. This paragraph is the record that
  * the question was asked; if an export ever grows a staging write, its suffix
  * goes in the list and this note comes out.
  */

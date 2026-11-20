@@ -124,11 +124,11 @@ export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): 
 
   const normalized = walk(state, '');
   // ID-AGNOSTIC mode, used ONLY for comparisons that cross a save/reload.
-  // `Shot::id` is not persisted: the loader renumbers every shot to
-  // `line_id * FEATURE_ID_STRIDE + sequence_order`
-  // (src-tauri/src/persistence/sqlite/read.rs:372), so a session that deleted or
-  // inserted a shot mid-line comes back with different ids for the same
-  // shots. Replacing each id with its position makes the comparison independent
+  // `Shot::id` is a session handle, never persisted (plan 1.1): the load
+  // numbers every shot `line_id * FEATURE_ID_STRIDE + index`
+  // (`Line::assign_session_shot_ids`, models/src/survey/types.rs), so a session
+  // that deleted or inserted a shot mid-line comes back with different ids for
+  // the same shots. Replacing each id with its position makes the comparison independent
   // of that renumbering while leaving everything else - uuids, geometry,
   // ordering, every other field - compared exactly. Line ids ARE persisted
   // and are NOT touched here.

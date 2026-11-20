@@ -1021,11 +1021,12 @@ export const exportRoundtripFuzz: Scenario = {
       let skipped: string | null = null;
 
       // The project's own bytes, read IMMEDIATELY before the move rather than
-      // once per episode. The `.stalx` is a live SQLite database and every
-      // mutating command writes to it, so an episode-scoped baseline reports
-      // the hostile-comment oracle's `createLine` as "the export modified
-      // the database". Measured on seed 2. Taken as late as possible so the
-      // only thing between the two reads is the export.
+      // once per episode, so that nothing but the export sits between the two
+      // reads. Under 0.6.0 the `.stalx` was a live SQLite database that every
+      // mutating command wrote, and an episode-scoped baseline reported the
+      // hostile-comment oracle's `createLine` as "the export modified the
+      // project file" (measured on seed 2); a `.stalx` v2 file only changes on
+      // a save, which the same late read keeps out of the comparison.
       const projectBytesBefore =
         draw.shape === 'openProject' && projectFile !== null ? hashOf(projectFile) : null;
 
@@ -1275,8 +1276,8 @@ export const exportRoundtripFuzz: Scenario = {
         ROUNDTRIP_PROJECT_NAME,
         undefined,
         // A real `savePath` rather than a deferred initial save: the deferred
-        // one reserves a path and leaves the database unopened, and an import
-        // into it cannot run. It also means `ensure_shot_uuids` has run by the
+        // one reserves a path and writes no file yet, and an import into it
+        // cannot run. It also means `ensure_shot_uuids` has run by the
         // time anything is exported back out.
         { savePath: projectPath },
       ]);

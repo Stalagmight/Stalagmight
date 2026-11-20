@@ -150,7 +150,7 @@ describe('stripUndoHistory', () => {
     expect(isInsideTrackedFixtures(path.join(tempDir(), 'naharon.stalx'))).toBe(false);
   });
 
-  it('reports a missing file rather than creating an empty database', () => {
+  it('reports a missing file rather than creating an empty one', () => {
     const missing = path.join(tempDir(), 'nope.stalx');
 
     expect(() => stripUndoHistory(missing)).toThrow(/no such \.stalx/);

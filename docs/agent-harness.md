@@ -560,10 +560,10 @@ history stacks are empty. Tracked fixtures ship with a stack
 (`undo_persist_limit`, 20 rows in the fractal fixture and 2 in naharon), and a
 scenario that models undo depth must not fuzz on top of somebody else's entries
 or burn the headroom below the 100-entry limit. `stripUndoHistory`
-(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the 0.6.0 app's
-`Database::clear_undo_history_at` (the tracked fixtures are old SQLite
-files), and refuses any path inside `e2e/fixtures/`
-so it can only ever touch a temp copy.
+(`e2e/agent/lib/fixtures.ts`) empties a v2 file's `history` member and leaves a
+legacy SQLite file as it is (the tracked fixtures are old SQLite files, and the
+app drops a migrated file's history on open), and refuses any path inside
+`e2e/fixtures/` so it can only ever touch a temp copy.
 
 | Env var | Effect |
 |---|---|

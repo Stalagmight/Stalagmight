@@ -11,13 +11,16 @@
  *
  * ## Why
  *
- * Bug 8 (issue #413, the data-corruption one) is three facts stacked:
+ * Bug 8 (issue #413, the data-corruption one) was three facts stacked in
+ * 0.6.0's SQLite file:
  *
  *   1. shots are RENUMBERED on load to `line_id * FEATURE_ID_STRIDE +
- *      sequence_order` (persistence/sqlite/read.rs:372);
- *   2. undo entries are persisted and reloaded as OPAQUE JSON with no remapping
- *      anywhere on the restore path (persistence/sqlite/undo.rs); and
- *   3. the in-session allocator (`Line::take_shot_id`) hands out ids from the
+ *      sequence_order` (still true: `Line::assign_session_shot_ids`);
+ *   2. undo entries were persisted and reloaded as OPAQUE JSON with no remapping
+ *      anywhere on the restore path (0.6.0's SQLite undo table; a `.stalx` v2
+ *      history entry names shots by uuid and carries no session id, plan 8.3);
+ *      and
+ *   3. the in-session allocator (`Line::mint_shot_id`) hands out ids from the
  *      SAME space, so a stale id does not miss - it COLLIDES.
  *
  * Nothing about that reasoning is specific to `CreatedShotSnapshot`. Every
