@@ -698,9 +698,19 @@ test.describe('Detail Panel Links', () => {
       await expect(otherShot).toBeVisible();
       await expect(otherShot).toContainText('On ');
       const id = await page.getByTestId('station-detail-id').textContent();
+      // "Merged with" names the other line, never the station itself (UX-7);
+      // the station merged into this one shows as "Also known as" with its
+      // own name and Station ID (the mock's retired slot: Side Passage 0).
+      const mergedLink = page.getByTestId(`station-${sideLineId}-0-link`);
+      await expect(mergedLink).toHaveText('Side Passage');
+      const retiredId = sideLineId * 100_000;
+      await expect(page.getByTestId('station-detail-aliases')).toContainText('Also known as');
+      await expect(page.getByTestId(`station-detail-alias-${retiredId}`)).toHaveText(`0 (Station ID ${retiredId})`);
 
       await selectStation(page, sideLineId, 0);
       await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
+      await expect(page.getByTestId(`station-${mainLineId}-3-link`)).toHaveText('Main Tunnel');
+      await expect(page.getByTestId(`station-detail-alias-${retiredId}`)).toBeVisible();
       await expect(page.getByTestId(`detail-unmerge-${mainLineId}-3`)).toHaveAttribute(
         'aria-label',
         /^Detach .+ from this station$/
@@ -1186,11 +1196,15 @@ test.describe('Detail Panel Links', () => {
       await selectStation(page, mainLineId, 1);
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
       // The merge partner is the SAME station on the other line (the station
-      // graph, plan 9.3): it shows the junction's one name, with that line.
+      // graph, plan 9.3): the entry names that line, never the station's own
+      // name again (UX-7); its accessible name still says which slot it is.
       const partner = page.getByTestId(`station-${sideLineId}-0-link`);
       await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 8');
-      await expect(partner).toContainText('8');
-      await expect(partner).toContainText('Side Passage');
+      await expect(partner).toHaveText('Side Passage');
+      // The name the merged station had is kept as "Also known as".
+      await expect(page.getByTestId(`station-detail-alias-${sideLineId * 100_000}`)).toHaveText(
+        `0 (Station ID ${sideLineId * 100_000})`,
+      );
 
       // Every station has a name: one never renamed keeps the one seeded from its index.
       await selectStation(page, mainLineId, 2);

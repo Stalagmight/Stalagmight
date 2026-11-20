@@ -474,7 +474,10 @@ one the user sees.
 
 - Per slot `(L, i)` with station `S` (`stations_wire`): `S`'s coordinates
   (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `S`'s
-  `id`, `name` and `comment` (shared by a junction's slots), `merged_with` =
+  `id`, `name` and `comment` (shared by a junction's slots), `aliases` = the
+  ids and names merged into `S` (`StationAliasWire`, TS `StationAlias`;
+  absent when `S` has none, so most stations pay nothing; every slot of a
+  junction carries them, for the station details' "Also known as"), `merged_with` =
   `S`'s other slots (so a junction's slots list each other, transitively,
   like today's merge groups), `is_zero_datum` / `gps_coordinates` = the datum
   the slot's datum dialog edits (`datum_index_for(S, Some(L))`, so every slot
@@ -566,7 +569,9 @@ frontend decoder drops `line_offsets` from `ProjectHeaderBinary`, the
 reconstruction loop and the `Project` literal, and pins
 `EXPECTED_VERSION = 9`; the e2e IPC mock's `load_project_full_binary` builder
 does the same. Semantics the decoder sees change without a layout change:
-`stations_ids`, names and comments are shared by a junction's slots.
+`stations_ids`, names and comments are shared by a junction's slots. The same
+unreleased version 9 added the sparse `station_aliases` list (`Station::aliases`
+per slot); a decoder without it reads no aliases.
 
 ### Equivalence with today
 

@@ -30,6 +30,7 @@ import type { Shot } from './ipc/Shot';
 import type { ShotKind } from './ipc/ShotKind';
 import type { Station } from './ipc/Station';
 import type { StationRef } from './ipc/StationRef';
+import type { StationAlias } from './ipc/StationAlias';
 import type { DatumRole } from './ipc/DatumRole';
 import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
@@ -130,6 +131,9 @@ export interface SurveyData {
   stationNames: Map<number, string>;
   /** The project-unique Station ID per global station index (dense). */
   stationIds: Uint32Array;
+  /** The Station IDs and names merged into a station (its aliases, oldest
+   *  first), on every slot of it; sparse, only stations that have some. */
+  stationAliases: Map<number, StationAlias[]>;
 }
 
 /**
@@ -311,6 +315,8 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
   station.name = data.stationNames.get(globalIndex) ?? '';
+  const aliases = data.stationAliases.get(globalIndex);
+  if (aliases !== undefined) station.aliases = aliases;
   return station;
 }
 
@@ -519,6 +525,7 @@ export function surveyDataFromLegacy(
     stationComments: new Map(),
     stationNames: new Map(),
     stationIds: new Uint32Array(stations.length),
+    stationAliases: new Map(),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
@@ -584,6 +591,7 @@ export function surveyDataFromLegacy(
     if (s.comment) data.stationComments.set(i, s.comment);
     if (s.name) data.stationNames.set(i, s.name);
     data.stationIds[i] = s.id ?? 0;
+    if (s.aliases && s.aliases.length > 0) data.stationAliases.set(i, s.aliases);
   });
 
   return data;
@@ -618,6 +626,7 @@ export function surveyDataWithAdjustedStations(
   const stationComments = new Map<number, string>();
   const stationNames = new Map<number, string>();
   const stationIds = new Uint32Array(SN);
+  const stationAliases = new Map<number, StationAlias[]>();
 
   adjustedStations.forEach((s, i) => {
     stationLineIds[i] = s.station_ref.line_id;
@@ -634,6 +643,7 @@ export function surveyDataWithAdjustedStations(
     if (s.comment) stationComments.set(i, s.comment);
     if (s.name) stationNames.set(i, s.name);
     stationIds[i] = s.id ?? 0;
+    if (s.aliases && s.aliases.length > 0) stationAliases.set(i, s.aliases);
   });
 
   return {
@@ -649,6 +659,7 @@ export function surveyDataWithAdjustedStations(
     stationComments,
     stationNames,
     stationIds,
+    stationAliases,
   };
 }
 
@@ -688,5 +699,6 @@ export function emptySurveyData(): SurveyData {
     stationComments: new Map(),
     stationNames: new Map(),
     stationIds: new Uint32Array(0),
+    stationAliases: new Map(),
   };
 }

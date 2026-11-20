@@ -178,6 +178,15 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
     }
 }
 
+/// `Detach line "Side" from station 3a`: the line at `slot` leaves the
+/// station there (named once: a junction has one name on every line).
+fn detach(names: &NameBook<'_>, slot: StationRef) -> String {
+    match (quoted_line(names, slot.line_id), names.station_name(slot)) {
+        (Some(line), Some(station)) => format!("Detach line {line} from station {station}"),
+        _ => "Detach line from station".to_string(),
+    }
+}
+
 /// The label of `cmd` with names, as a batch's preview rows and a recipe's
 /// placeholder sub-commands word it (0.6.0's `describe`): `Merge stations
 /// Main Line / 0 and Side / 1`, `Delete line "Main Line"`, `Update shot in
@@ -233,11 +242,11 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
             station_a,
             station_b,
         } => pair("Merge stations", station_a, station_b),
-        Command::UnmergeStations { station_ref } => on_station("Unmerge station", station_ref),
-        Command::UnmergeStationPair {
-            station_a,
-            station_b,
-        } => pair("Unmerge station pair", station_a, station_b),
+        // A junction is one station: the menu's "Detach Line from Station"
+        // detaches one line from it (plan 5.2; the pair form detaches
+        // `station_b`'s line), and the row says so in the same words.
+        Command::UnmergeStations { station_ref } => detach(names, *station_ref),
+        Command::UnmergeStationPair { station_b, .. } => detach(names, *station_b),
         Command::CreateLoopClosure {
             station_a,
             station_b,

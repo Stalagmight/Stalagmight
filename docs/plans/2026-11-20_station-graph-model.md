@@ -819,6 +819,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 - **W8. The merge check's closure preview reads each end's depth on the picked slot's line** (`closure_metrics_via`), as today's slot-based preview did; M2's `merge_check` uses first slots.
 - **W9. The binary load envelope drops `line_offsets`: version 8 -> 9.** Every other field keeps its name and element type.
 - **W10. `file_path` is sent lossily as UTF-8**; today a non-UTF-8 path failed the serialization.
+- **W11. A station's aliases are on the wire** (`Station::aliases`, TS `StationAlias[]`, absent when none; the binary envelope's sparse `station_aliases`, still version 9): the station details show them as "Also known as", and "Merged with" names the other lines, not the station again (review UX-7, H-frontend-wire-5). A detach's history row uses the menu's words, `Detach line "Side" from station 3a`.
 
 ## Deviations (stream C0, the core switch foundation)
 

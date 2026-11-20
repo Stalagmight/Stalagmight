@@ -515,6 +515,32 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
     }
   });
 
+  // An optional field is still part of the wire: a junction's aliases (the
+  // ids and names a merge retired) are optional because most stations have
+  // none, and a mock that never sends them hides "Also known as" from every
+  // spec. So each optional field of the generated type must be sent by every
+  // mock station list too, and the shared identity ones from the junction.
+  it('the mock station list sends every optional Station field, aliases from the junction', () => {
+    const stationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/Station.ts'), 'utf8');
+    const body = /export interface Station \{([^}]*)\}/.exec(stationTs)?.[1] ?? '';
+    const optional = body
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => /^\w+\?:/.test(f))
+      .map((f) => f.slice(0, f.indexOf('?')).trim());
+    expect(optional).toEqual(expect.arrayContaining(['closures_with', 'comment', 'aliases']));
+    const pushes = stripComments(mockTsSource).split('mockStations.push({').slice(1);
+    for (const push of pushes) {
+      const literal = push.slice(0, findMatchingBracket(`{${push}`, 0, '{', '}'));
+      for (const field of optional) {
+        expect(new RegExp(`\\b${field}\\b`).test(literal), `a mock station never sends ${field}`).toBe(true);
+      }
+      expect(literal).toMatch(/\baliases:\s*identity\.aliases\b/);
+    }
+    // The binary load envelope carries them too, as the backend's does.
+    expect(stripComments(mockTsSource)).toMatch(/\bstation_aliases:\s*\w+/);
+  });
+
   it('the shape check finds the arguments of a known command', () => {
     expect(rustCommandParams(rust, 'unmerge_station_pair').map((p) => p.name)).toEqual([
       'state',

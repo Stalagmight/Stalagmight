@@ -33,6 +33,7 @@ import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
+import { StationAliases } from './StationAliases';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -775,12 +776,14 @@ function StationDetail({ station }: { station: Station }) {
                 {station.merged_with.map((ref, i) => (
                   <li key={i} className="text-sm flex items-center justify-between gap-2">
                     <div>
+                      {/* A junction is ONE station: the entry is the other
+                          line through it, never its own name again. */}
                       <DetailLink
                         type="station"
                         target={{ lineId: ref.line_id, position: ref.station_index }}
-                        displayText={labels.station(ref, true)}
-                        pillLabel={labels.station(ref)}
-                        pillContext={labels.lineName(ref.line_id)}
+                        displayText={labels.lineName(ref.line_id)}
+                        fullText={labels.station(ref, true)}
+                        pillLabel={labels.lineName(ref.line_id)}
                         onSelect={() => handleSelectMergedStation(ref)}
                         isMissing={!mergedStationExists(ref)}
                         onAnnounce={announceSelection}
@@ -806,6 +809,8 @@ function StationDetail({ station }: { station: Station }) {
               </ul>
             </div>
           )}
+
+          <StationAliases aliases={station.aliases} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection

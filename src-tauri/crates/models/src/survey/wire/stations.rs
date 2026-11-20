@@ -5,7 +5,8 @@
 //! Per slot `(L, i)` with station `S`:
 //! - coordinates: `S`'s position (raw or Computed View), depth plus `L`'s
 //!   hand-move z at `S`;
-//! - `id`, `name`, `comment`: `S`'s, shared by every slot of a junction;
+//! - `id`, `name`, `comment`, `aliases`: `S`'s, shared by every slot of a
+//!   junction (`aliases` absent when `S` has none);
 //! - `merged_with`: `S`'s other slots (slot order), so a junction's slots
 //!   list each other, transitively, as today's merge groups did;
 //! - `is_zero_datum` / `gps_coordinates`: the datum the slot's datum dialog
@@ -22,7 +23,7 @@ use std::collections::BTreeMap;
 
 use crate::{ClosureRef, Coordinates, StationId, StationRef};
 
-use super::super::{AdjustedPositions, Project, RawPositions, StationPositions};
+use super::super::{AdjustedPositions, Project, RawPositions, StationAlias, StationPositions};
 
 /// Everything a wire station holds but its coordinates (one state).
 struct SlotRelations {
@@ -209,9 +210,20 @@ impl SlotRelations {
                     comment: identity.and_then(|s| s.comment.clone()),
                     id: station,
                     name: identity.map(|s| s.name.clone()).unwrap_or_default(),
+                    aliases: identity
+                        .filter(|s| !s.aliases.is_empty())
+                        .map(|s| s.aliases.iter().map(alias_wire).collect()),
                 }
             })
             .collect()
+    }
+}
+
+/// The wire form of one alias.
+fn alias_wire(alias: &StationAlias) -> crate::StationAliasWire {
+    crate::StationAliasWire {
+        id: alias.id,
+        name: alias.name.clone(),
     }
 }
 

@@ -22,7 +22,7 @@ const CHANGED: CommandResult = {
   warnings: [],
   line_ids: [],
 };
-const SAVED: CommandResult = { success: true, warnings: [], line_ids: [] };
+const SAVED: CommandResult = { success: true, error: null, warnings: [], line_ids: [] };
 
 describe('useAutoSave pause', () => {
   beforeEach(() => {

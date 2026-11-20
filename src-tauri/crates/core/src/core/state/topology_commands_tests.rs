@@ -503,7 +503,7 @@ fn unmerge_pair_needs_two_slots_of_one_station() {
         history(state)[0],
         (
             "unmerge_station_pair".to_string(),
-            "Unmerge station pair A / 1 and B / 1".to_string()
+            "Detach line \"B\" from station 1".to_string()
         )
     );
     assert_round_trip(state, &before, "unmerge pair");

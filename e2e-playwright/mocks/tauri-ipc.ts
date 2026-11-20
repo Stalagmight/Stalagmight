@@ -854,8 +854,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // derives what the backend's wire shows from their union: every slot of
       // a junction lists every other slot of it in `merged_with` (transitively),
       // they share one Station ID, name and comment (the junction's first slot
-      // in line order then index is its representative), and `station_merges`
-      // goes out as star pairs from that first slot.
+      // in line order then index is its representative), the other members'
+      // own ids and names are its aliases (the ids a merge retired, plan 5.1),
+      // and `station_merges` goes out as star pairs from that first slot.
       const mockSlotKey = (ref: MockStationRef): string => `${ref.line_id}:${ref.station_index}`;
       const mockJunctions = (
         lines: ReadonlyArray<{ id: number }>,
@@ -905,7 +906,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockSlotIdentity = (
         junctions: Map<string, MockStationRef[]>,
         ref: MockStationRef,
-      ): { merged_with: MockStationRef[]; id: number; name: string; comment: string | undefined } => {
+      ): {
+        merged_with: MockStationRef[];
+        id: number;
+        name: string;
+        comment: string | undefined;
+        aliases: Array<{ id: number; name: string | null }> | undefined;
+      } => {
         const members = junctions.get(mockSlotKey(ref));
         const rep = members?.[0] ?? ref;
         const others = members
@@ -916,11 +923,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           if (comment !== undefined) break;
           comment = mockStationComments[mockSlotKey(m)];
         }
+        const retired = (members ?? []).slice(1);
         return {
           merged_with: others.map((m) => ({ line_id: m.line_id, station_index: m.station_index })),
           id: mockStationId(rep.line_id, rep.station_index),
           name: mockStationName(rep.line_id, rep.station_index),
           comment,
+          // Absent when none, as the backend omits the key.
+          aliases: retired.length > 0
+            ? retired.map((m) => ({ id: mockStationId(m.line_id, m.station_index), name: mockStationName(m.line_id, m.station_index) }))
+            : undefined,
         };
       };
       /** The wire's `station_merges`: star pairs from each junction's first slot,
@@ -1656,6 +1668,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }>;
               id: number;
               name: string;
+              aliases?: Array<{ id: number; name: string | null }>;
             }> = [];
 
             const currentMerges = (currentProject.station_merges ?? []) as Array<{
@@ -1714,6 +1727,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   // and name (the station graph's wire, plan 9.2).
                   id: identity.id,
                   name: identity.name,
+                  ...(identity.aliases !== undefined ? { aliases: identity.aliases } : {}),
                 });
               }
             }
@@ -1856,6 +1870,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 comment?: string | null;
                 name?: string | null;
                 id?: number;
+                aliases?: unknown[];
               }>;
               stats: Record<string, unknown>;
               warnings: unknown[];
@@ -1983,6 +1998,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const stationClosuresWith: Array<[number, unknown[]]> = [];
             const stationCommentsArr: Array<[number, string]> = [];
             const stationNamesArr: Array<[number, string]> = [];
+            const stationAliasesArr: Array<[number, unknown[]]> = [];
             const stationsIds = new Uint8Array(totalStations * 4);
             const stationsIdsView = new DataView(stationsIds.buffer);
 
@@ -2000,6 +2016,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
               if (station.comment) stationCommentsArr.push([idx, station.comment]);
               if (station.name) stationNamesArr.push([idx, station.name]);
+              if (station.aliases?.length) stationAliasesArr.push([idx, station.aliases]);
               stationsIdsView.setUint32(idx * 4, (station.id ?? idx) >>> 0, true);
             });
 
@@ -2094,6 +2111,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_comments: stationCommentsArr,
               station_names: stationNamesArr,
               stations_ids: stationsIds,
+              station_aliases: stationAliasesArr,
               stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
@@ -2204,6 +2222,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               comment?: string;
               id: number;
               name: string;
+              aliases?: Array<{ id: number; name: string | null }>;
             }> = [];
 
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
@@ -2252,6 +2271,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     ...(identity.comment !== undefined ? { comment: identity.comment } : {}),
                     id: identity.id,
                     name: identity.name,
+                    ...(identity.aliases !== undefined ? { aliases: identity.aliases } : {}),
                   });
                 }
               }
