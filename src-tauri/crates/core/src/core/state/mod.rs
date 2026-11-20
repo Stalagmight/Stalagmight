@@ -247,13 +247,6 @@ mod name_rules_tests;
 mod open_undo_bugs_tests;
 #[cfg(sg_unported)]
 #[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod pre_line_rename_disk_tests;
-#[cfg(sg_unported)]
-#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
