@@ -5,10 +5,13 @@
 //! becomes JSON (docs/plans/2026-11-20_station-graph-model.md). Every old
 //! SQLite `.stalx` must still open exactly as 0.6.0 opened it, so this crate
 //! keeps that code, unchanged, under its own paths: [`models`] (the 0.6.0
-//! `stalagmight-models`, minus the gas planner, placement suggestions and
-//! dive plans) and [`persistence`] (the 0.6.0 SQLite layer). It depends on no
-//! live crate, so nothing the rewrite does can change what it reads. Change it
-//! only to fix a migration bug.
+//! `stalagmight-models`: the model, its edit operations, coordinates and the
+//! least-squares solve; minus the gas planner, placement suggestions, dive
+//! plans, distance/ruler queries and project stats) and [`persistence`] (the
+//! 0.6.0 SQLite layer: the hardened open, schema guards, the v2..v18
+//! migration chain and `load_project`; the save path only with `writer`). It
+//! depends on no live crate, so nothing the rewrite does can change what it
+//! reads. Change it only to fix a migration bug.
 //!
 //! Provenance: copied at `feat/survey-graph` d595f4ee7 (release/0.6.0 at
 //! 745946507). Mechanical edits only: test modules and `cfg(test)` items

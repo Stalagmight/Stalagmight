@@ -250,22 +250,6 @@ impl GpsCoordinates {
     }
 }
 
-/// GPS bounding box in WGS84 format
-/// Uses cardinal directions: north/south for latitude, east/west for longitude
-/// Note: When bounds cross the international dateline, `east < west`.
-/// For example, bounds spanning from 170°E to 170°W would have west=170, east=-170.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct GpsBounds {
-    /// Northern boundary (max latitude)
-    pub north: f64,
-    /// Southern boundary (min latitude)
-    pub south: f64,
-    /// Eastern boundary longitude. If `east < west`, bounds cross the dateline.
-    pub east: f64,
-    /// Western boundary longitude
-    pub west: f64,
-}
-
 /// Internal XYZ coordinates (meters)
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 // Member-crate path base only - see the rationale on `StationRef`.
@@ -628,14 +612,6 @@ impl ClosureStrategy {
             _ => Self::default(),
         }
     }
-}
-
-/// Reference to a frozen shot (part of an adjusted survey network).
-/// Frozen shots cannot have their geometry fields edited.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrozenShotRef {
-    pub line_id: LineId,
-    pub shot_index: u32,
 }
 
 /// A detected loop closure in the survey. Endpoints stored as position-independent

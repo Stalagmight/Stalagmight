@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use crate::models::{Coordinates, Line, LineId, Shot, Station, StationRef};
+use crate::models::{Line, LineId, Station, StationRef};
 
 use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
 
@@ -552,120 +552,6 @@ impl Project {
         m
     }
 
-    /// Build the survey distance graph as an adjacency list over the `n` stations
-    /// (nodes indexed by position; `station_index` maps refs to those indices).
-    /// Edges are **every real topological connection**:
-    /// - every shot - permanent AND jump/reference - weighted by its measured
-    ///   `length` (reference shots are real measured legs / jumps a diver swims);
-    /// - `station_merges` (zero cost - the same physical point);
-    /// - every `loop_closures` entry (zero cost - a closed loop means the two
-    ///   stations are the same physical point), **regardless of `is_aligned`**;
-    ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
-    ///   so the topological connection exists either way.
-    ///
-    /// We deliberately include everything. Distances are shortest-path (Dijkstra
-    /// always takes the minimum), so an extra real edge can only ever yield a
-    /// shorter, more correct route - never inflate one. Excluding real
-    /// connections is what hides reachable areas or routes "the long way".
-    ///
-    /// #77 is now CLOSED by #27: a [`ShotKind::Reference`] is a non-swimmable
-    /// survey tie, so `include_reference = false` (the default everywhere but the
-    /// `gas.include_reference_legs` opt-in) drops it from the route. That removes
-    /// the false-shortcut risk this doc used to carry. Jumps stay in: they are
-    /// swum. Excluding an edge can only lengthen a route or shrink reach, which
-    /// is the safe direction; the 88ccbaff lesson was about excluding *real* legs,
-    /// and a reference tie is precisely the leg that is not real to swim.
-    pub(super) fn build_survey_graph(
-        &self,
-        n: usize,
-        station_index: &HashMap<StationRef, usize>,
-        coords: Option<&[Coordinates]>,
-        include_reference: bool,
-    ) -> Vec<Vec<(usize, f64)>> {
-        // Thin wrapper over `build_survey_graph_weighted` preserving the original two
-        // weightings: straight-line between `coords` (closure-adjusted geometry, for the
-        // distance gradient) when supplied, else the measured `shot.length`. The gas engine
-        // (`models/project/gas`) calls the weighted form directly with a gas-cost closure.
-        // An unusable leg gets an INFINITE weight rather than being skipped:
-        // `along_line_between` keys a parallel shot-edge map on this function's
-        // edge-emission order, so the edge SET must not change. Dijkstra never
-        // relaxes across an infinite edge, so the leg is unreachable either way.
-        match coords {
-            Some(c) => self.build_survey_graph_weighted(n, station_index, |shot, fi, ti| {
-                if !shot.kind.is_swum() && !include_reference {
-                    return f64::INFINITY;
-                }
-                let (a, b) = (&c[fi], &c[ti]);
-                let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
-                (dx * dx + dy * dy + dz * dz).sqrt()
-            }),
-            None => self.build_survey_graph_weighted(n, station_index, |shot, _fi, _ti| {
-                if !shot.kind.is_swum() && !include_reference {
-                    return f64::INFINITY;
-                }
-                shot.length.max(0.0)
-            }),
-        }
-    }
-
-    /// Generalisation of [`build_survey_graph`](Self::build_survey_graph): each shot edge's
-    /// weight is supplied by `shot_weight(shot, from_idx, to_idx)`. Shot edges (permanent +
-    /// jump/reference) take the closure's weight; station merges and loop closures stay
-    /// **zero-cost** (same physical point). The line/shot iteration order is byte-identical
-    /// to `build_survey_graph` - `along_line_between` keys a parallel shot-edge map on that
-    /// edge-emission order, so it must not change here.
-    pub(super) fn build_survey_graph_weighted<F>(
-        &self,
-        n: usize,
-        station_index: &HashMap<StationRef, usize>,
-        shot_weight: F,
-    ) -> Vec<Vec<(usize, f64)>>
-    where
-        F: Fn(&Shot, usize, usize) -> f64,
-    {
-        let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-
-        // Shots (permanent and jump/reference).
-        for line in &self.lines {
-            for (i, shot) in line.shots.iter().enumerate() {
-                let from = StationRef::new(line.id, i as u32);
-                let to = StationRef::new(line.id, (i + 1) as u32);
-                if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
-                    let w = shot_weight(shot, fi, ti);
-                    adj[fi].push((ti, w));
-                    adj[ti].push((fi, w));
-                }
-            }
-        }
-        // Station merges: zero-cost (same physical point).
-        for merge in &self.station_merges {
-            if let (Some(a_sr), Some(b_sr)) = (
-                self.resolve_key(&merge.station_a),
-                self.resolve_key(&merge.station_b),
-            ) {
-                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                    adj[a].push((b, 0.0));
-                    adj[b].push((a, 0.0));
-                }
-            }
-        }
-        // Loop closures: zero-cost, INCLUDING non-aligned ones - a closed loop is
-        // a real physical connection no matter the reconciliation strategy.
-        for closure in &self.loop_closures {
-            if let (Some(a_sr), Some(b_sr)) = (
-                self.resolve_key(&closure.station_a),
-                self.resolve_key(&closure.station_b),
-            ) {
-                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                    adj[a].push((b, 0.0));
-                    adj[b].push((a, 0.0));
-                }
-            }
-        }
-
-        adj
-    }
-
     /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
     /// each seeded at distance 0). Returns the shortest-path distance to every
     /// node; unreachable nodes - and every node when `roots` is empty - stay
@@ -784,19 +670,5 @@ impl Project {
             }
         }
         (dist, riders, pred)
-    }
-
-    /// Resolve the project's ENTRANCE datum stations to their indices in
-    /// `stations`: the roots of "Start from entrance", penetration and the
-    /// distance gradient. A GPS fix that is not an entrance (a radiolocation
-    /// point mid-passage) is not a root (#741, [`Self::entrance_datum_refs`]).
-    pub(super) fn zero_datum_roots(
-        &self,
-        station_index: &HashMap<StationRef, usize>,
-    ) -> Vec<usize> {
-        self.entrance_datum_refs()
-            .into_iter()
-            .filter_map(|sr| station_index.get(&sr).copied())
-            .collect()
     }
 }

@@ -809,16 +809,6 @@ impl Project {
         ids
     }
 
-    /// Does the merge group containing `line_id` hold a zero datum?
-    pub(crate) fn rigid_group_has_datum(&self, id: LineId) -> bool {
-        // Delegate to the resolve-aware check so a DANGLING datum (anchor key no
-        // longer resolves) is not counted as an anchor - otherwise a move-drag is
-        // wrongly blocked on a phantom-anchored, actually-unanchored group (#174).
-        // Same merge-group scope as before: `component_datum_refs` (which backs
-        // `line_has_zero_datum`) uses the same `get_merged_line_ids`.
-        self.line_has_zero_datum(id)
-    }
-
     /// Assert that all merge points are colocated (within
     /// [`Project::MERGE_ALIGNMENT_INVARIANT_M`]).
     /// Only active in debug builds - no-op in release.
