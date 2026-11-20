@@ -22,20 +22,20 @@ Everything a user can see that differs from 0.6.0, gathered from 12.2 and the De
 Editing:
 
 - **A junction is one station**, with one Station ID, name and comment: a merge records the retired station's id and name as an alias and joins distinct comments (survivor first); renaming a junction checks all its lines (12.2, 5.1, 5.3, G3). Why: a merge makes one station, so merged stations can never drift apart or disagree.
-- **Split Line Here makes a junction**: the halves share the split station, so an edit to one half moves the other, Move Segment on the second half is refused when the first holds a datum, merging the far ends goes to the closure dialog, and the dialog has no comment or datum side (a datum "on both halves" is no longer refused) (12.2, 5.4, S9, N3). Why: no duplicated co-located station.
+- **Split Line Here makes a junction**: the halves share the split station, so an edit to one half can move the other, Move Segment on the second half is refused when the first holds a datum, merging the far ends goes to the closure dialog, and the dialog has no comment or datum side (a datum "on both halves" is no longer refused) (12.2, 5.4, S9, N3). Why: no duplicated co-located station.
 - **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (name copied and made unique, no comment); datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach (12.2, 5.2, E6, N13). Why: there is no pairwise merge left to remove.
 - **A delete leaves a junction on its other lines** with its comment and datums, whatever line they were set from; nothing is re-anchored and no replacement merge is made; the delete preview also lists the sweep's promotions beyond the removed member's (M1, S13, W6). Why: the junction is still a station of those lines.
 - **Set Zero Datum on a junction slot edits the station's datum** when it has one; two datums on one station come only from merging two placed pieces or from a migration (E1). Why: a datum belongs to the station, not to one line's member.
 - **A loop closure from a junction to a station a closure already ties it to is refused** as a duplicate (Q5). Why: 0.6.0's merged twin is the junction itself.
 - **Combine Lines works on junctions**: a torn junction detaches the moving line (closure ids differ from 0.6.0's; positions and misclosures match), and third lines there stay on the fixed side; a gauge both lines pass, or a migrated merge loop at a hand-moved join, can change which line moves; two datums on one merged join are allowed; the depth notice reads the station's averaged depth; a torn junction is named by its two slots and its one name (S1, S3, S5 to S8, S10, N3). Why: one station per junction, and the Computed View's own hold decides what stays.
-- **Closure figures are recomputed** from the current layout: path length counts shots only (closures and merges are no zero-length edges) and is 0 between two datum-held pieces (12.2, 3.6, D14). Why: nothing derived is stored.
+- **Closure figures are recomputed** from the current layout: path length counts shots only (closures and merges are not zero-length edges) and is 0 between two datum-held pieces (12.2, 3.6, D14). Why: nothing derived is stored.
 - **History labels are worded when the edit is recorded**, with the names before it, batch rows included; an Update Shot preview lists only the cells that changed (N1). Why: the persisted history holds no forward command to word later.
 - **Smaller editing differences**: an edit that changes nothing keeps the redo branch (Unmerge off a junction too); MoveComment onto its own station is a no-op (0.6.0 deleted the comment); Create Line names only the new line; a range gap-close reports the closures it removes; import tracking and Untrack Import are undo steps behind the read-only gate; Add .stalx and Section creation refuse when ids run out instead of renumbering; with no project open undo says "No project open", and editing a shot on a deleted line says "That line no longer exists." (N2, N4, N5, N6, N14, E5). Why: an empty changeset records nothing, the hash lists are recorded content, ids are never reused.
 
 Derived views and Plan mode:
 
 - **Migrated merge loops are `Tie` closures**, shown as aligned `Batch`: the Closures Computed View now solves a component 0.6.0 showed measured, and a demoted merge spanning one shot is skipped and reported instead of failing its component (D10, D11, G2, W3). Why: a merge that closes a loop is a loop closure.
-- **Immovable stations follow the documented rule** (datum stations and their aligned tie groups); 0.6.0's frontend also followed chain entries through an unaligned closure (D15). Why: that walk could let Move Station break an aligned tie.
+- **Immovable stations follow the documented rule** (datum stations and their aligned tie groups); 0.6.0's frontend also followed chain entries through an unaligned closure (D15). Why: an unaligned closure is not rigid, and the walk let Move Station's co-located set reach past it.
 - **One station, one entry**: a datum is flagged on every slot of its station (W2); Plan mode's route has no merge hops and lists each turn station once, and a drop override on another slot of the default drop's junction does nothing (D18); the ruler's path lists the two ends of each traversed shot (D19); Recents counts a version 2 file's junction once (N12). Why: a junction is one node.
 
 Files:
@@ -71,7 +71,7 @@ Exports, imports and readers:
 - **Stale code comments.** A few still describe the SQLite-era undo (`persistence::undo_limits`, `core::command`, `models::disk_names`); persistence's 32 MiB `UNDO_BYTE_BUDGET_BYTES` only derives the history row cap (`MAX_PERSISTED_HISTORY_ROWS`), the app's budget is `core::undo`'s 4 MiB.
 - **Release runs.** The fuzz campaigns and the migration corpus modes on the final build (11.6).
 
-Fixed in wave C, so not open: the first save of a legacy file left with a hot journal (C17 bug 3), one edit pass per batch and the release benchmark against 0.6.0 (C16), the least-squares edge cases C24 F2 and F3 (G9) and the frozen crate's #822 port, the wire cleanups (`SplitLineOptions` sides, the LoadingPhase names, the integrity banner and its IPC, the empty delete-preview fields) and the Move Station tie bug (D15), and the test-kit fold.
+Fixed in wave C, so not open: the first save of a legacy file left with a hot journal (C17 bug 3), one edit pass per batch (C16) and the release benchmark against 0.6.0, the least-squares edge cases C24 F2 and F3 (G9) and the frozen crate's #822 port, the wire cleanups (`SplitLineOptions` sides, the LoadingPhase names, the integrity banner and its IPC, the empty delete-preview fields) and the Move Station tie bug (D15), and the test-kit fold.
 
 ### Rollout prerequisites
 
@@ -82,7 +82,8 @@ Outside this repository (12.1), before the release that carries this change:
 3. **A minimum-client gate** on the server for projects whose HEAD is version 2, ideally, so an older client is told to update instead of downloading a file it cannot open.
 4. **A 0.5.x patch** that sniffs `{"format":"stalx"` and says "made with a newer Stalagmight" instead of taking the corrupt-file route.
 5. **stalx-reader published** for the server-side maps (#593): publish `stalagmight-legacy` or gate the dependency (G7).
-6. **Release notes** (CHANGELOG): a saved project no longer opens in an older Stalagmight, and SpeleoDB pushes need the updated server.
+
+The release notes for users (a saved project no longer opens in an older Stalagmight, SpeleoDB pushes need the updated server) are in `CHANGELOG.md`, Unreleased.
 
 ---
 

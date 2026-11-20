@@ -396,7 +396,8 @@ canonical form, so `RawJson::parse` leaves it unchanged):
   SpeleoDB watermark cut).
 - `k`, `label`, `refs`, `preview` are the core's: the command kind (icon),
   the label resolved at record time, the stable ids it names (never session
-  ids or slots), and rows worded at record time for what the changeset
+  ids or slots; at most `MAX_LISTED_SHOTS`, 16, shot uuids, as many as a
+  preview lists), and rows worded at record time for what the changeset
   cannot say (a batch's sub-commands, an offset). The forward `Command` is
   never persisted.
 - `decode_entry` is for untrusted input: a byte limit, the version, a strict
