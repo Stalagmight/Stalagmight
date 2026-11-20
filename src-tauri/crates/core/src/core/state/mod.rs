@@ -94,7 +94,7 @@ mod cave_sections_tests;
     reason = "on-demand characterisation dump: fails loudly, and says where it wrote"
 )]
 mod characterization_dump_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::float_cmp,

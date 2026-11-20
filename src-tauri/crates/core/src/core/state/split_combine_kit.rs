@@ -13,8 +13,10 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::survey::{ClosureId, ClosureStrategy, LineMeta, Project, StartAt};
-use crate::models::{LineId, ShotData, StationId, StationRef};
+use crate::models::survey::{
+    ClosureId, ClosureStrategy, EditContext, LineMeta, Project, StartAt, ZeroDatum,
+};
+use crate::models::{GpsCoordinates, LineId, ShotData, StationId, StationRef};
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
 /// A flat shot (no depth change).
@@ -92,6 +94,32 @@ pub(super) fn close(
         .value
         .closure
         .id
+}
+
+pub(super) fn gps(latitude: f64, longitude: f64) -> GpsCoordinates {
+    GpsCoordinates::new(latitude, longitude, 0.0).unwrap()
+}
+
+/// Put a zero datum on `station` as Set Zero Datum would (the anchor
+/// algorithm places its piece on it, or keeps it a GPS fix).
+pub(super) fn add_datum(p: &mut Project, station: StationId, at: GpsCoordinates) {
+    let before = p.anchor_snapshot();
+    p.push_datum(ZeroDatum::new(station, at));
+    p.settle_anchors(&before, &EditContext::none());
+}
+
+/// Put a zero datum on `station` that holds its piece where it is (a
+/// declared correction, as Add .stalx leaves one): two pieces each placed by
+/// their own datum, side by side.
+pub(super) fn hold(p: &mut Project, station: StationId, at: GpsCoordinates) {
+    let here = p.raw_positions().xy(station).unwrap();
+    add_datum(p, station, at);
+    let i = p.datums.len() - 1;
+    p.datums[i].correction = p.correction_to_hold(i, here);
+    assert!(
+        apart(p.raw_positions().xy(station).unwrap(), here) < 1e-9,
+        "setup: held"
+    );
 }
 
 /// The raw (measured) position of a slot.
