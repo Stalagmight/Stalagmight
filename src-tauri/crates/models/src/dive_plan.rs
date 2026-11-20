@@ -94,6 +94,20 @@ pub struct PlanAnchor {
     /// the thing this field exists to detect.
     #[serde(default)]
     pub terminal_shot_length_bits: Option<u64>,
+    /// The Station ID of the pinned station when it was written (the station
+    /// graph's stable identity, plan 10.3). `None` on anchors 0.6.0 wrote.
+    ///
+    /// The neighbours alone cannot say which END of a shot a one-neighbour
+    /// pin names once the line has been reversed: 0.6.0 told the two apart
+    /// with the record parity it kept in the project, and a station-graph
+    /// project keeps none. A station id needs no parity at all: a station
+    /// keeps its id through a reverse, an insert or delete elsewhere, a
+    /// split and a combine, and a merge keeps a retired id as an alias of
+    /// the survivor. `core::state::dive_plan` reads it first and falls back
+    /// to the neighbours only when that station is gone. Omitted when `None`,
+    /// so a 0.6.0 row writes back byte for byte and a 0.6.0 build ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station: Option<crate::StationId>,
 }
 
 impl PlanAnchor {
