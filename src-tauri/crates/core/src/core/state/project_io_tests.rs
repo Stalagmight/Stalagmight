@@ -747,3 +747,70 @@ fn setting_the_undo_mode_is_durable_and_serializes_with_full_saves() {
     let link: SpeleoLink = state.speleo_link().unwrap();
     assert!(link.has_unpushed_edits);
 }
+
+/// The `history` member of the file at `path`, byte for byte.
+fn history_member(path: &Path) -> String {
+    let text = String::from_utf8(std::fs::read(path).unwrap()).unwrap();
+    let at = text.find("\"history\":").expect("a history member");
+    let end = text[at..].find("\n\"end\"").map_or(text.len(), |e| at + e);
+    text[at..end].to_string()
+}
+
+/// A display toggle (a local-only save) never erases a history this build
+/// did not load (review findings C-file-format-3, J-docs-tests-truth-2,
+/// H-frontend-wire-2): entries it cannot decode, and the whole history of a
+/// read-only file made by a newer build, stay in the file byte for byte for
+/// a build that can still undo them. A real save writes the stacks again.
+#[test]
+fn a_display_toggle_keeps_a_history_this_build_did_not_load() {
+    let _config = crate::test_helpers::isolated_config();
+    crate::app_dirs::init_for_test();
+    let first = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for read_only in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("history.stalx");
+        let mut extras = Extras::default();
+        extras.history.undo = super::stalx_fixtures::raw_entries(first, 3, 8);
+        write_v2(&path, &survey("History"), &extras);
+        if read_only {
+            let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+            let text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+            assert!(
+                text.contains("zz-future"),
+                "the file now requires a future feature"
+            );
+            std::fs::write(&path, text).unwrap();
+        }
+        let before = history_member(&path);
+        let state = open(&path);
+        assert_eq!(state.read_only_reason().is_some(), read_only);
+        assert!(!state.can_undo(), "this build could not load the entries");
+
+        state.save_display_setting("showGrid", "true").unwrap();
+        assert_eq!(
+            history_member(&path),
+            before,
+            "read_only={read_only}: the toggle kept the file's history"
+        );
+        assert_eq!(
+            decoded(&path)
+                .extras
+                .local
+                .display
+                .get("showGrid")
+                .map(String::as_str),
+            Some("true"),
+            "and wrote the toggle"
+        );
+        if !read_only {
+            // An edit and a real save make the stacks the file's history.
+            assert!(set_length(&state, 6.0).success);
+            assert!(state.execute(Command::SaveProject { path: None }).success);
+            assert_eq!(decoded(&path).extras.history.undo.len(), 1);
+            state.save_display_setting("showGrid", "false").unwrap();
+            assert_eq!(decoded(&path).extras.history.undo.len(), 1);
+        }
+    }
+}

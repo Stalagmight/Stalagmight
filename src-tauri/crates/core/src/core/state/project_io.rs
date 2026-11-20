@@ -436,6 +436,7 @@ impl AppState {
         file.dirty = false;
         file.local_pending = false;
         file.saved_history = extras.history;
+        file.history_unread = false;
         drop(file);
         drop(proj_guard);
         self.initial_save_deferred

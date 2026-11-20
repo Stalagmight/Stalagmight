@@ -21,6 +21,26 @@ use super::{KNOWN_FEATURES, VERSION};
 /// other member verbatim. `summary.speleodb` follows the new link. The
 /// generator and `requires` stay as they were: the body is unchanged.
 pub fn rewrite_local(original: &[u8], extras: &Extras) -> Result<Vec<u8>, EncodeError> {
+    rewrite_local_with(original, extras, false)
+}
+
+/// [`rewrite_local`] that also copies the `history` member verbatim instead
+/// of writing `extras.history`: for a file whose history this build did not
+/// load (unreadable entries, a newer history format, a read-only file), so a
+/// per-machine change never erases what a later or newer build can still
+/// undo (review findings C-file-format-3, J-docs-tests-truth-2).
+pub fn rewrite_local_keeping_history(
+    original: &[u8],
+    extras: &Extras,
+) -> Result<Vec<u8>, EncodeError> {
+    rewrite_local_with(original, extras, true)
+}
+
+fn rewrite_local_with(
+    original: &[u8],
+    extras: &Extras,
+    keep_history: bool,
+) -> Result<Vec<u8>, EncodeError> {
     let text = complete_v2(original)?;
     let top = top_members(text)?;
     let mut out = Vec::with_capacity(original.len() + 1024);
@@ -38,7 +58,11 @@ pub fn rewrite_local(original: &[u8], extras: &Extras) -> Result<Vec<u8>, Encode
     }
     write_local(&mut out, &extras.local);
     write_body(&mut out, &top);
-    write_history(&mut out, &extras.history.undo, &extras.history.redo);
+    if keep_history {
+        copy(&mut out, &top, "history");
+    } else {
+        write_history(&mut out, &extras.history.undo, &extras.history.redo);
+    }
     out.extend_from_slice(b"\"end\":true}\n");
     Ok(out)
 }

@@ -149,7 +149,7 @@ pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, S
 pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
 pub use error::{DecodeError, EncodeError};
-pub use local::{rename_project, rewrite_local};
+pub use local::{rename_project, rewrite_local, rewrite_local_keeping_history};
 pub use probe::{probe_bytes, probe_path, sniff, Format, Header, ProjectInfo};
 pub use salvage::{Repair, SalvageReport};
 pub use summary::Summary;

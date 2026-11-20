@@ -483,8 +483,10 @@ reader does depends on where they are:
    `speleodb`, `summary`) and unknown top-level members: kept verbatim and
    written back after the known keys, in their original order.
 3. **`local` and `history`**: unknown or unreadable keys of `local` are
-   dropped; an unreadable `history` is dropped whole. The project always
-   opens.
+   dropped; a `history` this build cannot read is not loaded (the project
+   opens with nothing to undo) but stays in the file until a save of an edit
+   writes the new history: a local-only rewrite copies it byte for byte. The
+   project always opens.
 
 Arrays have a fixed number of positions; a row with extra positions is an
 error, not unknown content. New fields go in the objects.
@@ -679,7 +681,10 @@ For context; nothing here changes the format. The app's side is
   `local.speleodb` and no undo entries inherited from the server.
 - **Local-only rewrites.** Changes to the link, the sync state, display
   settings and the history alone rewrite those members and copy every other
-  member byte for byte, even when the file is open read-only. Renaming a
+  member byte for byte, even when the file is open read-only. When the
+  history did not load (unreadable entries, a newer history format, a
+  read-only file), the rewrite copies `history` byte for byte too, so a
+  display toggle never erases what another build can still undo. Renaming a
   project from its Recent Projects card rewrites `project.name` and
   `summary.name` the same way.
 - **A legacy (SQLite) file** is converted in memory when opened; its first save

@@ -101,6 +101,12 @@ pub(crate) struct FileState {
     /// writes while the survey has unsaved changes (the stacks then describe
     /// a body the file does not hold).
     pub(crate) saved_history: History,
+    /// The file's history did not load into the stacks (an unreadable member
+    /// or entry, a newer history format) or the file is read-only: until a
+    /// real save writes the stacks, a local-only save copies the file's
+    /// `history` member verbatim instead of writing the (empty or partial)
+    /// stacks over it.
+    pub(crate) history_unread: bool,
     /// The bytes last read or written at the project's path (the guard).
     /// `None` until something of ours is on disk. For a legacy origin it is
     /// the SQLite file's, so the upgrading save is guarded too.
@@ -358,13 +364,18 @@ impl AppState {
         };
         let original = read_unchanged(&path, &expected)?;
         let mut extras = file.extras.clone();
-        extras.history = if file.dirty {
+        let keep_file_history = !file.dirty && file.history_unread;
+        extras.history = if file.dirty || keep_file_history {
             file.saved_history.clone()
         } else {
             self.history_to_persist(&file)
         };
-        let bytes = crate::persistence::stalx_v2::rewrite_local(&original, &extras)
-            .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
+        let bytes = if keep_file_history {
+            crate::persistence::stalx_v2::rewrite_local_keeping_history(&original, &extras)
+        } else {
+            crate::persistence::stalx_v2::rewrite_local(&original, &extras)
+        }
+        .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
         let fingerprint =
             write_atomic(&path, &bytes, Guard::Expect(&expected)).map_err(|e| write_error(&e))?;
         file.fingerprint = Some(fingerprint);

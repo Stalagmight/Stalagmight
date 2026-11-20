@@ -351,6 +351,8 @@ impl AppState {
             }
         }
         let watermark = file.extras.local.speleodb.inherited_through;
+        let read_only = file.extras.read_only.is_some();
+        let history_unreadable = history_dropped.is_some();
         *proj_guard = Some(project);
         {
             let mut session = self
@@ -382,6 +384,8 @@ impl AppState {
                 .load_persisted(&history, &EntryLimits::default())
                 .err()
         };
+        let history_unread = read_only || history_unreadable || dropped.is_some();
+        self.with_file(|file| file.history_unread = history_unread);
         self.note_history_dropped(dropped);
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
