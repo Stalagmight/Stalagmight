@@ -103,7 +103,8 @@ pub struct ProjectStateWire {
     /// One entry per slot, lines in list order then chain index, raw
     /// (measured) coordinates.
     pub stations: Vec<crate::Station>,
-    /// Today's stats: `station_count` counts slots.
+    /// The stats: `station_count` counts distinct stations (a junction
+    /// once), `junction_count` the stations on two or more lines.
     pub stats: ProjectStats,
     pub frozen_shots: Vec<FrozenShotRef>,
 }

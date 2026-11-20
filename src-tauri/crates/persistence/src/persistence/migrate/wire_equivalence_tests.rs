@@ -1449,10 +1449,14 @@ pub(super) fn compare(
     );
 
     let state = p.project_state_wire(false);
-    if state.stats.station_count != lp.lines.iter().map(|l| l.shots.len() + 1).sum::<usize>()
+    // 0.6.0's station count was the slot count; the wire's is the distinct
+    // stations, as the file summary counts them (review finding UX-8).
+    if p.survey_stats(&raw, false).slot_count
+        != lp.lines.iter().map(|l| l.shots.len() + 1).sum::<usize>()
+        || state.stats.station_count != p.stations.len()
         || state.stats.line_count != lp.lines.len()
     {
-        case.fail("stats: line / slot counts".to_string());
+        case.fail("stats: line / slot / station counts".to_string());
     }
 
     case.line_relationships();

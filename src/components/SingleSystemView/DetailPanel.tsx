@@ -1476,13 +1476,16 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             </div>
           )}
 
-          {/* Merges and datums */}
+          {/* Junctions and datums. A junction is one station shared by
+              several lines (the file summary counts it once), so this counts
+              stations, not the wire's merge pairs: a Split Line Here adds a
+              junction and no station (review finding UX-8). */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
               {t('detailPanel.projectStats.connections')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label={t('detailPanel.projectStats.stationMerges')} value={formatNumber(project.station_merges.length)} />
+              <StatCard label={t('detailPanel.projectStats.junctions')} value={formatNumber(stats.junction_count)} />
               <StatCard label={t('detailPanel.projectStats.zeroDatums')} value={formatNumber(project.zero_datums.length)} />
             </div>
           </div>

@@ -123,7 +123,10 @@ pub struct ProjectStats {
     /// Deepest absolute station z. Same source as
     /// [`min_depth`](Self::min_depth).
     pub max_depth: f64,
+    /// Distinct stations: a junction counts once, as in the file's summary.
     pub station_count: usize,
+    /// Stations on two or more lines (one shared station each).
+    pub junction_count: usize,
     pub loop_count: usize,
     /// Maximum straight-line distance from zero datum to any station
     pub penetration_distance: f64,

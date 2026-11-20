@@ -286,7 +286,7 @@ form for the wire. Most take the alignment of this state,
 | Roles, entrances, gaps | `datum_roles`, `datum_entrances`, `entrance_stations`, `datum_gap`, `gps_fix_gaps`, `far_gps_fixes`, `gps_gap_warnings` | Entrance default: first or last station of the `via` line, else of the station's first line. Survey distance along shots only. |
 | Frozen shots | `frozen_shots(&aligned)`, `is_shot_frozen(line, index)` | Tarjan bridges over shots and aligned closures; positional output. |
 | Rigid groups | `rigid_groups(&aligned)` (`group_of`, `lines`, `has_datum`, `tied`), `rigid_lines_of`, `anchored_lines`, `immovable_stations(&ties)`, `merge_pairs()`; co-located stations are `tie_groups(&aligned).group(s)` | Fixes count as anchors for Move Segment and Move Station, as today (D15). |
-| Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct) and `slot_count`; `to_project_stats` keeps today's slot count. |
+| Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct, as the file summary counts), `slot_count` (0.6.0's station count) and `junction_count`; `to_project_stats` sends the distinct and junction counts. |
 | Survey graph | `survey_distances_from`, `penetration_distances`, `penetration`, `distance_field`, `along_line_between` | Junction = one node, closures zero-cost, reference ties infinite unless opted in; shots in line-id order. |
 | Gas | `gas_reach(..) -> GasReach`, `GasReach::to_wire`, `gas_reach_field_wire(..)` | Today's engine on stations; the route has no merge hops. |
 

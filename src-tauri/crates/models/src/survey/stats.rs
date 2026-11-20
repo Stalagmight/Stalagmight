@@ -2,10 +2,12 @@
 //! `Project::stats` plus the station-derived figures the caller filled in:
 //! `depth_range` and `calculate_penetration_with`).
 //!
-//! `station_count` counts stations (a junction once); `slot_count` counts
-//! slots (a junction once per line), which is today's `station_count`.
-//! [`SurveyStats::to_project_stats`] keeps today's wire meaning (slots) until
-//! the wire layer decides otherwise.
+//! `station_count` counts stations (a junction once), as the file's summary
+//! does; `slot_count` counts slots (a junction once per line), which was
+//! 0.6.0's `station_count`; `junction_count` counts the stations on two or
+//! more lines. The wire's [`ProjectStats`] carries the station and junction
+//! counts (review finding UX-8: the panel showed slots and the wire's merge
+//! pairs, so a Split Line Here raised both).
 
 use chrono::NaiveDate;
 
@@ -26,8 +28,10 @@ pub struct SurveyStats {
     pub max_depth: f64,
     /// Distinct stations on lines.
     pub station_count: usize,
-    /// Slots (today's station count: shots + one per line).
+    /// Slots (0.6.0's station count: shots + one per line).
     pub slot_count: usize,
+    /// Stations on two or more lines.
+    pub junction_count: usize,
     /// Loop closures.
     pub loop_count: usize,
     /// The longest along-cave distance from an entrance.
@@ -37,7 +41,7 @@ pub struct SurveyStats {
 }
 
 impl SurveyStats {
-    /// Today's `ProjectStats` (station count = slots).
+    /// The wire's `ProjectStats`: distinct stations and junctions.
     pub fn to_project_stats(&self) -> ProjectStats {
         ProjectStats {
             line_count: self.line_count,
@@ -45,7 +49,8 @@ impl SurveyStats {
             total_length: self.total_length,
             min_depth: self.min_depth,
             max_depth: self.max_depth,
-            station_count: self.slot_count,
+            station_count: self.station_count,
+            junction_count: self.junction_count,
             loop_count: self.loop_count,
             penetration_distance: self.penetration_distance,
             first_survey_date: self.first_survey_date,
@@ -86,14 +91,20 @@ impl Project {
                 (lo.min(s.z), hi.max(s.z))
             })
         };
+        let topology = self.topology();
         SurveyStats {
             line_count: self.lines().len(),
             shot_count,
             total_length,
             min_depth,
             max_depth,
-            station_count: self.topology().stations().len(),
+            station_count: topology.stations().len(),
             slot_count: shot_count + self.lines().len(),
+            junction_count: topology
+                .stations()
+                .iter()
+                .filter(|&&s| topology.is_junction(s))
+                .count(),
             loop_count: self.closures.len(),
             penetration_distance: self.penetration(include_reference),
             first_survey_date: first,
