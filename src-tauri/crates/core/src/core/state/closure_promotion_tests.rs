@@ -214,27 +214,51 @@ fn the_delete_dialog_promises_what_the_delete_does() {
     let update = &impact.replacement_closure_updates[0];
     assert_eq!(update.old_station, StationRef::new(b, 2));
     assert_eq!(update.new_station, StationRef::new(c, 1));
+
+    // The delete does exactly that: the promoted pair is the one merge, and the
+    // re-anchored closure keeps its id and now ends at C:1.
+    ok(state.execute(Command::DeleteShot {
+        section_id: b,
+        shot_id: last,
+    }));
+    let after = project(&state);
+    assert_eq!(
+        merges(&after),
+        vec![(StationRef::new(a, 1), StationRef::new(c, 1))]
+    );
+    assert_eq!(after.loop_closures.len(), 1);
+    let kept = &after.loop_closures[0];
+    assert_eq!(kept.id, update.closure_id);
+    let ends = [
+        after.resolve_key(&kept.station_a).unwrap(),
+        after.resolve_key(&kept.station_b).unwrap(),
+    ];
+    assert!(ends.contains(&StationRef::new(c, 1)), "{ends:?}");
+    assert!(ends.contains(&StationRef::new(a, 3)), "{ends:?}");
+}
+
+/// The whole project as JSON, without the edit clock, which every command
+/// moves forward.
+fn canonical(p: &Project) -> serde_json::Value {
+    let mut value = serde_json::to_value(p).unwrap();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("modified_at");
+    }
+    value
 }
 
 #[test]
 fn undo_and_redo_of_the_delete_are_exact() {
     let (state, _a, b, _c) = two_closures_on_one_station([1, 3]);
-    let before = project(&state);
+    let before = canonical(&project(&state));
     delete_last_shot_of(&state, b);
-    let after = project(&state);
+    let after = canonical(&project(&state));
+    assert_ne!(before, after);
     ok(state.undo());
-    let undone = project(&state);
-    assert_eq!(merges(&undone), merges(&before));
-    assert_eq!(closures(&undone), closures(&before));
-    assert_eq!(
-        undone.get_section(b).unwrap().shots.len(),
-        before.get_section(b).unwrap().shots.len()
-    );
+    assert_eq!(canonical(&project(&state)), before);
     assert!(state.integrity_check().messages.is_empty());
     ok(state.redo());
-    let redone = project(&state);
-    assert_eq!(merges(&redone), merges(&after));
-    assert_eq!(closures(&redone), closures(&after));
+    assert_eq!(canonical(&project(&state)), after);
     assert!(state.integrity_check().messages.is_empty());
 }
 

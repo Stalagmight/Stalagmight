@@ -136,6 +136,40 @@ impl Project {
         false
     }
 
+    /// [`Self::are_stations_merged`] once `planned` merges are recorded too:
+    /// whether `station_a` and `station_b` are then one point.
+    fn are_stations_merged_with_planned(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
+        if planned.is_empty() {
+            return self.are_stations_merged(station_a, station_b);
+        }
+        if station_a == station_b {
+            return true;
+        }
+        let mut adjacency = self.build_station_merge_adjacency();
+        for &(a, b) in planned {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
+        let mut visited = HashSet::from([station_a]);
+        let mut queue = VecDeque::from([station_a]);
+        while let Some(current) = queue.pop_front() {
+            for &next in adjacency.get(&current).into_iter().flatten() {
+                if next == station_b {
+                    return true;
+                }
+                if visited.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        false
+    }
+
     fn station_reaches_zero_datum_excluding_shot(
         &self,
         station_ref: StationRef,
@@ -752,8 +786,15 @@ impl Project {
                         closure.station_a
                     };
 
+                    // One point once the planned merges are recorded too: a
+                    // closure between them would close nothing, so it is dropped
+                    // here rather than re-anchored for the sweep to remove.
                     if replacement_station == other
-                        || self.are_stations_merged(replacement_station, other)
+                        || self.are_stations_merged_with_planned(
+                            replacement_station,
+                            other,
+                            &planned,
+                        )
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
@@ -1805,3 +1846,11 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: a failed lookup is a failed test"
+)]
+#[path = "shots_closure_promotion_tests.rs"]
+mod closure_promotion_tests;
