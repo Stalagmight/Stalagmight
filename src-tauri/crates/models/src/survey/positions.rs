@@ -234,12 +234,16 @@ impl Project {
     /// frame) + correction`, the frame datum at `(0, 0) + correction`. `None`
     /// when there is no frame or no such datum.
     pub fn datum_anchor_position(&self, datum: usize) -> Option<[f64; 2]> {
-        let frame = self.frame_datum()?;
+        self.datum_anchor_position_in(datum, self.frame_datum()?)
+    }
+
+    /// [`Self::datum_anchor_position`] with the frame datum already known.
+    fn datum_anchor_position_in(&self, datum: usize, frame: usize) -> Option<[f64; 2]> {
         let d = self.datums.get(datum)?;
         let base = if datum == frame {
             [0.0, 0.0]
         } else {
-            let (x, y) = gps_to_local(&d.gps, &self.datums[frame].gps);
+            let (x, y) = gps_to_local(&d.gps, &self.datums.get(frame)?.gps);
             [x, y]
         };
         Some(match d.correction {
@@ -253,6 +257,7 @@ impl Project {
     pub fn component_anchors(&self) -> Vec<Anchor> {
         let topology = self.topology();
         let placement_datums = self.placement_datums();
+        let frame = self.frame_datum();
         let mut placements: Vec<Option<usize>> = vec![None; topology.components().len()];
         for (index, placement) in self.placements.iter().enumerate() {
             if let Some(c) = topology.component_of(placement.station) {
@@ -266,7 +271,9 @@ impl Project {
             .map(|(c, component)| {
                 if let Some(datum) = placement_datums[c] {
                     let station = self.datums[datum].station;
-                    let at = self.datum_anchor_position(datum).unwrap_or([0.0, 0.0]);
+                    let at = frame
+                        .and_then(|frame| self.datum_anchor_position_in(datum, frame))
+                        .unwrap_or([0.0, 0.0]);
                     Anchor::Datum { datum, station, at }
                 } else if let Some(placement) = placements[c] {
                     let p = self.placements[placement];

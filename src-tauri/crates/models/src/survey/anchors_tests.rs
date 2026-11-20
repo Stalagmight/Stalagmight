@@ -139,12 +139,70 @@ fn a_shot_edit_in_a_datum_piece_keeps_the_datum_station() {
 #[test]
 fn an_explicit_placement_move_is_kept() {
     let (mut p, _) = three_line_junction();
-    let (before, _) = edit_and_settle(&mut p, &EditContext::none(), |p| {
+    let (before, _) = edit_and_settle(&mut p, &EditContext::none().with_placed(0), |p| {
         p.placements[0].x += 3.0;
         p.placements[0].y += 4.0;
     });
     assert_moved_by(before.positions(), &p.raw_positions(), [3.0, 4.0], &[]);
     assert_eq!(p.placements[0].station, 0);
+}
+
+#[test]
+fn an_undeclared_placement_change_is_not_a_decision() {
+    let (mut p, _) = three_line_junction();
+    let (before, _) = edit_and_settle(&mut p, &EditContext::none(), |p| {
+        p.placements[0].x += 3.0;
+    });
+    assert_moved_by(before.positions(), &p.raw_positions(), [0.0, 0.0], &[]);
+    assert_eq!(p.placements[0].x, 100.0);
+}
+
+#[test]
+fn a_moving_placement_re_keyed_onto_the_merge_station_is_dropped() {
+    // Q is placed at its last station q1; merging q1 onto s3 re-keys that
+    // placement to s3 (plan 5.1 replaces the station everywhere). It must not
+    // drag the stationary piece onto Q's old place.
+    let (mut p, [l0, _, _]) = three_line_junction();
+    let q = add(&mut p, StartAt::New, vec![flat(0.0, 3.0)]);
+    let (q0, q1) = (at(&p, q, 0), at(&p, q, 1));
+    p.set_placement(q1, 500.0, 500.0).unwrap();
+    let s3 = at(&p, l0, 3);
+    let ctx = EditContext::merge(s3, q1).with_renamed(q1, s3);
+    let (before, report) = edit_and_settle(&mut p, &ctx, |p| {
+        replace_station(p, q1, s3, None);
+        for placement in &mut p.placements {
+            if placement.station == q1 {
+                placement.station = s3;
+            }
+        }
+    });
+    assert_eq!(report.placements_dropped, vec![q1]);
+    assert_eq!(p.placements.len(), 1);
+    assert_eq!(p.placements[0].station, 0);
+    assert_moved_by(before.positions(), &p.raw_positions(), [0.0, 0.0], &[q0]);
+}
+
+#[test]
+fn a_declared_correction_on_a_new_datum_is_kept() {
+    // Add .stalx: a copied piece arrives with a datum whose correction the
+    // command computed so the piece lands next to its cave, not on its GPS.
+    let (mut p, _, g) = three_datum_pieces();
+    let copy = add(&mut p, StartAt::New, vec![flat(0.0, 4.0)]);
+    let c0 = at(&p, copy, 0);
+    let gc = gps(20.004, -87.004);
+    let target = [123.0, -45.0];
+    let ctx = EditContext::none().with_corrected(3);
+    let (_, report) = edit_and_settle(&mut p, &ctx, |p| {
+        p.push_datum(ZeroDatum::new(c0, gc));
+        p.datums[3].correction = p.correction_to_hold(3, target);
+    });
+    assert!(report.placed_on_gps.is_empty());
+    let local_c = local(gc, g[0]);
+    assert_eq!(
+        p.datums[3].correction,
+        Some([target[0] - local_c[0], target[1] - local_c[1]])
+    );
+    assert_xy_near(xy_of(&p.raw_positions(), c0), target, TOL, "copied piece");
 }
 
 #[test]

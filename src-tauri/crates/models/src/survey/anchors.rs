@@ -16,8 +16,8 @@
 //!   edit) the piece goes onto its GPS: correction cleared. Every datum that
 //!   is a GPS fix after the edit has its correction cleared (demotion).
 //! - **Holds no datum**: the *still point* `s*` is the first that applies:
-//!   (0) a placement the command itself set or moved (one not identical to a
-//!   pre-edit placement) is authoritative; (a) a geometry edit of line L and
+//!   (0) a placement the command declares it set or moved
+//!   ([`EditContext::placed`]) is authoritative; (a) a geometry edit of line L and
 //!   the component holds L's pre-edit first station: that station; (b) the
 //!   component holds a pre-edit placement station (preferring the merge's
 //!   stationary piece's): that station; (c) the first station of the edited
@@ -26,7 +26,12 @@
 //!   and its placement is stored at its *placement station*: the explicit
 //!   placement's, else the surviving pre-edit placement station (the merge's
 //!   stationary one first), else its lowest station. So the least-squares
-//!   gauge (the placement station) only changes when its station goes.
+//!   gauge (the placement station) only changes when its station goes. A
+//!   component with no pre-edit station at all (a new free piece) needs a
+//!   declared placement; without one it is laid out from its lowest station
+//!   at the origin.
+//! - **Declared corrections** ([`EditContext::corrected`], Add .stalx) are
+//!   kept as the command computed them, against the post-edit frame.
 //! - **Frame change** (the first resolvable datum is another datum than
 //!   before): positions are first settled in the old frame (a promoted datum
 //!   onto its GPS against the old frame's GPS, as today), then everything is
@@ -121,6 +126,14 @@ pub struct EditContext {
     pub renamed: Vec<(StationId, StationId)>,
     /// A GPS edit of one datum (its correction is cleared).
     pub gps_edit: Option<GpsEdit>,
+    /// Stations whose placement the command set or moved itself (Move
+    /// Segment, an import's manual placement, Add .stalx): authoritative, in
+    /// post-edit coordinates. Any other entry of the placement list is only
+    /// pre-edit state (a re-keyed or stale entry is ignored).
+    pub placed: Vec<StationId>,
+    /// Datums (post-edit indices) whose correction the command set itself
+    /// (Add .stalx): kept as is, in post-edit coordinates.
+    pub corrected: Vec<usize>,
 }
 
 impl EditContext {
@@ -165,6 +178,20 @@ impl EditContext {
     #[must_use]
     pub fn with_gps_edit(mut self, datum: usize, previous: GpsCoordinates) -> Self {
         self.gps_edit = Some(GpsEdit { datum, previous });
+        self
+    }
+
+    /// Record that the command set the placement on `station` itself.
+    #[must_use]
+    pub fn with_placed(mut self, station: StationId) -> Self {
+        self.placed.push(station);
+        self
+    }
+
+    /// Record that the command set the correction of post-edit datum `datum`.
+    #[must_use]
+    pub fn with_corrected(mut self, datum: usize) -> Self {
+        self.corrected.push(datum);
         self
     }
 }
@@ -260,7 +287,7 @@ impl Project {
             } else {
                 None
             };
-            if !stays {
+            if !stays && !ctx.corrected.contains(&datum) {
                 report.placed_on_gps.push(datum);
             }
             settled.push((datum, stays, old_frame_position));
@@ -280,6 +307,10 @@ impl Project {
         report.translation = translation;
 
         for &(datum, stays, old_frame_position) in &settled {
+            if ctx.corrected.contains(&datum) {
+                // The command computed it against the post-edit frame.
+                continue;
+            }
             let correction = if frame_changed {
                 match old_frame_position {
                     Some(at) if Some(datum) != frame_new => self.correction_to_hold(
@@ -364,15 +395,11 @@ impl Project {
             .merge
             .and_then(|merge| before.topology.component_of(merge.stationary));
 
-        // (0) Placements the command set or moved itself, by component.
+        // (0) Placements the command declares it set or moved, by component
+        // (the last entry of the list for that station wins).
         let mut explicit: Vec<Option<Placement>> = vec![None; components.len()];
-        for placement in &self.placements {
-            let unchanged = before.placements.iter().any(|old| {
-                old.station == placement.station
-                    && old.x.to_bits() == placement.x.to_bits()
-                    && old.y.to_bits() == placement.y.to_bits()
-            });
-            if unchanged {
+        for placement in self.placements.iter().rev() {
+            if !ctx.placed.contains(&placement.station) {
                 continue;
             }
             if let Some(c) = topology.component_of(placement.station) {

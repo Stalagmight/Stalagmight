@@ -18,8 +18,8 @@ use crate::{
 };
 
 use super::{
-    Caches, ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, Project,
-    ProjectSettings, Shot, Station, ZeroDatum,
+    Caches, ClosureEnd, ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure,
+    Placement, Project, ProjectSettings, Shot, Station, ZeroDatum,
 };
 
 /// Where a new line starts ([`Project::add_line`]).
@@ -29,6 +29,17 @@ pub enum StartAt {
     New,
     /// An existing station: the new line joins it (a junction).
     Station(StationId),
+}
+
+/// What [`Project::drop_stale_attachments`] cleared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaleAttachments {
+    /// Datums whose `via` was cleared.
+    pub datum_vias: Vec<usize>,
+    /// Closure ends whose `via` was cleared.
+    pub closure_vias: Vec<(ClosureId, ClosureEnd)>,
+    /// Hand moves dropped, by `(line, station)`.
+    pub hand_moves: Vec<(LineId, StationId)>,
 }
 
 /// Why a construction call was refused. Nothing was changed.
@@ -428,6 +439,48 @@ impl Project {
             self.placements.push(placement);
             Ok(self.placements.len() - 1)
         }
+    }
+
+    /// Clear what an edit left pointing at a line that no longer passes the
+    /// station: datum and closure-end `via` hints (they become unset) and hand
+    /// moves (dropped). Invariant 2 refuses both, so a command that removes a
+    /// station from a line (delete shot or range, delete line, split, combine)
+    /// runs this in its epilogue, before [`Self::validate`].
+    pub fn drop_stale_attachments(&mut self) -> StaleAttachments {
+        let topology = self.topology_arc();
+        let holds = |station: StationId, line: LineId| topology.slot_on(station, line).is_some();
+        let mut dropped = StaleAttachments::default();
+        for (index, datum) in self.datums.iter_mut().enumerate() {
+            if datum.via.is_some_and(|line| !holds(datum.station, line)) {
+                datum.via = None;
+                dropped.datum_vias.push(index);
+            }
+        }
+        for closure in &mut self.closures {
+            if closure.a_via.is_some_and(|line| !holds(closure.a, line)) {
+                closure.a_via = None;
+                dropped.closure_vias.push((closure.id, ClosureEnd::A));
+            }
+            if closure.b_via.is_some_and(|line| !holds(closure.b, line)) {
+                closure.b_via = None;
+                dropped.closure_vias.push((closure.id, ClosureEnd::B));
+            }
+        }
+        for line in &self.lines {
+            for &station in line.hand_moves.keys() {
+                if !holds(station, line.id) {
+                    dropped.hand_moves.push((line.id, station));
+                }
+            }
+        }
+        if !dropped.hand_moves.is_empty() {
+            let stale = dropped.hand_moves.clone();
+            for line in self.lines_mut() {
+                line.hand_moves
+                    .retain(|station, _| !stale.contains(&(line.id, *station)));
+            }
+        }
+        dropped
     }
 
     /// Append a closure with a fresh id (no refusal checks) and return the id.

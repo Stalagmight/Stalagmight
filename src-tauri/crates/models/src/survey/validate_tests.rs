@@ -499,3 +499,18 @@ fn slots_resolve_and_junctions_list_every_slot() {
     assert_eq!(p.topology().components()[0].lines, vec![l0, l1, l2]);
     assert_eq!(p.station_at(StationRef::new(l2, 2)), None);
 }
+
+#[test]
+fn a_non_finite_validation_threshold_is_reported() {
+    let (mut p, _) = three_line_junction();
+    p.settings.validation.pitch_diff_threshold = f64::INFINITY;
+    assert_eq!(
+        p.validate(),
+        vec![Violation::NonFinite {
+            field: NumberField::ValidationThreshold {
+                field: "pitch_diff_threshold"
+            },
+            value: f64::INFINITY,
+        }]
+    );
+}

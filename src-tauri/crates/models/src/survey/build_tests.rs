@@ -295,3 +295,46 @@ fn a_line_over_given_stations_can_end_on_a_junction() {
     assert_eq!(p.line_stations(line), Some(&[fresh, s0][..]));
     assert!(p.is_valid());
 }
+
+#[test]
+fn stale_vias_and_hand_moves_are_dropped_by_the_epilogue_helper() {
+    use super::test_helpers::gps;
+    let (mut p, [l0, l1, _]) = three_line_junction();
+    let (s0, s2, s3) = (at(&p, l0, 0), at(&p, l0, 2), at(&p, l0, 3));
+    p.placements.clear();
+    p.push_datum(super::ZeroDatum::new(s0, gps(20.0, -87.0)));
+    let mut fix = super::ZeroDatum::new(s3, gps(20.0001, -86.9999));
+    fix.via = Some(l0);
+    p.push_datum(fix);
+    p.push_closure(s2, Some(l0), s3, Some(l0), ClosureStrategy::Batch);
+    p.line_mut(l0)
+        .unwrap()
+        .hand_moves
+        .insert(s3, [1.0, 0.0, 0.0]);
+    let a = at(&p, l1, 1);
+    p.line_mut(l1)
+        .unwrap()
+        .hand_moves
+        .insert(a, [0.0, 1.0, 0.0]);
+    assert!(p.is_valid());
+    assert_eq!(
+        p.drop_stale_attachments(),
+        super::StaleAttachments::default()
+    );
+    // Delete L0's last shot: s3 stays (it is on L2) but L0 no longer passes
+    // it, so the fix's hint, the closure end's hint and L0's hand move there
+    // are stale. The epilogue drops them, then settles the anchors.
+    let before = p.anchor_snapshot();
+    p.line_mut(l0).unwrap().shots.pop();
+    let dropped = p.drop_stale_attachments();
+    assert_eq!(dropped.datum_vias, vec![1]);
+    assert_eq!(dropped.closure_vias, vec![(1, super::ClosureEnd::B)]);
+    assert_eq!(dropped.hand_moves, vec![(l0, s3)]);
+    assert_eq!(p.datums[1].via, None);
+    assert_eq!(p.closures[0].a_via, Some(l0));
+    assert!(p.line(l0).unwrap().hand_moves.is_empty());
+    assert_eq!(p.line(l1).unwrap().hand_moves.len(), 1);
+    let report = p.settle_anchors(&before, &super::EditContext::geometry(l0));
+    assert_eq!(report.placed_on_gps, vec![1]);
+    assert_eq!(p.validate(), Vec::new());
+}

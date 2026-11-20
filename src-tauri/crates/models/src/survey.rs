@@ -82,7 +82,7 @@ mod positions_tests;
 mod validate_tests;
 
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
-pub use build::{BuildError, StartAt};
+pub use build::{BuildError, StaleAttachments, StartAt};
 pub use naming::NameConflict;
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,

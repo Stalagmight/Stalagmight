@@ -84,6 +84,10 @@ pub enum NumberField {
     },
     SurfaceElevation,
     DefaultAzimuthCorrection,
+    /// A validation threshold, by its settings key.
+    ValidationThreshold {
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for NumberField {
@@ -117,6 +121,7 @@ impl fmt::Display for NumberField {
             }
             Self::SurfaceElevation => f.write_str("the surface elevation"),
             Self::DefaultAzimuthCorrection => f.write_str("the default azimuth correction"),
+            Self::ValidationThreshold { field } => write!(f, "validation threshold {field}"),
         }
     }
 }
@@ -882,6 +887,24 @@ impl Project {
         }
         if let Some(reference) = self.settings.default_azimuth_reference {
             check(NumberField::DefaultAzimuthCorrection, reference.correction);
+        }
+        let v = &self.settings.validation;
+        for (field, value) in [
+            ("warn_shot_length_min", v.warn_shot_length_min),
+            ("warn_shot_length_max", v.warn_shot_length_max),
+            (
+                "warn_depth_change_per_shot_max",
+                v.warn_depth_change_per_shot_max,
+            ),
+            ("warn_azimuth_deviation_max", v.warn_azimuth_deviation_max),
+            ("azimuth_diff_threshold", v.azimuth_diff_threshold),
+            ("pitch_diff_threshold", v.pitch_diff_threshold),
+            (
+                "inclination_depth_diff_threshold",
+                v.inclination_depth_diff_threshold,
+            ),
+        ] {
+            check(NumberField::ValidationThreshold { field }, value);
         }
     }
 }
