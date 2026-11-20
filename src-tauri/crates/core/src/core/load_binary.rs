@@ -106,7 +106,11 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// and `station_names` now lists EVERY station (names are required and
 /// unique per line). A stale frontend would show no Station ID and treat a
 /// station as unnamed.
-pub const BINARY_FORMAT_VERSION: u32 = 8;
+///
+/// Bumped 8 -> 9 by the station-graph switch: `ProjectHeaderBinary` lost
+/// `line_offsets` (a stale decoder would iterate a missing key), and
+/// `stations_ids`, names and comments are shared by a junction's slots.
+pub const BINARY_FORMAT_VERSION: u32 = 9;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -187,7 +191,6 @@ pub struct ProjectHeaderBinary {
     pub station_merges: Vec<StationMergeWire>,
     pub zero_datums: Vec<ZeroDatumWire>,
     pub loop_closures: Vec<LoopClosureWire>,
-    pub line_offsets: Vec<(LineId, (f64, f64))>,
     pub station_offsets: Vec<(StationRef, (f64, f64, f64))>,
     pub station_comments_map: Vec<(StationRef, String)>,
     pub imported_file_hashes: Vec<String>,
@@ -281,13 +284,13 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         warnings,
         display_settings,
         is_remote,
+        envelope_extra,
     } = result;
-
-    // Compute the frozen shots while the whole project is still in scope (its
-    // fields are moved into project_header below). The binary envelope used to
-    // ship an empty list, leaving the frontend's frozen-shot gating stale on a
-    // binary load until the next get_project_state refresh (issue #57 / Codex).
-    let frozen_shots = project.compute_frozen_shots();
+    let crate::core::loading::EnvelopeExtra {
+        frozen_shots,
+        station_offsets,
+        station_comments_map,
+    } = envelope_extra;
 
     // Sum shot count up front so we can pre-allocate exactly.
     let shot_count: usize = project.lines.iter().map(|s| s.shots.len()).sum();
@@ -441,49 +444,18 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         }
     }
 
-    // Resolve the stored StationKey-based cross-references to their positional wire
-    // form (the frontend reasons by station_index) before moving the rest of
-    // `project` out. A dangling ref (its anchoring shot was deleted) is OMITTED
-    // rather than collapsed to a phantom station-0 relationship; the integrity
-    // banner surfaces it and offers repair.
-    let station_merges = project
-        .station_merges
-        .iter()
-        .filter_map(|m| project.merge_to_wire(m))
-        .collect();
-    let zero_datums = project.zero_datums_wire();
-    let loop_closures = project
-        .loop_closures
-        .iter()
-        .filter_map(|c| project.closure_to_wire(c))
-        .collect();
-    let station_offsets = project
-        .station_offsets
-        .iter()
-        .filter_map(|(k, v)| Some((project.resolve_key(k)?, *v)))
-        .collect();
-    let station_comments_map = project
-        .station_comments
-        .iter()
-        .filter_map(|(k, v)| Some((project.resolve_key(k)?, v.clone())))
-        .collect();
-
     let project_header = ProjectHeaderBinary {
         name: project.name,
         location: project.location,
         created_at: project.created_at,
         modified_at: project.modified_at,
-        file_path: project
-            .file_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned()),
+        file_path: project.file_path,
         next_line_id: project.next_line_id,
         next_closure_id: project.next_closure_id,
         lines: lines_meta,
-        station_merges,
-        zero_datums,
-        loop_closures,
-        line_offsets: hashmap_to_pairs(project.line_offsets),
+        station_merges: project.station_merges,
+        zero_datums: project.zero_datums,
+        loop_closures: project.loop_closures,
         station_offsets,
         station_comments_map,
         imported_file_hashes: project.imported_file_hashes,
@@ -492,8 +464,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         surface_elevation: project.surface_elevation,
         default_azimuth_reference: project.default_azimuth_reference,
         credit_people: credit_table.people,
-        cave_sections: project.sections,
-        next_cave_section_id: project.next_section_id,
+        cave_sections: project.cave_sections,
+        next_cave_section_id: project.next_cave_section_id,
     };
 
     let result = LoadProjectFullBinaryResult {
@@ -537,10 +509,6 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         "load_project_full_binary encode"
     );
     Ok(bytes)
-}
-
-fn hashmap_to_pairs<K: Eq + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V)> {
-    map.into_iter().collect()
 }
 
 #[cfg(test)]

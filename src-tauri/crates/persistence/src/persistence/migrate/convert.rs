@@ -79,6 +79,18 @@ pub(super) fn closure_adjustment(
     }
 }
 
+/// The app's least-squares config in the frozen reader's type (the legacy
+/// open solves its Computed View with the user's config, as 0.6.0 did).
+pub(super) fn legacy_closure_adjustment(
+    c: &live::config::ClosureAdjustmentConfig,
+) -> old::config::ClosureAdjustmentConfig {
+    old::config::ClosureAdjustmentConfig {
+        base_sigma_length_m: c.base_sigma_length_m,
+        base_sigma_azimuth_deg: c.base_sigma_azimuth_deg,
+        base_sigma_depth_m: c.base_sigma_depth_m,
+    }
+}
+
 pub(super) fn section(s: &old::Section) -> live::Section {
     live::Section {
         id: s.id,

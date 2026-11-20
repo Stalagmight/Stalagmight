@@ -14,7 +14,7 @@
 
 use crate::StationRef;
 
-use super::super::Project;
+use super::super::{Project, RawPositions};
 use super::ProjectStateWire;
 
 /// Everything the load envelope packs (beside the load's own `loading_id`,
@@ -41,6 +41,16 @@ impl Project {
     /// is the penetration figure's opt-in, as for
     /// [`Self::project_state_wire`].
     pub fn load_envelope_input(&self, include_reference_legs: bool) -> LoadEnvelopeInput {
+        self.load_envelope_input_with(&self.raw_positions(), include_reference_legs)
+    }
+
+    /// [`Self::load_envelope_input`] from this state's raw layout `raw` (the
+    /// caller memoises it per revision).
+    pub fn load_envelope_input_with(
+        &self,
+        raw: &RawPositions,
+        include_reference_legs: bool,
+    ) -> LoadEnvelopeInput {
         let mut station_offsets = Vec::new();
         let mut station_comments_map = Vec::new();
         for line in self.lines() {
@@ -60,7 +70,7 @@ impl Project {
             }
         }
         LoadEnvelopeInput {
-            state: self.project_state_wire(include_reference_legs),
+            state: self.project_state_wire_with(raw, include_reference_legs),
             station_offsets,
             station_comments_map,
         }

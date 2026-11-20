@@ -96,7 +96,10 @@ mod wire_equivalence_tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use stalagmight_legacy::{LegacyError, LegacySurvey, OpenOptions};
+use stalagmight_legacy::{LegacySurvey, OpenOptions};
+
+/// The frozen reader's refusal (re-exported so the app can say why).
+pub use stalagmight_legacy::LegacyError;
 
 use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::survey::{Project, Violation};
@@ -208,6 +211,20 @@ pub fn migrate_path_with(path: &Path, options: &OpenOptions) -> Result<Migrated,
     )?;
     migrated.project.file_path = Some(path.to_path_buf());
     Ok(migrated)
+}
+
+/// [`migrate_path`] with the app's least-squares config: what the app's
+/// open calls (the verification then compares the Computed View like for
+/// like, G2).
+pub fn migrate_path_for_app(
+    path: &Path,
+    adjustment: &ClosureAdjustmentConfig,
+) -> Result<Migrated, MigrateError> {
+    let options = OpenOptions {
+        closure_adjustment: convert::legacy_closure_adjustment(adjustment),
+        ..OpenOptions::default()
+    };
+    migrate_path_with(path, &options)
 }
 
 /// Migrate a legacy `.stalx` held in memory.

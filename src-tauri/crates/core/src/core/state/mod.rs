@@ -18,6 +18,8 @@ mod config;
 mod display_settings;
 pub mod dive_plan;
 mod import_tracking;
+mod labels;
+mod open_file;
 mod project_add;
 mod project_append;
 mod project_create;
@@ -50,10 +52,7 @@ mod speleodb_session;
 mod speleodb_sidecars;
 mod speleodb_write_guard;
 mod undo;
-mod undo_capture;
-mod undo_delta;
 mod undo_policy;
-mod undo_restore;
 mod warnings;
 
 #[cfg(test)]
@@ -388,5 +387,7 @@ mod undo_size_gate_tests;
 mod tests_support;
 
 pub use app_state::AppState;
+pub use open_file::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+pub use project_io::set_generator;
 pub use command_import::VirtualShotMode;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

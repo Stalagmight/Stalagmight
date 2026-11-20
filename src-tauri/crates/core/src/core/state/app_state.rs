@@ -1,33 +1,19 @@
 use anyhow::Result;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
+use crate::models::survey::{AdjustedPositions, Project, RawPositions};
 use crate::models::{
-    AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, AlongLineResult, Cylinder,
-    DistanceField, Diver, GasReachField, PlanSegment, Project, RulerEndpoint, SkippedClosure,
-    Station, StationAnchor, StationRef,
+    AdjustmentReport, AlongLineResult, Cylinder, DistanceField, Diver, GasReachField, PlanSegment,
+    RulerEndpoint, Station, StationRef,
 };
-use crate::persistence::Database;
 use crate::tile_stats::TileFetchStats;
 use crate::tilemap_cache::TilemapCache;
 
-use crate::core::undo::snapshot_fixes;
 use crate::core::{CommandResult, UndoStack};
-
-use super::project_io::{reapply_heals_after_restore, RecordedGauges};
-
-/// What a snapshot restore asks of the snapshot besides the project it
-/// parses: whether it holds the two members an older build may lack, and the
-/// GPS fixes it keeps beside `zero_datums` ([`snapshot_fixes`]).
-struct SnapshotFacts {
-    has_validation: bool,
-    has_surface_elevation: bool,
-    fixes: serde_json::Result<Vec<snapshot_fixes::SnapshotFix>>,
-}
 
 /// Trait for types that can represent project lock errors.
 /// Enables `with_project_mut` and `with_project` to work with different return types.
@@ -54,24 +40,19 @@ impl<T> FromProjectLockError for Result<T, String> {
     }
 }
 
-/// Transient, never-persisted cache of the closure-adjusted station coordinates
-/// for the current project. Keyed on the project's `modified_at` (nanoseconds)
-/// plus a hash of the closure-adjustment config, and cleared on every
-/// command/undo/redo so the adjusted display view always re-derives from
-/// current measured data.
-pub(super) struct AdjustedStationsCache {
-    pub(super) version: i64,
-    pub(super) config_hash: u64,
-    pub(super) stations: Vec<Station>,
-    /// Components that same solve could not adjust and shows measured (#737).
-    /// Read by `get_adjustment_report` and the warnings pass, only while the
-    /// entry matches the project version they are asked about.
-    pub(super) failures: Vec<AdjustmentFailure>,
+/// The derived views of one project revision, memoised (C0 item 5): the raw
+/// layout (solver v1) and, per closure-adjustment config, the Closures
+/// Computed View. Nothing derived is stored in the model, so a revision is a
+/// complete key; [`AppState::bump_revision`] runs on every change of the
+/// project slot. Never persisted.
+pub(super) struct DerivedCache {
+    pub(super) revision: u64,
+    pub(super) raw: Arc<RawPositions>,
+    pub(super) adjusted: Option<(u64, Arc<AdjustedPositions>)>,
 }
 
 /// Hash the closure-adjustment config fields that affect the solve, for the
-/// adjusted-stations cache key. Shared by `get_adjusted_stations` and
-/// `distance_field` so both derive the same key.
+/// adjusted cache key.
 fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -83,10 +64,19 @@ fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
 
 /// Application state managed by Tauri
 pub struct AppState {
-    /// Current project (if any)
+    /// Current project (if any): the station-graph survey (`models::survey`).
     pub(super) project: Mutex<Option<Project>>,
-    /// Database connection (if project is open)
-    pub(super) database: Mutex<Option<Database>>,
+    /// Everything the open project's file holds besides the survey and the
+    /// history (SpeleoDB link and sync state, display settings, ignored
+    /// warnings, preserved members, the external-modification guard). There
+    /// is no live database handle (stream AS): see `open_file`.
+    pub(super) file: Mutex<super::open_file::FileState>,
+    /// Bumped on every change of the project slot (an edit, an undo or redo,
+    /// a load, a close): the revision the derived-view cache is keyed on.
+    pub(super) revision: AtomicU64,
+    /// Raw and adjusted positions of the current revision (see
+    /// [`DerivedCache`]). A leaf lock.
+    pub(super) derived: Mutex<Option<DerivedCache>>,
     /// True while the open project's initial save is still deferred - created with
     /// no save path and never written to disk, so it has no `.stalx` and no Recent
     /// Projects entry yet. Tracked explicitly rather than inferred from
@@ -94,13 +84,6 @@ pub struct AppState {
     /// (ambiguous for reserved-path collisions), so the first import can durably
     /// persist it exactly once (#92 / PR #104).
     pub(super) initial_save_deferred: AtomicBool,
-    /// Whether the open project's shot UUIDs a file held in more than one
-    /// line were renamed (`Project::make_shot_uuids_project_unique`), by its
-    /// load or by a Repair. Until a save re-keys them, ignored warnings can be
-    /// stored against the old ids, and only then is it worth deriving the
-    /// replacement to match them. Set by both load paths once the project is
-    /// committed and by Repair; cleared on close and on project create.
-    pub(super) load_renamed_shots: AtomicBool,
     /// Undo/redo stack
     pub(super) undo_stack: Mutex<UndoStack>,
     /// Application configuration
@@ -135,8 +118,6 @@ pub struct AppState {
     /// the session generation - see `speleodb_edit_gate`. A leaf lock: nothing
     /// else is ever taken while it is held.
     pub(super) speleodb_open_gate: Mutex<super::speleodb_edit_gate::OpenProjectGate>,
-    /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
-    pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
     /// The SpeleoDB collaborator listings already fetched, per (endpoint,
     /// account, project) - survey-credit suggestions (`speleodb_collaborators`).
     /// A leaf lock.
@@ -212,24 +193,13 @@ pub struct AppState {
     /// returning `HistoryDropped::EarlierVersion`), not because it was unreadable. The
     /// banner says which. Reset with the flag it qualifies.
     pub(super) history_from_earlier_version: AtomicBool,
-    /// Ignored warnings an "Add .stalx" carried in for lines the open file's
-    /// database does not hold yet (#674; see `project_add.rs`). Written by the
-    /// next save, cleared with every project-slot commit. Transient.
-    pub(super) pending_ignores: Mutex<Vec<crate::persistence::ResolvedWarning>>,
-    /// Memoized closure-adjusted station coordinates for the display-mode toggle.
-    /// See [`AdjustedStationsCache`]. Transient; never persisted.
-    pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
-    /// Bumped on every adjusted-cache invalidation. Captured before the lock-free
-    /// solve so a result computed against a since-invalidated project is not
-    /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
-    pub(super) adjusted_cache_generation: AtomicU64,
     /// The SpeleoDB SESSION generation: bumped on every session boundary - a
     /// project committed into (or cleared from) the `project` slot, and logout -
     /// and ONLY while holding the `project` mutex. Captured by Start Editing at
     /// entry and re-checked under the same mutex before its commit opens the edit
     /// gate, so a teardown landing inside its network window refuses the commit
     /// instead of opening a gate onto a torn-down world (F7). The same idiom as
-    /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
+    /// [`Self::revision`] / `unrecognised_shot_kinds`, applied to
     /// the one slot that never had it. See `core::state::speleodb_session`.
     pub(super) speleodb_session_generation: AtomicU64,
     /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
@@ -285,9 +255,10 @@ impl AppState {
 
         Ok(Self {
             project: Mutex::new(None),
-            database: Mutex::new(None),
+            file: Mutex::new(super::open_file::FileState::default()),
+            revision: AtomicU64::new(0),
+            derived: Mutex::new(None),
             initial_save_deferred: AtomicBool::new(false),
-            load_renamed_shots: AtomicBool::new(false),
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             config_write_lock: Mutex::new(()),
@@ -295,7 +266,6 @@ impl AppState {
             speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
             // Nothing open: unmanaged, so editing never waits on a lock (#191).
             speleodb_open_gate: Mutex::default(),
-            display_settings_cache: Mutex::new(HashMap::new()),
             speleodb_collaborators: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
@@ -307,9 +277,6 @@ impl AppState {
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
             history_from_earlier_version: AtomicBool::new(false),
-            pending_ignores: Mutex::new(Vec::new()),
-            adjusted_cache: Mutex::new(None),
-            adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
             speleodb_reverify: Mutex::new(None),
@@ -399,31 +366,13 @@ impl AppState {
     // claim, and there is no setter.
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
-    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
-    /// `set_project_name_for_path`) calls this FIRST, after
+    /// (`execute` and the edit pipeline, `undo`/`redo`/`undo_to`/`redo_to`,
+    /// `set_project_name_for_path`, the ignore verbs) calls this FIRST, after
     /// taking `command_lock` and before mutating. `Err` aborts the mutation when
     /// the open project is a SpeleoDB project with no edit session (no bound lock
     /// claim; see `speleodb_edit_gate`). No-op (`Ok`) for local-only projects, which
-    /// are always editable, and non-mutating reads.
-    ///
-    /// Non-survey project-DB writes are handled deliberately (the exemption the
-    /// push/release flow #197 had to revisit):
-    /// - `resolve_warning`/`unresolve_warning` ARE gated as of #197 (via
-    ///   `save_resolved_warning_gated`/`delete_resolved_warning_gated`): a resolved
-    ///   warning PROLIFERATES to the server (it is NOT stripped from the push
-    ///   snapshot), so it is a real remote-dirtying edit - gate it AND
-    ///   `mark_remote_dirty` so a read-only project rejects it and an edit-session
-    ///   resolve is pushed by `Done` rather than silently dropped on the next pull.
-    /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
-    ///   `display_settings` is stripped from the push snapshot and re-applied locally
-    ///   across pull/FF - purely local view state that never proliferates, never lost.
-    /// - `track_imported_file`/`track_line_hashes` import-dedup bookkeeping stays
-    ///   UNGATED for now: the in-import path gates + dirties, but the standalone
-    ///   `track_imported_file` command does not - a deferred follow-up, lower-impact
-    ///   than a lost annotation (re-import is the worst case, not silent data loss).
-    ///
-    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
-    /// warning verbs).
+    /// are always editable. Display settings stay ungated (per-machine view state,
+    /// never pushed).
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if self.edit_enabled() {
             return Ok(());
@@ -448,48 +397,39 @@ impl AppState {
     }
 
     /// What `cmd` is called in a message the user reads (a read-only refusal,
-    /// a batch refusal): its undo-history label, with the lines, stations and
-    /// shots it addresses named as the open project holds them
-    /// (`history_names::describe`), never by a positional id. Takes the
-    /// project lock briefly; never call it holding that lock.
+    /// a batch refusal) and in the undo history: worded with the names the
+    /// open project holds now (`super::labels`). Takes the project lock
+    /// briefly; never call it holding that lock.
     pub(super) fn command_label(&self, cmd: &crate::core::Command) -> String {
-        use crate::core::undo::history_names::{describe, referenced_lines, NameBook};
         let guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let names = guard.as_ref().map_or_else(NameBook::default, |project| {
-            let mut lines = std::collections::HashSet::new();
-            referenced_lines(cmd, &mut lines);
-            NameBook::of(project, lines)
-        });
-        describe(cmd, &names)
+        match guard.as_ref() {
+            Some(project) => super::labels::command_label(project, cmd),
+            None => cmd.description(),
+        }
     }
 
-    /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
-    /// successful edit of a remote project (#191, D-B16; v10 last_edit_at). No-op
-    /// for local-only (`load_speleo_link → None`). The dirty bit is SET-ONLY in
-    /// #191 - local save/autosave NEVER clears it; only a successful server push
-    /// (Sync/Release) does. `last_edit_at` is refreshed on EVERY accepted
-    /// mutation (not idempotent) because guardrail-7 compares it to push-start to
-    /// decide whether a landed-by-ancestry push may clear the dirty bit.
+    /// Flip the SpeleoDB dirty bit `false -> true` AND refresh `last_edit_at` on
+    /// a successful edit of a linked project (#191, D-B16). No-op for a local
+    /// project. Set-only: only a confirmed push clears it. In memory, made
+    /// durable at once by a local-only save (B3), so a crash after an edit
+    /// still knows the copy has unpushed work.
     pub(super) fn mark_remote_dirty(&self) {
-        let Ok(db_guard) = self.database.lock() else {
-            return;
-        };
-        let Some(db) = db_guard.as_ref() else {
-            return; // no open database (e.g. unsaved project) - nothing to stamp
-        };
-        // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
-        // push-start comparison needs the LATEST edit time, so this runs every edit,
-        // not idempotently). A local-only project has no link row → 0 rows → no-op,
-        // so this stays cheap on the hot edit path (no SELECT, no DDL, no full upsert).
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Err(e) = db.touch_speleo_link_dirty(&now) {
+        let result = self.mutate_speleo_link(|link| {
+            let Some(link) = link.as_mut() else {
+                return false;
+            };
+            link.has_unpushed_edits = true;
+            link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            true
+        });
+        if let Err(e) = result {
             tracing::warn!(
                 error = %e,
                 purpose = "flip SpeleoDB dirty bit after a remote edit",
-                "mark_remote_dirty: failed to persist has_unpushed_edits"
+                "mark_remote_dirty: the dirty bit is set in memory only"
             );
         }
     }
@@ -515,14 +455,15 @@ impl AppState {
         self.bump_speleodb_session();
         if let Ok(guard) = self.active_loading.lock() {
             if let Some(token) = guard.as_ref() {
-                token.store(true, std::sync::atomic::Ordering::SeqCst);
+                token.store(true, Ordering::SeqCst);
             }
         }
-        // No error if no active load - cancel_loading is idempotent
     }
 
     /// Lock the project mutex and pass a mutable reference to the callback.
     /// Returns the callback's result, or an error if the lock fails or no project is open.
+    /// Bumps the revision (whatever the callback did): a caller that only
+    /// reads uses [`Self::with_project`].
     pub(super) fn with_project_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Project) -> R,
@@ -534,7 +475,9 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return R::no_project();
         };
-        f(project)
+        let result = f(project);
+        self.bump_revision();
+        result
     }
 
     /// Lock the project mutex and pass an immutable reference to the callback.
@@ -553,169 +496,102 @@ impl AppState {
         f(project)
     }
 
-    // === Closure-adjusted geometry (non-destructive derived view) ===
+    // === Derived views, memoised per revision (C0 item 5) ===
 
-    /// Compute (or return cached) closure-adjusted station coordinates for the
-    /// current project. Non-destructive: the measured project is never mutated -
-    /// the adjustment runs on the project clone this method already takes (see
-    /// [`Project::into_adjusted_station_coordinates`]) and only the resulting
-    /// coordinates are returned.
-    ///
-    /// The result is memoized in a transient cache keyed on the project's
-    /// `modified_at` + closure-adjustment config and cleared on every
-    /// command/undo/redo, so repeatedly toggling to the adjusted display view is
-    /// cheap while any edit forces a fresh re-solve from intact measured data.
-    /// Returns `None` if no project is open.
-    pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
-        let config = self.get_config();
-        let config_hash = adjusted_config_hash(&config.closure_adjustment);
+    /// A new revision of the project slot: every cached derived view is stale.
+    /// Called under the `project` lock by everything that changes the slot.
+    pub(super) fn bump_revision(&self) {
+        self.revision.fetch_add(1, Ordering::SeqCst);
+    }
 
-        // Cheap project-version read under a short lock.
-        let version = {
+    pub(super) fn current_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    /// The raw layout of `project` (the project in the slot, read under its
+    /// lock), from the cache when this revision has one.
+    pub(super) fn raw_positions_of(&self, project: &Project) -> Arc<RawPositions> {
+        let revision = self.current_revision();
+        let mut cache = self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = cache.as_ref().filter(|e| e.revision == revision) {
+            return Arc::clone(&entry.raw);
+        }
+        let raw = Arc::new(project.raw_positions());
+        *cache = Some(DerivedCache {
+            revision,
+            raw: Arc::clone(&raw),
+            adjusted: None,
+        });
+        raw
+    }
+
+    /// The Closures Computed View of the open project under the current
+    /// closure-adjustment config, memoised per revision. On a miss the
+    /// project is cloned under its lock and solved without it (the solve is
+    /// CPU-heavy); the result is stored only if no edit landed meanwhile.
+    pub(super) fn adjusted_positions(&self) -> Option<(Project, Arc<AdjustedPositions>)> {
+        let config = self.get_config().closure_adjustment;
+        let key = adjusted_config_hash(&config);
+        let (project, revision, raw) = {
             let guard = self.project.lock().ok()?;
-            guard
-                .as_ref()?
-                .modified_at
-                .timestamp_nanos_opt()
-                .unwrap_or(0)
-        };
-
-        if let Ok(cache) = self.adjusted_cache.lock() {
-            if let Some(entry) = cache.as_ref() {
-                if entry.version == version && entry.config_hash == config_hash {
-                    return Some(entry.stations.clone());
+            let project = guard.as_ref()?;
+            let revision = self.current_revision();
+            let raw = self.raw_positions_of(project);
+            let cache = self
+                .derived
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((hash, adjusted)) = cache
+                .as_ref()
+                .filter(|e| e.revision == revision)
+                .and_then(|e| e.adjusted.as_ref())
+            {
+                if *hash == key {
+                    return Some((project.clone(), Arc::clone(adjusted)));
                 }
             }
-        }
-
-        // Miss: clone the project out, then solve without holding any lock (the
-        // solve is CPU-heavy and runs on a blocking thread). The clone is taken
-        // under `command_lock` so it is serialized with `execute()`/undo/redo:
-        // those hold `command_lock` across both the mutation *and* the
-        // `reconcile_geometry()` epilogue, which repairs derived offsets without
-        // bumping `modified_at`. Cloning outside that lock could capture a project
-        // after the mutation but before reconcile and then cache that partially
-        // reconciled solve under the final version. Re-read the version from the
-        // clone so the cache key matches exactly the data solved, and hand the
-        // clone to the by-value solver so it isn't cloned a second time.
-        let (project, generation) = {
-            let _cmd_guard = self.command_lock.lock().ok()?;
-            // Capture the invalidation generation alongside the (reconciled) clone,
-            // under command_lock, so it reflects exactly the data being solved.
-            let generation = self
-                .adjusted_cache_generation
-                .load(std::sync::atomic::Ordering::SeqCst);
-            (self.get_project_state()?, generation)
+            (project.clone(), revision, raw)
         };
-        let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let adjusted = project.into_adjusted_stations(&config.closure_adjustment);
-        let stations = adjusted.stations;
-
-        if let Ok(mut cache) = self.adjusted_cache.lock() {
-            // Only store if nothing invalidated the cache while command_lock was
-            // released for the heavy, lock-free solve. Otherwise an edit/open/repair
-            // that ran during the solve - including a repair that doesn't bump
-            // modified_at - could be clobbered by this now-stale result.
-            if self
-                .adjusted_cache_generation
-                .load(std::sync::atomic::Ordering::SeqCst)
-                == generation
-            {
-                *cache = Some(AdjustedStationsCache {
-                    version: solved_version,
-                    config_hash,
-                    stations: stations.clone(),
-                    failures: adjusted.failures,
-                });
-            }
+        let adjusted = Arc::new(project.adjusted_positions_from(&raw, &config));
+        let mut cache = self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = cache.as_mut().filter(|e| e.revision == revision) {
+            entry.adjusted = Some((key, Arc::clone(&adjusted)));
         }
-        Some(stations)
+        Some((project, adjusted))
     }
 
-    /// The cache key of the closure-adjustment config in force now. Takes the
-    /// config lock, so a caller that also needs the project lock reads this
-    /// FIRST, before taking it.
-    pub(super) fn current_adjusted_config_hash(&self) -> u64 {
-        adjusted_config_hash(&self.get_config().closure_adjustment)
+    /// The closure-adjusted station coordinates (per slot) for the
+    /// display-mode toggle. Non-destructive and memoised per revision.
+    /// Returns `None` if no project is open.
+    pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
+        let (project, adjusted) = self.adjusted_positions()?;
+        Some(project.adjusted_stations_wire(&adjusted))
     }
 
-    /// The components the last closure-adjusted solve of `project` could not
-    /// adjust (#737). Read-only on the memoized cache: empty unless that cache
-    /// was solved from exactly this project version under the config whose key
-    /// is `config_hash` ([`Self::current_adjusted_config_hash`], read by the
-    /// caller up front), so it never runs the solve itself and never reports a
-    /// failure the data has since moved past.
-    ///
-    /// Takes only the cache lock, which no path holds while taking another, so
-    /// a caller may hold the project lock - having read `config_hash` before
-    /// it took that lock, so the config lock is never nested inside it.
-    pub(super) fn cached_adjustment_failures(
-        &self,
-        project: &Project,
-        config_hash: u64,
-    ) -> Vec<AdjustmentFailure> {
-        let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let Ok(cache) = self.adjusted_cache.lock() else {
-            return Vec::new();
-        };
-        match cache.as_ref() {
-            Some(entry) if entry.version == version && entry.config_hash == config_hash => {
-                entry.failures.clone()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// What the Closures Computed View leaves out, for the notice above the map
-    /// (#737): the closures it skips because they span one shot (computed now,
-    /// `O(stations)`), and the components whose solve failed (from the cache
-    /// only - see [`Self::cached_adjustment_failures`]). `None` when no project
-    /// is open.
+    /// The adjustment report (skipped closures, failed components, far GPS
+    /// fixes) of the Computed View under the current config.
     pub fn get_adjustment_report(&self) -> Option<AdjustmentReport> {
-        // Before the project lock: the config lock is never taken inside it.
-        let config_hash = self.current_adjusted_config_hash();
+        let (project, adjusted) = self.adjusted_positions()?;
+        Some(project.adjustment_report(Some(&adjusted)))
+    }
+
+    /// Per-slot along-cave distance from `from` (or from the entrances when
+    /// `None`), on the measured layout: reachability is topological, and the
+    /// raw layout is instant.
+    pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
+        let include_reference = self.get_config().gas.include_reference_legs;
         let guard = self.project.lock().ok()?;
         let project = guard.as_ref()?;
-        Some(AdjustmentReport {
-            skipped_closures: project
-                .closures_across_one_shot()
-                .iter()
-                .map(SkippedClosure::from)
-                .collect(),
-            failures: self
-                .cached_adjustment_failures(project, config_hash)
-                .iter()
-                .map(AdjustmentFailureReport::from)
-                .collect(),
-            far_gps_fixes: project.far_gps_fixes(),
-        })
+        let raw = self.raw_positions_of(project);
+        Some(project.distance_field_wire(raw.as_ref(), from.copied(), include_reference))
     }
 
-    /// Per-station distance field for the distance-gradient overlay (#34),
-    /// computed on the closure-adjusted geometry. Takes ONE reconciled project
-    /// snapshot under `command_lock` (so the graph topology and the adjusted
-    /// coordinates come from the same version - no read-skew between two separate
-    /// state reads), and reuses the memoized adjusted-stations cache read-only
-    /// when it matches that snapshot (keeps re-root instant in the adjusted view).
-    pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
-        let project = self.get_project_state()?;
-        // Distance uses MEASURED geometry (surveyed shot lengths via the plain
-        // coordinate walk) - instant. The closure-adjusted solve is intentionally
-        // NOT used: it dominated the latency (~2s release / ~40s debug on a 6k-
-        // station survey; ~O(n^2)) for a sub-meter difference, and reachability is
-        // identical either way (it's topological - shots/merges/closures - not
-        // coordinate-dependent). Closure-solve perf is tracked separately (#81).
-        let stations = project.compute_station_coordinates();
-        // Reference ties are not swimmable, so they leave the route unless the
-        // user opts them back in (#27 q13).
-        let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.distance_field_from_with(&stations, from, include_reference))
-    }
-
-    /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
-    /// engine consumes the instant MEASURED geometry (reachability is coordinate-independent -
-    /// never the slow closure-adjusted solve). `None` when no project is open. The diver /
-    /// cylinders are assumed already validated and `gas_config` normalized by the command.
     pub fn gas_reach_field(
         &self,
         origin: Option<&StationRef>,
@@ -727,8 +603,9 @@ impl AppState {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
-        let project = self.get_project_state()?;
-        Some(project.compute_gas_reach_field_with_overrides(
+        let guard = self.project.lock().ok()?;
+        let project = guard.as_ref()?;
+        Some(project.gas_reach_field_wire(
             origin,
             endpoint,
             waypoints,
@@ -740,557 +617,16 @@ impl AppState {
         ))
     }
 
-    /// Shortest along-cave-line distance + traversed shots between two ruler
-    /// endpoints (#26). The distance sums the CLOSURE-ADJUSTED shot lengths, so it
-    /// uses the memoized adjusted-stations cache (`get_adjusted_stations`): warm
-    /// while the adjusted view is in use, and on a cold cache it pays one closure
-    /// solve (then repeat measurements are instant). Falls back to measured
-    /// coordinates only if the adjusted solve is unavailable - without loop
-    /// closures the two coincide anyway.
+    /// The ruler: the along-cave distance between two endpoints, on the
+    /// adjusted layout (as 0.6.0).
     pub fn along_line_between(
         &self,
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Option<AlongLineResult> {
-        let project = self.get_project_state()?;
-        // `project` (topology) and `stations` (adjusted coords) are two independent
-        // locked reads, so a concurrent edit between them could yield a slightly
-        // skewed snapshot. That's safe here - `along_line_between` looks everything
-        // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
-        // via those resolved indices, so a mismatch drops an edge at worst (never
-        // panics) and the ruler re-queries. We deliberately avoid a single
-        // command-locked snapshot to keep reusing the adjusted-stations cache.
-        let stations = self
-            .get_adjusted_stations()
-            .unwrap_or_else(|| project.compute_station_coordinates());
         let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.along_line_between_with(&stations, a, b, include_reference))
-    }
-
-    /// Drop any cached closure-adjusted coordinates. Called from every
-    /// command/undo/redo path so the adjusted view never serves stale geometry.
-    pub(super) fn invalidate_adjusted_cache(&self) {
-        if let Ok(mut cache) = self.adjusted_cache.lock() {
-            // Bump the generation under the cache lock so an in-flight solve's
-            // generation check (also under this lock) reliably observes it.
-            self.adjusted_cache_generation
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            *cache = None;
-        }
-    }
-
-    // === Snapshot helpers for snapshot-based undo ===
-
-    /// Capture a snapshot of the current project for undo, in its parts
-    /// ([`Self::serialize_project_parts`]).
-    /// Returns the snapshot, or a `CommandResult` failure if unavailable.
-    pub(super) fn capture_project_snapshot(
-        &self,
-    ) -> Result<crate::core::ProjectText, CommandResult> {
-        let Ok(mut guard) = self.project.lock() else {
-            return Err(CommandResult::failure("Failed to lock project".to_string()));
-        };
-        let Some(p) = guard.as_mut() else {
-            return Err(CommandResult::failure("No project open".to_string()));
-        };
-        Self::serialize_project_parts(p)
-            .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
-    }
-
-    /// [`Self::capture_project_snapshot`] as one JSON text, for a test that
-    /// reads or edits the snapshot.
-    #[cfg(test)]
-    #[expect(
-        clippy::result_large_err,
-        reason = "the failure `capture_project_snapshot` returns, which its tests match on"
-    )]
-    pub(super) fn capture_project_snapshot_text(&self) -> Result<String, CommandResult> {
-        self.capture_project_snapshot()?
-            .text()
-            .map_err(|e| CommandResult::failure(format!("Failed to write project: {e}")))
-    }
-
-    /// [#303] Serialize a project FOR AN UNDO SNAPSHOT, with machine-local fields cleared.
-    ///
-    /// Snapshot entries stopped being local-only when Full mode started shipping undo
-    /// history: `sanitize_push_snapshot` deliberately keeps `undo_stack` in the upload, and
-    /// every `ProjectSnapshotPair` half is a whole serialized `Project` - which the compact
-    /// delta made from it carries in part.
-    /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
-    /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
-    /// layout into the project's git history, permanently, readable by every collaborator
-    /// and by whoever runs the server. Snapshot pairs come from Delete shot, Delete line,
-    /// Reverse line and every Batch import, so this is routine editing, not an edge case.
-    ///
-    /// Cleared HERE, at the one place a snapshot is produced, rather than scrubbed out of
-    /// the upload: a snapshot that never holds the value cannot leak it through a log, a bug
-    /// report, or some future consumer either. `restore_snapshot_into` carries the LIVE path
-    /// back across, exactly as it already does for `validation`, so an undo does not lose
-    /// track of where the file lives.
-    ///
-    /// The clone is the cost of doing it correctly: `Project` is megabytes on a large
-    /// survey. It is proportionate - this path already builds a JSON string of the same
-    /// project - and it only runs for the snapshot commands, not for ordinary edits.
-    ///
-    /// `file_path` is the only machine-local field on `Project`: the four transient caches
-    /// are `#[serde(skip)]`, and `imported_file_hashes` is content hashes that are meant to
-    /// proliferate. A new field of that kind must be added here too.
-    ///
-    /// [#741] GPS fixes leave `zero_datums` here too (made for an older build reading the
-    /// persisted history, which none does any more): see [`snapshot_fixes`].
-    /// `restore_snapshot_into_with` merges them back.
-    pub(super) fn serialize_project_snapshot(project: &Project) -> serde_json::Result<String> {
-        let holds_fix = snapshot_fixes::holds_fix(project);
-        if project.file_path.is_none() && !holds_fix {
-            // Nothing to scrub or split, so skip the clone entirely.
-            return serde_json::to_string(project);
-        }
-        let mut scrubbed = project.clone();
-        scrubbed.file_path = None;
-        if holds_fix {
-            return snapshot_fixes::serialize_split(&mut scrubbed);
-        }
-        serde_json::to_string(&scrubbed)
-    }
-
-    /// [`Self::serialize_project_snapshot`] in its parts ([`ProjectText`]): the
-    /// top-level members as one object and each line on its own, the split
-    /// [`Doc::parse`] makes of the whole text, made without it.
-    ///
-    /// What a compact step and a capture serialize the live project with. The
-    /// whole text costs a whole-project clone when `file_path` is set (to clear
-    /// it) and a scan of the whole text to split it again; here the lines are
-    /// serialized one by one, and the members with the lines and the path taken
-    /// out of the project for the moment it takes - which is why it needs the
-    /// project mutably, and gives everything back before it returns, on every
-    /// path. The GPS fixes split as the whole text splits them
-    /// ([`snapshot_fixes`]), their roles read while the lines are in place.
-    ///
-    /// The parts are the whole text's, byte for byte
-    /// (`a_project_serialized_in_parts_is_its_whole_snapshot_split`).
-    ///
-    /// [`Doc::parse`]: crate::core::Doc::parse
-    pub(super) fn serialize_project_parts(
-        project: &mut Project,
-    ) -> serde_json::Result<crate::core::ProjectText> {
-        let lines = project
-            .lines
-            .iter()
-            .map(serde_json::to_string)
-            .collect::<serde_json::Result<Vec<String>>>()?;
-        let split = snapshot_fixes::holds_fix(project).then(|| snapshot_fixes::split(project));
-        let taken_lines = std::mem::take(&mut project.lines);
-        let taken_path = project.file_path.take();
-        let members = match split {
-            Some((kept, fixes)) => {
-                let datums = std::mem::replace(&mut project.zero_datums, kept);
-                let members = snapshot_fixes::serialize_with(project, fixes);
-                project.zero_datums = datums;
-                members
-            }
-            None => serde_json::to_string(&*project),
-        };
-        project.file_path = taken_path;
-        project.lines = taken_lines;
-        Ok(crate::core::ProjectText::new(members?, lines))
-    }
-
-    /// Deserialize a project snapshot and install it into `slot`, rebuilding the
-    /// transient lookup caches (`line_index_cache`, `shot_uuid_index`) that
-    /// serde skips. THE single place a restored project enters the live slot:
-    /// every rollback/undo/redo path routes through here so none can forget to
-    /// rebuild a cache and leave a half-populated / stale map behind (which would
-    /// silently mis-resolve lines) - see catalog #14/#39. The merge adjacency
-    /// needs nothing here: [`MergeTopology`](crate::models::MergeTopology) builds
-    /// it on first use, so a freshly deserialized project is correct by
-    /// construction.
-    /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
-    #[must_use]
-    pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
-        Self::restore_snapshot_into_with(slot, snapshot, None)
-    }
-
-    /// [`Self::restore_snapshot_into`] for one step through a snapshot pair:
-    /// `edited` holds the gauge pairs the half being left behind recorded (see
-    /// [`reapply_heals_after_restore`]).
-    #[must_use]
-    pub(super) fn restore_snapshot_into_with(
-        slot: &mut Option<Project>,
-        snapshot: &str,
-        edited: Option<&RecordedGauges>,
-    ) -> bool {
-        Self::restore_snapshot_reporting(slot, snapshot, edited).is_some()
-    }
-
-    /// [`Self::restore_snapshot_into_with`], saying how it went: `None` when it
-    /// refused (the slot is untouched), else whether the installed project can
-    /// differ from `snapshot` because a heal or a carry-over changed it - what a
-    /// compact entry needs to know to record the way back from the state that
-    /// is really live (`step_through_delta`).
-    #[must_use]
-    pub(super) fn restore_snapshot_reporting(
-        slot: &mut Option<Project>,
-        snapshot: &str,
-        edited: Option<&RecordedGauges>,
-    ) -> Option<bool> {
-        let facts = SnapshotFacts {
-            has_validation: snapshot.contains("\"validation\":"),
-            has_surface_elevation: snapshot.contains("\"surface_elevation\":"),
-            fixes: snapshot_fixes::read_fixes(snapshot),
-        };
-        Self::restore_with_facts(slot, snapshot, facts, edited)
-    }
-
-    /// [`Self::restore_snapshot_reporting`] for a project held split
-    /// ([`Doc`]): the members it asks about are read off the split, not
-    /// searched for in the whole text, and the text is written once for the
-    /// parse.
-    ///
-    /// [`Doc`]: crate::core::Doc
-    #[must_use]
-    pub(super) fn restore_doc_reporting(
-        slot: &mut Option<Project>,
-        doc: &crate::core::Doc<'_>,
-        edited: Option<&RecordedGauges>,
-    ) -> Option<bool> {
-        let facts = SnapshotFacts {
-            has_validation: doc.member("validation").is_some(),
-            has_surface_elevation: doc.member("surface_elevation").is_some(),
-            fixes: doc
-                .member(snapshot_fixes::FIXES_KEY)
-                .map_or_else(|| Ok(Vec::new()), serde_json::from_str),
-        };
-        Self::restore_with_facts(slot, &doc.text(), facts, edited)
-    }
-
-    fn restore_with_facts(
-        slot: &mut Option<Project>,
-        snapshot: &str,
-        facts: SnapshotFacts,
-        edited: Option<&RecordedGauges>,
-    ) -> Option<bool> {
-        // A snapshot persisted by a build predating the per-project `validation`
-        // field (#57) has no "validation" key, so serde (the field is
-        // #[serde(default)]) fills ValidationConfig::default() - silently changing
-        // the project's thresholds and its warnings when an undo/redo of a legacy
-        // persisted entry is restored. Detect that legacy blob and carry the CURRENT
-        // project's validation across instead. Undo of a real settings change always
-        // serializes the key, so it still restores the intended thresholds (Codex).
-        let snapshot_has_validation = facts.has_validation;
-        let current_validation = slot.as_ref().map(|p| p.validation.clone());
-        // Same idiom for `surface_elevation` (#431/#448): a snapshot persisted by a
-        // build predating that field has no "surface_elevation" key, so serde's
-        // #[serde(default)] fills None - silently dropping a real entrance
-        // elevation on undo/redo of a legacy persisted entry. Carry the CURRENT
-        // project's value across for those legacy blobs only; a real elevation
-        // edit always serializes the key, so it still restores correctly.
-        let snapshot_has_surface_elevation = facts.has_surface_elevation;
-        let current_surface_elevation = slot.as_ref().and_then(|p| p.surface_elevation);
-        // [#303] Where the file lives is a property of THIS machine, not of the survey, so
-        // `serialize_project_snapshot` clears it rather than write a username into every
-        // pushed commit. Carry the live value across on the way back, or an undo would leave
-        // the app thinking the project has never been saved - and the next save would ask
-        // for a path. Unconditional, unlike the `validation` carry-over above: the snapshot
-        // never has a useful path in it, whether it was written before this change (someone
-        // else's path) or after (none at all).
-        let current_file_path = slot.as_ref().and_then(|p| p.file_path.clone());
-        match serde_json::from_str::<Project>(snapshot) {
-            Ok(mut restored) => {
-                // #557: the snapshot blob is FILE-SUPPLIED (persisted undo is
-                // loaded from the .stalx), and serde rebuilds `Line`s
-                // field-by-field - never through `Line::new`, so neither the
-                // open-refusal in `persistence/sqlite/read.rs` nor the
-                // `restore_line` bound can see a hostile value arriving
-                // here. Two fields are load-bearing for the shot-id encode and
-                // both come straight from the JSON:
-                // - `id` past MAX_LINE_ID puts the first uuid-index or
-                //   save-path encode back in the debug-panic / release-wrap
-                //   regime the bound exists to end;
-                // - `next_shot_id` outside the line's stride window makes
-                //   the next `add_shot` (`self.next_shot_id += 1`) panic in
-                //   debug or wrap into another line's id space in release
-                //   (Codex, PR #575). A legit counter always sits inside
-                //   [id * STRIDE, (id + 1) * STRIDE] - `Line::new` starts it
-                //   at the window base and the max-shots-per-line check caps
-                //   growth. Upper bound in u64: for id = MAX_LINE_ID the
-                //   window end is u32::MAX + 1.
-                // Refuse the whole restore rather than repair it: a snapshot is
-                // a before/after pair, and a "fixed" one no longer restores the
-                // state it recorded.
-                let window_violation = |s: &crate::models::Line| {
-                    let base = u64::from(s.id) * u64::from(crate::models::FEATURE_ID_STRIDE);
-                    let end = base + u64::from(crate::models::FEATURE_ID_STRIDE);
-                    let counter = u64::from(s.next_shot_id);
-                    counter < base || counter > end
-                };
-                if let Some(line) = restored
-                    .lines
-                    .iter()
-                    .find(|s| s.id > crate::models::MAX_LINE_ID || window_violation(s))
-                {
-                    tracing::warn!(
-                        line_id = line.id,
-                        next_shot_id = line.next_shot_id,
-                        max = crate::models::MAX_LINE_ID,
-                        "Refusing snapshot restore: line id or shot counter outside the shot-id encode bound"
-                    );
-                    return None;
-                }
-                // [#741] The GPS fixes ride beside `zero_datums`, not in it
-                // (`serialize_project_snapshot`); put them back in list order.
-                // Fixes that cannot be read refuse the restore, as the window
-                // check above does: without them it is not the state recorded.
-                match facts.fixes {
-                    Ok(fixes) => snapshot_fixes::merge_fixes(&mut restored.zero_datums, fixes),
-                    Err(e) => {
-                        tracing::error!(
-                            purpose = "restore project snapshot",
-                            reason = %e,
-                            "Refusing snapshot restore: its GPS fixes cannot be read"
-                        );
-                        return None;
-                    }
-                }
-                let mut healed = false;
-                if !snapshot_has_validation {
-                    if let Some(validation) = current_validation {
-                        restored.validation = validation;
-                        healed = true;
-                    }
-                }
-                if !snapshot_has_surface_elevation {
-                    if let Some(surface_elevation) = current_surface_elevation {
-                        restored.surface_elevation = Some(surface_elevation);
-                        healed = true;
-                    }
-                }
-                restored.file_path = current_file_path;
-                // A snapshot written before the survey credit moved onto the
-                // shots carries each line's surveyor/date at line level;
-                // give it to the shots that have none (a no-op for a current
-                // snapshot, which never serializes those keys).
-                healed |= restored.absorb_legacy_line_credit() > 0;
-                restored.rebuild_line_index();
-                restored.rebuild_shot_uuid_index();
-                // A snapshot blob persisted by a PRE-ANCHOR build can carry
-                // transitional positional `Index` cross-reference anchors (undo/redo
-                // history is persisted to SQLite and reloaded across sessions, and the
-                // back-compat StationKey deserializer accepts the legacy
-                // `{line_id, station_index}` shape). The live-model invariant is
-                // "no Index anchors": a later shot insert/delete only shifts
-                // AfterShot/LineStart refs, so a live Index ref would silently start
-                // resolving to the wrong station. Canonicalize such a snapshot - the
-                // same step the load path runs - to AfterShot/LineStart.
-                //
-                // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
-                // anchor is present). A CURRENT same-session snapshot is already
-                // canonical, so mint/reanchor would be no-ops - but ensure_unique would
-                // RE-MINT intentional duplicate UUIDs, e.g. the pre-repair state that an
-                // undo of a duplicate_shot_uuid Repair must restore EXACTLY. Skipping
-                // the block when there is no Index anchor keeps current snapshots
-                // byte-for-byte (so undo/redo is a true before/after pair) while legacy
-                // snapshots are still fully canonicalized. (For a legacy snapshot,
-                // ensure_shot_uuids runs FIRST: a pre-v6 blob can have uuid:null shots,
-                // and ensure_unique only dedups existing UUIDs - without minting nulls,
-                // reanchor can't canonicalize the Index anchor of a null-uuid station.)
-                let has_legacy_index = {
-                    let mut found = false;
-                    restored.for_each_station_ref(|_, key| {
-                        if matches!(key.anchor, StationAnchor::Index(_)) {
-                            found = true;
-                        }
-                    });
-                    found
-                };
-                if has_legacy_index {
-                    healed = true;
-                    restored.ensure_shot_uuids();
-                    restored.ensure_unique_shot_uuids();
-                    restored.reanchor_station_refs();
-                }
-                // A save heals the live project with no undo entry of its own,
-                // and a snapshot recorded BEFORE that save holds the pre-heal
-                // project - so restoring one reverts the heal and makes the
-                // project at a given undo depth depend on the route taken to
-                // reach it (#413, finding 11). Bring the restored project back
-                // up to the standard the live one is already held to; the
-                // heal-by-heal reasoning for what that includes (and what it
-                // deliberately does not) is on the function.
-                healed |= reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
-                // The `line_offsets` invariant (`Project::write_line_offset`)
-                // has to hold for a map this app did not write, and a snapshot
-                // payload is exactly that case: undo/redo history is persisted to
-                // SQLite and reloaded across sessions, so an entry recorded by a
-                // build that predates the invariant can carry a dust-zero key. The
-                // load boundary drops one out of a `.stalx`; this is the same drop
-                // one payload over. Not a heal decided per-heal like the block
-                // above - it is an invariant, and a restore may not install a state
-                // the app cannot otherwise reach.
-                let dropped = restored.normalize_line_offsets();
-                healed |= dropped > 0;
-                if dropped > 0 {
-                    tracing::info!(
-                        dropped,
-                        purpose = "hold the line_offsets invariant across a snapshot restore",
-                        "Dropped restored line offsets that were within dust of the origin"
-                    );
-                }
-                *slot = Some(restored);
-                Some(healed)
-            }
-            Err(e) => {
-                tracing::error!(
-                    purpose = "restore project snapshot",
-                    reason = %e,
-                    "Failed to deserialize project snapshot; slot left unchanged"
-                );
-                None
-            }
-        }
-    }
-
-    /// [`Self::restore_snapshot_into`] for a snapshot held in its parts.
-    #[must_use]
-    pub(super) fn restore_parts_into(
-        slot: &mut Option<Project>,
-        snapshot: &crate::core::ProjectText,
-    ) -> bool {
-        match snapshot.doc() {
-            Ok(doc) => Self::restore_doc_reporting(slot, &doc, None).is_some(),
-            Err(e) => {
-                tracing::error!(
-                    purpose = "restore project snapshot",
-                    reason = %e,
-                    "Failed to read project snapshot; slot left unchanged"
-                );
-                false
-            }
-        }
-    }
-
-    /// Rollback the project to a previously captured snapshot.
-    /// Handles poisoned mutex gracefully (recovery is more important than panic).
-    pub(super) fn rollback_project(&self, snapshot: &crate::core::ProjectText) {
-        let mut proj = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if Self::restore_parts_into(&mut proj, snapshot) {
-            tracing::info!(
-                purpose = "restore project after failed command",
-                "Successfully rolled back to pre-mutation snapshot"
-            );
-        }
-    }
-
-    /// Capture an "after" snapshot of the project, rolling back on failure.
-    /// Returns the serialized JSON, or rolls back and returns a `CommandResult` failure.
-    pub(super) fn capture_after_snapshot_or_rollback(
-        &self,
-        before_snapshot: &crate::core::ProjectText,
-    ) -> Result<crate::core::ProjectText, CommandResult> {
-        self.capture_after_snapshot_settled(before_snapshot, true)
-    }
-
-    /// [`Self::capture_after_snapshot_or_rollback`], with the station-identity
-    /// settle only when `settle`: a batch whose members cannot change station
-    /// identity (`Command::can_change_station_identity`) skips it.
-    pub(super) fn capture_after_snapshot_settled(
-        &self,
-        before_snapshot: &crate::core::ProjectText,
-        settle: bool,
-    ) -> Result<crate::core::ProjectText, CommandResult> {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                tracing::warn!(
-                    purpose = "finalize undo snapshot",
-                    "Project mutex poisoned during after-snapshot; recovering"
-                );
-                poisoned.into_inner()
-            }
-        };
-        let Some(p) = proj_guard.as_mut() else {
-            tracing::error!(
-                purpose = "restore project after mutation error",
-                "Project became None after mutation; rolling back"
-            );
-            let _ = Self::restore_parts_into(&mut proj_guard, before_snapshot);
-            return Err(CommandResult::failure(
-                "No project for after snapshot".to_string(),
-            ));
-        };
-        // The station-identity epilogue (`settle_station_identities`) for
-        // every command that records a snapshot pair: the after side has to
-        // hold the ids its new stations were given, or the redo would put
-        // back stations without them.
-        if settle {
-            super::command_station_name::settle(p);
-        }
-        match Self::serialize_project_parts(p) {
-            Ok(json) => Ok(json),
-            Err(e) => {
-                tracing::error!(
-                    purpose = "finalize undo snapshot",
-                    reason = %e,
-                    "Failed to serialize after snapshot; rolling back"
-                );
-                if Self::restore_parts_into(&mut proj_guard, before_snapshot) {
-                    tracing::info!(
-                        purpose = "restore project after snapshot failure",
-                        "Successfully rolled back after serialization failure"
-                    );
-                }
-                Err(CommandResult::failure(format!(
-                    "Failed to serialize after snapshot: {e}"
-                )))
-            }
-        }
-    }
-
-    /// A history label worded from the open project as it is now
-    /// (`Command::Batch::label`, `undo::history_batch`); `None` when no
-    /// project is open. Takes the project lock briefly; never call it
-    /// holding that lock.
-    pub(super) fn batch_label(&self, word: impl FnOnce(&Project) -> String) -> Option<String> {
-        let guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.as_ref().map(word)
-    }
-
-    /// The history label of a batch the frontend sent, summarized from its
-    /// sub-commands with the names the project holds now
-    /// (`history_batch::summarize`).
-    pub(super) fn batch_summary(&self, commands: &[crate::core::Command]) -> Option<String> {
-        use crate::core::undo::history_names::{referenced_lines, NameBook};
-        self.batch_label(|project| {
-            let mut lines = std::collections::HashSet::new();
-            for cmd in commands {
-                referenced_lines(cmd, &mut lines);
-            }
-            crate::core::undo::history_batch::summarize(commands, &NameBook::of(project, lines))
-        })
-    }
-
-    /// Push the undo entry for a command captured as two snapshots: stored as
-    /// the compact delta between them ([`crate::core::UndoData::compact`]),
-    /// converted before the stack's lock is taken.
-    pub(super) fn push_snapshot_undo(
-        &self,
-        cmd: crate::core::Command,
-        before: crate::core::ProjectText,
-        after: crate::core::ProjectText,
-    ) {
-        let pair = crate::core::CapturedPair {
-            before,
-            after: Some(after),
-        };
-        let data = crate::core::UndoData::CapturedPair(Box::new(pair)).compact(&cmd);
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(cmd, data);
-        }
+        let (project, adjusted) = self.adjusted_positions()?;
+        Some(project.along_line_wire(adjusted.as_ref(), &a, &b, include_reference))
     }
 }
 

@@ -7,7 +7,7 @@
 //! answer has three inputs (is there a link, has its legacy NULL been initialized,
 //! what is the global default) and three chances to get the transition wrong.
 
-use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
+use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
 #[cfg(test)]
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
@@ -30,13 +30,7 @@ impl AppState {
         // project's history from the push - silently, with no log line - because some
         // unrelated thread panicked. This is a plain read of a link row, so taking the
         // value is the same judgement `project_io.rs` already makes at its own acquisitions.
-        let link = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|db| db.load_speleo_link().ok())
-            .flatten();
+        let link = self.speleo_link();
         self.undo_policy_for(link.as_ref())
     }
 
@@ -82,17 +76,17 @@ impl AppState {
                 "start editing before changing the undo-history setting".to_owned(),
             )));
         }
-        let db_guard = self.database.lock().map_err(|_| {
-            super::speleodb::local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
-        })?;
-        let db = db_guard
-            .as_ref()
-            .ok_or_else(|| super::speleodb::local_dto(SpeleoDbError::NoRemoteProject))?;
-        let now = chrono::Utc::now().to_rfc3339();
-        db.set_speleo_undo_mode_and_mark_forward_edit(mode, &now)
-            .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))?;
-        drop(db_guard);
         drop(project_guard);
+        self.mutate_speleo_link(|link| {
+            let Some(link) = link.as_mut() else {
+                return false;
+            };
+            link.undo_mode = Some(mode);
+            link.has_unpushed_edits = true;
+            link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            true
+        })
+        .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e)))?;
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,
@@ -196,14 +190,7 @@ impl AppState {
     /// setting the global default disagrees with. This answers the narrower question
     /// the control asks - which value is in force for this project's undo history.
     pub(crate) fn undo_mode_status(&self) -> UndoMode {
-        let stored_mode = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|db| db.load_speleo_link().ok())
-            .flatten()
-            .and_then(|l| l.undo_mode);
+        let stored_mode = self.speleo_link().and_then(|l| l.undo_mode);
         self.effective_undo_mode(stored_mode)
     }
 
@@ -212,24 +199,13 @@ impl AppState {
     /// NULL is only an initialization marker. Once a linked project is opened, its
     /// resolved Full/Disabled choice is written into the shared `.stalx` and no later
     /// config change can alter that project's policy.
-    pub(super) fn materialize_undo_mode(
-        &self,
-        db: &crate::persistence::Database,
-        link: &mut SpeleoLink,
-    ) {
+    pub(super) fn materialize_undo_mode(&self, link: &mut SpeleoLink) -> bool {
         let mode = self.effective_undo_mode(link.undo_mode);
         if link.undo_mode == Some(mode) {
-            return;
+            return false;
         }
         link.undo_mode = Some(mode);
-        if let Err(e) = db.save_speleo_link(Some(link)) {
-            tracing::warn!(
-                error = %e,
-                mode = ?mode,
-                purpose = "initialize a legacy SpeleoDB undo policy (#303)",
-                "Could not materialize the project's undo mode; this session will keep the resolved value in memory"
-            );
-        }
+        true
     }
 }
 

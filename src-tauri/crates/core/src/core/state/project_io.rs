@@ -1,12 +1,11 @@
 use super::AppState;
-use crate::core::{CommandResult, PersistStack, UndoStack};
-use crate::models::{LineId, Project, StationRef};
-use crate::persistence::Database;
+use crate::core::CommandResult;
 use std::path::{Path, PathBuf};
 
-/// `CommandResult` warning code of a save whose file holds GPS fixes or stored
-/// accuracies, which an older build drops when it saves the file (#741).
-pub(crate) const OLDER_BUILDS_DROP_GPS_FIXES: &str = "OLDER_BUILDS_DROP_GPS_FIXES";
+use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+use crate::models::survey::Project;
+use crate::persistence::stalx_v2::{write_atomic, Guard, Mode, WriteError};
+
 
 /// What a failed save actually was, once the error chain and the destination
 /// have both been consulted. Each variant except `Other` carries a marker the
@@ -179,387 +178,95 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
-/// The undo-less heals a save applies to the LIVE project, in one place.
-///
-/// Every one of them mutates the open project with **no undo entry of its own**,
-/// which is what makes them interesting: a `ProjectSnapshotPair` captured before
-/// a save holds the pre-heal project in both halves, so undoing (or redoing) an
-/// unrelated entry recorded before the save would otherwise revert the heal and
-/// make the project at a given undo depth depend on the route taken to reach it
-/// (issue #413, finding 11). [`reapply_heals_after_restore`] is the other half
-/// of that fix and documents, heal by heal, which of these a restore re-applies.
-///
-/// Called AFTER the unresolvable-cross-reference gate in [`AppState::save_project`],
-/// deliberately: two of these (the non-finite sanitize above all) are destructive,
-/// and a REFUSED save must leave the open project byte-for-byte unchanged.
-fn apply_save_heals(project: &mut Project) {
-    // Mint UUIDs for any shot still missing one (pre-v6 .stalx
-    // files loaded today come back with NULL uuid columns). The UUID
-    // is the station identity every cross-reference anchors to
-    // (`StationKey::AfterShot`), and it is what keeps the `.tml`
-    // SpeleoDB renders byte-stable across re-exports, so it has to be
-    // settled BEFORE the SQLite write rather than minted per-consumer.
-    project.ensure_shot_uuids();
-    // Re-mint any within-line duplicate shot UUID before refs are resolved
-    // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
-    // the FIRST matching shot, so a ref anchored on a later duplicate would be
-    // written to the wrong station - duplicate_shot_uuid is a Critical violation
-    // that the unresolvable-cross-reference save gate does NOT catch (the
-    // ref still resolves, just to the wrong shot). Re-minting is lossless and
-    // non-destructive: the kept (first) occurrence keeps its UUID so refs
-    // anchored on it stay faithful, and it clears the Critical so the heal isn't
-    // re-detected on the next load. (Mirrors the load-path dedup in
-    // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
-    // ref, so unlike those it is safe to auto-heal on save rather than block.)
-    project.ensure_unique_shot_uuids();
+/// How the save treats a destination that is not what it last read or wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnDisk {
+    /// The guard (plan 6.5): refuse with [`EXTERNALLY_MODIFIED_CODE`].
+    Checked,
+    /// Replace it (the user chose Overwrite after the guard refused).
+    Overwrite,
+}
 
-    // Capture the least-squares gauge pair for any line that lacks one (#24), now that
-    // every shot is guaranteed a UUID. Recording the station the line is ALREADY using
-    // means capturing never moves anybody's coordinates; from here on the gauge is named by
-    // a pair of shots rather than re-derived from an index that a later append can shift.
-    project.capture_missing_gauge_anchors();
+/// The generator a save writes (`generator`), the app's version when the
+/// host set it ([`set_generator`]).
+static GENERATOR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-    // Drop line_offsets for lines that no longer exist. An orphan entry
-    // (a line removed via a path that bypassed cleanup) is dead data, and the
-    // SQLite line_offsets row carries a FOREIGN KEY to lines(id) - writing
-    // it aborts the ENTIRE save with a generic FK error rather than routing the
-    // user to Repair. Lossless (matches repair_structural_integrity), so heal on
-    // save. (orphan_line_offset is Critical but the save gate only sees
-    // station cross-refs, not line_offsets.)
-    let existing_lines: std::collections::HashSet<LineId> =
-        project.lines.iter().map(|s| s.id).collect();
-    project
-        .line_offsets
-        .retain(|sid, _| existing_lines.contains(sid));
+/// Set the `generator` string every save writes (`Stalagmight <version>`);
+/// called once by the app at startup.
+pub fn set_generator(version: &str) {
+    let _ = GENERATOR.set(format!("Stalagmight {version}"));
+}
 
-    // Sanitize non-finite (NaN/inf) line offsets before persisting, mirroring
-    // the load-boundary guard and the shot sanitize below. line_offsets has no
-    // other finite guard, and a non-finite offset would either be coerced to NULL
-    // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
-    // world coordinate for that component on the next load.
-    //
-    // Through `write_line_offset`, not by rewriting the tuple in place: a
-    // fully-sanitized offset is (0, 0), which means "not displaced", and this
-    // map spells that as an ABSENT key. Writing the zero row instead persisted
-    // an inert entry the same project reached by any other route would not have
-    // - the exact shape `write_line_offset` exists to prevent (#413 finding
-    // 2) - and the row then had to be loaded, cascaded over and re-saved.
-    let non_finite: Vec<LineId> = project
-        .line_offsets
-        .iter()
-        .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
-        .map(|(id, _)| *id)
-        .collect();
-    for id in non_finite {
-        let offset = project.line_offset(id);
-        let finite = (
-            if offset.0.is_finite() { offset.0 } else { 0.0 },
-            if offset.1.is_finite() { offset.1 } else { 0.0 },
+fn generator() -> String {
+    GENERATOR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| crate::persistence::stalx_v2::DEFAULT_GENERATOR.to_string())
+}
+
+/// The app-data folder the pre-upgrade originals go to (plan 7.2.10).
+pub(super) fn upgrade_backup_dir() -> Option<PathBuf> {
+    Some(crate::app_dirs::data_local_dir()?.join("backups"))
+}
+
+/// The files a legacy original was moved or copied into before its first
+/// version 2 write, so a failed write can put the sidecars back.
+struct UpgradeBackup {
+    /// `(sidecar at the project, where it went)`.
+    moved: Vec<(PathBuf, PathBuf)>,
+}
+
+impl UpgradeBackup {
+    /// Copy the SQLite original into the backups folder and MOVE its
+    /// `-journal` / `-wal` / `-shm` sidecars there (R2 L19: a stale journal
+    /// beside the JSON file could be rolled into it by an old build).
+    fn take(original: &Path) -> Result<Self, String> {
+        let dir = upgrade_backup_dir()
+            .ok_or_else(|| "the app data folder is not available".to_string())?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        let stem = original
+            .file_stem()
+            .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
+        let base = dir.join(format!("{stem}.{stamp}.pre-v2.stalx"));
+        std::fs::copy(original, &base)
+            .map_err(|e| format!("could not back up {}: {e}", original.display()))?;
+        let mut moved = Vec::new();
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let mut name = original.as_os_str().to_os_string();
+            name.push(suffix);
+            let sidecar = PathBuf::from(name);
+            if sidecar.exists() {
+                let mut to = base.as_os_str().to_os_string();
+                to.push(suffix);
+                let to = PathBuf::from(to);
+                std::fs::rename(&sidecar, &to)
+                    .map_err(|e| format!("could not move {}: {e}", sidecar.display()))?;
+                moved.push((sidecar, to));
+            }
+        }
+        tracing::info!(
+            backup = ?base,
+            sidecars = moved.len(),
+            purpose = "keep the original of a legacy file the first save upgrades",
+            "Backed up the legacy original before writing version 2"
         );
-        Project::write_line_offset(&mut project.line_offsets, id, finite);
+        Ok(Self { moved })
     }
 
-    // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
-    // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
-    // INSERT aborts the whole save), and an inf would persist and only be
-    // neutralized on the next load. The load path already sanitizes, so mirror
-    // it here so a save can neither abort nor write unusable geometry.
-    // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
-    // so blocking the save would strand the user; neutralizing matches the load
-    // round-trip - the value was already unusable.)
-    for line in &mut project.lines {
-        for shot in &mut line.shots {
-            shot.sanitize_non_finite();
-        }
-    }
-}
-
-/// The gauge pairs a recorded snapshot holds, by line id (lines with a
-/// pair only): what the EDIT on the other side of a snapshot pair wrote, as
-/// opposed to a pair a save captured after the entry was recorded.
-pub(crate) type RecordedGauges = std::collections::HashMap<LineId, (String, Option<String>)>;
-
-/// Read just the gauge pairs out of a project snapshot. serde skips every
-/// other field, so this costs one scan of the text, not a project. `None` when
-/// the snapshot does not parse.
-pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
-    #[derive(serde::Deserialize)]
-    struct GaugeOf {
-        id: LineId,
-        #[serde(default)]
-        gauge_shot_uuid: Option<String>,
-        #[serde(default)]
-        gauge_neighbour_uuid: Option<String>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Gauges {
-        #[serde(default)]
-        lines: Vec<GaugeOf>,
-    }
-    let gauges: Gauges = serde_json::from_str(snapshot).ok()?;
-    Some(
-        gauges
-            .lines
-            .into_iter()
-            .filter_map(|s| Some((s.id, (s.gauge_shot_uuid?, s.gauge_neighbour_uuid))))
-            .collect(),
-    )
-}
-
-/// Bring a project restored from an undo/redo snapshot up to the standard a
-/// saved project is held to, so a history move cannot revert a save's heal
-/// (issue #413, finding 11).
-///
-/// `live` is the project being replaced - what the heals have already been
-/// applied to.
-///
-/// The full save-time set is [`apply_save_heals`]; this is the subset a RESTORE
-/// may re-apply, decided per heal rather than wholesale, because a restore that
-/// changes more than the save changed is a new route-dependence rather than a
-/// fix:
-///
-/// * `ensure_shot_uuids` - RE-APPLIED. Pure fill-in: it only touches a shot with
-///   no uuid, and it cannot alter one that has it. (A no-op in practice today -
-///   `Line::new` mints, and the load path mints - which is exactly why it is
-///   safe to keep as a guarantee.)
-/// * `capture_missing_gauge_anchors` - RE-APPLIED AS A CARRY-FORWARD, not as a
-///   fresh capture. The anchors `live` holds are copied onto any restored
-///   line that has none AND CAN RESOLVE THEM, so the pair a save recorded
-///   survives the undo. It is deliberately NOT the unconditional capture:
-///   minting anchors for a project that has never been saved would have a
-///   restore invent state no save authorised, and the restored project would
-///   then differ from the state it is supposed to be restoring. Neither
-///   direction can OVERWRITE an anchor - both the app's capture and this
-///   carry-forward skip a line that already has one - so the pair a line
-///   is pinned to never moves.
-///
-/// # The half of finding 11 this does NOT cover, and what does
-///
-/// KEPT, not superseded, by `AppState::refresh_snapshot_pair_counterpart`
-/// (`undo.rs`) - the two cover different halves of a history move and the split
-/// is exact:
-///
-/// * THIS covers the half being RESTORED. It reaches into a payload recorded
-///   before a heal and brings it up to date, which nothing else can do: the
-///   payload is the only record of that state, so if the restore did not repair
-///   it the heal would simply be reverted.
-/// * THE REFRESH covers the half being LEFT BEHIND, by re-recording it from the
-///   live project. That is what makes the reverse move exact - and it is the only
-///   thing that can, because this carry-forward is a LIVE-LINE LOOKUP and a
-///   snapshot pair whose halves disagree about whether a line EXISTS (a
-///   `Batch` holding a `CreateLine`, `execute_delete_shot_range_split`'s
-///   re-created tail) has no live counterpart at the moment the line comes
-///   back (#413, finding 11's re-creation residue).
-///
-/// Neither subsumes the other, and this one is also on the path of every
-/// rollback and load-time restore, where there is no pair to refresh at all.
-/// * `ensure_unique_shot_uuids` - NOT re-applied. It RE-MINTS an existing uuid,
-///   which is not fill-in, and the pre-repair state of a `duplicate_shot_uuid`
-///   Repair is a snapshot that intentionally holds duplicates: undoing that
-///   Repair has to restore them exactly (`restore_snapshot_into` says the same
-///   thing about its legacy-canonicalization block, and
-///   `undo_of_duplicate_uuid_repair_restores_the_duplicates` pins it).
-/// * the orphan `line_offsets` retain - NOT re-applied. It DROPS state rather
-///   than filling it in, and an orphan key is inert until the next save: every
-///   consumer looks offsets up by an id in `lines`, and the save runs its own
-///   retain before the FK-bearing write. Restoring it faithfully keeps undo an
-///   exact inverse.
-/// * the non-finite sanitize - NOT re-applied. It is destructive, which is why
-///   the save runs it only after the save gate and why a refused save
-///   deliberately leaves it undone. An undo must not rewrite the user's values;
-///   the load and save boundaries neutralize them where it matters.
-///
-/// `edited`: for a step through a snapshot pair, the gauge pairs the half
-/// being LEFT BEHIND held when it was recorded. A live pair equal to one of
-/// them is the edit's own (a combine that pins its kept line's gauge on the
-/// station it was on), not a save's capture, so it is not carried across: the
-/// restored half did not have it, and the step is an exact inverse.
-///
-/// Returns whether it changed `restored`.
-pub(super) fn reapply_heals_after_restore(
-    restored: &mut Project,
-    live: Option<&Project>,
-    edited: Option<&RecordedGauges>,
-) -> bool {
-    let mut changed = restored
-        .lines
-        .iter()
-        .flat_map(|line| &line.shots)
-        .any(|shot| shot.uuid.as_deref().is_none_or(str::is_empty));
-    restored.ensure_shot_uuids();
-    let Some(live) = live else {
-        return changed;
-    };
-    // The Section id counter only goes up within a timeline: a Section the
-    // restored state predates keeps its id retired, so `hiddenSections` (a
-    // view setting, keyed by id) never names a different Section later.
-    // Both are heals like the rest: reported, so a step through a compact
-    // entry records its way back from the project really installed.
-    let next_section_id = restored.next_section_id.max(live.next_section_id);
-    changed |= next_section_id != restored.next_section_id;
-    restored.next_section_id = next_section_id;
-    changed |= adopt_station_identities(restored, live);
-    // `Line::loaded_created_at` is session-only (serde-skipped), so every line
-    // of a restored snapshot comes back without the time its file held. Carry
-    // the live line's by id, or the next save rewrites every line's
-    // `sections.created_at` with the fallback (`docs/saving.md`). Not a heal:
-    // the field is never serialized, so the installed text is unchanged.
-    let stored_times: std::collections::HashMap<LineId, _> = live
-        .lines
-        .iter()
-        .filter_map(|line| Some((line.id, line.loaded_created_at?)))
-        .collect();
-    for line in &mut restored.lines {
-        if line.loaded_created_at.is_none() {
-            line.loaded_created_at = stored_times.get(&line.id).copied();
-        }
-    }
-    for line in &mut restored.lines {
-        if line.gauge_shot_uuid.is_some() {
-            continue;
-        }
-        let Some(healed) = live.lines.iter().find(|candidate| candidate.id == line.id) else {
-            continue;
-        };
-        let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
-            continue;
-        };
-        let edits_own =
-            edited
-                .and_then(|pairs| pairs.get(&line.id))
-                .is_some_and(|(shot, neighbour)| {
-                    shot == gauge_shot
-                        && neighbour.as_deref() == healed.gauge_neighbour_uuid.as_deref()
-                });
-        if edits_own {
-            continue;
-        }
-        // Matched by id, but the pair names shots BY UUID - and the line this
-        // is being copied onto is a DIFFERENT state of that id, which need not
-        // hold them. `DeleteShot` records a snapshot pair; save while the undo
-        // has the deleted shot back, and the pair a save captures names a shot
-        // the `after` half never had.
-        //
-        // A pair that does not resolve is not a weaker pin, it is no pin at all,
-        // and it is worse than none: `Project::gauge_index` silently falls back
-        // to the index rule, and `capture_missing_gauge_anchors` skips every
-        // line whose `gauge_shot_uuid.is_some()` - so the line stays on the
-        // fallback, and the gauge walks onto a new far station the next time the
-        // line is extended, which is the whole defect the pair exists to
-        // prevent (#24). Leaving the anchors as the snapshot had them (unset) is
-        // what lets the next save capture a pair the line can actually
-        // resolve.
-        let holds = |uuid: &str| line.shots.iter().any(|s| s.uuid.as_deref() == Some(uuid));
-        // The neighbour is legitimately absent for a single-shot line, so
-        // "unset" passes and only a RECORDED one has to resolve.
-        if !holds(gauge_shot) || !healed.gauge_neighbour_uuid.as_deref().is_none_or(holds) {
-            continue;
-        }
-        line.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
-        line.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
-        changed = true;
-    }
-    changed
-}
-
-/// A station told apart from every other by the shots on either side of it,
-/// as an unordered pair (`None` is the line's start or end), so it names the
-/// same physical station whichever way its line runs: a Reverse swaps the
-/// sides, not the pair. Shot uuids are project-unique, so the pair names the
-/// station across lines too (a split half); only a shot-less line's one
-/// station, `(None, None)`, needs its line to tell it apart.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct StationSides {
-    line: Option<LineId>,
-    sides: (Option<String>, Option<String>),
-}
-
-/// Every station of `project` by [`StationSides`], with its position; a pair
-/// that names more than one station (a repeated or missing shot uuid) is
-/// dropped, since it cannot say which one it means.
-fn stations_by_sides(project: &Project) -> std::collections::HashMap<StationSides, StationRef> {
-    let mut out = std::collections::HashMap::new();
-    let mut ambiguous = std::collections::HashSet::new();
-    for line in &project.lines {
-        let uuid = |i: usize| line.shots.get(i).and_then(|s| s.uuid.clone());
-        for index in 0..=line.shots.len() {
-            let before = index.checked_sub(1).and_then(uuid);
-            let after = uuid(index);
-            let both_ends = before.is_none() && after.is_none();
-            let sides = if before <= after {
-                (before, after)
-            } else {
-                (after, before)
-            };
-            let key = StationSides {
-                line: both_ends.then_some(line.id),
-                sides,
-            };
-            let at = StationRef::new(line.id, u32::try_from(index).unwrap_or(u32::MAX));
-            if out.insert(key.clone(), at).is_some() {
-                ambiguous.insert(key);
+    /// The write failed: put the sidecars back beside the untouched original.
+    fn put_back(self) {
+        for (sidecar, to) in self.moved {
+            if let Err(e) = std::fs::rename(&to, &sidecar) {
+                tracing::error!(error = %e, sidecar = ?sidecar, "could not put a legacy sidecar back");
             }
         }
     }
-    for key in ambiguous {
-        out.remove(&key);
-    }
-    out
-}
-
-/// A snapshot recorded by a build that predates Station IDs carries none (and
-/// may lack names the live project has seeded since). Give every station the
-/// restored state shares with the live one the live station's id and, when
-/// the snapshot has none, its name, and keep the counter above both; the
-/// station-identity epilogue mints and seeds the rest. A current snapshot
-/// carries its own ids and is left exactly as recorded.
-///
-/// "Shares" means the same PHYSICAL station: the same shots on either side
-/// ([`StationSides`]), not the same stored key. Across a Reverse or a
-/// first-shot delete one key (`LineStart`, `AfterShot(u)`) names a different
-/// station in the two states, and adopting by key put ids and names on the
-/// wrong stations; a station whose sides changed (the new first station after
-/// a first-shot delete) is left for the epilogue instead.
-///
-/// Returns whether it changed `restored`.
-fn adopt_station_identities(restored: &mut Project, live: &Project) -> bool {
-    if !restored.station_ids.is_empty() || live.station_ids.is_empty() {
-        return false;
-    }
-    let mut changed = false;
-    let live_stations = stations_by_sides(live);
-    for (sides, at) in stations_by_sides(restored) {
-        let Some(live_at) = live_stations.get(&sides) else {
-            continue;
-        };
-        let Some(key) = restored.key_for_ref(at) else {
-            continue;
-        };
-        if let Some(id) = live.station_id_at(*live_at) {
-            restored.station_ids.insert(key.clone(), id);
-            changed = true;
-        }
-        if restored.station_name_at(at).is_none() {
-            if let Some(name) = live.station_name_at(*live_at) {
-                restored.station_names.insert(key, name.to_string());
-                changed = true;
-            }
-        }
-    }
-    let next_station_id = restored.next_station_id.max(live.next_station_id);
-    changed |= next_station_id != restored.next_station_id;
-    restored.next_station_id = next_station_id;
-    changed
 }
 
 impl AppState {
-    /// True when the open project's initial save is still deferred - it was created
-    /// with no save path and has never been written to disk, so it has no `.stalx`
-    /// file and no Recent Projects entry yet. Used to durably persist a brand-new
-    /// project on its first import (#92), at the command every import path funnels
-    /// through, so the fix survives changes to the import UI. Backed by an explicit
-    /// flag (set at deferred creation, cleared on save/open/load) rather than
-    /// inferred from the DB handle or file existence, both of which are ambiguous.
+    /// [#92] Whether the open project's initial save is still deferred.
     pub fn initial_save_deferred(&self) -> bool {
         self.initial_save_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -569,15 +276,40 @@ impl AppState {
         self.save_project_at_generation(path, None)
     }
 
+    /// Save, refusing if the SpeleoDB session changed since `expected_generation`.
     pub(super) fn save_project_at_generation(
         &self,
         path: Option<PathBuf>,
         expected_generation: Option<u64>,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        self.save_with(path, expected_generation, OnDisk::Checked)
+    }
 
+    /// Save over a file another program changed since it was opened (the
+    /// guard's "Overwrite" answer).
+    pub fn save_project_overwriting(&self, path: Option<PathBuf>) -> CommandResult {
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        self.save_with(path, None, OnDisk::Overwrite)
+    }
+
+    /// The save (plan 6.5): validate, encode in memory, write atomically with
+    /// the external-modification guard. `path` `None` saves to the open
+    /// file; an explicit `path` on a SpeleoDB-managed project writes a
+    /// detached copy (no link, no SpeleoDB state, no inherited history) and
+    /// leaves the session on the managed file. The first save of a legacy
+    /// file upgrades it, after backing up the original.
+    fn save_with(
+        &self,
+        path: Option<PathBuf>,
+        expected_generation: Option<u64>,
+        on_disk: OnDisk,
+    ) -> CommandResult {
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if expected_generation
             .is_some_and(|generation| self.speleodb_session_generation() != generation)
         {
@@ -586,888 +318,125 @@ impl AppState {
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
-
-        // Refuse to persist a project with unresolvable cross-references (a station an
-        // endpoint anchors on was deleted) BEFORE the heals below mutate the live
-        // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
-        // non-finite sanitize) do NOT affect this predicate - it depends only on
-        // line existence and anchor resolution - so checking first is equivalent
-        // for the block decision but guarantees a REFUSED save leaves the open project
-        // byte-for-byte unchanged (the non-finite sanitize rewrites shot values to
-        // finite defaults with no undo entry, so mutating on a refused save would
-        // silently lose the user's data).
-        //
-        // This applies to AUTO-SAVE as well as manual saves: AUTO-SAVE MUST NEVER
-        // PERSIST A BROKEN PROJECT. When the project is broken the save is refused (no
-        // file written) and the caller surfaces that auto-save did not run (the
-        // auto-save indicator + the integrity banner); the user restores integrity via
-        // Repair, after which saves resume. This is the single chokepoint that
-        // guarantees only sound projects reach disk.
-        if project.has_unresolvable_cross_references() {
-            let count = project
-                .check_structural_integrity()
-                .iter()
-                .filter(|v| {
-                    matches!(
-                        v.category.as_str(),
-                        "dangling_merge_ref"
-                            | "dangling_closure_ref"
-                            | "dangling_zero_datum_ref"
-                            | "orphan_station_offset"
-                            | "orphan_station_comment"
-                    )
-                })
-                .count();
+        let open_path = project.file_path.clone();
+        let Some(target) = path.clone().or_else(|| open_path.clone()) else {
+            return CommandResult::failure("The project has no file to save to".to_string());
+        };
+        let to_open_file = open_path.as_ref().is_some_and(|p| same_file(p, &target));
+        let violations = project.validate();
+        if let Some(first) = violations.first() {
             tracing::error!(
-                count,
-                purpose = "block persisting unresolvable cross-references",
-                "Refused to save project with dangling cross-references"
+                count = violations.len(),
+                purpose = "never write an invalid survey",
+                "Refused to save a project that breaks an invariant"
             );
-            return CommandResult::failure(format!(
-                "Can't save: the project has {count} unresolved cross-reference{} \
-                 (a station they point to was deleted). Use \"Repair\" in the \
-                 integrity banner, then save.",
-                if count == 1 { "" } else { "s" }
-            ));
+            return CommandResult::failure(format!("Can't save: {first}"));
         }
-
-        // The undo-less heals, all of them, in `apply_save_heals` - which is
-        // also what a snapshot restore consults so an undo of an entry recorded
-        // BEFORE this save cannot revert them (#413, finding 11).
-        apply_save_heals(project);
-        // [#741] Decided on the healed project the file is written from.
-        let older_builds_drop_fixes = crate::persistence::holds_datum_extras(project);
-
-        // Don't let geometric corruption persist silently: a release-mode warning
-        // when drifted merges are about to be written. (The frontend re-checks
-        // after save and offers a repair via the integrity banner.)
-        let misaligned = project.check_merge_alignment();
-        if !misaligned.is_empty() {
-            tracing::warn!(
-                count = misaligned.len(),
-                purpose = "flag misaligned merges before persisting",
-                "Saving a project with drifted station merges"
-            );
-            for violation in &misaligned {
-                tracing::warn!(category = %violation.category, "{}", violation.message);
-            }
-        }
-
-        // Determine save path and ensure .stalx extension
-        let is_implicit_save = path.is_none();
-        let save_path = path.or_else(|| project.file_path.clone());
-        let mut save_path = match save_path {
-            Some(p) => {
-                // Ensure .stalx extension
-                if p.extension().is_none_or(|ext| ext != "stalx") {
-                    p.with_extension("stalx")
-                } else {
-                    p
-                }
-            }
-            None => return CommandResult::failure("No save path specified".to_string()),
-        };
-
-        // On the first implicit save (path omitted), avoid overwriting an existing file.
-        // Deferred new projects can reserve a canonical path; if it now exists, auto-rename.
-        let has_open_database = self.database.lock().map(|db| db.is_some()).unwrap_or(false);
-        if is_implicit_save && !has_open_database {
-            let candidate_path = Self::next_available_project_path(&save_path);
-            if candidate_path != save_path {
-                tracing::warn!(
-                    requested_path = ?save_path,
-                    selected_path = ?candidate_path,
-                    purpose = "avoid overwriting existing project on first implicit save",
-                    "Implicit first save path already exists; using auto-renamed path"
-                );
-                save_path = candidate_path;
-            }
-        }
-
-        // The destination folder has to be there before anything is opened.
-        // SQLite answers a deleted folder or an unmapped drive with the same
-        // errno-free "unable to open database file" as a genuine denial, so
-        // asking first is what lets the user be told which one it is instead of
-        // being handed a raw database error (#429).
-        if let Some(parent) = save_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            let reachable = match parent.try_exists() {
-                Ok(present) => present,
-                // A folder whose metadata cannot be read at all - a removed
-                // stick, a dropped share - cannot host the save either. A
-                // permission error is the one exception: the folder IS there,
-                // and the pipeline below classifies that denial with its own
-                // guidance.
-                Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
-            };
-            if !reachable {
-                tracing::warn!(
-                    path = ?save_path,
-                    parent = ?parent,
-                    purpose = "persist edits safely",
-                    "Save refused: the destination folder is not reachable"
-                );
-                return CommandResult::failure(format!(
-                    "{}: Cannot save to {}: the folder no longer exists or the drive is not \
-                     connected",
-                    crate::core::loading::PATH_NOT_FOUND_CODE,
-                    save_path.display()
-                ));
-            }
-        }
-
-        // Create a temporary file path in the same directory (for atomic rename)
-        let temp_path = save_path.with_extension("stalx.tmp");
-        tracing::info!(
-            final_path = ?save_path,
-            temp_path = ?temp_path,
-            purpose = "persist edits safely",
-            "Starting safe save operation"
-        );
-
-        // Load display settings from current database or in-memory cache
-        let display_settings = {
-            let db_guard = self.database.lock().ok();
-            let from_db = db_guard
-                .as_ref()
-                .and_then(|db| db.as_ref())
-                .and_then(|db| db.load_display_settings().ok())
-                .unwrap_or_default();
-
-            // If DB had settings, use those; otherwise use the in-memory cache
-            if from_db.is_empty() {
-                self.display_settings_cache
-                    .lock()
-                    .map(|cache| cache.clone())
-                    .unwrap_or_default()
-            } else {
-                from_db
-            }
-        };
-
-        // Resolved (ignored) warnings live in their own table, not in the Project
-        // model, so save_project() won't carry them. Snapshot them from the
-        // current database and re-apply to the fresh save file below, otherwise
-        // every save would drop the user's "Ignore" acknowledgements (issue #57).
-        //
-        // [#517] The read is `load_resolved_warnings_verbatim`, not the load
-        // path's `load_resolved_warnings`: it takes the table in whatever shape
-        // the file has (a pre-v8 file with no `shot_uuid`, e.g. one whose
-        // migration chain a forged `PRAGMA user_version` skipped) instead of
-        // failing on the one missing column. What it still cannot read is
-        // refused below rather than guessed at.
-        let carried_ignores = {
-            // Recover a poisoned lock rather than silently dropping every ignore.
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            match db_guard.as_ref() {
-                Some(db) => db.load_resolved_warnings_verbatim(),
-                None => Ok(Vec::new()),
-            }
-        }
-        // ...plus the ignores an "Add .stalx" carried in for lines this file
-        // has never held (#674): THIS save is the first that can write them.
-        // They ride the same remap and line filter as every other row.
-        .map(|mut rows| {
-            rows.extend(self.pending_ignores());
-            rows
-        });
-        let resolved_warnings: Vec<_> = match carried_ignores {
-            Ok(rows) => {
-                // Drop rows whose line no longer exists. resolved_warnings has
-                // a FOREIGN KEY on line_id and the carry-over re-inserts in a
-                // single transaction - one orphaned row (e.g. a line deleted
-                // after a warning on it was ignored; delete_line is in-memory
-                // only and never prunes this table) would abort the whole
-                // transaction and silently drop EVERY still-valid ignore.
-                let line_ids: std::collections::HashSet<_> =
-                    project.lines.iter().map(|s| s.id).collect();
-                // Re-derive each UUID-keyed row's stored (line_id, shot_id)
-                // from the live shot's CURRENT position so two distinct live
-                // shots never share a (line_id, shot_id) in the fresh save
-                // file (issue #57). save_project writes shot_id =
-                // line_id*FEATURE_ID_STRIDE + sequence_order, so we derive
-                // the same value from the in-memory project; load regenerates
-                // ids with this identical formula. Without this, a renumber that
-                // lands a different shot on a stale UUID-keyed row's old position
-                // would let INSERT OR REPLACE (against UNIQUE(line_id, shot_id,
-                // warning_code)) silently delete the older shot's still-valid
-                // ignore.
-                // Key by (line_id, uuid), not uuid alone: shot UUIDs are unique
-                // across the live project, but a STORED row may name an id that
-                // two lines held before the load renamed one copy, and only
-                // its line says which shot it meant (issue #57 / Codex).
-                let live_positions: std::collections::HashMap<(LineId, &str), (LineId, u32)> =
-                    project
-                        .lines
-                        .iter()
-                        .flat_map(|s| {
-                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                                sh.uuid.as_deref().map(|u| {
-                                    (
-                                        (s.id, u),
-                                        (
-                                            s.id,
-                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
-                                        ),
-                                    )
-                                })
-                            })
-                        })
-                        .collect();
-                // Index live shots by their CURRENT (line_id, shot_id) → (uuid,
-                // saved position). A position-keyed (NULL-uuid) row written before
-                // its shot's UUID was persisted (resolve_warning on a pre-v6 or
-                // not-yet-saved shot) is upgraded here: THIS save persists every
-                // shot's UUID, so we re-key such a row to the shot's saved position
-                // AND its now-persisted UUID. Without this, its stale in-memory
-                // shot_id could point at a different shot (or none) after an
-                // insert/delete on the next load (issue #57 / Codex).
-                let live_by_id: std::collections::HashMap<(LineId, u32), (&str, (LineId, u32))> =
-                    project
-                        .lines
-                        .iter()
-                        .flat_map(|s| {
-                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                                sh.uuid.as_deref().map(|u| {
-                                    (
-                                        (s.id, sh.id),
-                                        (
-                                            u,
-                                            (
-                                                s.id,
-                                                s.id * crate::models::FEATURE_ID_STRIDE
-                                                    + seq as u32,
-                                            ),
-                                        ),
-                                    )
-                                })
-                            })
-                        })
-                        .collect();
-                let homes = super::warnings::ShotHomes::of(project);
-                // Remap each UUID-keyed row to its shot's live position; DROP a
-                // UUID-keyed row whose shot was deleted (UUID no longer live) - it
-                // can never match a live shot by UUID on reload, so it is dead.
-                // Keeping it with its stale id would let it collide (under
-                // UNIQUE(line_id, shot_id, warning_code) + INSERT OR REPLACE)
-                // with a live shot that a renumber moved onto that position, and
-                // REPLACE could drop either row depending on insert order - i.e.
-                // silently lose the live shot's still-valid ignore. Dropping dead
-                // rows here also stops them accumulating across saves. NULL-uuid
-                // (legacy, position-keyed) rows are kept and matched by position
-                // (the load-time backfill upgrades the ones that map to a shot).
-                rows.into_iter()
-                    .filter_map(|mut r| {
-                        match r.shot_uuid.as_deref() {
-                            Some(uuid) => {
-                                // Look up by (line_id, uuid). A row stored against
-                                // an id the load renamed (a cross-line repeat in a
-                                // file saved before shot UUIDs were project-wide
-                                // unique) names its shot through the derived id, and
-                                // is re-keyed to it here: this save persists it.
-                                let live = crate::models::live_shot_uuid_for_stored(
-                                    r.line_id,
-                                    uuid,
-                                    |id| live_positions.contains_key(&(r.line_id, id)),
-                                );
-                                // A shot a split or combine moved to another
-                                // line keeps its uuid: re-key the row to its
-                                // new line rather than drop it.
-                                let (home, live_uuid) = match live {
-                                    Some(live) => (r.line_id, live),
-                                    None => (homes.moved_to(r.line_id, uuid)?, uuid.to_string()),
-                                };
-                                let &(sec, shot) =
-                                    live_positions.get(&(home, live_uuid.as_str()))?;
-                                r.shot_uuid = Some(live_uuid);
-                                r.line_id = sec;
-                                r.shot_id = shot;
-                                Some(r)
-                            }
-                            None => {
-                                // Upgrade a position-keyed row to its shot's saved
-                                // position + now-persisted UUID when its (line_id,
-                                // shot_id) still maps to a live shot. A row that maps
-                                // to NO live shot is DEAD (its shot was deleted) - DROP
-                                // it: carrying it forward would let the load-time
-                                // position backfill re-attach it to whatever shot now
-                                // occupies that saved position, suppressing an
-                                // unrelated shot's warning (issue #57 / Codex).
-                                let &(uuid, (sec, shot)) =
-                                    live_by_id.get(&(r.line_id, r.shot_id))?;
-                                r.shot_uuid = Some(uuid.to_string());
-                                r.line_id = sec;
-                                r.shot_id = shot;
-                                Some(r)
-                            }
-                        }
-                    })
-                    // Then drop any (legacy) row whose line no longer exists so
-                    // the FK on line_id holds for every carried-over row.
-                    .filter(|r| line_ids.contains(&r.line_id))
-                    .collect()
-            }
-            // [#517] REFUSE the save. This snapshot is not a nicety the save
-            // can do without: the pipeline builds a FRESH `.stalx.tmp` and
-            // renames it over the destination, so the file's ignore list is
-            // rebuilt from exactly these rows. Continuing with `Vec::new()`
-            // wrote a file with zero ignores and destroyed the old one in the
-            // same stroke - every "Ignore" the user ever recorded, gone, on a
-            // save reported as successful.
-            //
-            // Refusing loses nothing: no temp file exists yet, the destination
-            // is untouched, and the rows stay in the file that still holds
-            // them. It is also the only channel that reaches the user - a
-            // `CommandResult.warnings` entry on a SUCCESSFUL save is read by
-            // nothing on the frontend (`projectStore.saveProject` inspects the
-            // list only for `DATABASE_NOT_REOPENED`), whereas a failure is
-            // routed to the error dialog / autosave banner by
-            // `surfaceSaveFailure`.
-            //
-            // The verbatim read above already absorbs every legacy SHAPE, and
-            // coerces every hostile VALUE, so what remains here is STRUCTURAL:
-            // a missing key column, an unreadable `sqlite_master`, a step error
-            // from a corrupt page. A single nonsense row must never land here -
-            // that would make one poisoned cell in a file the user merely opened
-            // into a project that can never be saved again. The project's survey
-            // data is exportable meanwhile, so the user is not walled in.
-            //
-            // The message carries `IGNORES_UNREADABLE` because an unmarked
-            // failure is routed to Review & Repair whenever the integrity check
-            // is also unhappy, and Review & Repair cannot fix this - see
-            // `saveErrors.ts` / `surfaceSaveFailure`. The quoted cause is clamped:
-            // SQLite error text embeds the attacker's own identifiers.
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    purpose = "carry resolved warnings across save",
-                    "Refused to save: the resolved-warnings table could not be read, and the \
-                     save would rebuild the file without the user's ignores"
-                );
-                return CommandResult::failure(format!(
-                    "{}: Can't save: this project's list of ignored warnings could not be read \
-                     ({}). Saving would rewrite the file without them, so nothing was written - \
-                     the file on disk is unchanged.",
-                    crate::core::loading::IGNORES_UNREADABLE_CODE,
-                    crate::core::loading::clamp_quoted_error(&e.to_string()),
-                ));
-            }
-        };
-
-        // [Track B] (#191, D-B13c) The SpeleoDB hand-off link (speleo_link) lives
-        // in its own table, not the Project model, so save_project() won't carry
-        // it. The save pipeline writes a FRESH temp .stalx and atomically renames
-        // it over the destination, so without this snapshot+re-apply a local save
-        // would DROP the link entirely - silently un-remoting the project and
-        // clearing has_unpushed_edits (exactly the "local save NEVER clears the
-        // dirty bit" invariant). Snapshot it here and re-apply to the fresh file
-        // below. base_commit_sha + the dirty bit are carried verbatim.
-        let speleo_link = {
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            db_guard
-                .as_ref()
-                .and_then(|db| db.load_speleo_link().ok().flatten())
-        };
-
-        // Save a Copy: an EXPLICIT destination on a SpeleoDB-managed project does
-        // not relocate the session - it writes a detached copy WITHOUT the
-        // `speleo_link` row and leaves the session on the managed file. A managed
-        // project is usable at exactly one path (its cache slot - see
-        // `speleodb_foreign`), so carrying the link to an arbitrary destination
-        // would mint the second linked copy that module exists to refuse. The
-        // predicate is safe for every in-tree caller: `speleodb_publish` and the
-        // Ariane adopt both save to the cache path while the project is STILL
-        // UNLINKED (the link is stamped after - pinned by
-        // `publish_relocates_into_the_cache_before_it_stamps_the_link`), and
-        // `speleodb_upload`'s pre-push flush is an implicit save.
-        let copy_only = speleo_link.is_some() && !is_implicit_save;
-        if copy_only {
-            // Refuse the managed file itself as the copy's destination: writing an
-            // unlinked copy over it would strip the managed project's link in
-            // place - the one outcome this whole arrangement exists to prevent.
-            // Both spellings of "itself" are checked: the open file, and the
-            // project's canonical cache slot (they are normally the same file, but
-            // `same_file` cannot bridge them when one side does not resolve).
-            let names_the_managed_file = project
-                .file_path
-                .as_ref()
-                .is_some_and(|open| same_file(open, &save_path))
-                || speleo_link.as_ref().is_some_and(|link| {
-                    super::speleodb::validate_project_id(&link.project_id).is_ok()
-                        && super::speleodb_local_state::cache_root().is_some_and(|root| {
-                            super::speleodb_local_state::is_the_cached_copy(
-                                &root,
-                                &link.project_id,
-                                &save_path,
-                            )
-                        })
-                });
-            if names_the_managed_file {
-                return CommandResult::failure(format!(
-                    "\"{}\" is the managed copy of \"{}\" - Save a Copy needs a \
-                     different destination. Use Save to save the project itself.",
-                    save_path.display(),
-                    project.name
-                ));
-            }
-        }
-        // [#303] The Unwind chain pointer needs the same treatment, and for a sharper
-        // reason than "it would be lost". Losing it is documented as benign - the next
-        // Unwind restarts from BASE - but the pointer is also what EXCUSES the dirty bit
-        // a walk leaves behind. Dropped here, a copy the user only unwound reads as
-        // holding un-pushed work nobody warned them about, so the confirmation and the
-        // backend guard disagree: the dialog resolved the flag before an autosave, the
-        // guard re-derived it after, and the Unwind failed on press with "this copy holds
-        // un-pushed edits that the undo history no longer covers". A scripted run never
-        // sees it because nothing saves in between; a person pausing between two Unwinds
-        // hits it every time.
-        // A detached copy deliberately sheds both markers, so it does not need to read
-        // them. For a managed save, keep absence distinct from a read error: if either
-        // marker cannot be preserved, the selected fail-closed policy is to save the
-        // survey with no undo history rather than publish unclassified inherited rows.
-        let marker_snapshot = if copy_only {
-            Ok((None, None))
-        } else {
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            match db_guard.as_ref() {
-                Some(db) => db.load_speleo_undo_chain().and_then(|chain| {
-                    db.load_speleo_undo_watermark()
-                        .map(|watermark| (chain, watermark))
-                }),
-                None => Ok((None, None)),
-            }
-        };
-        let (speleo_undo_chain, speleo_undo_watermark, mut marker_preservation_failed) =
-            match marker_snapshot {
-                Ok((chain, watermark)) => (chain, watermark, false),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "save without unclassified inherited undo history (#303)",
-                        "Could not read the undo-chain metadata; the saved file will drop Undo and Redo history"
-                    );
-                    (None, None, true)
-                }
-            };
-
-        // Remove any leftover temp file from previous failed saves
-        if temp_path.exists() {
-            let _ = std::fs::remove_file(&temp_path);
-        }
-
-        // Save to temporary file first
-        let mut db = match Database::open(&temp_path) {
-            Ok(db) => db,
-            Err(e) => {
-                // Clean up temp file on failure
-                let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to create save file", &save_path, &e);
-            }
-        };
-
-        if let Err(e) = db.save_project(project) {
-            // Clean up temp file on failure
-            drop(db);
-            let _ = std::fs::remove_file(&temp_path);
-            tracing::error!(
-                error = %e,
-                purpose = "persist edits safely",
-                "Save failed; temp file cleaned up"
-            );
-            return save_failure("Failed to save project", &save_path, &e);
-        }
-
-        // Copy display settings to the new database, in key order: the map's
-        // order changes on every open, and the insert order decides where the
-        // rows land in the file (`docs/saving.md`).
-        let mut display_settings: Vec<_> = display_settings.iter().collect();
-        display_settings.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        for (key, value) in display_settings {
-            if let Err(e) = db.save_display_setting(key, value) {
-                tracing::warn!(
-                    key = %key,
-                    error = %e,
-                    purpose = "preserve display settings on save",
-                    "Failed to copy display setting"
-                );
-            }
-        }
-
-        // Carry over resolved (ignored) warnings so they survive the save.
-        if !resolved_warnings.is_empty() {
-            if let Err(e) = db.save_resolved_warnings_bulk(&resolved_warnings) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve resolved warnings on save",
-                    "Failed to copy resolved warnings"
-                );
-            }
-        }
-
-        // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
-        // local save never un-remotes the project or clears the dirty bit. The
-        // dirty bit is set-only here - only a later server push clears it.
-        // EXCEPT on a copy save, where dropping the row is the whole point: the
-        // copy is a plain unmanaged project.
-        // [#303] The chain position and the inherited-history watermark join the link
-        // under the SAME guard, rather than each carrying their own: all three describe
-        // this machine's relationship to the SERVER, so a copy that has deliberately shed
-        // its link must shed them too. A copy that kept the watermark and was later linked
-        // would have its own first push cut the user's history as "inherited". Grouped
-        // because the per-site version of this rule has already been missed once.
-        if !copy_only {
-            if let Some(link) = &speleo_link {
-                if let Err(e) = db.save_speleo_link(Some(link)) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve SpeleoDB hand-off link on save",
-                        "Failed to copy speleo_link onto the fresh save file"
-                    );
-                }
-            }
-            // [#303] ...and the Unwind chain position with it. Only written when one exists:
-            // `None` is already the fresh file's state, and writing it unconditionally would
-            // mean every save of every project touched this table for nothing.
-            if let Some(sha) = &speleo_undo_chain {
-                if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
-                    marker_preservation_failed = true;
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve the Unwind chain position on save (#303)",
-                        "Failed to copy speleo_undo_chain onto the fresh save file; Undo and \
-                         Redo history will be removed from the saved file"
-                    );
-                }
-            }
-
-            // [#303] Likewise the inherited-history watermark.
-            if let Some(ts) = &speleo_undo_watermark {
-                if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
-                    marker_preservation_failed = true;
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve the inherited-history watermark on save (#303)",
-                        "Failed to copy speleo_undo_watermark onto the fresh save file; Undo and \
-                         Redo history will be removed from the saved file"
-                    );
-                }
-            }
-        }
-
-        // Persist history while the file is still staged. A partial undo/redo rewrite
-        // must never be renamed into place: try the pair atomically, and if it fails,
-        // atomically clear both stacks and continue with a visible warning.
-        let mut history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
-            Ok(dropped) => dropped,
-            Err(e) => {
-                drop(db);
-                let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to finalize undo history", &save_path, &e);
-            }
-        };
-        if marker_preservation_failed {
-            if let Err(e) = db.clear_history_stacks() {
-                drop(db);
-                let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to remove unclassified undo history", &save_path, &e);
-            }
-            history_dropped = true;
-            // Keep the fresh file coherent where possible. History is already empty, so
-            // failure here cannot expose inherited rows and must not turn the selected
-            // continue-saving policy back into a refused save.
-            if let Err(e) = db.save_speleo_undo_chain(None) {
-                tracing::warn!(error = %e, "Could not clear the saved undo-chain pointer");
-            }
-            if let Err(e) = db.save_speleo_undo_watermark(None) {
-                tracing::warn!(error = %e, "Could not clear the saved undo watermark");
-            }
-        }
-
-        // Close the temp database before renaming
-        drop(db);
-
-        if copy_only {
-            // The destination is provably NOT the live file (refused above), so
-            // the live connection stays open, the session keeps its file_path and
-            // database handle, and no cache is invalidated. Rename the temp into
-            // place, list the copy, and report it via `unlinked_copy_path` -
-            // deliberately NOT `saved_path`, which the frontend treats as "the
-            // open project now lives here".
-            if let Err(e) = std::fs::rename(&temp_path, &save_path) {
-                let _ = std::fs::remove_file(&temp_path);
-                let e = anyhow::Error::from(e);
-                tracing::error!(
-                    error = %e,
-                    purpose = "write a detached unlinked copy",
-                    "Failed to rename temp file to the copy destination"
-                );
-                return save_failure("Failed to finalize save", &save_path, &e);
-            }
-            drop(proj_guard);
-            self.note_recent_project(&save_path);
-            tracing::info!(
-                path = ?save_path,
-                purpose = "write a detached unlinked copy",
-                "Saved an unlinked copy of a SpeleoDB-managed project"
-            );
-            let mut result =
-                CommandResult::success().with_unlinked_copy_path(save_path.display().to_string());
-            Self::warn_history_dropped(&mut result, history_dropped);
-            Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
-            return result;
-        }
-
-        // Close our own persistent connection to the destination BEFORE the
-        // rename. Windows refuses to rename a file over a destination that
-        // still has an open handle: SQLite's Connection opens the file without
-        // FILE_SHARE_DELETE, so MoveFileEx(REPLACE_EXISTING) fails with
-        // "Access is denied" (os error 5). Unix renames over an open file fine
-        // (the live handle keeps pointing at the old inode), which is why this
-        // only bit Windows. We reopen below - at save_path on success (existing
-        // logic), or at the prior path here if the rename fails - so the
-        // session keeps a working connection either way.
-        let closed_open_db = self
-            .database
-            .lock()
-            .map(|mut db| db.take().is_some())
-            .unwrap_or(false);
-
-        // Atomically rename temp file to final destination
-        // This is safe: if rename fails, original file is untouched
-        if let Err(e) = std::fs::rename(&temp_path, &save_path) {
-            let _ = std::fs::remove_file(&temp_path);
-            // The destination is untouched. If we just closed our live
-            // connection, reopen the previously-open project so subsequent
-            // saves, undo persistence, and the implicit-save overwrite guard
-            // keep working instead of operating with no open database.
-            if closed_open_db {
-                if let Some(prev_path) = project.file_path.clone() {
-                    if let Ok(reopened) = Database::open(&prev_path) {
-                        if let Ok(mut database) = self.database.lock() {
-                            *database = Some(reopened);
-                        }
-                    }
-                }
-            }
-            let e = anyhow::Error::from(e);
-            tracing::error!(
-                error = %e,
-                purpose = "persist edits safely",
-                "Failed to rename temp file to final destination"
-            );
-            return save_failure("Failed to finalize save", &save_path, &e);
-        }
-
-        // The `.stalx` is now written, so the initial save is no longer deferred.
-        // Set this BEFORE the reopen below: that path returns early on failure, and
-        // the project is persisted regardless of whether the handle reopens.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        // The file now holds every pending ignore (#674) - still under the
-        // project guard the carry-over read them under, so none can slip in
-        // between. The detached-copy branch above returns before this: the
-        // session's own file did not receive them.
-        self.clear_pending_ignores();
-
-        // The installed file deliberately has no history because its chain metadata
-        // could not be classified safely. Drop the live mirror at the same commit point:
-        // otherwise a later save can write these same unclassified rows straight back
-        // into the now-valid database and undo the fail-closed fallback.
-        if marker_preservation_failed {
-            let mut undo_stack = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            undo_stack.clear();
-            undo_stack.set_inherited_through(None);
-        }
-
-        // Reopen the database at the final path
-        let db = match Database::open(&save_path) {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    purpose = "reopen saved project for continued editing",
-                    "Failed to reopen saved database (file was saved successfully)"
-                );
-                // File was saved but can't be reopened - subsequent operations
-                // (undo persistence, display settings) will fail. Clear the stale
-                // database handle so callers don't use it.
-                project.file_path = Some(save_path.clone());
-                if let Ok(mut database) = self.database.lock() {
-                    *database = None;
-                }
-                drop(proj_guard);
-                // Distinct code (not the generic "SYSTEM") so the frontend can keep
-                // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
-                // disabled until the project is reopened (issue #57 / Codex).
-                let mut result = CommandResult::success();
-                Self::warn_history_dropped(&mut result, history_dropped);
-                Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
-                result.warnings.push(crate::core::ValidationWarning {
-                    code: "DATABASE_NOT_REOPENED".to_string(),
-                    message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
-                    severity: crate::core::WarningSeverity::Warning,
-                });
-                return result;
-            }
-        };
-
-        // Update file path after successful save
-        project.file_path = Some(save_path.clone());
-
-        // Publish the reopened handle before a replacement project can take the slot.
-        if let Ok(mut database) = self.database.lock() {
-            *database = Some(db);
-        }
-        drop(proj_guard);
-
-        // Clear in-memory cache since settings are now persisted to DB
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // Add to recent projects and persist to config
-        self.note_recent_project(&save_path);
-
-        let save_path_str = save_path.display().to_string();
-        tracing::info!(
-            path = ?save_path,
-            purpose = "persist edits safely",
-            "Project saved successfully"
-        );
-        let mut result = CommandResult::success().with_path(save_path_str);
-        Self::warn_history_dropped(&mut result, history_dropped);
-        Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
-        result
-    }
-
-    /// [#741] The saved file holds GPS fixes or stored accuracies, in the side
-    /// table `zero_datum_extras`. A build from before it writes a fresh file
-    /// without that table on its next save, so it drops them, and neither
-    /// build can tell afterwards. Reported on every such save; the frontend
-    /// shows it once per project per session. Not the `"SYSTEM"` code, which
-    /// belongs to the deferred-save contract.
-    fn warn_older_builds_drop_fixes(result: &mut CommandResult, holds: bool) {
-        if holds {
-            result.warnings.push(crate::core::ValidationWarning {
-                code: OLDER_BUILDS_DROP_GPS_FIXES.to_owned(),
-                message: "Older versions of the app drop this project's GPS fixes and accuracies when they save it.".to_owned(),
-                severity: crate::core::WarningSeverity::Warning,
-            });
-        }
-    }
-
-    fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
-        if dropped {
-            result.warnings.push(crate::core::ValidationWarning {
-                code: "UNDO_HISTORY_DROPPED".to_owned(),
-                message: "The project was saved, but its Undo and Redo history could not be preserved and was removed.".to_owned(),
-                severity: crate::core::WarningSeverity::Warning,
-            });
-        }
-    }
-
-    pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
-        let undo_stack = self
-            .undo_stack
+        let mut file = self
+            .file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
-        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
-            Ok(()) => Ok(false),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "save project without partial undo history",
-                    "Could not persist the complete Undo and Redo history; saving with both stacks empty"
-                );
-                db.clear_history_stacks()?;
-                Ok(true)
-            }
+        if file.extras.read_only.is_some() {
+            return CommandResult::failure(format!(
+                "{READ_ONLY_FILE_CODE}: this project was made with a newer Stalagmight; \
+                 it is open read-only and cannot be saved"
+            ));
         }
-    }
-
-    /// Persist an already-locked stack. The confirmed-push path uses this while it
-    /// holds the live database and undo guards, so no late edit can land between
-    /// pruning memory and rewriting SQLite.
-    pub(super) fn persist_locked_undo_stacks_into(
-        &self,
-        db: &Database,
-        undo_stack: &UndoStack,
-    ) -> bool {
-        // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
-        // by the byte budget, not by a count) because that history is what rides in the
-        // next commit and gives undo its cross-commit reach. Everything else - local
-        // projects, Disabled mode - keeps the `undo_persist_limit` window unchanged.
-        //
-        // The link is read from the LOCAL `db` handle rather than through
-        // `undo_policy()`: `self.database` still points at the pre-save handle when the
-        // normal save calls this, so asking the AppState would consult the wrong file.
-        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, undo_stack);
-        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
-            Ok(()) => true,
+        let detached = file.extras.speleodb.is_some() && path.is_some() && !to_open_file;
+        let mut extras = file.extras.clone();
+        extras.generator = generator();
+        extras.history = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .persisted();
+        let mode = if detached {
+            Mode::DetachedCopy
+        } else {
+            Mode::Normal
+        };
+        let bytes = match crate::persistence::stalx_v2::encode(project, &extras, mode) {
+            Ok(bytes) => bytes,
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve undo and redo history atomically",
-                    "Failed to persist undo and redo stacks"
-                );
-                false
-            }
-        }
-    }
-
-    fn history_rows_to_persist(
-        &self,
-        db: &Database,
-        undo_stack: &UndoStack,
-    ) -> (
-        Vec<(String, String, Option<String>)>,
-        Vec<(String, String, Option<String>)>,
-    ) {
-        let count_limit = {
-            let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
-            if policy.unlimited_depth() {
-                None
-            } else {
-                Some(
-                    self.config
-                        .lock()
-                        .map(|c| c.general.undo_persist_limit)
-                        .unwrap_or(20),
-                )
+                tracing::error!(error = %e, "Encoding the project failed");
+                return CommandResult::failure(format!("Can't save: {e}"));
             }
         };
-
-        // Every save writes the WHOLE (windowed) stack, because the pipeline above
-        // built a fresh temp file and renamed it over the target: the reopened `db`
-        // has no undo tables to add to. See `UndoStack::rows_to_persist`.
-        let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
-
-        // [#303] Redo is persisted in EVERY mode, including Full, where that means a
-        // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
-        // the two stacks independently.
-        //
-        // That doubling is deliberate and was re-decided after review, so do not
-        // "fix" it by skipping redo in Full mode: that change was made and reversed.
-        // The reasoning is that 64 MiB is a CEILING, not growth - each stack is
-        // bounded by the budget, and a confirmed push clears the undo history - and
-        // that persisting redo is what keeps a redo branch alive across a close and
-        // reopen. Dropping it bought a smaller save on exactly the projects whose
-        // saves are largest, and cost redo-after-reopen on all of them, which is the
-        // worse end of the trade.
-        //
-        // None of the redo half reaches the server either way: `redo_stack` is
-        // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
-        // for a local-only feature.
-        let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
-        (undo_rows, redo_rows)
+        let guard = match (on_disk, to_open_file, file.fingerprint.as_ref()) {
+            (OnDisk::Overwrite, _, _) => Guard::Overwrite,
+            (OnDisk::Checked, true, Some(fp)) => Guard::Expect(fp),
+            // The first write of a project created in this session: its path
+            // was chosen free; something appearing there meanwhile is not ours.
+            (OnDisk::Checked, true, None) => Guard::Absent,
+            // An explicit destination the save dialog confirmed.
+            (OnDisk::Checked, false, _) => Guard::Overwrite,
+        };
+        let upgrade = !detached && to_open_file && file.origin == FileOrigin::Legacy;
+        let backup = if upgrade {
+            match UpgradeBackup::take(&target) {
+                Ok(backup) => Some(backup),
+                Err(e) => {
+                    tracing::error!(error = %e, "Could not back up the legacy original");
+                    return CommandResult::failure(format!(
+                        "Can't save: the original could not be backed up before the upgrade ({e})"
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let fingerprint = match write_atomic(&target, &bytes, guard) {
+            Ok(fp) => fp,
+            Err(e) => {
+                if let Some(backup) = backup {
+                    backup.put_back();
+                }
+                return match e {
+                    WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
+                        tracing::warn!(error = %e, "Save refused: the file changed on disk");
+                        CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
+                    }
+                    WriteError::Io { error, .. } => {
+                        save_failure("Failed to save", &target, &anyhow::Error::from(error))
+                    }
+                };
+            }
+        };
+        if detached {
+            drop(file);
+            drop(proj_guard);
+            self.note_recent_project(&target);
+            tracing::info!(path = ?target, "Saved an unlinked copy of a SpeleoDB-managed project");
+            return CommandResult::success()
+                .with_unlinked_copy_path(target.display().to_string());
+        }
+        project.file_path = Some(target.clone());
+        file.fingerprint = Some(fingerprint);
+        file.origin = FileOrigin::V2;
+        file.dirty = false;
+        file.local_pending = false;
+        file.saved_history = extras.history;
+        drop(file);
+        drop(proj_guard);
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.note_recent_project(&target);
+        tracing::info!(
+            path = ?target,
+            bytes = bytes.len(),
+            upgraded = upgrade,
+            purpose = "persist project",
+            "Saved project"
+        );
+        let mut result = CommandResult::success();
+        result.saved_path = Some(target.display().to_string());
+        result
     }
 
     /// Put `path` at the head of the recent-projects list and persist it to
     /// config. Takes no state locks other than `recent_projects` + `config`;
     /// callers must NOT hold `project` (the save paths drop it first).
-    fn note_recent_project(&self, path: &Path) {
+    pub(super) fn note_recent_project(&self, path: &Path) {
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != path);
             recent.insert(0, path.to_path_buf());
@@ -1485,119 +454,52 @@ impl AppState {
         }
     }
 
-    /// Drop the open project's resources.
-    ///
-    /// Every lock here is RECOVERED from poisoning rather than skipped. A poisoned
-    /// mutex means some earlier call panicked while holding it; the guarded values
-    /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
-    /// them to `None`/empty is precisely the recovery - there is no half-written
-    /// state to protect. Skipping the drop, by contrast, is never safe: a caller
-    /// that renames a new file over the project (a cache replace, a delete) relies
-    /// on the live SQLite handle and its 256 MB mmap being gone, and a skipped drop
-    /// is the exact SIGBUS / `MoveFileEx`-denied hazard that close exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
-        tracing::debug!("close_project: acquiring project lock");
-        let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let mut proj = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.close_open_project_locked(&mut proj)
     }
 
-    /// [`close_project`](Self::close_project)'s teardown, with the `project` guard
-    /// supplied by the caller so that a caller which must first DECIDE whether to
-    /// close can decide and close under ONE acquisition.
-    ///
-    /// `delete_project` is that caller: it closes only when the `.stalx` it is
-    /// about to hand to the OS delete is the file backing the open project, and
-    /// doing the check through `open_project_path` (which releases the lock) and
-    /// only then calling `close_project` (which re-acquires it) is a TOCTOU - a
-    /// load that finished installing a DIFFERENT project in that gap had ITS
-    /// database handle and undo stack torn down while the delete went on to remove
-    /// the original file.
-    ///
-    /// Holding `project` across the `database` and `undo_stack` acquisitions below
-    /// is the ordering the rest of the state layer already uses - `save_project`
-    /// holds its `project` guard while it takes both - and no path acquires either
-    /// of those BEFORE `project`, so it cannot deadlock. Calling
-    /// [`close_project`](Self::close_project) with the guard held, by contrast,
-    /// would self-deadlock on its own first acquisition.
-    ///
-    /// The caller owns the poison recovery for the `project` lock (both of this
-    /// function's callers use `PoisonError::into_inner`, for the reason spelled out
-    /// on `close_project`); the locks taken here recover it themselves.
+    /// Drop the open project and everything that describes it. The caller
+    /// holds the `project` guard (passed in). Unsaved changes are the
+    /// caller's to have asked about.
     pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
-        tracing::debug!("close_project: dropping project");
         *project = None;
-        // A session boundary: the caller holds the `project` guard (it passed it
-        // in), which is the bump rule (`speleodb_session`). Covers close, delete
-        // and the project switch, which all route through here.
+        // A session boundary: the caller holds the `project` guard, which is the
+        // bump rule (`speleodb_session`).
         self.bump_speleodb_session();
-        // An add's pending ignores (#674) die with the project they belong to.
-        self.clear_pending_ignores();
-        // So does the record of renamed shot ids: it describes this project only.
-        self.load_renamed_shots
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        // [#473] The discarded-history banner describes the OPEN project; with none
-        // open there is nothing for it to describe. Cleared here as well as on every
-        // load commit, so closing a project takes its banner with it rather than
-        // leaving it up over the welcome screen.
+        self.bump_revision();
         self.set_history_discarded(false);
-        tracing::debug!("close_project: project dropped");
-
-        tracing::debug!("close_project: acquiring database lock");
+        *self
+            .file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = FileState::default();
         {
-            let mut db = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: dropping database");
-            *db = None;
-            tracing::debug!("close_project: database dropped");
-        }
-
-        tracing::debug!("close_project: acquiring undo_stack lock");
-        {
-            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: clearing undo stack");
+            let mut undo_stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             undo_stack.clear();
-            // [#303] Back onto the configured entry window: the next project to open is
-            // local until a link says otherwise.
+            undo_stack.set_inherited_through(None);
+            // [#303] Back onto the configured entry window.
             undo_stack.use_count_limit();
-            tracing::debug!("close_project: undo stack cleared");
         }
-
-        // Clear display settings cache
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) Nothing is open: back to unmanaged (see
-        // `speleodb_edit_gate`); the closed session's claim stays a pointer only.
+        *self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.speleodb_set_open_gate(None);
-
         tracing::info!(purpose = "release project resources", "Project closed");
-        tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
 
-    /// The path of the `.stalx` currently open, when one is open and it has been
-    /// saved somewhere (a never-saved project has no `file_path`).
-    ///
-    /// Recovers a poisoned lock rather than reporting "nothing open": every caller
-    /// uses this to decide whether the live handle / live link belongs to a file it
-    /// is about to touch, and answering "no" on a poisoned mutex is the unsafe
-    /// direction in both.
     pub(super) fn open_project_path(&self) -> Option<PathBuf> {
-        let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().and_then(|p| p.file_path.clone())
+        self.open_file_path()
     }
 }
 
-/// Whether two paths denote the same file on disk.
-///
-/// Canonicalization resolves `.`/`..`, symlinks, and (on Windows) case/short-name
-/// differences, so two spellings of the open project's path still compare equal.
-/// When either side cannot be canonicalized - most commonly because `dest` does
-/// not exist yet (a first pull into an empty cache) - it cannot be the file a live
-/// connection is holding unless it is LITERALLY the same path, so fall back to a
-/// plain comparison instead of guessing.
-///
-/// Shared with `speleodb_local_state`, where the same question ("is the open
-/// project THIS file?") decides whether the live in-memory link may vouch for a
-/// copy that could not be read.
 pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,

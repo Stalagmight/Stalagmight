@@ -930,27 +930,69 @@ impl ProgressEmitter {
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The loaded project. Serialized in positional wire form (like
-    /// `ProjectState`) so cross-references reach the frontend as
-    /// `StationRef { line_id, station_index }`, not the internal `StationKey`
-    /// shape derived serde would emit.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: crate::models::Project,
-    /// Computed station coordinates
+    /// The loaded project in its wire form (`survey::wire::ProjectWire`, the
+    /// TS `Project`): slot `StationRef`s, derived merges, metrics and
+    /// alignment.
+    pub project: crate::models::survey::wire::ProjectWire,
+    /// Computed station coordinates (one per slot)
     pub stations: Vec<crate::models::Station>,
     /// Project statistics
     pub stats: crate::models::ProjectStats,
     /// Project warnings (validation results)
     pub warnings: Vec<crate::models::ProjectWarning>,
-    /// Display settings from the project database
+    /// Display settings from the project file
     pub display_settings: DisplaySettings,
-    /// Is this a SpeleoDB project (it carries a `speleo_link` row)? The SAME
+    /// Is this a SpeleoDB project (it carries a `speleodb` link)? The SAME
     /// value this load derived the backend edit gate from (a linked project opens
     /// read-only until Start Editing binds a lock claim, `speleodb_edit_gate`),
     /// handed to the frontend so its read-only gate resolves
-    /// synchronously with the load instead of waiting on a `speleodb_link_status`
-    /// round trip that arrives after the project has already rendered (#270).
+    /// synchronously with the load (#270).
     pub is_remote: bool,
+    /// What only the binary envelope carries (frozen shots, hand moves and
+    /// comments per slot); not on the JSON wire.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub envelope_extra: EnvelopeExtra,
+}
+
+/// The parts of [`crate::models::survey::wire::LoadEnvelopeInput`] the JSON
+/// result does not carry.
+#[derive(Debug, Clone, Default)]
+pub struct EnvelopeExtra {
+    pub frozen_shots: Vec<crate::models::FrozenShotRef>,
+    pub station_offsets: Vec<(crate::models::StationRef, (f64, f64, f64))>,
+    pub station_comments_map: Vec<(crate::models::StationRef, String)>,
+}
+
+impl LoadProjectFullResult {
+    /// The result of a load from its envelope input.
+    pub fn from_envelope(
+        loading_id: u64,
+        input: crate::models::survey::wire::LoadEnvelopeInput,
+        warnings: Vec<crate::models::ProjectWarning>,
+        display_settings: DisplaySettings,
+        is_remote: bool,
+    ) -> Self {
+        let crate::models::survey::wire::LoadEnvelopeInput {
+            state,
+            station_offsets,
+            station_comments_map,
+        } = input;
+        Self {
+            loading_id,
+            project: state.project,
+            stations: state.stations,
+            stats: state.stats,
+            warnings,
+            display_settings,
+            is_remote,
+            envelope_extra: EnvelopeExtra {
+                frozen_shots: state.frozen_shots,
+                station_offsets,
+                station_comments_map,
+            },
+        }
+    }
 }
 
 // ============================================================================
@@ -965,11 +1007,8 @@ pub struct LoadProjectFullResult {
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The created project. Serialized in positional wire form (see
-    /// `LoadProjectFullResult`); harmless for a fresh project (no cross-refs yet),
-    /// but keeps every Project-bearing IPC payload consistent.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: crate::models::Project,
+    /// The created project in its wire form (see `LoadProjectFullResult`).
+    pub project: crate::models::survey::wire::ProjectWire,
     /// Display settings (defaults for new project)
     pub display_settings: DisplaySettings,
 }

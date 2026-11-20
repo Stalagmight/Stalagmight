@@ -1,124 +1,110 @@
-//! Names for the undo-history labels and previews: a line by its name, a
-//! station as `Line name / station name`, a shot as `Line name: from → to` -
-//! never by the positional ids (`line:index`, shot ids) the commands address
-//! them with, which are session handles the user never sees.
-//!
-//! The names are read off the project when the history is listed
-//! ([`NameBook::of`]), so a label names what the project holds then. Where a
-//! name cannot be resolved (the line or shot is gone, or an entry from an
-//! older file addresses something that moved) the label falls back to its
-//! wording without the handle (`Delete shot`), never to the number.
-//!
-//! A shot is named only through the uuid an entry records
-//! (`UndoData::PreviousValues::shot_uuid`), never through the command's shot
-//! id: that id is an in-session handle the loader renumbers, so after a
-//! reload it can address a different shot. A command with no recorded uuid
-//! names the shot's line instead (`Delete shot in line "Main"`).
+//! History labels and refs of a command, worded at record time with the
+//! names the open project holds (plan 8.2: record-time labels; names never
+//! positional). Ported from 0.6.0's `history_names.rs` onto the station
+//! graph: a station reads `Line name / station name` on the slot the
+//! command addresses. The batch summaries (`history_batch.rs`) and the
+//! per-entry refinements (`describe_entry`) are ported by the
+//! history-labels work package.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use crate::core::{Command, CommentHolder, UndoData, UndoEntry};
-use crate::models::{
-    CreditTargets, LineId, Project, ShotKind, StationAnchor, StationKey, StationRef,
-};
+use crate::core::{Command, CommentHolder};
+use crate::models::survey::changeset::HistoryRefs;
+use crate::models::survey::Project;
+use crate::models::{CreditTargets, LineId, ShotKind, StationRef};
 
-/// One line's names, by position.
-#[derive(Debug, Default, Clone)]
-struct LineNames {
-    name: String,
-    /// Station names by station index.
-    stations: Vec<String>,
-    /// Shot uuid -> shot index, to resolve a stored station key or a shot.
-    uuids: HashMap<String, usize>,
+/// The names a label reads, off the project as it is now.
+pub(super) struct NameBook<'p> {
+    project: Option<&'p Project>,
 }
 
-/// The names a set of history labels needs, read off the project once.
-#[derive(Debug, Default, Clone)]
-pub struct NameBook {
-    lines: HashMap<LineId, LineNames>,
+impl Default for NameBook<'_> {
+    fn default() -> Self {
+        Self { project: None }
+    }
 }
 
-impl NameBook {
-    /// The names of `lines` as `project` holds them now. A line the project
-    /// does not hold is simply absent (its labels fall back).
-    pub fn of(project: &Project, lines: impl IntoIterator<Item = LineId>) -> Self {
-        let mut book = Self::default();
-        for line_id in lines {
-            let Some(line) = project.get_line(line_id) else {
-                continue;
-            };
-            let stations = project
-                .line_station_names(line_id)
-                .into_iter()
-                .enumerate()
-                .map(|(index, name)| name.unwrap_or_else(|| index.to_string()))
-                .collect();
-            book.lines.insert(
-                line_id,
-                LineNames {
-                    name: project.line_label(line_id).unwrap_or_default(),
-                    stations,
-                    uuids: line
-                        .shots
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, s)| s.uuid.clone().map(|u| (u, i)))
-                        .collect(),
-                },
-            );
+impl<'p> NameBook<'p> {
+    pub(super) fn of(project: &'p Project) -> Self {
+        Self {
+            project: Some(project),
         }
-        book
     }
 
-    /// A line's name.
-    pub fn line(&self, line_id: LineId) -> Option<&str> {
-        self.lines.get(&line_id).map(|l| l.name.as_str())
+    /// A line's name (`Line N` when it has none), if the line exists.
+    pub(super) fn line(&self, line_id: LineId) -> Option<String> {
+        let project = self.project?;
+        project.line(line_id)?;
+        Some(project.line_label_of(line_id))
     }
 
-    /// `Line name / station name`.
-    pub fn station(&self, station: StationRef) -> Option<String> {
-        let line = self.lines.get(&station.line_id)?;
-        let name = line.stations.get(station.station_index as usize)?;
-        Some(format!("{} / {name}", line.name))
-    }
-
-    /// [`Self::station`] for a stored key (a closure recorded in undo data).
-    pub fn station_key(&self, key: &StationKey) -> Option<String> {
-        let line = self.lines.get(&key.line_id)?;
-        let index = match &key.anchor {
-            StationAnchor::LineStart => 0,
-            StationAnchor::AfterShot(uuid) => line.uuids.get(uuid)? + 1,
-            StationAnchor::Index(i) => *i as usize,
-        };
-        self.station(StationRef::new(key.line_id, u32::try_from(index).ok()?))
-    }
-
-    /// `Line name: from → to`, for the shot with `uuid`.
-    pub fn shot(&self, line_id: LineId, uuid: &str) -> Option<String> {
-        let line = self.lines.get(&line_id)?;
-        let index = *line.uuids.get(uuid)?;
-        let from = line.stations.get(index)?;
-        let to = line.stations.get(index + 1)?;
-        Some(format!("{}: {from} \u{2192} {to}", line.name))
+    /// `Line name / station name` of the station at a slot.
+    pub(super) fn station(&self, slot: StationRef) -> Option<String> {
+        let project = self.project?;
+        let id = project.topology().station_at(slot)?;
+        let station = project.stations.get(&id)?;
+        Some(format!("{} / {}", self.line(slot.line_id)?, station.name))
     }
 }
 
-/// [`referenced_lines`] for a history entry: its command's lines, and the
-/// lines its undo data names a station of that its preview names (a removed
-/// loop closure's two ends). Without them a Remove Loop Closure preview named
-/// its stations only while another entry on the same stack named their lines,
-/// so it changed when a save trimmed the persisted window.
-pub fn referenced_entry_lines(entry: &UndoEntry, out: &mut HashSet<LineId>) {
-    referenced_lines(&entry.command, out);
-    if let UndoData::ClosureInfo { closure, .. } = &entry.undo_data {
-        out.insert(closure.station_a.line_id);
-        out.insert(closure.station_b.line_id);
-    }
+/// The label of `cmd` worded on `project` (before it runs).
+pub(super) fn command_label(project: &Project, cmd: &Command) -> String {
+    describe(cmd, &NameBook::of(project))
 }
 
-/// Every line `cmd` addresses (batch sub-commands included), so the history
-/// can read just those lines' names.
-pub fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
+/// The stable ids `cmd` names on `project` (before it runs): its lines, the
+/// stations at its slots, the uuids of its shots. Never session ids or slots.
+pub(super) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
+    let mut lines = HashSet::new();
+    referenced_lines(cmd, &mut lines);
+    let mut refs = HistoryRefs::default();
+    let mut lines: Vec<LineId> = lines.into_iter().filter(|l| project.line(*l).is_some()).collect();
+    lines.sort_unstable();
+    refs.lines = lines;
+    let mut slot = |sr: &StationRef| {
+        if let Some(id) = project.topology().station_at(*sr) {
+            if !refs.stations.contains(&id) {
+                refs.stations.push(id);
+            }
+        }
+    };
+    match cmd {
+        Command::MergeStations { station_a, station_b }
+        | Command::UnmergeStationPair { station_a, station_b }
+        | Command::CreateLoopClosure { station_a, station_b, .. } => {
+            slot(station_a);
+            slot(station_b);
+        }
+        Command::UnmergeStations { station_ref }
+        | Command::SetZeroDatum { station_ref, .. }
+        | Command::RemoveZeroDatum { station_ref }
+        | Command::SetStationComment { station_ref, .. }
+        | Command::SetStationName { station_ref, .. }
+        | Command::MoveStation { station_ref, .. } => slot(station_ref),
+        _ => {}
+    }
+    let shot = |line_id: LineId, shot_id: crate::models::ShotId| {
+        project
+            .line(line_id)?
+            .shots
+            .iter()
+            .find(|s| s.id == shot_id)
+            .map(|s| s.uuid.clone())
+    };
+    match cmd {
+        Command::UpdateShot { line_id, shot_id, .. }
+        | Command::DeleteShot { line_id, shot_id }
+        | Command::SetShotKind { line_id, shot_id, .. } => {
+            refs.shots.extend(shot(*line_id, *shot_id));
+        }
+        Command::RemoveLoopClosure { closure_id } => refs.closures.push(*closure_id),
+        _ => {}
+    }
+    refs
+}
+
+/// Every line `cmd` addresses (batch sub-commands included).
+pub(super) fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
     let mut station = |sr: &StationRef| {
         out.insert(sr.line_id);
     };
@@ -191,11 +177,11 @@ fn kind_word(kind: ShotKind) -> &'static str {
 }
 
 /// `"Name"` for a line, quoted, or `None`.
-fn quoted(names: &NameBook, line_id: LineId) -> Option<String> {
+fn quoted(names: &NameBook<'_>, line_id: LineId) -> Option<String> {
     names.line(line_id).map(|n| format!("\"{n}\""))
 }
 
-fn holder(names: &NameBook, holder: &CommentHolder) -> String {
+fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
     match holder {
         CommentHolder::Station { station_ref } => names
             .station(*station_ref)
@@ -207,51 +193,7 @@ fn holder(names: &NameBook, holder: &CommentHolder) -> String {
 
 /// The history label of an entry: [`describe`], except where the undo data
 /// knows better (a rename names the station by the name it had).
-pub fn describe_entry(entry: &UndoEntry, names: &NameBook) -> String {
-    if let (
-        Command::SetStationName { station_ref, name },
-        UndoData::InverseCommand(Command::SetStationName { name: previous, .. }),
-    ) = (&entry.command, &entry.undo_data)
-    {
-        let name = name.trim();
-        return match names.line(station_ref.line_id) {
-            Some(line) => format!("Rename station {line} / {previous} to \"{name}\""),
-            None => format!("Rename station \"{previous}\" to \"{name}\""),
-        };
-    }
-    // A shot edit whose entry recorded the shot's uuid names the shot.
-    if let UndoData::PreviousValues {
-        line_id,
-        shot_uuid: Some(uuid),
-        ..
-    } = &entry.undo_data
-    {
-        if let Some(shot) = names.shot(*line_id, uuid) {
-            match &entry.command {
-                Command::UpdateShot { .. } => return format!("Update shot {shot}"),
-                Command::SetShotKind { kind, .. } => {
-                    return format!("Mark shot {shot} as {}", kind_word(*kind));
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Command::DeleteLine { line_id } = &entry.command {
-        if names.line(*line_id).is_none() {
-            if let Some(name) = super::history_view::recorded_line_name(&entry.undo_data, *line_id)
-            {
-                return format!("Delete line \"{name}\"");
-            }
-        }
-    }
-    describe(&entry.command, names)
-}
-
-/// The history label of `cmd` with names (`Merge stations Main Line / 0 and
-/// Side / 1`, `Delete line "Main Line"`, `Update shot in line "Main Line"` -
-/// [`describe_entry`] names the shot itself when its entry recorded the uuid).
-/// Commands that address nothing positional keep [`Command::description`].
-pub fn describe(cmd: &Command, names: &NameBook) -> String {
+pub(super) fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
     let station = |sr: &StationRef| names.station(*sr);
     let pair =
         |verb: &str, a: &StationRef, b: &StationRef, joiner: &str| match (station(a), station(b)) {
