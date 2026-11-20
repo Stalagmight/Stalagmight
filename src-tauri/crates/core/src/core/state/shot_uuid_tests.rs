@@ -498,9 +498,12 @@ fn merging_two_projects_with_the_same_ids_keeps_the_first_copy() {
         archive_originals: false,
     });
     assert!(result.success, "merge failed: {:?}", result.error);
-    let merged = stalx_v2::decode(&std::fs::read(&out).unwrap(), &Default::default())
-        .unwrap()
-        .project;
+    let merged = stalx_v2::decode(
+        &std::fs::read(&out).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap()
+    .project;
     assert_eq!(merged.lines().len(), 2, "both lines must survive");
     assert_eq!(line_uuids(&merged, 0), IDS.map(String::from).to_vec());
     assert!(line_uuids(&merged, 1)
@@ -894,7 +897,7 @@ fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
     let before = line_uuids(&saved, 0);
     assert!(before.iter().all(|u| !u.contains('\u{0}') && !u.is_empty()));
     let bytes = stalx_v2::encode(&saved, &Extras::default(), Mode::Normal).unwrap();
-    let reloaded = stalx_v2::decode(&bytes, &Default::default())
+    let reloaded = stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default())
         .unwrap()
         .project;
     assert_eq!(line_uuids(&reloaded, 0), before);

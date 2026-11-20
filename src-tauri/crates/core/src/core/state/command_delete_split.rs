@@ -259,7 +259,7 @@ impl AppState {
         line_id: LineId,
         name_a: &str,
         name_b: &str,
-    ) -> Result<(String, String), CommandResult> {
+    ) -> Result<(String, String), String> {
         let guard = self
             .project
             .lock()
@@ -267,7 +267,7 @@ impl AppState {
         let Some(project) = guard.as_ref() else {
             return Ok((name_a.trim().to_string(), name_b.trim().to_string()));
         };
-        split_names(project, line_id, name_a, name_b).map_err(CommandResult::failure)
+        split_names(project, line_id, name_a, name_b)
     }
 
     /// Delete a mid-line shot and split the line in two, as one undo/redo
@@ -293,7 +293,7 @@ impl AppState {
         // empty or another line's, before anything changes.
         let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
             Ok(names) => names,
-            Err(refusal) => return refusal,
+            Err(refusal) => return CommandResult::failure(refusal),
         };
         tracing::info!(
             line_id,
@@ -370,7 +370,7 @@ impl AppState {
         }
         let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
             Ok(names) => names,
-            Err(refusal) => return refusal,
+            Err(refusal) => return CommandResult::failure(refusal),
         };
         tracing::info!(
             line_id,
