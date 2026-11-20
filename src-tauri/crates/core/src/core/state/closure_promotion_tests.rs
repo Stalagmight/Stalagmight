@@ -263,7 +263,7 @@ fn the_delete_dialog_promises_what_the_delete_does() {
     );
     assert!(after.closures.iter().all(|c| c.id != first));
     // The preview ran the delete itself on a copy: the same project.
-    let mut previewed = before.clone();
+    let mut previewed = before;
     previewed.delete_shot(b, last).unwrap();
     assert_eq!(canonical(&previewed), canonical(&after));
 }
