@@ -414,7 +414,10 @@ fn fuzz_shrink() {
             env_number("ITERATIONS", GATE_ITERATIONS),
             env_flag("PERSISTENCE"),
         );
-        println!("shrink: seed {seed}, plan {} (recording)", describe_plan(plan));
+        println!(
+            "shrink: seed {seed}, plan {} (recording)",
+            describe_plan(plan)
+        );
         let recorded = record_run(seed, plan);
         println!(
             "  the run {} - signature: {}",
@@ -428,7 +431,9 @@ fn fuzz_shrink() {
         let target = asked
             .or_else(|| target_of(borrow(&recorded.probe)))
             .unwrap_or_else(|| {
-                panic!("seed {seed} reached no failure under this plan, so there is nothing to shrink")
+                panic!(
+                    "seed {seed} reached no failure under this plan, so there is nothing to shrink"
+                )
             });
         assert!(
             reproduces(&target, borrow(&recorded.probe)),

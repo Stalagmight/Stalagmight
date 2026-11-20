@@ -501,7 +501,10 @@ fn calibrate(
     prefix_rates.print("prefix");
     let rare_end = end_rates.rare_mask(threshold);
     let rare_prefix = prefix_rates.rare_mask(threshold);
-    println!("  rare END bits    (<= {threshold}%): {:?}", bit_names(rare_end));
+    println!(
+        "  rare END bits    (<= {threshold}%): {:?}",
+        bit_names(rare_end)
+    );
     println!(
         "  rare PREFIX bits (<= {threshold}%): {:?}",
         bit_names(rare_prefix)

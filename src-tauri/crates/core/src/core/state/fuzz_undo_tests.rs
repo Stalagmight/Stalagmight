@@ -539,7 +539,13 @@ impl Targets {
         }
         let junctions = by_station
             .into_iter()
-            .filter(|(_, at)| at.iter().map(|(line, _)| line).collect::<BTreeSet<_>>().len() > 1)
+            .filter(|(_, at)| {
+                at.iter()
+                    .map(|(line, _)| line)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    > 1
+            })
             .collect();
         let mut closures: Vec<u64> = project.closures.iter().map(|c| c.id).collect();
         closures.sort_unstable();
@@ -606,10 +612,6 @@ impl Targets {
             .find(|(l, _, s)| *l == line && *s == station)
             .or_else(|| self.slots.iter().find(|(_, _, s)| *s == station))
             .map(|(l, index, _)| StationRef::new(*l, *index))
-    }
-
-    pub(super) fn has_station(&self, station: StationId) -> bool {
-        self.slots.iter().any(|(_, _, s)| *s == station)
     }
 
     /// A shot as a trace reference.
@@ -803,15 +805,38 @@ pub(super) enum Op {
 /// The sub-commands a batch carries, each with its own references.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) enum BatchOp {
-    UpdateShotLength { shot: ShotRefT, length: f64 },
-    MoveLine { line: LineId, offset: Coordinates },
-    MoveSegment { line: LineId, offset: Coordinates },
-    MoveStation { station: StationT, offset: Coordinates },
-    ReverseLine { line: LineId, swap_left_right: bool },
-    RenameLine { line: LineId, name: u32 },
-    RenameStation { station: StationT, name: u32 },
+    UpdateShotLength {
+        shot: ShotRefT,
+        length: f64,
+    },
+    MoveLine {
+        line: LineId,
+        offset: Coordinates,
+    },
+    MoveSegment {
+        line: LineId,
+        offset: Coordinates,
+    },
+    MoveStation {
+        station: StationT,
+        offset: Coordinates,
+    },
+    ReverseLine {
+        line: LineId,
+        swap_left_right: bool,
+    },
+    RenameLine {
+        line: LineId,
+        name: u32,
+    },
+    RenameStation {
+        station: StationT,
+        name: u32,
+    },
     /// A command the batch allowlist refuses: the whole batch must refuse.
-    Disallowed { shot: ShotRefT },
+    Disallowed {
+        shot: ShotRefT,
+    },
 }
 
 impl Op {
@@ -1120,7 +1145,10 @@ fn pair_fresh<K: Ord + Clone, V: PartialEq + Clone>(
 /// `(unknown recorded, fresh live)` for one kind.
 fn arity<K: Ord, V: PartialEq>(map: &BTreeMap<K, V>, recorded: &[K], live: &[V]) -> (usize, usize) {
     (
-        recorded.iter().filter(|key| !map.contains_key(*key)).count(),
+        recorded
+            .iter()
+            .filter(|key| !map.contains_key(*key))
+            .count(),
         live.iter()
             .filter(|value| !map.values().any(|known| known == *value))
             .count(),
@@ -1246,7 +1274,10 @@ impl Refs {
         let line = if self.identity {
             recorded.line
         } else {
-            self.lines.get(&recorded.line).copied().unwrap_or(LineId::MAX)
+            self.lines
+                .get(&recorded.line)
+                .copied()
+                .unwrap_or(LineId::MAX)
         };
         targets.slot(station, line)
     }
@@ -1859,14 +1890,21 @@ impl Fuzzer {
         let project = self.live();
         let violations = project.validate();
         if !violations.is_empty() {
-            let shown: Vec<String> = violations.iter().take(8).map(|v| format!("  {v}")).collect();
+            let shown: Vec<String> = violations
+                .iter()
+                .take(8)
+                .map(|v| format!("  {v}"))
+                .collect();
             self.fail(
                 &format!("{what} left the survey INVALID"),
                 &shown.join("\n"),
             );
         }
         if let Err(e) = testkit::session_ids_sound(&project) {
-            self.fail(&format!("{what} left unsound session ids"), &format!("  {e}"));
+            self.fail(
+                &format!("{what} left unsound session ids"),
+                &format!("  {e}"),
+            );
         }
         if let Some(last) = self.last_counters {
             let now = project.counters;
@@ -1890,7 +1928,11 @@ impl Fuzzer {
                 &format!("after {what} the memoised derived views are STALE"),
                 &format!(
                     "  memo:  {}\n  fresh: {}",
-                    memo.as_deref().unwrap_or("<none>").lines().next().unwrap_or(""),
+                    memo.as_deref()
+                        .unwrap_or("<none>")
+                        .lines()
+                        .next()
+                        .unwrap_or(""),
                     fresh.lines().next().unwrap_or("")
                 ),
             );
@@ -1929,13 +1971,18 @@ impl Fuzzer {
         }
         let bytes = canonical_bytes(&project, rec_c);
         if bytes != recorded.bytes {
-            let (diffs, hidden) = line_diff(&recorded.bytes, &bytes, if fuzz_verbose() { 60 } else { 6 });
+            let (diffs, hidden) =
+                line_diff(&recorded.bytes, &bytes, if fuzz_verbose() { 60 } else { 6 });
             self.fail(
                 &format!("{what} did not restore the state recorded at depth {depth}"),
                 &format!(
                     "    {}{}",
                     diffs.join("\n    "),
-                    if hidden { "\n    (more differences not shown)" } else { "" }
+                    if hidden {
+                        "\n    (more differences not shown)"
+                    } else {
+                        ""
+                    }
                 ),
             );
         }
@@ -1975,7 +2022,9 @@ impl Fuzzer {
         if exact_ids && !self.id_taint && recorded.ids_gen == self.id_gen {
             if ids != recorded.ids {
                 self.fail(
-                    &format!("{what} did not give the shots their session ids back (depth {depth})"),
+                    &format!(
+                        "{what} did not give the shots their session ids back (depth {depth})"
+                    ),
                     &format!("  recorded {:?}\n  live     {ids:?}", recorded.ids),
                 );
             }
@@ -2061,7 +2110,12 @@ impl Fuzzer {
 
     /// Execute one `Op` and hold the app to what it did: the path a drawn
     /// move and a replayed one share.
-    pub(super) fn step_apply(&mut self, op: &Op, refs: &mut Refs, targets: &Targets) -> StepOutcome {
+    pub(super) fn step_apply(
+        &mut self,
+        op: &Op,
+        refs: &mut Refs,
+        targets: &Targets,
+    ) -> StepOutcome {
         let before = Before {
             project: self.live(),
             undo: self.undo_len(),
@@ -2331,7 +2385,12 @@ impl Fuzzer {
     /// back and forth in single steps (every arrival checked against the
     /// record), and the reversed lines the jump reported must be the single
     /// steps' in order.
-    fn probe_jump_equivalence(&mut self, back: bool, steps: usize, jumped: Option<&[ReversedLine]>) {
+    fn probe_jump_equivalence(
+        &mut self,
+        back: bool,
+        steps: usize,
+        jumped: Option<&[ReversedLine]>,
+    ) {
         let pairs = |lines: Option<&[ReversedLine]>| -> Vec<(LineId, u32)> {
             lines
                 .unwrap_or_default()
@@ -2349,7 +2408,10 @@ impl Fuzzer {
         for _ in 0..steps {
             let reach_before = self.cursor;
             let result = {
-                self.starting_move(format!("{} x1 (jump probe)", if back { "undo" } else { "redo" }));
+                self.starting_move(format!(
+                    "{} x1 (jump probe)",
+                    if back { "undo" } else { "redo" }
+                ));
                 let r = self.catching(|f| if back { f.state.undo() } else { f.state.redo() });
                 self.finished_move();
                 match r {
@@ -2364,8 +2426,14 @@ impl Fuzzer {
                 );
             }
             singles.extend(pairs(result.reversed_lines.as_deref()));
-            self.cursor = if back { self.cursor - 1 } else { self.cursor + 1 };
-            let session = self.depth(if back { self.cursor + 1 } else { self.cursor }).session;
+            self.cursor = if back {
+                self.cursor - 1
+            } else {
+                self.cursor + 1
+            };
+            let session = self
+                .depth(if back { self.cursor + 1 } else { self.cursor })
+                .session;
             if !session {
                 self.id_gen += 1;
                 self.id_taint = true;
@@ -2379,7 +2447,9 @@ impl Fuzzer {
                 &format!("  jump {jumped:?}\n  singles {singles:?}"),
             );
         }
-        self.note(format!("  ^ {steps} single step(s) back and forth land where the jump did"));
+        self.note(format!(
+            "  ^ {steps} single step(s) back and forth land where the jump did"
+        ));
     }
 
     /// The closing guarantee: unwind every reachable entry to the floor and
@@ -2421,8 +2491,7 @@ impl Fuzzer {
             self.orphan_pending = false;
             fuzz_extended_tests::expose_orphan_closure(self);
         }
-        if self.top == self.floor
-            || (self.crossing_would_truncate() && !self.knobs.trim_crossings)
+        if self.top == self.floor || (self.crossing_would_truncate() && !self.knobs.trim_crossings)
         {
             return false;
         }
@@ -2512,8 +2581,8 @@ impl Fuzzer {
             1 => Some(SurveyDirection::In),
             _ => Some(SurveyDirection::Out),
         };
-        let section = (!targets.sections.is_empty() && self.rng.chance(25))
-            .then(|| self.rng.below(8) as u32);
+        let section =
+            (!targets.sections.is_empty() && self.rng.chance(25)).then(|| self.rng.below(8) as u32);
         Some(Op::CreateLine {
             name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
             surveyor: (!null_metadata).then(|| "fuzz".to_string()),
@@ -2793,7 +2862,10 @@ impl Fuzzer {
             self.rng.float(0.0, 5.0),
         )
         .ok()?;
-        let accuracy_mm = self.rng.chance(30).then(|| self.rng.range(1, 20_000) as u32);
+        let accuracy_mm = self
+            .rng
+            .chance(30)
+            .then(|| self.rng.range(1, 20_000) as u32);
         let entrance = match self.rng.below(4) {
             0 => Some(true),
             1 => Some(false),
@@ -2814,7 +2886,11 @@ impl Fuzzer {
             Some(join) if self.rng.chance(60) => join,
             _ => {
                 let (line, shots) = &targets.lines[self.rng.below(targets.lines.len().max(1))];
-                let index = if self.rng.chance(50) { 0 } else { shots.len() as u32 };
+                let index = if self.rng.chance(50) {
+                    0
+                } else {
+                    shots.len() as u32
+                };
                 let station = targets
                     .slots
                     .iter()
@@ -2955,10 +3031,12 @@ impl Fuzzer {
                     line,
                     offset: random_offset(&mut self.rng),
                 }),
-                3 => self.pick_station(targets).map(|station| BatchOp::MoveStation {
-                    station,
-                    offset: random_offset(&mut self.rng),
-                }),
+                3 => self
+                    .pick_station(targets)
+                    .map(|station| BatchOp::MoveStation {
+                        station,
+                        offset: random_offset(&mut self.rng),
+                    }),
                 4 => self.pick_line(targets).map(|line| BatchOp::ReverseLine {
                     line,
                     swap_left_right: self.rng.chance(50),
@@ -2967,15 +3045,18 @@ impl Fuzzer {
                     line,
                     name: self.rng.below(6) as u32,
                 }),
-                6 => self.pick_station(targets).map(|station| BatchOp::RenameStation {
-                    station,
-                    name: self.rng.below(6) as u32,
-                }),
+                6 => self
+                    .pick_station(targets)
+                    .map(|station| BatchOp::RenameStation {
+                        station,
+                        name: self.rng.below(6) as u32,
+                    }),
                 _ => {
                     if self.rng.chance(30) {
-                        self.pick_shot(targets).map(|(line_id, shot_id)| BatchOp::Disallowed {
-                            shot: targets.shot_ref(line_id, shot_id),
-                        })
+                        self.pick_shot(targets)
+                            .map(|(line_id, shot_id)| BatchOp::Disallowed {
+                                shot: targets.shot_ref(line_id, shot_id),
+                            })
                     } else {
                         None
                     }
@@ -3001,7 +3082,12 @@ impl Fuzzer {
     /// Execute one [`Op`]. EVERY mutation goes through here: a drawn one with
     /// [`Refs::identity`], a replayed one with a mapping resolver. `None`
     /// means INAPPLICABLE (a reference the resolver could not map).
-    pub(super) fn apply_op(&mut self, op: &Op, refs: &mut Refs, targets: &Targets) -> Option<Drawn> {
+    pub(super) fn apply_op(
+        &mut self,
+        op: &Op,
+        refs: &mut Refs,
+        targets: &Targets,
+    ) -> Option<Drawn> {
         let label = op.describe();
         let result = match op {
             Op::CreateLine {
@@ -3899,7 +3985,10 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         outcome.oracle_us.1,
         outcome.oracle_us.2,
         outcome.peak,
-        outcome.config.map(DrawnConfig::describe).unwrap_or_default(),
+        outcome
+            .config
+            .map(DrawnConfig::describe)
+            .unwrap_or_default(),
         if outcome.app_panic { " APP-PANIC" } else { "" },
         describe_coverage(outcome),
     )
@@ -4141,7 +4230,11 @@ fn undo_redo_fuzz_gate_legacy_origin() {
         plan.persistence = persistence;
         plan.legacy_origin = true;
         let outcomes = gate(
-            if persistence { "legacy-persist" } else { "legacy-memory" },
+            if persistence {
+                "legacy-persist"
+            } else {
+                "legacy-memory"
+            },
             &GATE_SEEDS[..6],
             plan,
         );
@@ -4189,7 +4282,10 @@ fn undo_redo_fuzz_gate_combined() {
             outcome.mutations
         );
     }
-    assert!(trimmed > 0, "no combined seed reached its drawn history limit");
+    assert!(
+        trimmed > 0,
+        "no combined seed reached its drawn history limit"
+    );
     assert!(
         reloads > COMBINED_SEEDS.len(),
         "the combined gate crossed {reloads} time(s) - nothing stacked"
@@ -4325,7 +4421,9 @@ fn the_line_diff_says_when_it_hid_something() {
     assert!(hidden, "one past the cap must report as truncated");
     // A line one side lacks is a difference too.
     let (shorter, _) = line_diff(&text(3, 0), &text(2, 0), 6);
-    assert!(shorter.iter().any(|d| d.contains("<absent>") || d.contains("S2")));
+    assert!(shorter
+        .iter()
+        .any(|d| d.contains("<absent>") || d.contains("S2")));
 }
 
 /// A move that does NOT RETURN is the move the failure names, and an app
@@ -4348,9 +4446,8 @@ fn a_move_that_panics_is_the_move_the_failure_tail_names() {
             .is_some_and(|line| line.contains("deleteShot(8:800002) -> IN FLIGHT")),
         "the in-flight move is not the LAST line of the tail:\n{mid_move}"
     );
-    let absorbed = fuzzer.catching(|_| -> () {
-        panic!("delete_shot_range: index 7 out of range for 5 shots")
-    });
+    let absorbed = fuzzer
+        .catching(|_| -> () { panic!("delete_shot_range: index 7 out of range for 5 shots") });
     assert!(absorbed.is_none());
     assert!(fuzzer.outcome.app_panic);
     let flushed = fuzzer
@@ -4416,7 +4513,11 @@ fn fuzz_seed_survey() {
             Ok(result) => {
                 println!(
                     "{}",
-                    summarize(if persistence { "persist" } else { "memory " }, seed, &result)
+                    summarize(
+                        if persistence { "persist" } else { "memory " },
+                        seed,
+                        &result
+                    )
                 );
                 outcomes.push(result);
             }
@@ -4440,7 +4541,10 @@ fn fuzz_seed_survey() {
         println!("FAILING {} seed(s) on: {headline}", seeds.len());
         println!("  seeds: {seeds:?}");
     }
-    println!("coverage per command family:\n{}", coverage_table(&outcomes));
+    println!(
+        "coverage per command family:\n{}",
+        coverage_table(&outcomes)
+    );
 }
 
 /// CORPUS-GUIDED sweeping, and the measurement that says whether it is
@@ -4583,7 +4687,10 @@ fn undo_redo_fuzz_soak() {
         "soak: {} seed(s) x {iterations} iterations x 2 modes",
         seeds.len()
     );
-    println!("coverage per command family:\n{}", coverage_table(&outcomes));
+    println!(
+        "coverage per command family:\n{}",
+        coverage_table(&outcomes)
+    );
     assert!(
         failures.is_empty(),
         "soak seed(s) {failures:?} failed - see the payloads above"

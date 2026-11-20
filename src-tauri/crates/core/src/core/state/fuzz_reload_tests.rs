@@ -77,7 +77,8 @@ impl Fuzzer {
             self.outcome.coverage.corrupted += 1;
             self.note(format!("  ^ corrupted {corruption}"));
         }
-        let opened = self.catching(|f| f.state.execute(Command::OpenProject { path: path.clone() }));
+        let opened =
+            self.catching(|f| f.state.execute(Command::OpenProject { path: path.clone() }));
         self.finished_move();
         let Some(opened) = opened else {
             return;
@@ -175,7 +176,9 @@ impl Fuzzer {
             // The damaged entry fits nothing: a step through it refuses.
             if let Some(depth) = corruption.depth(self.cursor, undo_kept, redo_kept) {
                 self.walls.insert(depth);
-                self.note(format!("  ^ a step through the entry into depth {depth} must refuse"));
+                self.note(format!(
+                    "  ^ a step through the entry into depth {depth} must refuse"
+                ));
             }
         }
         self.expect_stacks("reload");
@@ -262,7 +265,11 @@ impl Fuzzer {
     /// the tampered survey exactly as it was and keep its entry. Then the
     /// untampered survey is put back.
     pub(super) fn probe_tamper(&mut self, back: bool) {
-        let direction = if back { Direction::Undo } else { Direction::Redo };
+        let direction = if back {
+            Direction::Undo
+        } else {
+            Direction::Redo
+        };
         let changes = {
             let stack = self.state.undo_stack.lock().unwrap();
             let entry = if back {
@@ -345,7 +352,10 @@ impl Fuzzer {
             );
         }
         if self.state.has_unsaved_changes() != dirty {
-            self.fail(&format!("{what} was refused but changed the dirty flag"), "");
+            self.fail(
+                &format!("{what} was refused but changed the dirty flag"),
+                "",
+            );
         }
         self.outcome.refusals += 1;
         self.note(format!("{what} -> refused, nothing changed"));
@@ -396,9 +406,18 @@ fn a_save_persists_only_the_newest_undo_persist_limit_entries() {
         .take(limit)
         .map(item_text)
         .collect();
-    let redo: Vec<String> = fuzzer.state.get_redo_stack().iter().map(item_text).collect();
+    let redo: Vec<String> = fuzzer
+        .state
+        .get_redo_stack()
+        .iter()
+        .map(item_text)
+        .collect();
     assert!(fuzzer.state.save_project(Some(path.clone())).success);
-    assert_eq!(fuzzer.undo_len(), undo_held, "a save trims nothing in memory");
+    assert_eq!(
+        fuzzer.undo_len(),
+        undo_held,
+        "a save trims nothing in memory"
+    );
     let decoded = crate::persistence::stalx_v2::decode(
         &std::fs::read(&path).unwrap(),
         &crate::persistence::stalx_v2::DecodeOptions::default(),
@@ -409,8 +428,21 @@ fn a_save_persists_only_the_newest_undo_persist_limit_entries() {
     assert!(fuzzer.state.execute(Command::CloseProject).success);
     assert!(fuzzer.state.execute(Command::OpenProject { path }).success);
     assert!(!fuzzer.state.history_discarded());
-    let reopened: Vec<String> = fuzzer.state.get_undo_stack().iter().map(item_text).collect();
-    assert_eq!(reopened, newest_undo, "the newest entries, in order, came back");
-    let reopened_redo: Vec<String> = fuzzer.state.get_redo_stack().iter().map(item_text).collect();
+    let reopened: Vec<String> = fuzzer
+        .state
+        .get_undo_stack()
+        .iter()
+        .map(item_text)
+        .collect();
+    assert_eq!(
+        reopened, newest_undo,
+        "the newest entries, in order, came back"
+    );
+    let reopened_redo: Vec<String> = fuzzer
+        .state
+        .get_redo_stack()
+        .iter()
+        .map(item_text)
+        .collect();
     assert_eq!(reopened_redo, redo);
 }

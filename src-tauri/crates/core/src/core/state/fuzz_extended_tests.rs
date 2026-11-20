@@ -49,14 +49,12 @@ use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::{
-    random_shot, Drawn, Fuzzer, Op, Refs, Rng, ShotRefT, StationT, Targets, COLORS,
-};
+use super::{random_shot, Drawn, Fuzzer, Op, Refs, Rng, ShotRefT, StationT, Targets, COLORS};
 use crate::core::{Command, CommentHolder};
 use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{
-    ClosureStrategy, CreditEdit, CreditTargets, GpsCoordinates, ImportLineConfig,
-    ImportPlacement, LineId, Person, ShotData, ShotUpdates, StationRef,
+    ClosureStrategy, CreditEdit, CreditTargets, GpsCoordinates, ImportLineConfig, ImportPlacement,
+    LineId, Person, ShotData, ShotUpdates, StationRef,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -342,7 +340,9 @@ fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp
         15..=17 => Some(ExtOp::Import {
             seed: rng.below(1 << 30) as u32,
             lines: 1 + rng.below(3) as u8,
-            anchor: (rng.chance(70)).then(|| pick_station(rng, targets)).flatten(),
+            anchor: (rng.chance(70))
+                .then(|| pick_station(rng, targets))
+                .flatten(),
             names: rng.chance(60),
         }),
         18..=19 => {
@@ -568,7 +568,9 @@ pub(super) fn apply_extended(
                     .expect("the project to add encodes"),
             )
             .expect("write the project to add");
-            let result = fuzzer.state.execute(Command::add_project_file(path.clone()));
+            let result = fuzzer
+                .state
+                .execute(Command::add_project_file(path.clone()));
             let _ = std::fs::remove_file(&path);
             result
         }
@@ -881,8 +883,14 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
     );
     assert!(state.execute(Command::CloseProject).success);
     let opened = state.execute(Command::OpenProject { path });
-    assert!(opened.success, "reopen the LARGE project: {:?}", opened.error);
-    let project = state.get_project_state().expect("the LARGE project is open");
+    assert!(
+        opened.success,
+        "reopen the LARGE project: {:?}",
+        opened.error
+    );
+    let project = state
+        .get_project_state()
+        .expect("the LARGE project is open");
     assert!(
         project.closures.len() > 64
             && project.placements.len() > 64
@@ -937,12 +945,18 @@ pub(super) fn legacy_origin_file(seed: u32, dir: &Path) -> PathBuf {
         });
     }
     let ids: Vec<m::LineId> = p.lines.iter().map(|l| l.id).collect();
-    let key = |p: &m::Project, line: usize, index: u32| p.key_for_ref(m::StationRef::new(ids[line], index));
+    let key = |p: &m::Project, line: usize, index: u32| {
+        p.key_for_ref(m::StationRef::new(ids[line], index))
+    };
     // A hand move before the merges (a merge holds the shown position).
     if let Some(k) = key(&p, 0, 1) {
         p.station_offsets.insert(
             k,
-            (rng.float(-1.0, 1.0), rng.float(-1.0, 1.0), rng.float(-0.5, 0.5)),
+            (
+                rng.float(-1.0, 1.0),
+                rng.float(-1.0, 1.0),
+                rng.float(-0.5, 0.5),
+            ),
         );
     }
     let _ = p.set_zero_datum(
@@ -1001,7 +1015,11 @@ pub(super) fn expose_stale_ids(fuzzer: &mut Fuzzer) {
         shots,
         section: None,
     };
-    fuzzer.step_apply(&create, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+    fuzzer.step_apply(
+        &create,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
     let Some(line) = fuzzer.live().lines().last().map(|l| l.id) else {
         return;
     };
@@ -1019,7 +1037,11 @@ pub(super) fn expose_stale_ids(fuzzer: &mut Fuzzer) {
         after: None,
         before: Some(anchor),
     };
-    fuzzer.step_apply(&insert, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+    fuzzer.step_apply(
+        &insert,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
     let edits: Vec<Box<dyn Fn(ShotRefT) -> Op>> = vec![
         Box::new(|shot| Op::UpdateShot {
             shot,
@@ -1042,7 +1064,11 @@ pub(super) fn expose_stale_ids(fuzzer: &mut Fuzzer) {
         let Some(shot) = first(fuzzer) else {
             return;
         };
-        fuzzer.step_apply(&edit(shot), &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+        fuzzer.step_apply(
+            &edit(shot),
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
     }
 }
 
@@ -1077,7 +1103,11 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
             shots: vec![random_shot(&mut fuzzer.rng), random_shot(&mut fuzzer.rng)],
             section: None,
         };
-        fuzzer.step_apply(&create, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+        fuzzer.step_apply(
+            &create,
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
         let Some(line) = fuzzer.live().lines().last().cloned() else {
             return;
         };
@@ -1091,7 +1121,11 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
             accuracy_mm: None,
             entrance: None,
         };
-        fuzzer.step_apply(&datum, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+        fuzzer.step_apply(
+            &datum,
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
         ends.push(StationT {
             station: line.stations().last().unwrap_or(line.start),
             line: line.id,
@@ -1106,9 +1140,17 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
         b: ends[2],
         strategy: ClosureStrategy::Batch,
     };
-    fuzzer.step_apply(&closure, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+    fuzzer.step_apply(
+        &closure,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
     let remove = Op::RemoveZeroDatum { station: ends[3] };
-    fuzzer.step_apply(&remove, &mut Refs::identity(), &super::read_targets(&fuzzer.state));
+    fuzzer.step_apply(
+        &remove,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
 }
 
 // ===========================================================================
@@ -1288,7 +1330,11 @@ fn the_legacy_origin_is_a_migrated_survey_with_the_old_shapes() {
         let opened = state.execute(Command::OpenProject { path });
         assert!(opened.success, "seed {seed}: {:?}", opened.error);
         let project = state.get_project_state().unwrap();
-        assert!(project.validate().is_empty(), "seed {seed}: {:?}", project.validate());
+        assert!(
+            project.validate().is_empty(),
+            "seed {seed}: {:?}",
+            project.validate()
+        );
         ties += project
             .closures
             .iter()
@@ -1312,5 +1358,8 @@ fn the_legacy_origin_is_a_migrated_survey_with_the_old_shapes() {
     }
     assert!(ties > 0, "no seed migrated a Tie");
     assert!(hands > 0, "no seed kept a hand move");
-    assert!(junctions > 0 && aliases > 0, "no seed made a junction with aliases");
+    assert!(
+        junctions > 0 && aliases > 0,
+        "no seed made a junction with aliases"
+    );
 }
