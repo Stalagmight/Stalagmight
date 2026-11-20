@@ -1,5 +1,4 @@
-use crate::models::Project;
-use crate::persistence::Database;
+use crate::models::survey::Project;
 
 use super::AppState;
 
@@ -10,48 +9,31 @@ use super::AppState;
 // this crate's own tests.
 #[cfg(any(test, feature = "test-support"))]
 impl AppState {
-    /// Install `project` as the open project, with the station identities
-    /// every project the app holds has (the load path settles them): a name
-    /// and a Station ID for every station, a unique name for every line.
+    /// Install `project` as the open project (a new, unsaved one: no file
+    /// state, empty history).
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_project_for_tests(&self, mut project: Project) {
-        project.ensure_station_identities();
-        if let Ok(mut guard) = self.project.lock() {
-            *guard = Some(project);
-        }
+    pub fn set_project_for_tests(&self, project: Project) {
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(project);
+        self.bump_revision();
     }
 
-    /// Install `db` as the open project's database, and say what that makes the
-    /// open project the way an open would: a linked database is a SpeleoDB
-    /// project, read-only until an edit session binds a lock claim
-    /// (`speleodb_edit_gate`) - for which a fixture runs Start Editing.
+    /// Install a SpeleoDB link on the open project, and say what that makes
+    /// the open project the way an open would: read-only until an edit
+    /// session binds a lock claim (`speleodb_edit_gate`).
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_database_for_tests(&self, db: Database) {
-        let link = db.load_speleo_link().ok().flatten();
-        if let Ok(mut guard) = self.database.lock() {
-            *guard = Some(db);
-        }
-        self.speleodb_set_open_gate(link.as_ref());
+    pub fn set_speleo_link_for_tests(&self, link: Option<&crate::models::SpeleoLink>) {
+        self.with_file(|file| file.set_speleo_link(link));
+        self.speleodb_set_open_gate(link);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_initial_save_deferred_for_tests(&self, deferred: bool) {
         self.initial_save_deferred
             .store(deferred, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Run `f` against the open project's LIVE database handle - the very
-    /// connection the session reads through, with whatever mmap its open set up -
-    /// or return `None` when no database is open. The #706 fuzzer's probe: a
-    /// fresh connection would map the file as it is NOW and could never fault on
-    /// a mapping a truncation left behind.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_open_database_for_tests<T>(&self, f: impl FnOnce(&Database) -> T) -> Option<T> {
-        let guard = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.as_ref().map(f)
     }
 
     /// The path of the open project's file, if one is open.

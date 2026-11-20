@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::core::AppState;
-use crate::models::Project;
-use crate::persistence::Database;
+use crate::models::survey::Project;
 
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 
+/// A project written as a `.stalx` version 2 file in a temp dir.
 #[cfg(any(test, feature = "test-support"))]
 pub struct TestDb {
     _dir: TempDir,
@@ -16,12 +16,18 @@ pub struct TestDb {
 
 #[cfg(any(test, feature = "test-support"))]
 impl TestDb {
-    pub fn with_project(project: &Project) -> Result<(Self, Database)> {
+    /// Write `project` (empty history, no link) as `project.stalx`.
+    pub fn with_project(project: &Project) -> Result<Self> {
         let dir = TempDir::new()?;
         let path = dir.path().join("project.stalx");
-        let mut db = Database::open(&path)?;
-        db.save_project(project)?;
-        Ok((Self { _dir: dir, path }, db))
+        let bytes = crate::persistence::stalx_v2::encode(
+            project,
+            &crate::persistence::stalx_v2::Extras::default(),
+            crate::persistence::stalx_v2::Mode::Normal,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        std::fs::write(&path, bytes)?;
+        Ok(Self { _dir: dir, path })
     }
 
     pub fn path(&self) -> &Path {
@@ -29,12 +35,18 @@ impl TestDb {
     }
 }
 
+/// An `AppState` with `project` written to a temp `.stalx` and opened from
+/// it (the normal open path).
 #[cfg(any(test, feature = "test-support"))]
 pub fn app_state_with_project_db(project: Project) -> Result<(AppState, TestDb)> {
-    let (test_db, db) = TestDb::with_project(&project)?;
+    let test_db = TestDb::with_project(&project)?;
     let state = AppState::new()?;
-    state.set_project_for_tests(project);
-    state.set_database_for_tests(db);
+    let opened = state.execute(crate::core::Command::OpenProject {
+        path: test_db.path().to_path_buf(),
+    });
+    if !opened.success {
+        anyhow::bail!("open failed: {:?}", opened.error);
+    }
     Ok((state, test_db))
 }
 

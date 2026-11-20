@@ -1752,6 +1752,9 @@ pub fn run() {
             // PathResolver delegates to the platform-native APIs correctly.
             commands::event_sink::init_app_dirs(app.handle());
 
+            // The `generator` every .stalx save writes ("Stalagmight <version>").
+            core::state::set_generator(env!("CARGO_PKG_VERSION"));
+
             // Initialize app state
             let app_state = core::state::AppState::new()?;
             app.manage(app_state);

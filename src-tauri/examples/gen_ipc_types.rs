@@ -15,7 +15,7 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
-use stalagmight_lib::commands::project::ProjectState;
+use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::commands::survey_geometry::{
     GeometryShot, SurveyGeometry, SurveyGeometryError,
 };
@@ -60,9 +60,9 @@ use stalagmight_lib::models::{
     CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
     DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
     GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
-    Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
+    LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
     LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
-    PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
     RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
     SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
     StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
@@ -97,6 +97,17 @@ fn export<T: TS + 'static>(out_dir: &Path) {
         .expect("TS type must have an export path");
     let out_path = out_dir.join(export_to);
     T::export_to(&out_path).expect("Failed to export TS type");
+    flatten_import_paths(&out_path);
+}
+
+/// Export a station-graph wire type (`models::survey::wire`), which carries
+/// the legacy TS name (`#[ts(rename)]`) but no `#[ts(export)]` path (so no
+/// test writes it into `src-tauri/bindings/`): rendered with
+/// `export_to_string` into `<name>.ts`, then flattened like every other file.
+fn export_wire<T: TS + 'static>(out_dir: &Path, name: &str) {
+    let out_path = out_dir.join(format!("{name}.ts"));
+    let text = T::export_to_string().expect("Failed to render TS type");
+    fs::write(&out_path, text).expect("Failed to write TS type");
     flatten_import_paths(&out_path);
 }
 
@@ -203,7 +214,7 @@ fn main() {
     export::<stalagmight_lib::models::NewerSchema>(&out_dir);
 
     // Project/model types
-    export::<Project>(&out_dir);
+    export_wire::<ProjectWire>(&out_dir, "Project");
     export::<ProjectMetadata>(&out_dir);
     // [Track B] SpeleoDB hand-off link (#189)
     export::<SpeleoLink>(&out_dir);
@@ -233,7 +244,7 @@ fn main() {
     export::<AzimuthReference>(&out_dir);
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
-    export::<Line>(&out_dir);
+    export_wire::<LineWire>(&out_dir, "Line");
     export::<Section>(&out_dir);
     // Per-shot survey credit (surveyors, explorers, date as people)
     export::<Person>(&out_dir);
@@ -308,7 +319,7 @@ fn main() {
     export::<AdjustmentFailureReport>(&out_dir);
     export::<AdjustmentReport>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
-    export::<ProjectState>(&out_dir);
+    export_wire::<ProjectStateWire>(&out_dir, "ProjectState");
 
     // Placement suggestions
     export::<MatchDirection>(&out_dir);
