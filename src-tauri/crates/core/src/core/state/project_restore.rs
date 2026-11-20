@@ -53,16 +53,20 @@
 //! SQLite finds a database's `-journal`, `-wal` and `-shm` by NAME
 //! ([`super::speleodb_sidecars`] explains the hazard). An armed journal, or a
 //! WAL with frames, beside a SQLite file holds committed changes that the file
-//! alone does not, so a restore refuses rather than copy, replace or put back
-//! such a file without them. Any other sidecar beside a name that is about to
-//! be replaced (beside a version 2 file a sidecar belongs to no database) is
-//! moved out of SQLite's sight first, so the new file never picks up the old
-//! one's.
+//! alone does not. A SQLite backup is restored WITH them: its staged copy is
+//! the file with them folded in, worked out on a private copy as an open does
+//! (`legacy_upgrade::settled_bytes`; the backup and its sidecars are only
+//! read), so the restored file is the survey the pair opens as. The project
+//! and the safety copy are only ever replaced, never copied with their
+//! sidecars, so a restore refuses rather than replace or put back such a file
+//! without them. Any other sidecar beside a name that is about to be replaced
+//! (beside a version 2 file a sidecar belongs to no database) is moved out of
+//! SQLite's sight first, so the new file never picks up the old one's.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use super::speleodb_sidecars::{has_hot_journal, sidecar_path, SetAsideSidecars};
+use super::speleodb_sidecars::{sidecar_path, SetAsideSidecars};
 use super::AppState;
 use crate::models::NewerSchema;
 use crate::persistence::migrate::{LegacyError, MigrateError};
@@ -116,8 +120,15 @@ impl AppState {
         }
         // 1. The backup's bytes, staged and checked before anything is written.
         // Only the staged copy is read: the legacy conversion copies it to a
-        // private folder first, and the backup itself is never opened.
-        let staged = stage_copy(&files.backup_real, &files.dir, &files.project)?;
+        // private folder first, and the backup itself is never opened. A SQLite
+        // backup's unfinished changes are folded into the staged copy.
+        let staged = if is_sqlite(&files.backup_real)
+            && super::legacy_upgrade::unfinished(&files.backup_real).is_some()
+        {
+            stage_settled(&files.backup_real, backup, &files.dir, &files.project)?
+        } else {
+            stage_copy(&files.backup_real, &files.dir, &files.project)?
+        };
         let checked = self.check_opens(&staged, backup);
         remove_sidecars_of(&staged);
         checked?;
@@ -386,7 +397,7 @@ fn ends_with_end_marker(bytes: &[u8]) -> bool {
 /// `20261120T101112.123456789Z`: the stamp `UpgradeBackup` names a
 /// pre-upgrade original with, so a project named `cave` is not offered the
 /// originals of `cave.old`.
-fn is_upgrade_stamp(stamp: &str) -> bool {
+pub(super) fn is_upgrade_stamp(stamp: &str) -> bool {
     let b = stamp.as_bytes();
     let digits = |range: std::ops::Range<usize>| {
         b.get(range)
@@ -462,12 +473,9 @@ impl<'a> Files<'a> {
                 return Err(format!("Not restored: {} is not a file.", name(path)));
             }
         }
-        // Before SQLite opens a file: an open acts on the sidecars it finds.
-        refuse_unfinished(
-            &self.backup_real,
-            &format!("the backup {}", name(self.backup)),
-            "a copy of the file alone would lose them. Pick another backup.",
-        )?;
+        // Before SQLite opens a file: an open acts on the sidecars it finds. The
+        // backup's unfinished changes ride with it (step 1).
+        refuse_odd_sidecars(&self.backup_real)?;
         refuse_unfinished(
             &self.project,
             &format!("the project {}", name(&self.project)),
@@ -755,31 +763,30 @@ fn follow_link(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Refuse a SQLite file whose committed state is partly in a sidecar, or a
-/// file whose sidecar is not a regular file (which nothing here opens). Beside
-/// a version 2 file (or none) a sidecar is debris, moved aside when a name is
-/// replaced.
-fn refuse_unfinished(db: &Path, what: &str, consequence: &str) -> Result<(), String> {
-    let journal = sidecar_path(db, "-journal");
-    let wal = sidecar_path(db, "-wal");
-    for sidecar in [&journal, &wal] {
-        if std::fs::symlink_metadata(sidecar).is_ok_and(|m| !m.is_file()) {
+/// Refuse a file whose sidecar is not a regular file (which nothing here
+/// opens).
+fn refuse_odd_sidecars(db: &Path) -> Result<(), String> {
+    for sidecar in [sidecar_path(db, "-journal"), sidecar_path(db, "-wal")] {
+        if std::fs::symlink_metadata(&sidecar).is_ok_and(|m| !m.is_file()) {
             return Err(format!(
                 "Not restored: {} beside {} is not a file. Move it away, then restore.",
-                name(sidecar),
+                name(&sidecar),
                 name(db)
             ));
         }
     }
+    Ok(())
+}
+
+/// Refuse a SQLite file whose committed state is partly in a sidecar, or a
+/// file whose sidecar is not a regular file. Beside a version 2 file (or none)
+/// a sidecar is debris, moved aside when a name is replaced.
+fn refuse_unfinished(db: &Path, what: &str, consequence: &str) -> Result<(), String> {
+    refuse_odd_sidecars(db)?;
     if !is_sqlite(db) {
         return Ok(());
     }
-    let wal_has_frames = std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0);
-    let unfinished = if has_hot_journal(db) {
-        journal
-    } else if wal_has_frames {
-        wal
-    } else {
+    let Some(unfinished) = super::legacy_upgrade::unfinished(db) else {
         return Ok(());
     };
     Err(format!(
@@ -798,6 +805,56 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
             name(source)
         )
     };
+    let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
+    let permissions = reader
+        .metadata()
+        .map_err(|e| failed("read", &e))?
+        .permissions();
+    stage_from(&mut reader, permissions, source, dir, project)
+}
+
+/// [`stage_copy`] of a SQLite `backup` (`named` as the caller named it) with
+/// the unfinished changes beside it folded in: the survey the pair opens as.
+fn stage_settled(
+    backup: &Path,
+    named: &Path,
+    dir: &Path,
+    project: &Path,
+) -> Result<tempfile::TempPath, String> {
+    let read = std::fs::read(backup)
+        .and_then(|bytes| std::fs::metadata(backup).map(|meta| (bytes, meta.permissions())));
+    let (bytes, permissions) = read.map_err(|e| {
+        format!(
+            "Not restored: could not read {} ({e}). Nothing was changed.",
+            name(named)
+        )
+    })?;
+    let settled = super::legacy_upgrade::settled_bytes(&bytes, backup).map_err(|e| {
+        tracing::warn!(reason = %e, backup = %backup.display(), "Could not finish a backup's unfinished changes");
+        format!(
+            "Not restored: the changes that were never finished beside {} could not be \
+             finished ({e}). Nothing was changed. Pick another backup.",
+            name(named)
+        )
+    })?;
+    stage_from(&mut settled.as_slice(), permissions, backup, dir, project)
+}
+
+/// Write everything `reader` yields to a staged file beside the project, sync
+/// it and give it `permissions` (those of `source`, named in messages).
+fn stage_from(
+    reader: &mut dyn std::io::Read,
+    permissions: std::fs::Permissions,
+    source: &Path,
+    dir: &Path,
+    project: &Path,
+) -> Result<tempfile::TempPath, String> {
+    let failed = |what: &str, e: &dyn std::fmt::Display| {
+        format!(
+            "Not restored: could not {what} {} ({e}). Nothing was changed.",
+            name(source)
+        )
+    };
     let mut staged = tempfile::Builder::new()
         .prefix(&format!(".{}.restore-", name(project)))
         .suffix(".stalx")
@@ -808,12 +865,7 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
                 name(project)
             )
         })?;
-    let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
-    let permissions = reader
-        .metadata()
-        .map_err(|e| failed("read", &e))?
-        .permissions();
-    std::io::copy(&mut reader, staged.as_file_mut()).map_err(|e| failed("copy", &e))?;
+    std::io::copy(reader, staged.as_file_mut()).map_err(|e| failed("copy", &e))?;
     // Through the handle that wrote it, so a read-only source does not stop it.
     staged
         .as_file()

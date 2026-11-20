@@ -257,14 +257,59 @@ byte.
 ## Upgrading a legacy file
 
 The first save of a migrated legacy file (its origin is `Legacy` in
-`FileState`) writes version 2 over it. Before the write,
-`UpgradeBackup::take` (`project_io.rs`):
+`FileState`) writes version 2 over it, through `legacy_upgrade::upgrade`
+(`core/state/legacy_upgrade.rs`).
 
-1. copies the SQLite original to `<app data>/backups/<stem>.<UTC stamp>.pre-v2.stalx`;
-2. MOVES any `-journal` / `-wal` / `-shm` sidecar beside that copy, so no old
-   build can later roll a stale journal into the JSON file.
+A legacy file is not always one file. Beside a file an old build was killed
+writing sits a HOT `-journal`: it holds the before-images of the pages the
+interrupted write had already put into the file, so only the pair is the survey
+0.6.0 committed. Beside a file another tool left in WAL mode, the `-wal` can
+hold the newest commits. SQLite finds both by NAME. So the JSON file must never
+appear beside one (an old build opening it would roll the journal's pages into
+it), and the original must never lose one while it still needs it (the file
+alone opens as another survey). The upgrade runs in this order:
 
-If the write fails, the sidecars are moved back beside the untouched original.
+1. Read the original and check the guard: a file that is not what the open read
+   refuses with `EXTERNALLY_MODIFIED` before anything is written.
+2. If a hot journal or a WAL with frames is beside it, **settle** it: fold them
+   into a private copy (`persistence::legacy_settle`: a read-write SQLite open
+   rolls the journal back and checkpoints the WAL, exactly as the frozen
+   reader's open does on its own copy, so the result is the survey the open
+   showed), write that copy beside the original under a hidden name, sync it,
+   check the guard again, and rename it over the original. The original's bytes
+   change, its survey does not.
+3. Remove every `-journal` / `-wal` / `-shm` beside the original: none holds
+   anything the file does not now.
+4. Keep the original: write its bytes to `<app data>/backups/` under a hidden
+   name, sync it, rename it to `<stem>.<UTC stamp>.pre-v2.stalx`, sync the
+   folder. The kept copy is one self-contained SQLite file, never a pair.
+5. Write version 2 (`write_atomic`, above), guarded by what the original holds
+   now.
+
+A kill between any two steps leaves the project's path holding the survey the
+user had or the complete version 2 file. Between steps 2 and 3 the settled file
+sits beside the old sidecar: that is SQLite's own state after a rollback or a
+checkpoint, and a replay leaves the file as it is. The Recovery dialog only
+ever sees a complete kept original, and only once the original beside the
+project needs no sidecar.
+
+If a step fails, the original stays whole (settled, or as it was). When the
+settle already rewrote it, the session's guard follows the new bytes, so the
+next save works. A failed write removes the copy step 4 kept while the original
+still holds the same bytes, so an autosave retried on a read-only folder does
+not fill the backups folder. The next upgrade of the same file removes what a
+killed one left behind (the hidden settled copy, a partial backup). An original
+whose unfinished changes SQLite cannot fold in (a damaged pair) is never
+replaced, not even by Keep my version: there would be no whole copy of it. The
+save says so ("the original's unfinished changes could not be finished") and
+Save As still works.
+
+Settling replaces the original by a rename, so it needs what the version 2
+write needs (a writable folder) and nothing more: a write-protected legacy file
+in a writable folder upgrades like any other and keeps its permission bits. On
+write-protected media the upgrade is refused with `PERMISSION_DENIED` and
+changes nothing.
+
 The Recovery dialog lists the kept originals with the project's own backups
 (`list_project_backups`), and Restore puts one back. The save itself is
 silent; the conversion notice (above) was shown at open when the conversion
@@ -471,7 +516,9 @@ The `save_project` backend command returns the save path as a string in `Command
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend save, the guard choice, the legacy upgrade backup, close |
+| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend save, the guard choice, close |
+| `src-tauri/crates/core/src/core/state/legacy_upgrade.rs` | The first write over a legacy file: settle, keep, write |
+| `src-tauri/crates/persistence/src/persistence/legacy_settle.rs` | A legacy copy's hot journal or WAL folded into the file |
 | `src-tauri/crates/core/src/core/state/project_load.rs` | Open: sniff, decode or migrate, commit |
 | `src-tauri/crates/core/src/core/state/open_file.rs` | `FileState`, the local-only durable save, the conversion notice |
 | `src-tauri/crates/persistence/src/persistence/stalx_v2/atomic.rs` | `write_atomic`, `Fingerprint`, `Guard` |

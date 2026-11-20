@@ -682,11 +682,13 @@ For context; nothing here changes the format. The app's side is
   project from its Recent Projects card rewrites `project.name` and
   `summary.name` the same way.
 - **A legacy (SQLite) file** is converted in memory when opened; its first save
-  writes version 2 over it, after copying the original into the app's data
-  folder (`backups/<stem>.<UTC stamp>.pre-v2.stalx`) and moving any `-journal`,
-  `-wal` or `-shm` file beside that copy, so no older build can roll a stale
-  journal into the JSON file. Until that save the file is untouched. Its undo
-  history is not converted.
+  writes version 2 over it. Before that write the original is made whole (a hot
+  `-journal` an old build left is rolled back into it, a `-wal` checkpointed,
+  as SQLite's own open would), every `-journal`, `-wal` or `-shm` beside it is
+  removed, so no older build can roll a stale journal into the JSON file, and
+  the original is kept in the app's data folder
+  (`backups/<stem>.<UTC stamp>.pre-v2.stalx`, one self-contained file).
+  Until that save the file is untouched. Its undo history is not converted.
 - **Repair** of a damaged version 2 file copies it to `<name>.stalx.backup` (or
   the next free `.backup.N`) first, then writes the salvaged survey in its
   place, without history.

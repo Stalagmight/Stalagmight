@@ -8,8 +8,9 @@ use crate::persistence::stalx_v2::{
     Fingerprint, Format, Guard, Header, History, Mode, Summary, WriteError,
 };
 
+use super::legacy_upgrade::{self, UpgradeError};
 use super::open_file::{FileOrigin, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
-use super::project_io::{generator, same_file, UpgradeBackup};
+use super::project_io::{generator, same_file};
 use super::AppState;
 
 impl AppState {
@@ -717,8 +718,8 @@ impl AppState {
     }
 
     /// Upgrade a closed legacy file to version 2 the way its first save would
-    /// (plan 7.2.10: the original copied into the backups folder and its
-    /// sidecars moved there before the rename), with `name` as its name.
+    /// (plan 7.2.10, `legacy_upgrade`: the original made whole and kept in the
+    /// backups folder before the rename), with `name` as its name.
     fn upgrade_and_rename(&self, path: &Path, name: &str) -> CommandResult {
         let opened = match self.read_project_file(path) {
             Ok(opened) => opened,
@@ -739,16 +740,7 @@ impl AppState {
             Ok(bytes) => bytes,
             Err(e) => return CommandResult::failure(format!("Failed to rename project: {e}")),
         };
-        let backup = match UpgradeBackup::take(path) {
-            Ok(backup) => backup,
-            Err(e) => {
-                return CommandResult::failure(format!(
-                    "Failed to rename project: the original could not be backed up before the \
-                     upgrade ({e})"
-                ))
-            }
-        };
-        match write_atomic(path, &bytes, Guard::Expect(&expected)) {
+        match legacy_upgrade::upgrade(path, &bytes, Guard::Expect(&expected)) {
             Ok(_) => {
                 tracing::info!(
                     path = ?path,
@@ -757,10 +749,10 @@ impl AppState {
                 );
                 CommandResult::success()
             }
-            Err(e) => {
-                backup.put_back();
-                rename_write_failure(&e)
-            }
+            Err(failure) => match &failure.error {
+                UpgradeError::Write(e) => rename_write_failure(e),
+                e => CommandResult::failure(format!("Failed to rename project: {e}")),
+            },
         }
     }
 }
