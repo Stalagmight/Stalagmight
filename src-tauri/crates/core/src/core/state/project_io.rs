@@ -1190,8 +1190,8 @@ impl AppState {
         // (`Database::open_staging`), so this is the sync that makes the file
         // durable. It has to land before the rename: a rename that reaches the
         // disk ahead of the data can leave the project's name on a file that is
-        // not all there. A failure here (a full disk can surface only now) leaves
-        // the destination untouched, like every failure before the rename.
+        // not all there. A failure here (a write error the OS reports only when
+        // syncing) leaves the destination untouched, like any before the rename.
         if let Err(e) = sync_staged_save(&temp_path) {
             let _ = std::fs::remove_file(&temp_path);
             let e = anyhow::Error::from(e);

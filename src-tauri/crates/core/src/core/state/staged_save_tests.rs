@@ -1,7 +1,9 @@
 //! The save's one sync (`sync_staged_save` in `project_io.rs`): the staging
 //! file is written without SQLite's per-commit syncs (`Database::open_staging`)
 //! and synced once, complete and closed, before the rename puts it in place.
-//! These pin when that sync runs and what a failed one leaves behind.
+//! These pin when that sync runs and what a failed one leaves behind. They
+//! cannot see the `sync_all` itself (a unit test cannot observe a sync), only
+//! the hook at its start; `docs/saving.md` has the syscall count.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -71,12 +73,31 @@ fn lines_in_copy_of(path: &Path, scratch: &Path) -> usize {
         .len()
 }
 
+/// Whether this process holds a file descriptor on `path` (Linux: read from
+/// `/proc/self/fd`; `None` elsewhere). An open SQLite connection keeps one on
+/// its database for as long as it lives.
+fn held_open_by_this_process(path: &Path) -> Option<bool> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let target = std::fs::canonicalize(path).ok()?;
+    let held = std::fs::read_dir("/proc/self/fd")
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+        .any(|linked| linked == target);
+    Some(held)
+}
+
 /// What the sync saw when it ran.
 struct AtSync {
     staged: PathBuf,
     destination: Vec<u8>,
     staged_lines: usize,
+    /// A `-journal` beside the staged file: a write still in flight.
     staged_journal: bool,
+    /// The staging connection still open (Linux only).
+    staged_held_open: Option<bool>,
 }
 
 /// Install a sync hook that records [`AtSync`] for a save to `destination`.
@@ -88,11 +109,14 @@ fn observe_sync(destination: &Path, scratch: &Path) -> Rc<RefCell<Option<AtSync>
     set_staged_sync_hook(move |staged| {
         let mut journal = staged.as_os_str().to_os_string();
         journal.push("-journal");
+        // Before the copy below, which opens the staged file itself.
+        let staged_held_open = held_open_by_this_process(staged);
         *slot.borrow_mut() = Some(AtSync {
             staged: staged.to_path_buf(),
             destination: std::fs::read(&destination).unwrap_or_default(),
             staged_lines: lines_in_copy_of(staged, &scratch),
             staged_journal: Path::new(&journal).exists(),
+            staged_held_open,
         });
         Ok(())
     });
@@ -124,7 +148,12 @@ fn the_staged_file_is_synced_complete_and_closed_before_the_rename() {
     );
     assert!(
         !seen.staged_journal,
-        "the staging connection must be closed (no journal) when the file is synced"
+        "no write may be in flight (a journal beside the file) when it is synced"
+    );
+    assert_ne!(
+        seen.staged_held_open,
+        Some(true),
+        "the staging connection must be closed when the file is synced"
     );
     assert_eq!(lines_in_copy_of(&path, &dir.path().join("after.stalx")), 2);
     assert!(!path.with_extension("stalx.tmp").exists());
@@ -208,4 +237,26 @@ fn a_detached_copy_is_synced_before_it_is_renamed_into_place() {
     assert_eq!(seen.staged_lines, 2);
     assert_eq!(lines_in_copy_of(&copy, &dir.path().join("after.stalx")), 2);
     assert_eq!(state.open_project_path_for_tests(), Some(path));
+}
+
+/// Nothing above can tell a staging connection from a synced one: both write
+/// the same bytes, and the tests see only the hook. So the opener the save
+/// stages through is pinned in its source, the way `speleodb_session` pins its
+/// bump sites. A save through `Database::open` is correct, only slower: 0.7 s
+/// instead of 15 ms for a small project on a fast SSD.
+#[test]
+fn the_save_stages_through_the_unsynced_opener() {
+    let source = std::fs::read_to_string(format!(
+        "{}/src/core/state/project_io.rs",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("read project_io.rs");
+    assert!(
+        source.contains("Database::open_staging(&temp_path)"),
+        "the save must build its temp file through `Database::open_staging`"
+    );
+    assert!(
+        !source.contains("Database::open(&temp_path)"),
+        "the save's temp file must not be opened with per-commit syncs"
+    );
 }

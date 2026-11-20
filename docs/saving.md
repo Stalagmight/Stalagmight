@@ -389,14 +389,16 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 
 ### One sync per save
 
-The temp file is written through `Database::open_staging`, which sets `PRAGMA synchronous = OFF`. Building a file takes 39 commits (each `CREATE TABLE`, each display setting, the survey, the history), and with SQLite's default each one synced the journal twice, the folder and the database: 156 syncs for the temp file, about 0.7 s on a fast NVMe disk whatever the project's size. A save now makes four: the temp file, the folder, and the two config files the recent-projects update rewrites. Nothing reads the temp file before the rename, so those syncs bought nothing; one sync of the closed file before the rename gives the same guarantee.
+The temp file is written through `Database::open_staging`, which sets `PRAGMA synchronous = OFF`. Building a file takes 39 commits (each `CREATE TABLE`, each display setting, the survey, the history), and with SQLite's default each one synced the journal twice, the folder and the database: 156 syncs for the temp file, about 0.7 s on a fast NVMe disk whatever the project's size. A save now makes four: the temp file, the folder, and the two config files the recent-projects update rewrites. The app never opens the temp file as the project before the rename, so those syncs bought nothing; one sync of the closed file before the rename gives the same guarantee.
 
 What the staging connection keeps:
 
 - **The rollback journal** (DELETE mode, like every other connection). A failed transaction still rolls back, and the copies of the undo history and of the ignored warnings rely on that. `PRAGMA journal_mode = OFF` would leave a failed copy's spilled pages in the file.
 - **The bytes.** A staging file is byte-identical to the same writes through `Database::open`, so the format, older builds and outside readers see no difference.
 
-A process killed during a save leaves exactly the files it left before: its writes are in the OS whether or not they were synced. A power loss before the sync can leave the temp in a state no journal repairs, but the project file is untouched until the rename, and the sync runs before the rename, so the project file's name never points at data that is not on disk. A sync failure (a full disk can surface only here now) fails the save before the rename.
+A process killed during a save leaves exactly the files it left before: its writes are in the OS whether or not they were synced. A power loss before the sync can leave the temp in a state no journal repairs, but the project file is untouched until the rename, and the sync runs before the rename, so the project file's name never points at data that is not on disk. A sync failure (a write error the OS reports only when syncing, such as an I/O error or a full network drive) fails the save before the rename.
+
+One reader does see a leftover temp: the recovery dialog lists `<project>.stalx.tmp` as a backup (`Database::list_backups`), and Restore installs it after a quick check of its structure. A temp left by a killed process is what it always was (the crash-timing gate checks it). A temp left by a power loss during a save could before hold only whole commits, a prefix of the save; it can now also mix pages of different commits, which that quick check does not always catch. Restore copies it over the project, keeping the replaced file as `<project>.stalx.pre-restore`.
 
 The project file's own connection (`Database::open`, reopened after the rename) keeps SQLite's default `synchronous = FULL`: its writes (display settings, the SpeleoDB dirty bit) go into the file itself.
 

@@ -18,7 +18,7 @@
 //!
 //! # The pipeline, as measured
 //!
-//! `AppState::save_project` (`core/state/project_io.rs:572`), with the line that
+//! `AppState::save_project_at_generation` (`core/state/project_io.rs:572`), with the line that
 //! performs each step. Only the steps that TOUCH THE DISK are listed; the heals
 //! and snapshots before them are in-memory:
 //!
@@ -89,7 +89,7 @@
 //!
 //! | injected state | the kill lands |
 //! |---|---|
-//! | destination only | before `:1059`, or after any failure cleanup (`:1063`, `:1071`, `:1164`, `:1196`, `:1256`) |
+//! | destination only | before `:1059`, or after any failure cleanup (`:1063`, `:1071`, `:1164`, `:1171`, `:1196`, `:1214`, `:1256`) |
 //! | destination + temp truncated to N bytes | inside `:1068`-`:1184` |
 //! | destination + temp mid-transaction + its hot journal | inside `:1086`-`:1184`, after the survey committed |
 //! | destination + whole temp | between `:1187` and `:1255` (before or after the sync: a kill leaves the same bytes) |
@@ -172,7 +172,7 @@
 //! exists", so the bucket sizes are the honest measure of what that button can
 //! install.
 //!
-//! Re-measured 2026-11-20 on `release/0.6.0`, the same 60 seeds: 300 refused,
+//! Re-measured 2026-11-20 on `release/0.6.0` at 745946507, the same 60 seeds: 300 refused,
 //! 60 opened with content of their own, none as exactly the interrupted save -
 //! identical with and without the one-sync staging (which writes the same
 //! bytes). The figures and the per-shape explanation above predate compact
@@ -433,7 +433,7 @@ fn crashes(reference: &Reference) -> Vec<Crash> {
     let mut out = vec![Crash {
         id: "destination-only".to_string(),
         after: "before the temp database is created (project_io.rs:1059), or after any of \
-                the failure cleanups removed it (:1063, :1071, :1164, :1196, :1256)",
+                the failure cleanups removed it (:1063, :1071, :1164, :1171, :1196, :1214, :1256)",
         shape: Shape::Untouched,
         expect: Expect::Old,
     }];
@@ -1026,9 +1026,12 @@ fn the_hot_journal_injection_is_a_real_interrupted_write() {
     let committed = std::fs::read(&path).expect("could not read the saved file");
     drop(state);
 
+    let mut record_counts = Vec::new();
     for writer in [Writer::Staging, Writer::Project] {
         let (interrupted, journal) =
             mid_transaction(&committed, writer).expect("the interrupted write could not be staged");
+        // Bytes 8..12 of a rollback journal's header: its record count.
+        record_counts.push(journal.get(8..12).map(<[u8]>::to_vec));
         assert!(
             !journal.is_empty(),
             "the interrupted {writer:?} transaction left an EMPTY rollback journal, so the \
@@ -1041,6 +1044,19 @@ fn the_hot_journal_injection_is_a_real_interrupted_write() {
              recovery oracle is vacuous"
         );
     }
+    // The writer has to change what is staged, or the temp's states would be a
+    // project-file journal under another name. With syncs off SQLite writes the
+    // record count as 0xffffffff up front (replay counts the records from the
+    // file's size); a synced write fills in the real count.
+    assert_eq!(
+        record_counts[0].as_deref(),
+        Some(&[0xff_u8; 4][..]),
+        "a staging journal's record count"
+    );
+    assert_ne!(
+        record_counts[0], record_counts[1],
+        "the staging and project-file writers staged the same journal header"
+    );
 }
 
 /// Determinism, so a failing state is a repro.

@@ -547,13 +547,20 @@ fn install(staged: tempfile::TempPath, dest: &Path) -> Result<(), String> {
 
 /// Make a rename in `dest`'s directory durable (Unix; Windows has no directory
 /// handle to sync and makes the rename durable itself). Best effort: the caller
-/// has already renamed, so a failure is logged, not returned. Also used by the
-/// save (`project_io.rs`).
+/// has already renamed, so a failure is logged, not returned. Also used by
+/// every save (`project_io.rs`), so a folder that never syncs (some network or
+/// removable volumes) warns once per run and is a debug line after that.
 pub(super) fn sync_dir(dest: &Path) {
     #[cfg(unix)]
     if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Err(error) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
-            tracing::warn!(%error, path = %parent.display(), "could not sync the project's folder after a rename");
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::debug!(%error, path = %parent.display(), "could not sync the project's folder after a rename");
+            } else {
+                tracing::warn!(%error, path = %parent.display(), "could not sync the project's folder after a rename");
+            }
         }
     }
     #[cfg(not(unix))]
