@@ -137,6 +137,14 @@ mod format_v2_doc_tests;
 )]
 mod format_v2_limits_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: a failing seed prints its replay line, a sweep its verdicts"
+)]
+mod decode_fuzz_tests;
+
 pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, Stage, WriteError};
 pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
@@ -149,6 +157,9 @@ pub use types::{
     CountLimits, DecodeNote, DecodeOptions, Decoded, Extras, History, IgnoredWarning, Limit,
     LocalState, LocalSync, Mode, Preserved, PushOptions, RawJson, ReadOnly, SpeleoDbLink,
 };
+/// The format's date rule (0001-01-01 ..= 9999-12-31, F10), which the
+/// migration applies so a migrated model is what its file will hold.
+pub(crate) use write::normalized_date;
 
 /// The fixed first bytes of every canonical file. A reader sniffs them; a
 /// server can check them the way it checks the SQLite header today.

@@ -486,6 +486,13 @@ mod topology_commands_tests;
 )]
 mod topology_kit;
 #[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: a failing seed prints its replay line, a sweep its coverage counts"
+)]
+mod transition_fuzz_tests;
+#[cfg(test)]
 mod undo_after_reopen_tests;
 #[cfg(test)]
 mod undo_pipeline_tests;

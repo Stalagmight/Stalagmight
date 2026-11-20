@@ -882,7 +882,8 @@ fn same_measurements(a: &m::Shot, b: &crate::models::survey::Shot) -> bool {
                 .iter()
                 .map(|p| (p.name.clone(), p.email.clone()))
                 .collect::<Vec<_>>(),
-            c.date,
+            // As the file holds it (F10): out-of-range dates are clamped.
+            c.date.map(super::super::stalx_v2::normalized_date),
         )
     });
     let credit_b = b.credit.as_ref().map(|c| {

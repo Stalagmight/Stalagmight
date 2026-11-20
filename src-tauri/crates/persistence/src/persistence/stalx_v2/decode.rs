@@ -117,6 +117,17 @@ pub(super) fn sniff_detail(bytes: &[u8]) -> Sniffed {
     {
         i += 1;
     }
+    if i == start {
+        // Not a number (a string, `null`...): a version this build never
+        // wrote, unless the bytes end before the token does.
+        while i - start < 32
+            && bytes
+                .get(i)
+                .is_some_and(|b| !matches!(b, b',' | b'}' | b' ' | b'\t' | b'\n' | b'\r'))
+        {
+            i += 1;
+        }
+    }
     if i == start || i == bytes.len() {
         // No token yet, or it may continue past the bytes we have.
         return Sniffed::V2(None);

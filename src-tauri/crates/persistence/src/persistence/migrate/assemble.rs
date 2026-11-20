@@ -13,6 +13,7 @@ use crate::models::survey::{
 };
 use crate::models::{LineId, StationId, MAX_LINE_ID, MAX_SECTION_ID};
 
+use super::super::stalx_v2::normalized_date;
 use super::convert::{self, Credits};
 use super::merges::{self, Fate};
 use super::slots::{resolve_map, Slots};
@@ -271,6 +272,14 @@ fn build_lines(
             if sanitized {
                 report.numbers_sanitized += 1;
             }
+            let date = source
+                .credit
+                .as_ref()
+                .filter(|c| !c.is_empty())
+                .and_then(|c| c.date);
+            if date != shot.credit.as_ref().and_then(|c| c.date) {
+                report.dates_clamped += 1;
+            }
             shots.push(shot);
         }
         let quality = if line.quality.is_finite() {
@@ -291,7 +300,11 @@ fn build_lines(
                 .map(convert::azimuth_reference),
             section_id: line.section_id,
             legacy_surveyor: line.legacy_surveyor.clone(),
-            legacy_date: line.legacy_date,
+            legacy_date: line.legacy_date.map(|day| {
+                let clamped = normalized_date(day);
+                report.dates_clamped += usize::from(clamped != day);
+                clamped
+            }),
             start,
             shots,
             hand_moves: BTreeMap::new(),

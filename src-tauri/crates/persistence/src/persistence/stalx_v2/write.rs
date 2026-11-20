@@ -59,7 +59,7 @@ pub(super) fn parse_date(text: &str) -> Option<NaiveDate> {
 
 /// `day` clamped into 0001-01-01 ..= 9999-12-31, the dates every reader
 /// parses as `YYYY-MM-DD` (the dates' version of the #810 rule).
-pub(super) fn normalized_date(day: NaiveDate) -> NaiveDate {
+pub(crate) fn normalized_date(day: NaiveDate) -> NaiveDate {
     match (
         NaiveDate::from_ymd_opt(1, 1, 1),
         NaiveDate::from_ymd_opt(9999, 12, 31),
