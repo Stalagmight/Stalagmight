@@ -2671,6 +2671,31 @@ fn test_first_implicit_save_of_a_deferred_project_avoids_a_taken_path() {
     });
 }
 
+/// An empty file at a deferred project's reserved path is a placeholder (a
+/// document picker made it before returning the path): the first implicit
+/// save writes over it, as 0.6.0 did, instead of moving or refusing.
+#[test]
+fn test_first_implicit_save_of_a_deferred_project_fills_an_empty_placeholder() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let reserved = dir.path().join("Cave.stalx");
+        let mut project = project_with_line(vec![shot_data(1.0)]);
+        project.file_path = Some(reserved.clone());
+        set_project_for_tests(&app, project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        fs::write(&reserved, b"").unwrap();
+
+        let result = project::save_project(state(&app), None, None);
+        assert_success(&result);
+        assert_eq!(result.saved_path.as_deref(), reserved.to_str());
+        assert_eq!(read_v2(&reserved).lines().len(), 1);
+        assert!(!dir.path().join("Cave_1.stalx").exists());
+    });
+}
+
 #[test]
 fn test_list_recent_projects_includes_saved() {
     with_config_lock(|| {

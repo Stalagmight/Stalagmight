@@ -354,7 +354,7 @@ impl AppState {
         // project's reserved path): a file that appeared there meanwhile is
         // not ours, so the save moves to the next free name, as 0.6.0 did,
         // instead of offering to overwrite a stranger's file.
-        let target = if path.is_none() && file.origin == FileOrigin::New {
+        let (target, empty_placeholder) = if path.is_none() && file.origin == FileOrigin::New {
             let free = Self::next_available_project_path(&target);
             if free != target {
                 tracing::warn!(
@@ -364,9 +364,13 @@ impl AppState {
                     "Implicit first save path already exists; using auto-renamed path"
                 );
             }
-            free
+            // An empty file there is a placeholder (Android's document picker
+            // creates one before it returns the path), which 0.6.0 wrote over.
+            let placeholder =
+                std::fs::symlink_metadata(&free).is_ok_and(|m| m.is_file() && m.len() == 0);
+            (free, placeholder)
         } else {
-            target
+            (target, false)
         };
         // The destination folder has to be there: say so instead of relaying
         // the write's raw "No such file or directory" (#429).
@@ -415,6 +419,7 @@ impl AppState {
         let guard = match (on_disk, to_open_file, file.fingerprint.as_ref()) {
             (OnDisk::Overwrite, _, _) => Guard::Overwrite,
             (OnDisk::Checked, true, Some(fp)) => Guard::Expect(fp),
+            (OnDisk::Checked, true, None) if empty_placeholder => Guard::Overwrite,
             // The first write of a project created in this session: its path
             // was chosen free; something appearing there meanwhile is not ours.
             (OnDisk::Checked, true, None) => Guard::Absent,
