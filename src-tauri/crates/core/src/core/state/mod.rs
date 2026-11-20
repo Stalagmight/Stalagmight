@@ -146,7 +146,11 @@ mod datum_ui_tests;
     reason = "live check: fails loudly, and reports each step it proved"
 )]
 mod exit_prompt_live_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "a property sweep's summary IS its output, and `--nocapture` is a test's only channel"
+)]
 mod format_property_tests;
 #[cfg(sg_unported)]
 mod fuzz_rarity_tests;

@@ -491,6 +491,36 @@ pub(super) fn open_fresh(path: &Path) -> Option<AppState> {
         .then_some(state)
 }
 
+/// A legacy (SQLite) project at `path`, written by the 0.6.0 save path: three
+/// lines of random shots, the second line's start merged onto the first
+/// line's end, and a datum at the first line's start.
+pub(super) fn write_legacy(path: &Path, rng: &mut Rng, name: &str) {
+    let mut p = crate::models::Project::new(name.to_string(), None);
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let shots = (0..2 + rng.below(3)).map(|_| random_shot(rng)).collect();
+        ids.push(
+            p.add_line(crate::models::LineData {
+                name: Some(format!("L{i}")),
+                color: (*rng.pick(COLORS)).to_string(),
+                shots,
+                ..Default::default()
+            })
+            .id,
+        );
+    }
+    let end = index_of(p.get_line(ids[0]).map_or(0, |l| l.shots.len()));
+    p.merge_stations(StationRef::new(ids[0], end), StationRef::new(ids[1], 0))
+        .expect("a legacy merge");
+    p.set_zero_datum(
+        StationRef::new(ids[0], 0),
+        GpsCoordinates::new(20.4, -87.3, 0.0).expect("a valid GPS"),
+    )
+    .expect("a legacy datum");
+    let mut db = crate::persistence::Database::open(path).expect("a legacy file");
+    db.save_project(&p).expect("the legacy save");
+}
+
 /// The full load's progress events go nowhere.
 pub(super) struct NullSink;
 
