@@ -433,8 +433,9 @@ mod tests {
     }
 
     /// Deselecting the line everything hangs off must NOT leave a
-    /// `FromImporting` pointing at a line that is never created: that is a
-    /// hard, whole-import rollback in `execute_import_lines`, not a skip.
+    /// `FromImporting` pointing at a line that is never created: the child
+    /// would import unconnected (since #814; it used to roll the whole import
+    /// back).
     /// The first surviving line re-anchors to the origin instead.
     #[test]
     fn deselecting_the_root_reanchors_its_child_instead_of_dangling() {

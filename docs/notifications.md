@@ -109,14 +109,21 @@ regions). Read the comment blocks in those two files plus
   already asked for by importing - counts, not a choice. When it carries no
   `warnings`, no unit conversion, no created zero datum, and something actually
   landed, it surfaces as a `success` toast (counts only, dedup key
-  `TOAST_KEYS.IMPORT_RECEIPT`) instead of opening `ImportReceiptDialog`. Four
+  `TOAST_KEYS.IMPORT_RECEIPT`) instead of opening `ImportReceiptDialog`. Five
   things keep the modal:
   - It carries even one warning: a warning means something was lost or needs
     a look, and #411 exists precisely so that never rides a dismissible toast.
+  - It carries even one `line_problems` entry (#814): a line the import
+    left out or could not connect. The dialog shows every such entry above
+    the warnings and never folds them behind Details, since they are what the
+    user most needs. A line left unconnected is also listed afterwards in the
+    Warnings tab (code `SECTION_NOT_CONNECTED`, the pre-rename spelling the
+    stored Ignores key on) while the project holds a zero datum; in a project
+    with none, the receipt is its only record.
   - `lines_imported` is zero (#442) - nothing landing is itself the fact
-    the user needs to see, never inferred from `shot_count` (which is summed
-    from the lines the import *attempted*, not what landed - the two only
-    agree while the import path is all-or-nothing).
+    the user needs to see. Since #814 both it and `shot_count` count only the
+    lines that landed: a line the project refuses is skipped and named in
+    the receipt's `line_problems`, which keep the modal anyway.
   - `unit_conversion` is set - a length-unit conversion silently changes every
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather

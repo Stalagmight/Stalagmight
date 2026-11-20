@@ -20,6 +20,7 @@ use crate::models::shot::implied_pitch_deg;
 use crate::models::{
     ImportClosure, ImportLineConfig, ImportPlacement, Person, ShotData, ShotKind, SurveyCredit,
 };
+use crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
 
 use azimuth::tml_azimuth_reference;
 use import_options::{build_selection_index, determine_placement, PlacementInput};
@@ -1288,6 +1289,7 @@ pub fn convert_tml_with_options(
 
     let mut configs: Vec<ImportLineConfig> = Vec::new();
     let mut zero_shot_lines_dropped: u32 = 0;
+    let mut coincident_ties: u32 = 0;
 
     for (si, line) in tml.lines.iter().enumerate() {
         let line_index = si as u32;
@@ -1311,6 +1313,11 @@ pub fn convert_tml_with_options(
             zero_shot_lines_dropped += 1;
             continue;
         }
+        coincident_ties += line
+            .shots
+            .iter()
+            .filter(|s| is_imported_row(s, include_excluded) && has_no_usable_length(s))
+            .count() as u32;
 
         // When excluded shots are filtered, the effective first shot may differ
         // from line.start_ariane_id (which is the raw first shot's from_id).
@@ -1550,6 +1557,16 @@ pub fn convert_tml_with_options(
             } else {
                 "were"
             }
+        ));
+    }
+    if coincident_ties > 0 {
+        warnings.push(format!(
+            "{coincident_ties} shot{} in the file had no usable length (zero, negative or \
+             unreadable) and {} given a negligible {COINCIDENT_TIE_EPSILON_M} m length, so the \
+             stations on either end share one position on the map; any depth \
+             difference recorded between them is kept",
+            plural_s(coincident_ties),
+            was_were(coincident_ties)
         ));
     }
     if closures_with_excluded_endpoints > 0 {
@@ -1906,6 +1923,14 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // `current < 14`, so a value written here afterwards is never revisited.
     let az = crate::models::normalize_azimuth(shot.azimuth);
 
+    // The model has no zero-length shot, and one would fail the whole import
+    // (#812), so a row with no usable length becomes a coincident tie.
+    let length = if has_no_usable_length(shot) {
+        COINCIDENT_TIE_EPSILON_M
+    } else {
+        shot.length
+    };
+
     ShotData {
         // The file's own shot id, carried so the round trip re-emits it (#423).
         // The TML importer is the only one that sets this; every other importer
@@ -1913,10 +1938,10 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         uuid: shot.uuid.clone(),
         azimuth_in: az,
         azimuth_out: az, // No backsight in Ariane
-        length: shot.length,
+        length,
         depth_in,
         depth_out: shot.depth,
-        pitch_in: tml_pitch_in(shot.inclination, shot.length, depth_in, shot.depth),
+        pitch_in: tml_pitch_in(shot.inclination, length, depth_in, shot.depth),
         pitch_out: None, // No backsight inclination
         left: lrud_opt(shot.left),
         right: lrud_opt(shot.right),
@@ -1941,6 +1966,24 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     }
 }
 
+/// Whether a parsed row becomes a shot on import.
+///
+/// CLOSURE rows are loop-closure markers, not survey measurements, whatever tape
+/// reading they carry (our own exporter gives them the vertical gap between the
+/// two nodes they tie, so `Length` is only zero on a loop that closes perfectly);
+/// their topology is captured in `TmlClosure`. Excluded rows are dropped unless
+/// the user asked for them.
+fn is_imported_row(shot: &TmlShot, include_excluded: bool) -> bool {
+    shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded)
+}
+
+/// Whether a row has no usable tape length: zero, negative, or unreadable (the
+/// parser reads a non-finite or missing `<Length>` as 0). Such a row imports as
+/// a coincident-station tie of [`COINCIDENT_TIE_EPSILON_M`] (#812).
+fn has_no_usable_length(shot: &TmlShot) -> bool {
+    !shot.length.is_finite() || shot.length <= 0.0
+}
+
 /// Convert TML shots to `ShotData` for import.
 ///
 /// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
@@ -1956,15 +1999,9 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Filter out CLOSURE shots - they are loop-closure markers, not real survey
-    // measurements, whatever tape reading they carry (our own exporter gives them
-    // the vertical gap between the two nodes they tie, so `Length` is only zero on
-    // a loop that closes perfectly). Their topology is captured in TmlClosure.
-    // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
         .iter()
-        .filter(|s| s.shot_type != TmlShotType::Closure)
-        .filter(|s| include_excluded || !s.excluded)
+        .filter(|s| is_imported_row(s, include_excluded))
         .collect();
 
     if real_shots.is_empty() {

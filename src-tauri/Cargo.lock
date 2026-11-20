@@ -2029,8 +2029,6 @@ dependencies = [
 [[package]]
 name = "igrf"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeb750ac62b7b81c05b0090d0fc42cdab0ec685835ee6a83a51aad21a15fc79a"
 dependencies = [
  "thiserror 1.0.69",
  "time",
@@ -4588,9 +4586,9 @@ dependencies = [
 
 [[package]]
 name = "speleodb-api"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "437d3ade10076154df74bd0d26fbbb77277ac14cffba33234ebe8072aa1a25d7"
+checksum = "34c6e0a57ab6686a311fdf3b1d83e31d6912263855f8d498e3b3e7e43ff6e74a"
 dependencies = [
  "bytes",
  "futures-util",

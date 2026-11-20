@@ -34,6 +34,10 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
       info: [...(acc.info ?? []), ...(r.info ?? [])],
       // First batch that created one wins, same rule as `unit_conversion`.
       zero_datum_created: acc.zero_datum_created ?? r.zero_datum_created,
+      // #814: optional on the wire; kept absent when no batch had any.
+      ...(acc.line_problems || r.line_problems
+        ? { line_problems: [...(acc.line_problems ?? []), ...(r.line_problems ?? [])] }
+        : {}),
     }),
     first,
   );
@@ -79,13 +83,12 @@ export function importReceiptSummaryParts(
  * never be demoted to a toast, even if it happens to carry no `warnings` of
  * its own (the absence of any data IS the thing the user needs to see).
  *
- * Gated on `lines_imported` alone, NOT `shot_count`: `shot_count` is
- * summed from the lines the import *attempted* (`command_import.rs`,
- * computed before the per-line outcome is known), while
- * `lines_imported` counts what actually landed. They only agree today
- * because the import loop is all-or-nothing - the day a partial-drop path
- * exists, a zero-lines receipt could carry a nonzero `shot_count`, and a
- * `shot_count`-inclusive check would wrongly let that case through as a
+ * Gated on `lines_imported` alone, NOT `shot_count`: `lines_imported`
+ * is the count of what landed, which is the fact this case is about. Since
+ * #814 `shot_count` also counts only the lines that landed (a refused
+ * line is skipped and named in `line_problems`), but the gate stays on the
+ * line count so it never depends on that sum being right; a
+ * `shot_count`-inclusive check would let a zero-lines receipt through as a
  * toast.
  */
 export function isEmptyImportReceipt(receipt: ImportReceipt): boolean {

@@ -162,14 +162,6 @@ impl AppState {
                 "a project name is required to publish".to_owned(),
             )));
         }
-        // The server's Project model requires a non-blank description (`blank=False`),
-        // so a blank one 400s the create. Reject it up front (the FE gates on it too)
-        // for a clear message instead of a raw server validation error.
-        if params.description.trim().is_empty() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "a project description is required to publish".to_owned(),
-            )));
-        }
         if self.speleodb_open_link().is_ok() {
             return Err(local_dto(SpeleoDbError::Io(
                 "this project is already linked to SpeleoDB".to_owned(),

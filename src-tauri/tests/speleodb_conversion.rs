@@ -84,7 +84,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                 } else {
                     serde_json::Value::Null
                 };
-                let project = json!({"id":server_id,"name":"Latest local edits","description":"Synthetic conversion","country":"US",
+                let project = json!({"id":server_id,"name":"Latest local edits","description":"","country":"US",
                     "type":"STALAGMIGHT","visibility":"PRIVATE","permission":"ADMIN","color":"#123456",
                     "commit_count":u8::from(uploaded),"created_by":"test@example.com","creation_date":"2026-01-01T00:00:00Z",
                     "modified_date":"2026-01-01T00:00:00Z","exclude_geojson":false,"fork_from":null,"is_active":true,
@@ -143,7 +143,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
         let result = state
             .speleodb_publish(SpeleoPublishParams {
                 name: "Latest local edits".into(),
-                description: "Synthetic conversion".into(),
+                description: String::new(),
                 country: "US".into(),
                 visibility: Visibility::Private,
                 latitude: None,

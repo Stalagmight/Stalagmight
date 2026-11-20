@@ -1997,6 +1997,7 @@ mod tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            line_problems: None,
         }
     }
 
@@ -2070,6 +2071,18 @@ mod tests {
 
         assert_eq!(receipt.warnings.len(), 1);
         assert_eq!(receipt.warnings[0].chars().count(), 300);
+    }
+
+    /// #814: the per-line entries are bounded like the warnings - a hostile
+    /// file can refuse one line per entry just as easily.
+    #[test]
+    fn cap_warnings_also_caps_line_problems() {
+        let mut receipt = blank_receipt();
+        receipt.line_problems = Some((0..60).map(|i| format!("line {i}")).collect());
+        receipt.cap_warnings();
+        let problems = receipt.line_problems.unwrap();
+        assert_eq!(problems.len(), 51);
+        assert_eq!(problems[50], "... and 10 more lines");
     }
 
     #[test]

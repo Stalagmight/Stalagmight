@@ -125,6 +125,31 @@ describe('ImportReceiptDialog', () => {
     expect(screen.queryByTestId('import-receipt-warnings')).not.toBeInTheDocument();
   });
 
+  // #814: the lines an import lost or could not connect are what the user
+  // most needs to read, so every one shows, above the warnings, even when the
+  // warnings themselves fold behind Details.
+  it('shows every line problem above the warnings, never folded', () => {
+    dialogData.receipt = baseReceipt({
+      warnings: ['w1', 'w2', 'w3', 'w4', 'w5'],
+      line_problems: ['Line "A" was not imported: Shot A: 1 \u2192 2 has zero length', 'p2', 'p3', 'p4'],
+    });
+    render(<ImportReceiptDialog />);
+
+    const problems = screen.getByTestId('import-receipt-line-problems');
+    expect(problems.querySelectorAll('li')).toHaveLength(4);
+    expect(problems.textContent).toContain('Line "A" was not imported: Shot A: 1 \u2192 2 has zero length');
+    const warnings = screen.getByTestId('import-receipt-warnings');
+    expect(
+      problems.compareDocumentPosition(warnings) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('renders no line-problems block for a receipt without the field', () => {
+    dialogData.receipt = baseReceipt({ warnings: ['w1'] });
+    render(<ImportReceiptDialog />);
+    expect(screen.queryByTestId('import-receipt-line-problems')).toBeNull();
+  });
+
   it('hides "View details" when there are no extra warnings to expand', () => {
     dialogData.receipt = baseReceipt({ warnings: ['one'] });
     render(<ImportReceiptDialog />);
