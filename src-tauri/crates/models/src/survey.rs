@@ -102,6 +102,12 @@ mod test_helpers;
 mod adjust_floor_tests;
 #[cfg(test)]
 #[expect(
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod adjust_precision_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::panic,
     clippy::float_cmp,

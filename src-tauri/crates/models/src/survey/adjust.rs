@@ -47,7 +47,7 @@ use crate::{
 
 use super::closures::ClosureAcrossOneShot;
 use super::graph::{ShotEdge, StationPositions};
-use super::lsq::solve_reduced_laplacian;
+use super::lsq::Grounded;
 use super::topology::find;
 use super::{Anchor, Project, RawPositions, SlotPosition};
 
@@ -813,11 +813,19 @@ impl Project {
             }
         }
 
-        let mut atb_x = vec![0.0; n];
-        let mut atb_y = vec![0.0; n];
-        let mut diag_x = vec![0.0; n];
-        let mut diag_y = vec![0.0; n];
-        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+        // Where each group's solve starts: a free group's lowest member's
+        // raw position; a held group stays at its held position.
+        let held = |root: usize| -> [f64; 2] {
+            fixed
+                .get(&root)
+                .copied()
+                .unwrap_or(raw_xy[input.stations[root]])
+        };
+        let end = |root: usize| match unknown[root] {
+            Some(i) => End::Free(i),
+            None => End::Held(held(root)),
+        };
+        let mut observations: Vec<Observation> = Vec::new();
         let mut shot_nbrs: Vec<Vec<usize>> = vec![Vec::new(); m];
         let mut degree_nbrs: Vec<Vec<usize>> = vec![Vec::new(); m];
         for &edge in &input.shots {
@@ -829,13 +837,13 @@ impl Project {
             degree_nbrs[li].push(lj);
             degree_nbrs[lj].push(li);
             let (root_i, root_j) = (group[li], group[lj]);
-            if root_i == root_j {
+            if root_i == root_j || (unknown[root_i].is_none() && unknown[root_j].is_none()) {
                 continue;
             }
             let line = edge.line;
             let shot = &line.shots[edge.index];
             let reference = self.azimuth_reference_for(line);
-            let mut vec = shot.vector(reference);
+            let mut vector = shot.vector(reference);
             let (hand_i, hand_j) = (
                 line.hand_moves.get(&edge.from_station),
                 line.hand_moves.get(&edge.to_station),
@@ -843,52 +851,26 @@ impl Project {
             if hand_i.is_some() || hand_j.is_some() {
                 let hi = hand_i.copied().unwrap_or([0.0; 3]);
                 let hj = hand_j.copied().unwrap_or([0.0; 3]);
-                vec[0] += hj[0] - hi[0];
-                vec[1] += hj[1] - hi[1];
+                vector[0] += hj[0] - hi[0];
+                vector[1] += hj[1] - hi[1];
             }
             let az = shot.average_azimuth_true_rad(reference);
-            let [sigma_dx, sigma_dy] = ShotSigmas::of(config, line.quality, shot.length, az).axes;
-            let w_x = if sigma_dx > 0.0 {
-                1.0 / (sigma_dx * sigma_dx)
-            } else {
-                0.0
-            };
-            let w_y = if sigma_dy > 0.0 {
-                1.0 / (sigma_dy * sigma_dy)
-            } else {
-                0.0
-            };
-            let (i_idx, j_idx) = (unknown[root_i], unknown[root_j]);
-            let held = |root: usize| fixed.get(&root).copied().unwrap_or([0.0, 0.0]);
-            let rhs = |axis: usize| match (i_idx, j_idx) {
-                (Some(_), Some(_)) => vec[axis],
-                (Some(_), None) => vec[axis] - held(root_j)[axis],
-                (None, Some(_)) => vec[axis] + held(root_i)[axis],
-                (None, None) => 0.0,
-            };
-            for (axis, w) in [(0, w_x), (1, w_y)] {
-                if !(w.is_finite() && w > 0.0) {
-                    continue;
-                }
-                let b = rhs(axis);
-                let (diag, atb) = if axis == 0 {
-                    (&mut diag_x, &mut atb_x)
+            let sigmas = ShotSigmas::of(config, line.quality, shot.length, az).axes;
+            // An axis whose weight is not a positive number is not observed.
+            let weights = sigmas.map(|sigma| {
+                let w = 1.0 / (sigma * sigma);
+                if sigma > 0.0 && w.is_finite() {
+                    w
                 } else {
-                    (&mut diag_y, &mut atb_y)
-                };
-                if let Some(ii) = i_idx {
-                    diag[ii] += w;
-                    atb[ii] += -w * b;
+                    0.0
                 }
-                if let Some(jj) = j_idx {
-                    diag[jj] += w;
-                    atb[jj] += w * b;
-                }
-            }
-            if let (Some(ii), Some(jj)) = (i_idx, j_idx) {
-                accumulate(&mut adj[ii], jj, w_x, w_y);
-                accumulate(&mut adj[jj], ii, w_x, w_y);
-            }
+            });
+            observations.push(Observation {
+                from: end(root_i),
+                to: end(root_j),
+                vector,
+                weights,
+            });
         }
         for &(a, b) in &input.ties {
             if let (Some(la), Some(lb)) = (local(a), local(b)) {
@@ -896,41 +878,66 @@ impl Project {
                 degree_nbrs[lb].push(la);
             }
         }
-        for fix in &input.fixes {
-            let Some(w) = fix.weight else {
-                continue;
-            };
-            let Some(i) = local(fix.station).and_then(|l| unknown[group[l]]) else {
-                continue;
-            };
-            diag_x[i] += w;
-            diag_y[i] += w;
-            atb_x[i] += w * fix.east;
-            atb_y[i] += w * fix.north;
-        }
+        let soft: Vec<SoftFix> = input
+            .fixes
+            .iter()
+            .filter_map(|fix| {
+                let weight = fix.weight?;
+                let group = unknown[group[local(fix.station)?]]?;
+                Some(SoftFix {
+                    group,
+                    weight,
+                    at: [fix.east, fix.north],
+                })
+            })
+            .collect();
 
-        // Warm start: each free group's lowest member's raw position.
-        let mut x0_x = vec![0.0; n];
-        let mut x0_y = vec![0.0; n];
-        for root in 0..m {
-            if let Some(i) = unknown[root] {
-                let p = raw_xy[input.stations[root]];
-                x0_x[i] = p[0];
-                x0_y[i] = p[1];
+        // The grounded Laplacian (`lsq` module docs): an edge per shot
+        // between free groups, a ground weight per shot to a held group and
+        // per soft fix.
+        let mut ground = [vec![0.0; n], vec![0.0; n]];
+        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+        for o in &observations {
+            match (o.from, o.to) {
+                (End::Free(i), End::Free(j)) => {
+                    accumulate(&mut adj[i], j, o.weights[0], o.weights[1]);
+                    accumulate(&mut adj[j], i, o.weights[0], o.weights[1]);
+                }
+                (End::Free(i), End::Held(_)) | (End::Held(_), End::Free(i)) => {
+                    ground[0][i] += o.weights[0];
+                    ground[1][i] += o.weights[1];
+                }
+                (End::Held(_), End::Held(_)) => {}
             }
         }
-        let (sol_x, sol_y) = if n == 0 {
-            (Vec::new(), Vec::new())
-        } else {
-            solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y)
-        };
+        for fix in &soft {
+            ground[0][fix.group] += fix.weight;
+            ground[1][fix.group] += fix.weight;
+        }
+        let mut free: Vec<[f64; 2]> = vec![[0.0; 2]; n];
+        for root in 0..m {
+            if let Some(i) = unknown[root] {
+                free[i] = raw_xy[input.stations[root]];
+            }
+        }
+        if n > 0 {
+            let system = Grounded::factor(&ground[0], &ground[1], &adj);
+            for _ in 0..SOLVE_PASSES {
+                let [rhs_x, rhs_y] = misclosure_currents(&observations, &soft, &free);
+                if rhs_x.iter().chain(&rhs_y).all(|&c| c == 0.0) {
+                    break;
+                }
+                let (d_x, d_y) = system.solve(&rhs_x, &rhs_y);
+                for (p, (dx, dy)) in free.iter_mut().zip(d_x.into_iter().zip(d_y)) {
+                    p[0] += dx;
+                    p[1] += dy;
+                }
+            }
+        }
         let group_xy = |root: usize| -> [f64; 2] {
             match unknown[root] {
-                Some(i) => [sol_x[i], sol_y[i]],
-                None => fixed
-                    .get(&root)
-                    .copied()
-                    .unwrap_or(raw_xy[input.stations[root]]),
+                Some(i) => free[i],
+                None => held(root),
             }
         };
 
@@ -1006,16 +1013,84 @@ impl Project {
     }
 }
 
-/// Add `-w` to the off-diagonal entry `(j, ..)` of a row, appending it when
-/// new (today's linear-scan accumulation, so the float sums run in shot
-/// order).
+/// How many times the solve corrects its free groups: the first pass from
+/// the raw layout, then refinements from the corrected positions (`lsq`
+/// module docs: each pass's currents are what the previous positions leave
+/// of the shots, so the rounding of the first pass's large currents, which a
+/// weakly held part of the survey amplifies, is corrected by the next).
+const SOLVE_PASSES: usize = 3;
+
+/// One end of an observed shot: a free group (its index) or a held position.
+#[derive(Debug, Clone, Copy)]
+enum End {
+    Free(usize),
+    Held([f64; 2]),
+}
+
+/// One shot between two groups as the solve weighs it: its vector (plus the
+/// hand-move difference) and its per-axis weights (zero: not observed).
+struct Observation {
+    from: End,
+    to: End,
+    vector: [f64; 2],
+    weights: [f64; 2],
+}
+
+/// A soft GPS fix on a free group.
+struct SoftFix {
+    group: usize,
+    weight: f64,
+    at: [f64; 2],
+}
+
+/// Per axis and free group, the weighted misfit the positions `free` leave:
+/// each shot's weight times what its ends' positions miss of its vector
+/// (taken out of its start, put into its end), each soft fix's weight times
+/// its offset. Differences of nearby positions only, never a coordinate
+/// times a weight.
+fn misclosure_currents(
+    observations: &[Observation],
+    soft: &[SoftFix],
+    free: &[[f64; 2]],
+) -> [Vec<f64>; 2] {
+    let n = free.len();
+    let mut rhs = [vec![0.0; n], vec![0.0; n]];
+    let at = |end: End| match end {
+        End::Free(i) => free[i],
+        End::Held(p) => p,
+    };
+    for o in observations {
+        let (from, to) = (at(o.from), at(o.to));
+        for (axis, &w) in o.weights.iter().enumerate() {
+            if w == 0.0 {
+                continue;
+            }
+            let current = w * (o.vector[axis] - (to[axis] - from[axis]));
+            if let End::Free(i) = o.from {
+                rhs[axis][i] -= current;
+            }
+            if let End::Free(j) = o.to {
+                rhs[axis][j] += current;
+            }
+        }
+    }
+    for fix in soft {
+        for (axis, values) in rhs.iter_mut().enumerate() {
+            values[fix.group] += fix.weight * (fix.at[axis] - free[fix.group][axis]);
+        }
+    }
+    rhs
+}
+
+/// Add `w` to the edge weight `(j, ..)` of a row, appending it when new
+/// (today's linear-scan accumulation, so the float sums run in shot order).
 fn accumulate(row: &mut Vec<(usize, f64, f64)>, j: usize, w_x: f64, w_y: f64) {
     for entry in row.iter_mut() {
         if entry.0 == j {
-            entry.1 -= w_x;
-            entry.2 -= w_y;
+            entry.1 += w_x;
+            entry.2 += w_y;
             return;
         }
     }
-    row.push((j, -w_x, -w_y));
+    row.push((j, w_x, w_y));
 }
