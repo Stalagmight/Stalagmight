@@ -90,7 +90,7 @@ mod c0_foundation_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod cave_sections_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
