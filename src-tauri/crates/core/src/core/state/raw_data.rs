@@ -137,8 +137,9 @@ fn preferred_columns(table: &str) -> &'static [&'static str] {
 }
 
 /// The parsed file of the last read, keyed by what the file looked like then
-/// (path, size, modification time), so paging through a large file parses it
-/// once.
+/// (path, size, modification time), so paging through a file parses it once.
+/// Only files up to [`CACHED_FILE_BYTES`] are kept: a parsed tree is several
+/// times the size of its text, and a larger file is parsed per page instead.
 type Parsed = (
     PathBuf,
     u64,
@@ -147,6 +148,9 @@ type Parsed = (
 );
 
 static LAST_PARSED: Mutex<Option<Parsed>> = Mutex::new(None);
+
+/// The largest file whose parsed tree is kept between pages (32 MiB).
+const CACHED_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 impl AppState {
     /// The raw tables of the open project's saved file (see the module docs),
@@ -257,10 +261,11 @@ fn parsed_file(path: &Path) -> Result<Arc<Map<String, Value>>> {
     let parsed: Map<String, Value> = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow!("The project file is not readable JSON: {e}"))?;
     let parsed = Arc::new(parsed);
+    let kept = (len <= CACHED_FILE_BYTES)
+        .then(|| (path.to_path_buf(), len, modified, Arc::clone(&parsed)));
     *LAST_PARSED
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-        Some((path.to_path_buf(), len, modified, Arc::clone(&parsed)));
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = kept;
     Ok(parsed)
 }
 
