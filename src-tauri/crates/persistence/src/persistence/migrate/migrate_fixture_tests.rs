@@ -240,14 +240,22 @@ fn migration_timing() {
         let started = Instant::now();
         let positions = migrated.project.raw_positions();
         let solve = started.elapsed();
+        // What `migrate_path` pays by default: the legacy open with its
+        // Closures Computed View (for the adjusted verification).
+        let started = Instant::now();
+        let with_adjusted =
+            stalagmight_legacy::open_bytes(&bytes, &OpenOptions::default()).unwrap();
+        let open_adjusted = started.elapsed();
+        assert!(with_adjusted.adjusted_positions.is_some());
         assert!(migrated.report.verification.is_clean());
         assert_eq!(positions.iter().count(), migrated.report.stations);
         eprintln!(
-            "shots={} lines={} stations={} legacy_open_ms={} migrate_ms={} (incl. verification) raw_solve_ms={}",
+            "shots={} lines={} stations={} legacy_open_ms={} legacy_open_with_adjusted_ms={} migrate_ms={} (incl. verification) raw_solve_ms={}",
             migrated.report.shots,
             migrated.report.lines,
             migrated.report.stations,
             open.as_millis(),
+            open_adjusted.as_millis(),
             total.as_millis(),
             solve.as_millis()
         );
