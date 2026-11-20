@@ -1356,7 +1356,7 @@ fn only_the_flip_to_dirty_rewrites_a_linked_file() {
     let (state, line, first, _temp) = remote_fixture_editable();
     let path = state.open_project_path().unwrap();
     run(&state, length_edit(line, first, 9.0));
-    let on_disk = super::synthetic_stalx_tests::link_on_disk(&path).unwrap();
+    let on_disk = super::stalx_fixtures::link_on_disk(&path).unwrap();
     assert!(on_disk.has_unpushed_edits, "the flip is durable at once");
     let after_first = std::fs::read(&path).unwrap();
     let stamped = state.speleodb_open_link().unwrap().last_edit_at;
@@ -1371,11 +1371,11 @@ fn only_the_flip_to_dirty_rewrites_a_linked_file() {
     assert!(live.has_unpushed_edits);
     assert_ne!(live.last_edit_at, stamped, "the edit time moves in memory");
     run(&state, Command::SaveProject { path: None });
-    let saved = super::synthetic_stalx_tests::link_on_disk(&path).unwrap();
+    let saved = super::stalx_fixtures::link_on_disk(&path).unwrap();
     assert!(saved.has_unpushed_edits);
     assert_eq!(
-        super::synthetic_stalx_tests::instant(saved.last_edit_at.as_deref()),
-        super::synthetic_stalx_tests::instant(live.last_edit_at.as_deref()),
+        super::stalx_fixtures::instant(saved.last_edit_at.as_deref()),
+        super::stalx_fixtures::instant(live.last_edit_at.as_deref()),
         "the save writes the latest edit time"
     );
 }

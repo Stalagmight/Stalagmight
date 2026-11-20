@@ -41,7 +41,7 @@ use crate::core::events::EventSink;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CylRole, Cylinder, Diver,
-    GpsCoordinates, LineId, ShotId, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationRef,
+    GpsCoordinates, LineId, ShotId, ShotUpdates, SplitAt, SplitLineOptions, StationRef,
     TankMaterial,
 };
 
@@ -366,8 +366,6 @@ fn actions() -> Vec<(&'static str, Prepare)> {
                         name_b: "B".to_string(),
                         color_a: "#111111".to_string(),
                         color_b: "#222222".to_string(),
-                        comment_side: SplitSide::A,
-                        datum_side: SplitSide::A,
                     },
                 )
             })
