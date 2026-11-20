@@ -40,12 +40,11 @@ export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAUL
  * CLOSE FIRST, and not as a matter of taste. `ctx.fixturePath` always resolves
  * to the same path (`<sessionDir>/fixtures/<name>.stalx`), so a caller that
  * already has that very file open - `seed(mode:'fixture')` followed by
- * `run_scenario`, which does not close anything - would have the copy TRUNCATED
- * and then SQLite-written underneath a live read-write handle holding a 256 MB
- * mmap. That is the SIGBUS hazard `project_io.rs` documents at its own
- * `close_project`, and it surfaces as the app crashing or reporting "database
- * disk image is malformed" - a fabricated app bug that is really the harness
- * corrupting the database it had open.
+ * `run_scenario`, which does not close anything - would have the copy
+ * rewritten underneath the open project. The app keeps no file handle (the
+ * `.stalx` v2 save path), but its external-modification guard would then
+ * refuse the next save with `EXTERNALLY_MODIFIED`, a fabricated app finding
+ * that is really the harness editing the file it had open.
  */
 export async function loadFixtureWithoutUndoHistory(
   ctx: ScenarioContext,
@@ -60,7 +59,7 @@ export async function loadFixtureWithoutUndoHistory(
     if (await hasProject(ctx)) {
       throw new Error(
         `a project is still open after closeProject; refusing to rewrite ${fixture} underneath ` +
-          `the backend's live SQLite handle (see loadFixtureWithoutUndoHistory)`,
+          `the open project (see loadFixtureWithoutUndoHistory)`,
       );
     }
   }
@@ -84,13 +83,14 @@ export async function loadFixtureWithoutUndoHistory(
  * Turn auto-save off for this session (frontend-only: `setConfig` does not
  * persist, so the user's/profile's config file is untouched).
  *
- * Any scenario that compares project state across time needs this. `save_project`
- * MUTATES the live project with no undo entry - `ensure_shot_uuids`,
- * `ensure_unique_shot_uuids`, `capture_missing_gauge_anchors`, orphan
- * `line_offsets` retain and non-finite sanitize (`core/state/project_io.rs`) -
- * so a 30 s auto-save timer firing mid-run silently changes state that no command
- * accounts for. Returns true when auto-save is definitely off (including the case
- * where config has not loaded yet, which `useAutoSave` already treats as off).
+ * Any scenario that compares project state across time needs this. A save no
+ * longer mutates the project (the `.stalx` v2 writer validates and refuses
+ * instead of healing), but it still moves the epoch a scenario models: the
+ * first save of a legacy fixture upgrades it to version 2, and a save resets
+ * the dirty state and the history the file holds. A 30 s auto-save timer
+ * firing mid-run would do that behind the scenario's back. Returns true when
+ * auto-save is definitely off (including the case where config has not loaded
+ * yet, which `useAutoSave` already treats as off).
  */
 export async function disableAutoSave(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>(`

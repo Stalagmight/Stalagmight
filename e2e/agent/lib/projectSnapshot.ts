@@ -6,12 +6,13 @@
  * `fuzzOracleCore.ts`, which owns the serializer and documents what it
  * normalizes. Only the rare, slow paths live here: when two canonical strings
  * disagree, Node fetches both and works out whether the difference is real,
- * floating-point dust, or one of the two DOCUMENTED, INTENDED families a save
- * or a reload is allowed to produce (`SAVE_HEALING_MUTATIONS`,
- * `RELOAD_RESOLVED_GEOMETRY`). Both of those are narrowed by SHAPE rather than
- * by magnitude - `isNumericMove` rejects anything that is not a number moving
- * to another number, and how FAR it moved is reported (`maxNumericDelta`)
- * instead of bounded.
+ * floating-point dust, or one of the DOCUMENTED, INTENDED families a save or a
+ * reload is allowed to produce (`SAVE_HEALING_MUTATIONS`,
+ * `RELOAD_RESOLVED_GEOMETRY`). On the station-graph model both families are
+ * EMPTY: a v2 save never heals and a v2 load is pure, so anything a save or a
+ * reload changes fails the run. The attribution seam is kept, with
+ * `isNumericMove` and `maxNumericDelta`, for a family that is narrowed by SHAPE
+ * rather than by magnitude.
  *
  * ## No known-bug classifiers live here any more
  *
@@ -26,10 +27,11 @@
  *
  * ## Why there is a tolerance at all
  *
- * Station coordinates and line offsets are RE-DERIVED after an undo/redo
- * (`reconcile_geometry()` -> `compute_station_coordinates`), not copied, so a
- * value whose true result is 0 can land on different floating-point dust
- * depending on the order the survey chain was summed in. Observed in practice:
+ * Station coordinates are RE-DERIVED after an undo/redo (the raw layout is
+ * recomputed from the restored model), not copied. The station graph's solver
+ * sums in a fixed order, so an exact restore gives the same bits; the tolerance
+ * stays as a guard for a step that is exact in the model but reaches the
+ * coordinates by another summation route. Observed under the SQLite model:
  * `stations[].coordinates.x` coming back as -3.55e-15 where the recorded
  * snapshot had -7.11e-15 (femtometres, either side of a true zero) after `undo`
  * of a `moveStation`.
@@ -45,8 +47,8 @@
 
 /**
  * A named, path-and-direction-narrow rule for attributing a snapshot
- * difference to something the app is DOCUMENTED to do without an undo entry -
- * today only the save-time heals and the reload's offset re-solve.
+ * difference to something the app is DOCUMENTED to do without an undo entry.
+ * None is left on the station-graph model (see the two lists below).
  *
  * The name is historical: these used to double as known-open-bug classifiers,
  * and none of those are left (see the module header). A rule here never makes a
@@ -318,99 +320,36 @@ export function describeDiffs(diffs: readonly SnapshotDiff[]): string {
 
 /**
  * Changes a SAVE is documented to make to live project state, with no undo entry
- * of its own (`AppState::save_project`, src-tauri/src/core/state/project_io.rs).
+ * of its own. EMPTY on the station-graph model, and deliberately so.
  *
- * These are healing mutations: the save settles identity and drops dead data
- * before writing. They are real state changes the roundtrip model has to account
- * for, but they are ATTRIBUTABLE - so a save whose diff is entirely explained by
- * this list is absorbed (and recorded), while a save that changes ANYTHING else
- * is a hard failure. That is the oracle: "save mutated the project in an
- * undocumented way".
+ * The SQLite save used to heal the live project before writing (capture missing
+ * gauge anchors, backfill shot uuids, drop orphan line offsets), and this list
+ * attributed exactly those changes. The `.stalx` v2 save
+ * (`AppState::save_project`, `core/state/project_io.rs`) validates and REFUSES
+ * an invalid survey instead of healing it, and leaves the model as it was: the
+ * gauge anchors and line offsets no longer exist and every shot carries its
+ * uuid. So a save that changes ANY compared field is a hard failure, which is
+ * the oracle: "save mutated the project".
  *
- * Deliberately narrow, by value as well as by path: a gauge anchor may only go
- * from null to a value (capture_missing_*), a uuid may only be filled in, and an
- * offset entry may only disappear (the orphan retain). A gauge anchor CHANGING
- * from one value to another, or an offset entry appearing, is not on this list.
+ * Kept as an (empty) list so the scenarios keep one attribution seam; a future
+ * documented save-time change goes here, narrow by path and by direction.
  */
-export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
-  {
-    id: 'save-captures-missing-gauge-anchors',
-    pathPattern: /^project\.lines\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
-    accepts: (diff) => diff.expected === 'null' && diff.actual !== 'null',
-    description:
-      'save_project calls capture_missing_gauge_anchors(), which records the least-squares ' +
-      'gauge pair for any line that lacks one (project_io.rs). Null -> value only; it never ' +
-      'moves coordinates.',
-  },
-  {
-    id: 'save-backfills-shot-uuids',
-    pathPattern: /^project\.lines\[\d+\]\.shots\[\d+\]\.uuid$/,
-    accepts: (diff) => (diff.expected === ABSENT || diff.expected === 'null') && diff.actual !== ABSENT,
-    description:
-      'save_project calls ensure_shot_uuids(), minting a uuid for any shot still missing one ' +
-      '(pre-v6 files). Absent -> value only.',
-  },
-  {
-    id: 'save-drops-orphan-line-offsets',
-    pathPattern: /^project\.line_offsets\.\d+$/,
-    accepts: (diff) => diff.actual === ABSENT,
-    description:
-      'save_project retains only line_offsets whose line still exists - the SQLite row ' +
-      'carries a FOREIGN KEY to lines(id), so an orphan would abort the whole save. ' +
-      'Disappearance only.',
-  },
-];
+export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [];
 
 /**
- * Derived geometry a RELOAD re-solves from scratch.
+ * Derived geometry a RELOAD is documented to re-solve. EMPTY on the station-graph
+ * model, and deliberately so.
  *
- * `Project::redrive_offsets_after_load` (src-tauri/src/models/project/offsets.rs:186-188)
- * ends with an unconditional `resolve_offsets()` under the comment "Zero-trust:
- * never honor a persisted derivable offset - re-solve unconditionally so a
- * sub-tolerance stale offset can't survive the load." So `line_offsets` and
- * the station coordinates derived from them are NOT restored from the file -
- * they are recomputed - and a snapshot recorded in-session before the save can
- * legitimately hold a drifted value the reload then corrects. (In this fuzzer's
- * own runs the drift is usually bug 3's or bug 7's, which is exactly the kind of
- * corruption a reload is designed to heal.)
- *
- * Deliberately scoped to those two derived families and applied ONLY to
- * comparisons that cross a reload. Everything else - line and shot fields,
- * uuids, merges, closures, datums, comments, stats - must still match exactly,
- * so this cannot hide a structural divergence.
- *
- * Narrowed by SHAPE, not by magnitude, and the distinction is deliberate. A
- * re-solve MOVES a number: an offset entry appearing or disappearing, or a
- * coordinate turning into null, is structural and is not this - `isNumericMove`
- * rejects those. What is NOT bounded is how far the number moved, because the
- * heal this family exists to absorb is measured in metres: bug 3 displaced a
- * whole line by a shot's horizontal vector (1.13 m in its repro) and
- * RATCHETED on every cycle, and the reload correcting that was the documented
- * case above. Any sub-metre threshold would fail on the heal; any threshold
- * loose enough to pass it would not catch what a threshold is for. So the
- * magnitude is REPORTED instead - `maxNumericDelta` puts it in the attributed
- * line and in a metric - and a number that starts growing is visible rather
- * than silent.
+ * The SQLite loader re-solved `line_offsets` unconditionally, so a reload could
+ * legitimately move them and the station coordinates derived from them. A v2
+ * load is pure (plan 6.6: "the in-memory project equals the file"), the file
+ * round-trips every float bit for bit (plan 6.3), and positions are a
+ * deterministic function of the model (solver v1, plan 3), so a reload gives
+ * the coordinates back exactly. Session shot ids are still renumbered on load;
+ * the id-agnostic snapshot mode handles that, not this list. A reload that
+ * moves a station is therefore a hard failure.
  */
-export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
-  {
-    id: 'reload-resolves-line-offsets',
-    pathPattern: /^project\.line_offsets\.\d+(\[\d+\])?$/,
-    accepts: isNumericMove,
-    description:
-      'A reload re-solves line_offsets unconditionally rather than trusting the persisted ' +
-      'value (offsets.rs redrive_offsets_after_load). A numeric MOVE only: an entry appearing ' +
-      'or disappearing is structural and is not this.',
-  },
-  {
-    id: 'reload-resolves-station-coordinates',
-    pathPattern: /^stations\[\d+\]\.coordinates\.[xyz]$/,
-    accepts: isNumericMove,
-    description:
-      'Station coordinates are derived from line_offsets, so they move with the re-solve a ' +
-      'reload performs. A numeric MOVE only.',
-  },
-];
+export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [];
 
 /** Every finite number in a rendered diff value (`3.5`, `[1,2]`, `<absent>` -> none). */
 function numbersIn(text: string): number[] {

@@ -40,18 +40,22 @@
  *     while a targeted restore (`restore_line`, a re-created shot) only ever
  *     raises them, so comparing them would fire on every mixed history.
  *
- * Everything else is compared: shot uuids, `reverse_parity`, the gauge anchors,
- * `StationMerge.merged_at`, every `LoopClosure` metric, both imported-hash
- * vectors, and all geometry.
+ * Everything else is compared: shot uuids, every `LoopClosure` metric, both
+ * imported-hash vectors, the junction identity (shared Station IDs, names,
+ * comments, `merged_with`), and all geometry. On the station-graph wire a few
+ * fields are CONSTANT and so compare trivially: `reverse_parity` is `false`,
+ * the gauge anchors are `null` (plan W5), and every derived
+ * `StationMerge.merged_at` is the project's `created_at` (W4). They are kept
+ * rather than dropped, so a backend that started filling them again would be
+ * seen.
  *
  * Two other classes of noise are handled without dropping anything. Object keys
- * are sorted recursively, which canonicalizes `Project::line_offsets` (a
- * `HashMap`, so its JSON key order is not stable across a snapshot restore)
- * without hiding a value. And numbers are rounded to 12 significant digits,
- * because geometry is RE-DERIVED after every undo/redo rather than copied. The
- * rounding is only the fast path: when two canonical strings still disagree,
- * Node re-compares with an absolute tolerance too (see `projectSnapshot.ts`),
- * which is what catches values either side of a true zero.
+ * are sorted recursively, so no map's key order can leak in. And numbers are
+ * rounded to 12 significant digits, because geometry is RE-DERIVED from the
+ * model after every undo/redo rather than copied. The station graph derives it
+ * deterministically, so an exact restore gives the same bits; the rounding is
+ * only the fast path, and when two canonical strings still disagree Node
+ * re-compares with an absolute tolerance too (see `projectSnapshot.ts`).
  */
 
 /** Documentation mirror of the list inlined in `canonicalProjectSnapshot`. */
@@ -333,8 +337,8 @@ export function oracleInjectionSource(): string {
  *   - two shots in ONE line sharing a uuid (note: the app's contract is
  *     per-line, not global - `ensure_unique_shot_uuids` dedupes per line -
  *     so global uniqueness is NOT asserted here either)
- *   - dangling merge / loop-closure / zero-datum refs, orphan station offsets
- *     and comments, orphan `line_offsets` keys
+ *   - dangling merge / loop-closure / zero-datum refs, stale hand moves (on
+ *     the station graph the checker is `Project::validate`, plan section 2)
  *
  * Those are covered instead by the integrity-DELTA oracle, which records the
  * checker's own verdict per depth and asserts undo/redo restores it. Two further
@@ -345,8 +349,14 @@ export function oracleInjectionSource(): string {
  * the way out rather than shown.
  *
  * What is left, and what this suite asserts, is well-formedness nothing else
- * checks: id uniqueness, id-allocator dominance, and agreement between the
- * model and the derived arrays computed from it.
+ * checks: id uniqueness, id-allocator dominance, agreement between the model
+ * and the derived arrays computed from it, and the station graph's identity
+ * on the wire (plan 9.2): a line passes a Station ID once and names each of
+ * its stations once; the slots that share a Station ID share its name and
+ * comment and list exactly each other in `merged_with`; and every
+ * `station_merges` pair joins two slots of one station. The model enforces
+ * the first two (`validate`); the rest is the wire projection's contract,
+ * which nothing else checks from the outside.
  *
  * Keep this dependency-free - it is injected into the webview verbatim.
  */
@@ -474,6 +484,86 @@ export function checkProjectInvariants(state: unknown): string[] {
       violations.push(
         `frozen_shots[${i}] shot index ${shotIndex} out of range for line ${lineId} (0..${count - 1})`,
       );
+    }
+  }
+
+  // The station graph's identity on the wire (plan 9.2). Checked only on
+  // slots that carry an `id` (every real payload does); a slot is named by its
+  // line and index.
+  const slotName = (lineId: number, index: number): string => `${lineId}/${index}`;
+  const byStationId: Record<string, Array<Record<string, unknown>>> = {};
+  const perLineIds: Record<string, Record<string, true>> = {};
+  const perLineNames: Record<string, Record<string, true>> = {};
+  for (let i = 0; i < stations.length; i++) {
+    const station = (stations[i] ?? {}) as Record<string, unknown>;
+    if (station.id === undefined || station.id === null) continue;
+    const ref = (station.station_ref ?? {}) as Record<string, unknown>;
+    const lineKey = String(Number(ref.line_id));
+    const idKey = String(Number(station.id));
+    const here = slotName(Number(ref.line_id), Number(ref.station_index));
+    const ids = (perLineIds[lineKey] = perLineIds[lineKey] ?? {});
+    if (ids[idKey] === true) violations.push(`line ${lineKey} passes Station ID ${idKey} twice (at ${here})`);
+    ids[idKey] = true;
+    if (typeof station.name === 'string') {
+      const names = (perLineNames[lineKey] = perLineNames[lineKey] ?? {});
+      if (names[station.name] === true) {
+        violations.push(`line ${lineKey} has two stations named ${JSON.stringify(station.name)} (at ${here})`);
+      }
+      names[station.name] = true;
+    }
+    (byStationId[idKey] = byStationId[idKey] ?? []).push(station);
+  }
+  const idKeys = Object.keys(byStationId);
+  for (let k = 0; k < idKeys.length; k++) {
+    const idKey = idKeys[k] as string;
+    const slots = byStationId[idKey] as Array<Record<string, unknown>>;
+    const first = slots[0] as Record<string, unknown>;
+    const members: string[] = [];
+    for (let j = 0; j < slots.length; j++) {
+      const ref = ((slots[j] as Record<string, unknown>).station_ref ?? {}) as Record<string, unknown>;
+      members.push(slotName(Number(ref.line_id), Number(ref.station_index)));
+    }
+    for (let j = 0; j < slots.length; j++) {
+      const slot = slots[j] as Record<string, unknown>;
+      const here = members[j] as string;
+      if (slot.name !== first.name || (slot.comment ?? null) !== (first.comment ?? null)) {
+        violations.push(
+          `Station ID ${idKey} has a different name or comment at ${here} than at ${members[0] as string}`,
+        );
+      }
+      const listed: string[] = [];
+      const mergedWith = Array.isArray(slot.merged_with) ? slot.merged_with : [];
+      for (let m = 0; m < mergedWith.length; m++) {
+        const ref = (mergedWith[m] ?? {}) as Record<string, unknown>;
+        listed.push(slotName(Number(ref.line_id), Number(ref.station_index)));
+      }
+      const expected = members.filter((name) => name !== here);
+      if (listed.slice().sort().join(',') !== expected.slice().sort().join(',')) {
+        violations.push(
+          `${here} (Station ID ${idKey}) lists merged_with [${listed.join(', ')}] ` +
+            `but the slots sharing its Station ID are [${expected.join(', ')}]`,
+        );
+      }
+    }
+  }
+  const idAt: Record<string, string> = {};
+  for (let i = 0; i < stations.length; i++) {
+    const station = (stations[i] ?? {}) as Record<string, unknown>;
+    if (station.id === undefined || station.id === null) continue;
+    const ref = (station.station_ref ?? {}) as Record<string, unknown>;
+    idAt[slotName(Number(ref.line_id), Number(ref.station_index))] = String(Number(station.id));
+  }
+  for (let i = 0; i < merges.length; i++) {
+    const merge = (merges[i] ?? {}) as Record<string, unknown>;
+    const a = (merge.station_a ?? {}) as Record<string, unknown>;
+    const b = (merge.station_b ?? {}) as Record<string, unknown>;
+    const nameA = slotName(Number(a.line_id), Number(a.station_index));
+    const nameB = slotName(Number(b.line_id), Number(b.station_index));
+    const idA = idAt[nameA];
+    const idB = idAt[nameB];
+    if (idA === undefined || idB === undefined) continue;
+    if (nameA === nameB || idA !== idB) {
+      violations.push(`station_merges[${i}] joins ${nameA} and ${nameB}, which are not two slots of one station`);
     }
   }
 
