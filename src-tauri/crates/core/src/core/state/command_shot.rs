@@ -15,7 +15,9 @@
 use std::collections::BTreeMap;
 
 use crate::core::{Command, ValidationWarning, Validator, WarningSeverity};
-use crate::models::survey::{ClosureId, EditReport, LoopClosure, Project, ShotPlace, SweepReport};
+use crate::models::survey::{
+    ClosureId, EditReport, LoopClosure, Project, ShotEditRun, ShotPlace, SweepReport,
+};
 use crate::models::{LineId, CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS};
 
 /// The refusal of a delete that would remove a frozen shot (S12).
@@ -239,6 +241,34 @@ fn created_shot_warnings(project: &Project, line: LineId, index: usize) -> Vec<V
     })
 }
 
+/// `UpdateShot`s (one, or a batch's run of them: a data-table paste) as
+/// one [`ShotEditRun`]: each exactly as its own `update_shot` after the
+/// frozen-shot refusal (S12: the model does not refuse frozen shots; the
+/// command does), in one survey pass. Any other command in `cmds` is
+/// skipped. On `Err` the caller rolls back (`run_recorded`).
+pub(super) fn apply_updates(project: &mut Project, cmds: &[Command]) -> Result<(), String> {
+    let mut run = ShotEditRun::new(project);
+    for cmd in cmds {
+        let Command::UpdateShot {
+            line_id,
+            shot_id,
+            updates,
+        } = cmd
+        else {
+            continue;
+        };
+        if updates.touches_geometry() {
+            let index = shot_index(run.project(), *line_id, *shot_id);
+            if index.is_some_and(|i| run.is_frozen(*line_id, i)) {
+                return Err(super::commands::FROZEN_GEOMETRY.to_string());
+            }
+        }
+        run.update_shot(*line_id, *shot_id, updates)
+            .map_err(|e| e.to_string())?;
+    }
+    run.finish().map_err(|e| e.to_string())
+}
+
 /// The execute pipeline's mutation for the shot family (`commands.rs`
 /// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
 /// validates, captures and records around it; `record` is the entry being
@@ -288,21 +318,8 @@ pub(super) fn apply(
                 ..super::commands::Applied::default()
             })
         }
-        Command::UpdateShot {
-            line_id,
-            shot_id,
-            updates,
-        } => {
-            // S12: the model does not refuse frozen shots; the command does.
-            if updates.touches_geometry() {
-                let index = shot_index(project, *line_id, *shot_id);
-                if index.is_some_and(|i| any_shot_frozen(project, *line_id, [i])) {
-                    return Err(super::commands::FROZEN_GEOMETRY.to_string());
-                }
-            }
-            project
-                .update_shot(*line_id, *shot_id, updates)
-                .map_err(|e| e.to_string())?;
+        Command::UpdateShot { .. } => {
+            apply_updates(project, std::slice::from_ref(cmd))?;
             Ok(super::commands::Applied::default())
         }
         Command::DeleteShot { line_id, shot_id } => {

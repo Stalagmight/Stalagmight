@@ -354,6 +354,9 @@ fn actions() -> Vec<(&'static str, Action)> {
                 label: None,
             })
         }),
+        ("paste 100 length cells (batch)", |g| {
+            paste_length(g, &g.lines[10..12])
+        }),
         ("project settings", |g| {
             let validation = g.state.get_project_state().unwrap().settings.validation;
             g.state
@@ -489,6 +492,23 @@ fn actions() -> Vec<(&'static str, Action)> {
 /// A data-table paste of one LRUD cell into every shot of `lines`: a batch
 /// of one `UpdateShot` per shot, each value different.
 fn paste_left(g: &Gate, lines: &[LineId]) -> CommandResult {
+    paste(g, lines, |k| ShotUpdates {
+        left: Some(Some(1.0 + k as f64 * 0.01)),
+        ..Default::default()
+    })
+}
+
+/// A paste of the length column into every shot of `lines`: every cell a
+/// geometry edit, which moves what hangs off the line (one survey pass for
+/// the whole batch, D2).
+fn paste_length(g: &Gate, lines: &[LineId]) -> CommandResult {
+    paste(g, lines, |k| ShotUpdates {
+        length: Some(3.5 + k as f64 * 0.001),
+        ..Default::default()
+    })
+}
+
+fn paste(g: &Gate, lines: &[LineId], cell: impl Fn(usize) -> ShotUpdates) -> CommandResult {
     let mut commands = Vec::new();
     for line in lines {
         for shot_id in g.shot_ids(*line) {
@@ -496,10 +516,7 @@ fn paste_left(g: &Gate, lines: &[LineId]) -> CommandResult {
             commands.push(Command::UpdateShot {
                 line_id: *line,
                 shot_id,
-                updates: ShotUpdates {
-                    left: Some(Some(1.0 + k as f64 * 0.01)),
-                    ..Default::default()
-                },
+                updates: cell(k),
             });
         }
     }
@@ -516,6 +533,9 @@ fn large_actions() -> Vec<(&'static str, Action)> {
     vec![
         ("paste 1,000 cells (batch)", |g| {
             paste_left(g, &g.lines[180..200])
+        }),
+        ("paste 1,000 length cells (batch)", |g| {
+            paste_length(g, &g.lines[180..200])
         }),
         ("rename 1,000 stations (batch)", |g| {
             let mut commands = Vec::new();

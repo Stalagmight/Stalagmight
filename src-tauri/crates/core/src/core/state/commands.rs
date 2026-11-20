@@ -159,7 +159,8 @@ pub(crate) fn apply_command(
             let mut applied = Applied::default();
             // Several slots of one station move it once (plan 9.1).
             let mut station_moves = command_move::StationMoves::default();
-            for sub in commands {
+            let mut rest = commands.as_slice();
+            while let Some((sub, tail)) = rest.split_first() {
                 if !AppState::is_batch_allowed(sub) {
                     // 0.6.0's words, naming the command as the history would.
                     return Err(format!(
@@ -168,9 +169,23 @@ pub(crate) fn apply_command(
                     ));
                 }
                 if station_moves.repeats(project, sub) {
+                    rest = tail;
+                    continue;
+                }
+                // A run of shot updates (a data-table paste) is one survey
+                // pass: the same updates one after another, to the bit
+                // (`ShotEditRun`). An update reports nothing to fold.
+                let updates = rest
+                    .iter()
+                    .take_while(|c| matches!(c, Command::UpdateShot { .. }))
+                    .count();
+                if updates > 0 {
+                    command_shot::apply_updates(project, &rest[..updates])?;
+                    rest = &rest[updates..];
                     continue;
                 }
                 applied.merge(apply_command(project, record, sub)?);
+                rest = tail;
             }
             // A reverse is reported for the lines the batch leaves (0.6.0's
             // `settle_reversed_lines`): a line it reversed and then deleted
