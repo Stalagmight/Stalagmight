@@ -1,0 +1,339 @@
+//! Merge stations (plan 5.1, direction 4.2) and the Merge dialog's check.
+//!
+//! A merge makes two stations of different pieces one station. The station
+//! on the side that stays put survives (keeps its id, name and comment); the
+//! other one is retired into the survivor's aliases and replaced by it
+//! everywhere: line starts, shot ends, datums, closure ends, hand-move keys.
+//! The moving piece then follows by derivation (the anchor algorithm lays it
+//! out from the stationary piece through the shared station), its placement
+//! is dropped, and when both pieces were placed the later placement datum is
+//! a GPS fix from then on (its correction cleared). Datums and closure ends
+//! keep their `via` hints, so a later detach can hand them back. Names on the
+//! moving piece's lines through the junction are re-uniquified (letter
+//! suffix rule). The orphan-closure sweep runs afterwards, which also removes
+//! every closure between the two stations (#738).
+//!
+//! Refused: two ends that are one station already; two stations already
+//! connected (one piece, or tied by an aligned closure), so the user is routed
+//! to Create Loop Closure, as today.
+
+use std::collections::BTreeSet;
+
+use crate::{ClosurePreview, LineId, StationId};
+
+use super::m3_stubs::{closure_metrics, closure_spans_one_shot};
+use super::ops::{OpError, OpOutcome, Sweep};
+use super::{EditContext, Project, StationAlias};
+
+/// What a merge did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeReport {
+    /// The station that stays (its id, name and comment are kept).
+    pub survivor: StationId,
+    /// The station replaced by the survivor; now one of its aliases.
+    pub retired: StationId,
+    /// The lines of the piece that moved, ascending.
+    pub moving_lines: Vec<LineId>,
+    /// Stations renamed so names stay unique on the junction's lines.
+    pub renamed: Vec<StationId>,
+}
+
+/// What merging two separately placed pieces does to the later-placed one
+/// (#741), for the Merge dialog to say before the user confirms
+/// (`merge_datum_shift`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeDatumShift {
+    /// Every line of the piece that moves, ascending.
+    pub moving_lines: Vec<LineId>,
+    /// How far it moves, horizontal metres.
+    pub shift_m: f64,
+    /// The list index of its placement datum, which becomes a GPS fix.
+    pub datum: usize,
+    /// That datum's station.
+    pub datum_station: StationId,
+}
+
+/// The Merge tool's check of a picked pair (today's
+/// `check_merge_connectivity`): connected pairs go to the closure dialog with
+/// its preview figures, unconnected ones may merge.
+#[derive(Debug, Clone)]
+pub struct MergeCheck {
+    /// Joined by shots and junctions, or through loop closures.
+    pub connected: bool,
+    /// The closure dialog's figures, for a connected pair.
+    pub preview: Option<ClosurePreview>,
+    /// Whether the pair may be merged.
+    pub can_merge: bool,
+    /// Why not, when it may not.
+    pub reason: Option<String>,
+    /// For a connected pair: why a closure would be refused (#737).
+    pub closure_refusal: Option<String>,
+    /// For a mergeable pair of two placed pieces: which one moves, how far.
+    pub datum_shift: Option<MergeDatumShift>,
+}
+
+impl Project {
+    /// Merge station `a` with station `b` (plan 5.1). The piece of `a` moves
+    /// onto `b`, unless `a`'s piece is placed and `b`'s is not, or both are
+    /// placed and `a`'s placement datum comes first (plan 4.2).
+    pub fn merge_stations(
+        &mut self,
+        a: StationId,
+        b: StationId,
+    ) -> Result<OpOutcome<MergeReport>, OpError> {
+        self.merge_refusal(a, b)?;
+        let (stationary, moving) = self.merge_direction(a, b);
+        self.run_op(Sweep::Run, |p| {
+            let report = p.merge_ids(stationary, moving)?;
+            let ctx = EditContext::merge(stationary, moving).with_renamed(moving, stationary);
+            Ok((report, ctx))
+        })
+    }
+
+    /// Why `a` and `b` may not be merged, if they may not.
+    pub fn merge_refusal(&self, a: StationId, b: StationId) -> Result<(), OpError> {
+        self.existing_station(a)?;
+        self.existing_station(b)?;
+        if a == b {
+            return Err(OpError::AlreadyMerged);
+        }
+        let topology = self.topology();
+        if topology.connected(a, b) || self.rigidly_tied(a, b) {
+            return Err(OpError::AlreadyConnected);
+        }
+        for line in topology.lines_of(b) {
+            if topology.slot_on(a, line).is_some() {
+                return Err(OpError::StationTwiceOnLine { line, station: a });
+            }
+        }
+        Ok(())
+    }
+
+    /// `(stationary, moving)` for a merge of `a` with `b` (plan 4.2): `a`'s
+    /// piece moves unless it is placed and `b`'s is not, or both are placed
+    /// and `a`'s placement datum comes first in the list.
+    pub fn merge_direction(&self, a: StationId, b: StationId) -> (StationId, StationId) {
+        let (pa, pb) = (self.placement_datum_of(a), self.placement_datum_of(b));
+        let a_stays = match (pa, pb) {
+            (Some(x), Some(y)) => x < y,
+            (x, _) => x.is_some(),
+        };
+        if a_stays {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
+
+    /// The list index of the placement datum of `station`'s piece.
+    pub fn placement_datum_of(&self, station: StationId) -> Option<usize> {
+        let component = self.topology().component_of(station)?;
+        self.placement_datums().get(component).copied().flatten()
+    }
+
+    /// What a merge of `a` and `b` would do to a placed piece: `None` unless
+    /// both stations sit in two different pieces that are each placed by
+    /// their own datum (today's `merge_datum_shift`). Read-only.
+    pub fn merge_datum_shift(&self, a: StationId, b: StationId) -> Option<MergeDatumShift> {
+        let (pa, pb) = (self.placement_datum_of(a)?, self.placement_datum_of(b)?);
+        if pa == pb {
+            return None;
+        }
+        let (anchor, moving, datum) = if pa < pb { (a, b, pb) } else { (b, a, pa) };
+        let positions = self.raw_positions();
+        let ([ax, ay], [mx, my]) = (positions.xy(anchor)?, positions.xy(moving)?);
+        Some(MergeDatumShift {
+            moving_lines: self.piece_lines(moving),
+            shift_m: (ax - mx).hypot(ay - my),
+            datum,
+            datum_station: self.datums.get(datum)?.station,
+        })
+    }
+
+    /// The Merge tool's check of `a` and `b` (today's
+    /// `check_merge_connectivity`). Refuses a pair that is one station, or
+    /// that a loop closure already joins.
+    pub fn merge_check(&self, a: StationId, b: StationId) -> Result<MergeCheck, OpError> {
+        self.existing_station(a)?;
+        self.existing_station(b)?;
+        if a == b {
+            return Err(OpError::AlreadyMerged);
+        }
+        if self.closure_between(a, b).is_some() {
+            return Err(OpError::DuplicateClosure);
+        }
+        let connected = self.topology().connected(a, b) || self.closure_linked(a, b);
+        let preview = if connected {
+            closure_metrics(self, a, b)
+        } else {
+            None
+        };
+        let closure_refusal = if connected {
+            closure_spans_one_shot(self, a, b)
+                .map(|(line, index)| self.across_one_shot_error(line, index).to_string())
+        } else {
+            None
+        };
+        Ok(MergeCheck {
+            connected,
+            preview,
+            can_merge: !connected,
+            reason: connected.then(|| "Creates survey loop".to_string()),
+            closure_refusal,
+            datum_shift: if connected {
+                None
+            } else {
+                self.merge_datum_shift(a, b)
+            },
+        })
+    }
+
+    /// The lines of `station`'s piece, ascending.
+    pub fn piece_lines(&self, station: StationId) -> Vec<LineId> {
+        let topology = self.topology();
+        let mut lines = topology
+            .component_of(station)
+            .and_then(|c| topology.component(c))
+            .map(|component| component.lines.clone())
+            .unwrap_or_default();
+        lines.sort_unstable();
+        lines
+    }
+
+    /// Whether the pieces of `a` and `b` are joined through loop closures
+    /// (any strategy), possibly via other pieces.
+    pub(super) fn closure_linked(&self, a: StationId, b: StationId) -> bool {
+        let topology = self.topology();
+        let (Some(ca), Some(cb)) = (topology.component_of(a), topology.component_of(b)) else {
+            return false;
+        };
+        let mut parent: Vec<usize> = (0..topology.components().len()).collect();
+        for closure in &self.closures {
+            if let (Some(x), Some(y)) = (
+                topology.component_of(closure.a),
+                topology.component_of(closure.b),
+            ) {
+                let (rx, ry) = (find(&mut parent, x), find(&mut parent, y));
+                if rx != ry {
+                    parent[rx.max(ry)] = rx.min(ry);
+                }
+            }
+        }
+        find(&mut parent, ca) == find(&mut parent, cb)
+    }
+
+    /// The low-level merge: replace `retired` by `survivor` everywhere, fold
+    /// the retired station into the survivor (alias, comment), re-uniquify
+    /// names on the moving piece's lines through the junction. No anchors,
+    /// no sweep, no validation (callers run the pipeline).
+    pub(super) fn merge_ids(
+        &mut self,
+        survivor: StationId,
+        retired: StationId,
+    ) -> Result<MergeReport, OpError> {
+        let topology = self.topology_arc();
+        let moving_lines = self.piece_lines(retired);
+        let junction_lines = topology.lines_of(retired);
+        for &line in &junction_lines {
+            if topology.slot_on(survivor, line).is_some() {
+                return Err(OpError::StationTwiceOnLine {
+                    line,
+                    station: survivor,
+                });
+            }
+        }
+        let (Some(_), Some(gone)) = (
+            self.stations.get(&survivor),
+            self.stations.get(&retired).cloned(),
+        ) else {
+            return Err(OpError::UnknownStation(retired));
+        };
+
+        for &id in &junction_lines {
+            if let Some(line) = self.line_mut(id) {
+                if line.start == retired {
+                    line.start = survivor;
+                }
+                for shot in &mut line.shots {
+                    if shot.to == retired {
+                        shot.to = survivor;
+                    }
+                }
+                if let Some(hand) = line.hand_moves.remove(&retired) {
+                    line.hand_moves.insert(survivor, hand);
+                }
+            }
+        }
+        for datum in &mut self.datums {
+            if datum.station == retired {
+                datum.station = survivor;
+            }
+        }
+        for closure in &mut self.closures {
+            if closure.a == retired {
+                closure.a = survivor;
+            }
+            if closure.b == retired {
+                closure.b = survivor;
+            }
+        }
+        self.placements.retain(|p| p.station != retired);
+
+        self.stations.remove(&retired);
+        if let Some(keep) = self.stations.get_mut(&survivor) {
+            keep.aliases.extend(gone.aliases.iter().cloned());
+            keep.aliases.push(StationAlias {
+                id: retired,
+                name: Some(gone.name.clone()),
+            });
+            keep.comment = joined_comment(keep.comment.take(), gone.comment.clone());
+            if keep.external.is_none() {
+                keep.external.clone_from(&gone.external);
+            }
+        }
+
+        let survivor_name = self.stations.get(&survivor).map(|s| s.name.clone());
+        let mut clashing: BTreeSet<StationId> = BTreeSet::new();
+        for &line in &junction_lines {
+            for &other in self.topology().chain(line).unwrap_or(&[]) {
+                if other != survivor
+                    && self.stations.get(&other).map(|s| &s.name) == survivor_name.as_ref()
+                {
+                    clashing.insert(other);
+                }
+            }
+        }
+        let mut renamed = Vec::new();
+        for &other in &clashing {
+            if self.uniquify_station_name(other).is_some() {
+                renamed.push(other);
+            }
+        }
+        Ok(MergeReport {
+            survivor,
+            retired,
+            moving_lines,
+            renamed,
+        })
+    }
+}
+
+/// The survivor's comment after a merge (plan 5.1): both, separated by a
+/// blank line, when both are non-empty and different; else whichever exists.
+fn joined_comment(survivor: Option<String>, retired: Option<String>) -> Option<String> {
+    let keep = survivor.filter(|c| !c.is_empty());
+    let gone = retired.filter(|c| !c.is_empty());
+    match (keep, gone) {
+        (Some(k), Some(g)) if k != g => Some(format!("{k}\n\n{g}")),
+        (Some(k), _) => Some(k),
+        (None, g) => g,
+    }
+}
+
+pub(super) fn find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}

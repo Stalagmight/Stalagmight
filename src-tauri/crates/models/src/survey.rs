@@ -39,6 +39,17 @@ mod topology;
 mod types;
 mod validate;
 
+// Stream M2: topology, closures, datums, move tools, Add (plan 4-5).
+mod append;
+mod m3_stubs;
+mod ops;
+mod ops_closures;
+mod ops_datums;
+mod ops_detach;
+mod ops_merge;
+mod ops_move;
+mod sweep;
+
 #[cfg(test)]
 #[expect(
     clippy::panic,
@@ -93,6 +104,15 @@ pub use types::{
     Shot, Station, StationAlias, ZeroDatum, MAX_SHOT_UUID_CHARS,
 };
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
+
+pub use append::{AppendSummary, ShotUuidRename};
+pub use ops::{OpError, OpOutcome};
+pub use ops_closures::ClosureCreated;
+pub use ops_datums::{DatumChange, DatumSet};
+pub use ops_detach::DetachReport;
+pub use ops_merge::{MergeCheck, MergeDatumShift, MergeReport};
+pub use ops_move::{SegmentMoved, StationMoved};
+pub use sweep::{Promotion, SweepReport};
 
 /// A survey project in the station-graph model (plan 1.2).
 ///
