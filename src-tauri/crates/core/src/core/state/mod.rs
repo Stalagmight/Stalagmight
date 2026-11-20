@@ -254,6 +254,8 @@ mod merge_projects_tests;
 mod meta_moves_tests;
 #[cfg(test)]
 mod metamorphic_undo_tests;
+#[cfg(test)]
+mod misc_state_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
@@ -453,16 +455,6 @@ mod station_names_import_tests;
     reason = "test fixtures: a failed setup step is a failed test"
 )]
 mod synthetic_stalx_tests;
-#[cfg(sg_unported)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp,
-    clippy::print_stderr,
-    clippy::print_stdout
-)]
-mod tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

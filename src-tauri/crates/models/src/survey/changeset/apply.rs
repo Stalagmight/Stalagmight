@@ -315,8 +315,11 @@ fn with_session_ids(built: BuiltLine) -> Line {
         line.next_shot_id = next;
     }
     let window_end = base.saturating_add(FEATURE_ID_STRIDE);
+    // An allocator AT the window's end is a used-up window (the create that
+    // took the last id leaves it there, and `shot_ids_left` refuses the next
+    // one): the ids still fit, so a step keeps them.
     let ids_fit = line.shots.iter().all(|s| s.id >= base && s.id < window_end)
-        && line.next_shot_id < window_end;
+        && line.next_shot_id <= window_end;
     if !ids_fit {
         line.assign_session_shot_ids();
     }
