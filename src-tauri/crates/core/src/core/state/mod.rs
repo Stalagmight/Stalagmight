@@ -70,7 +70,7 @@ mod adversarial_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod azimuth_reference_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
@@ -145,6 +145,12 @@ mod fuzz_rarity_tests;
 mod fuzz_shrink_tests;
 #[cfg(sg_unported)]
 mod fuzz_undo_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod history_labels_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -453,8 +459,6 @@ mod topology_kit;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod undo_after_reopen_tests;
-#[cfg(sg_unported)]
-mod undo_disk_names_tests;
 #[cfg(sg_unported)]
 mod undo_size_gate_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the

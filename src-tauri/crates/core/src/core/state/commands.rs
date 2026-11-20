@@ -42,9 +42,9 @@ impl Record {
     pub(crate) fn of(project: &Project, cmd: &Command) -> Self {
         Self {
             kind: crate::core::command_kind(cmd).to_string(),
-            label: super::labels::command_label(project, cmd),
+            label: super::labels::entry_label(project, cmd),
             refs: super::labels::command_refs(project, cmd),
-            preview: RecordedPreview::default(),
+            preview: super::labels::command_preview(project, cmd),
         }
     }
 }
