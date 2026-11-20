@@ -155,7 +155,9 @@ fn frontend_sources(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, St
             if name != "__tests__" && name != "node_modules" {
                 frontend_sources(&path, out);
             }
-        } else if (name.ends_with(".ts") || name.ends_with(".tsx"))
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ts") || ext.eq_ignore_ascii_case("tsx"))
             && !name.contains(".test.")
             && !name.contains(".spec.")
         {

@@ -4,12 +4,7 @@
 //! The survey is the station-graph model (`models::survey`): stations are
 //! entities, a merge is one shared station, positions are derived, and a
 //! project is saved as a `.stalx` version 2 file.
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp
-)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{AppState, Command, CommandResult, UndoEntry, UndoStack, Validator};
@@ -18,8 +13,8 @@ use stalagmight_lib::models::survey::changeset::{
 };
 use stalagmight_lib::models::survey::{self, LineMeta, Project, StartAt};
 use stalagmight_lib::models::{
-    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineId, LineUpdates,
-    ProjectMetadata, Shot, ShotData, ShotKind, ShotUpdates, StationId, StationRef,
+    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineId, LineUpdates, ProjectMetadata,
+    Shot, ShotData, ShotKind, ShotUpdates, StationId, StationRef,
 };
 use stalagmight_lib::persistence::stalx_v2::{self, DecodeOptions, Extras, Mode};
 use std::collections::HashSet;
@@ -464,7 +459,11 @@ fn test_unmerge_keeps_position() {
 fn test_duplicate_merge_rejection() {
     let mut project = create_test_project();
 
-    let a = add_line(&mut project, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let a = add_line(
+        &mut project,
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
     let b = add_line_at(
         &mut project,
         "B",
@@ -488,7 +487,11 @@ fn test_duplicate_merge_rejection() {
 fn test_delete_line_cleanup() {
     let mut project = create_test_project();
 
-    let a = add_line(&mut project, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let a = add_line(
+        &mut project,
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
     let b = add_line_at(
         &mut project,
         "B",
@@ -552,7 +555,11 @@ fn test_multiple_zero_datums_disconnected() {
 fn test_merge_nonexistent_station_fails() {
     let mut project = create_test_project();
 
-    let a = add_line(&mut project, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let a = add_line(
+        &mut project,
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
 
     // Try to merge with non-existent station
     assert!(project.station_at(StationRef::new(99, 0)).is_none());
@@ -806,7 +813,10 @@ fn test_batch_command_structure() {
     assert_eq!(stepped.stations, before.stations);
     survey::changeset::redo(&mut stepped, &restored.entry().changes).unwrap();
     assert_eq!(stepped.lines().len(), 1);
-    assert_eq!(stepped.lines()[0].shots[0].uuid, project.lines()[0].shots[0].uuid);
+    assert_eq!(
+        stepped.lines()[0].shots[0].uuid,
+        project.lines()[0].shots[0].uuid
+    );
     assert_eq!(stepped.stations, project.stations);
 }
 
@@ -1010,7 +1020,10 @@ fn test_shot_deletion() {
 
     let line = project.line(main).unwrap();
     assert_eq!(line.shots.len(), 2);
-    assert_eq!([line.shots[0].uuid.clone(), line.shots[1].uuid.clone()], kept);
+    assert_eq!(
+        [line.shots[0].uuid.clone(), line.shots[1].uuid.clone()],
+        kept
+    );
     // The chain closed the gap: one station fewer.
     assert_eq!(line.station_count(), 3);
 }
@@ -1875,7 +1888,13 @@ fn test_shot_id_generation() {
     assert_eq!(stations.len(), 1001);
     // A reload gives every shot its session id back the same way.
     let reloaded = round_trip(&project);
-    let reloaded_ids: Vec<_> = reloaded.line(large).unwrap().shots.iter().map(|s| s.id).collect();
+    let reloaded_ids: Vec<_> = reloaded
+        .line(large)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .collect();
     let original_ids: Vec<_> = line.shots.iter().map(|s| s.id).collect();
     assert_eq!(reloaded_ids, original_ids);
 }
@@ -2052,7 +2071,11 @@ fn test_invalid_station_reference() {
 
     // Check non-existent station
     assert!(project.station_at(StationRef::new(999, 0)).is_none());
-    let main = add_line(&mut project, "Main", vec![create_shot_data(0.0, 1.0, 5.0, 5.0)]);
+    let main = add_line(
+        &mut project,
+        "Main",
+        vec![create_shot_data(0.0, 1.0, 5.0, 5.0)],
+    );
     assert!(project.station_at(StationRef::new(main, 2)).is_none());
     assert!(project.station_of_slot(StationRef::new(main, 2)).is_err());
 }
@@ -2215,7 +2238,11 @@ fn test_negative_lrud_errors() {
 #[test]
 fn test_save_load_with_station_merges() {
     let mut project = Project::new("Test", None);
-    let a = add_line(&mut project, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let a = add_line(
+        &mut project,
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
     let b = add_line_at(
         &mut project,
         "B",
@@ -2318,7 +2345,10 @@ fn test_save_load_with_loop_closures() {
     assert_eq!(after[0].path_length, before[0].path_length);
     assert!((after[0].path_length - 33.0).abs() < 1e-9);
     assert_eq!(after[0].error_percentage, before[0].error_percentage);
-    assert_eq!(after[0].horizontal_misclosure, before[0].horizontal_misclosure);
+    assert_eq!(
+        after[0].horizontal_misclosure,
+        before[0].horizontal_misclosure
+    );
     assert_eq!(after[0].vertical_misclosure, before[0].vertical_misclosure);
     assert!((after[0].vertical_misclosure.abs() - 1.5).abs() < 1e-9);
 }
@@ -2473,7 +2503,11 @@ fn test_project_insert_shot_after() {
 #[test]
 fn test_project_update_shot() {
     let mut project = Project::new("Test", None);
-    let line = add_line(&mut project, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let line = add_line(
+        &mut project,
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
 
     let shot_id = project.line(line).unwrap().shots[0].id;
     let updates = ShotUpdates {
@@ -2672,7 +2706,11 @@ fn test_gps_metadata_update_preserves_order() {
 #[test]
 fn test_gps_invalid_coordinates_rejected() {
     let state = app();
-    let line = create_line_cmd(&state, "Line A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let line = create_line_cmd(
+        &state,
+        "Line A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
     let set = |at: GpsCoordinates| {
         state.execute(Command::SetZeroDatum {
             station_ref: StationRef::new(line, 0),

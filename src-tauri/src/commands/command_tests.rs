@@ -6,8 +6,8 @@ use super::{
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::survey::{self, LineMeta, Project, StartAt, ZeroDatum};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotKind, ShotUpdates, StationRef,
-    SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotKind,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 use crate::test_helpers::TestDb;
@@ -177,7 +177,12 @@ fn meta(name: &str) -> LineMeta {
 }
 
 /// Add a free line (a new piece) placed with its start at local `(x, 0)`.
-fn add_free_line(project: &mut Project, line_meta: LineMeta, shots: Vec<ShotData>, x: f64) -> LineId {
+fn add_free_line(
+    project: &mut Project,
+    line_meta: LineMeta,
+    shots: Vec<ShotData>,
+    x: f64,
+) -> LineId {
     let id = project
         .add_line(line_meta, StartAt::New, shots)
         .expect("add line");
@@ -2476,7 +2481,7 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
         let project_path = locked.join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
-        project.file_path = Some(project_path.clone());
+        project.file_path = Some(project_path);
         state(&app).inner().set_project_for_tests(project);
         state(&app)
             .inner()
@@ -2549,7 +2554,7 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
         fs::create_dir_all(dir.path().join("new-import.stalx.tmp")).unwrap();
 
         let mut project = Project::new("New Import".to_string(), None);
-        project.file_path = Some(project_path.clone());
+        project.file_path = Some(project_path);
         state(&app).inner().set_project_for_tests(project);
         state(&app)
             .inner()
@@ -3130,7 +3135,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "the open project's undo stack must survive an unrelated delete"
             );
 
-            let own = project::delete_project_impl(state(&app).inner(), open_path.clone());
+            let own = project::delete_project_impl(state(&app).inner(), open_path);
             assert_success(&own);
             assert_eq!(
                 own.session_closed,
@@ -4938,7 +4943,12 @@ fn test_get_project_warnings_multiple_lines_sorted_by_line_id() {
     let app = app_with_state();
     let mut project = Project::new("Test Cave", None);
     add_free_line(&mut project, LineMeta::default(), vec![shot_data(0.0)], 0.0);
-    add_free_line(&mut project, LineMeta::default(), vec![shot_data(0.0)], 10.0);
+    add_free_line(
+        &mut project,
+        LineMeta::default(),
+        vec![shot_data(0.0)],
+        10.0,
+    );
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.len() >= 2);
@@ -5094,7 +5104,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -5146,7 +5156,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
             line_id: warning.line_id,
             shot_id: warning.shot_id,
-            warning_code: warning.code.clone(),
+            warning_code: warning.code,
             resolved_at: chrono::Utc::now(),
             resolved_comment: None,
             shot_uuid: None,
@@ -5249,7 +5259,7 @@ fn test_resolved_warning_survives_save() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -5282,7 +5292,12 @@ fn test_save_keeps_other_ignores_when_a_line_was_deleted() {
             ..meta(name)
         };
         // short-shot → SHORT_SHOT warning
-        add_free_line(&mut project, line_meta, vec![shot_data(0.1)], x as f64 * 10.0);
+        add_free_line(
+            &mut project,
+            line_meta,
+            vec![shot_data(0.1)],
+            x as f64 * 10.0,
+        );
     }
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5358,7 +5373,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     // Renumber: swap the shot order so A now sits at B's old position and B at
     // A's old position. The carry-over derives live positions from sequence
     // order, so A's stored shot_id (== shot_a.id, now occupied by B) is stale.
-    let mut renumbered = loaded.clone();
+    let mut renumbered = loaded;
     renumbered.lines_mut()[0].shots.swap(0, 1);
     state(&app).inner().set_project_for_tests(renumbered);
 
@@ -5558,7 +5573,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -5597,7 +5612,7 @@ fn test_datum_gps_gap_warning_is_ignorable() {
     };
     let mut project = Project::new("TwoEntrances", None);
     let a = project
-        .add_line(LineMeta::default(), StartAt::New, vec![north.clone(); 5])
+        .add_line(LineMeta::default(), StartAt::New, vec![north; 5])
         .unwrap();
     push_datum_at(&mut project, a, 0, origin);
     let (lat, lon) = local_to_gps(40.0, 500.0, &origin).unwrap();
