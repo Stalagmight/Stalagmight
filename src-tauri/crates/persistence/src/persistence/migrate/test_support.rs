@@ -889,7 +889,8 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
 /// The G9 classes (C24 F2 and F3) against the whole legacy project: a class
 /// blamed on 0.6.0's weights or rewrite needs a shot that has them, and the
 /// solve-precision class stays within the project-wide bound (the largest
-/// weight spread and coordinate, so at least any component's).
+/// weight spread and coordinate, raw or a datum's GPS, so at least any
+/// component's).
 fn legacy_precision_classes_hold(
     legacy: &LegacySurvey,
     a: &super::AdjustedVerification,
@@ -943,10 +944,21 @@ fn legacy_precision_classes_hold(
         );
     }
     if let Some(stats) = a.expected.get(&ExpectedClass::LegacySolvePrecision) {
+        let datums = lp.frame_datum().map_or_else(Vec::new, |frame| {
+            lp.zero_datums
+                .iter()
+                .map(|d| {
+                    let (east, north) =
+                        stalagmight_legacy::models::gps_to_local(&d.gps, &frame.gps);
+                    east.abs().max(north.abs())
+                })
+                .collect()
+        });
         let scale = legacy
             .raw_positions
             .values()
             .map(|p| p[0].abs().max(p[1].abs()))
+            .chain(datums)
             .filter(|m| m.is_finite())
             .fold(0.0_f64, f64::max);
         let hops = f64::from(u32::try_from(lp.lines.len()).unwrap_or(u32::MAX));

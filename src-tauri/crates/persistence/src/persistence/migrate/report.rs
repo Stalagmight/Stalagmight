@@ -230,12 +230,14 @@ pub enum ExpectedClass {
     /// Closures Computed View only (G9, C24 F3): a slot within the tolerance
     /// plus the precision of 0.6.0's solve of its component,
     /// `eps x (largest / smallest shot weight) x the largest coordinate`
-    /// (`verify::legacy_solve_precision_m`). 0.6.0 solved spur stations
-    /// through the normal equations too and placed an all-spur line by its
-    /// attachment group's solved position; with shots of kilometres (a
-    /// cross-axis weight of 1e-7 next to hundreds) that position carries
-    /// rounding of up to 1e-4 m, where the station graph lays spurs out from
-    /// their measured shots. Bounded, unlike the other Computed View classes.
+    /// (raw, or a datum's GPS position; `verify::legacy_solve_precision_m`).
+    /// 0.6.0 solved spur stations through the normal equations too and
+    /// placed an all-spur line, and a spur beyond a merge, by its group's
+    /// solved position; with shots of kilometres (a cross-axis weight of
+    /// 1e-7 next to hundreds) that position carries rounding of up to a few
+    /// millimetres (farm seed 34019254: 3.4 mm with GPS fixes 2 km away),
+    /// where the station graph lays spurs out from their measured shots.
+    /// Bounded, unlike the other Computed View classes.
     LegacySolvePrecision,
 }
 

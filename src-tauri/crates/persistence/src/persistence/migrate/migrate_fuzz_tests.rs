@@ -1195,9 +1195,36 @@ fn history_rides_the_file(recorded: &Recorded, seed: u64) -> Result<(), String> 
 /// source's size, so by superposition (and the triangle inequality across
 /// the axes) no station moves further than the sum of all of them. A
 /// degenerate solve breaks this by orders of magnitude (finding C24-F2:
-/// 13.8 km and 11,550 km against a few hundred metres of misclosure). The
-/// slack covers the solve's own precision: `1e-9` of the largest raw
-/// coordinate, the conjugate gradient's tolerance at that scale.
+/// 13.8 km and 11,550 km against a few hundred metres of misclosure).
+///
+/// Why it is a true property of the solve as built (sigma floor, `Tie`
+/// closures, held datums and fixes, spurs), not a heuristic: per axis the
+/// solve minimises, over station displacements `d` from the raw layout,
+/// `sum w_s (d_t - d_u - m_s)^2` over shots (`m_s` the raw layout's misfit
+/// of shot `u -> t`) plus `w_f (d_f - o_f)^2` per soft fix, with `d_a - d_b
+/// = raw_b - raw_a` for every closure it ties (its ends share one point),
+/// `d = o_f` at a hard fix and `d = 0` at a held datum or gauge. Every
+/// weight is positive (the floor raises small sigmas; it never changes a
+/// sign), so this is a resistor network: shots are resistors with a series
+/// source `m_s`, ties are ideal sources of their raw gap, fixes are sources
+/// to ground. The minimiser is linear in the sources. With one source alone
+/// (a tie of zero gap is a short, a fix of zero offset is ground), a node
+/// that is not one of its two ends carries no injected current, so its
+/// value is a weighted mean of its neighbours' and the extremes sit at the
+/// source's ends; the ground (all held nodes, one potential) carries no net
+/// current either (a source returns what it sends), so 0 lies between those
+/// extremes and every value is within the source's size. Superposing, `|d|
+/// <= sum |source|` per axis, and across the axes `hypot` of the sums is at
+/// most the sum of the sources' `hypot`s (the budget below). Spurs are laid
+/// out from their measured shots, which is exactly the minimiser there (a
+/// leaf carries no current). So a station past the budget is the solve's
+/// error, never the model's: farm seed 34022454 (809 m against 37 m; the
+/// exact minimiser moves it 10.7 m) was the absolute-coordinate solve's
+/// rounding, fixed in `models::survey::lsq`. Seeds 34014784 and 34016414
+/// attain the bound (one source moves a station by all of it), so the slack
+/// covers only the solve's rounding: `1e-6 m` plus `1e-9` of the largest
+/// raw coordinate. The corrected solve agrees with a 100-digit solve of the
+/// farm's seeds within 5e-9 m.
 fn computed_view_within_its_misclosures(project: &Project) -> Result<(), String> {
     use crate::models::{gps_to_local, DatumRole};
     let raw = project.raw_positions();
@@ -2015,6 +2042,49 @@ fn a_doubled_closure_leaves_with_the_slot_as_today() {
                 slot.x,
                 slot.y
             );
+        }
+    }
+}
+
+/// Farm seeds of the default draw (extreme values, 100 km shots and
+/// zero-length shots on lines of quality 0.25: weights 1e14 apart) whose
+/// Computed View the solve got wrong, and one 0.6.0 got wrong:
+/// - 34022454: a part of the survey hanging off one 100 km shot; the exact
+///   least squares moves no station there more than 10.7 m (the shot
+///   carries nothing), the solve for absolute coordinates moved one 809 m
+///   (807 m from the exact solution: rounding of `weight x coordinate`
+///   currents and a diagonal leaking to ground, which the weak shot
+///   amplified);
+/// - 34014784, 34016414 (and 34013171, which the farm shrank to 34014784):
+///   a station moves by exactly its misclosures (one GPS fix 72 km off, or
+///   one closure), so the oracle's bound is attained and the solve's
+///   rounding, 9.4e-4 m and 0.022 m, broke it;
+/// - 34019254: 0.6.0 placed a spur beyond a merge by its group's solved
+///   position, 3.4 mm off where its measured shots put it (GPS fixes hold
+///   the 17 m survey 2 km away, under weights 2e11 apart); the port lays it
+///   out from its shots and agrees with a 100-digit solve to 1e-13 m:
+///   `LegacySolvePrecision`, whose scale now counts the datums' GPS
+///   positions.
+///
+/// The solve now finds corrections to the raw layout from misclosure
+/// currents and refines them (`models::survey::lsq`); a 100-digit solve of
+/// each seed's least squares agrees with it within 5e-9 m. Injections: the
+/// absolute solve fails 34022454, 34014784 and 34016414 on the bound; one
+/// pass without the refinement fails 34022454's model test
+/// (`adjust_precision_tests`); the precision scale without the datums
+/// leaves 34019254's four slots unexplained.
+#[test]
+fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
+    for (seed, class) in [
+        (34_022_454, None),
+        (34_014_784, None),
+        (34_016_414, None),
+        (34_013_171, None),
+        (34_019_254, Some(ExpectedClass::LegacySolvePrecision)),
+    ] {
+        let classes = pinned_seed(seed, DEFAULT_KNOBS);
+        if let Some(class) = class {
+            assert!(classes.contains_key(&class), "seed {seed}: {classes:?}");
         }
     }
 }
