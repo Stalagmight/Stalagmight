@@ -173,7 +173,9 @@ fn edit_and_save(state: &AppState, elevation: f64) {
 }
 
 fn elevation(state: &AppState) -> Option<f64> {
-    state.get_project_state().and_then(|p| p.surface_elevation)
+    state
+        .get_project_state()
+        .and_then(|p| p.settings.surface_elevation)
 }
 
 /// The three closes, exactly as `close_project_impl` performs them.

@@ -1017,8 +1017,8 @@ pub struct CreateProjectFullResult {
 // Tests
 // ============================================================================
 
-#[cfg(sg_unported)]
-#[expect(clippy::expect_used)]
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1349,82 +1349,70 @@ mod tests {
 
     #[test]
     fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
-        use crate::models::{LineData, Project, ProjectStats, ShotData, StationKey, StationMerge};
+        use crate::models::survey::{LineMeta, Project, StartAt};
+        use crate::models::ShotData;
 
-        // A project with one resolvable station merge, stored in the internal
-        // StationKey form.
-        let mut project = Project::new("Wire".to_string(), None);
+        // Two lines sharing their start station: one junction, which the wire
+        // shows as a derived merge between the two slots.
+        let mut project = Project::new("Wire", None);
         let a = project
-            .add_line(LineData {
-                shots: vec![ShotData {
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![ShotData {
                     length: 1.0,
                     ..Default::default()
                 }],
-                ..Default::default()
-            })
-            .id;
-        let b = project
-            .add_line(LineData {
-                shots: vec![ShotData {
+            )
+            .unwrap();
+        let start = project.line(a).unwrap().start;
+        project
+            .add_line(
+                LineMeta::default(),
+                StartAt::Station(start),
+                vec![ShotData {
                     length: 1.0,
                     ..Default::default()
                 }],
-                ..Default::default()
-            })
-            .id;
-        project.ensure_shot_uuids();
-        project.record_station_merge(StationMerge {
-            station_a: StationKey::positional(a, 0),
-            station_b: StationKey::positional(b, 0),
-            merged_at: chrono::Utc::now(),
-        });
-
-        let stats = ProjectStats {
-            line_count: 2,
-            shot_count: 2,
-            total_length: 2.0,
-            min_depth: 0.0,
-            max_depth: 0.0,
-            station_count: 4,
-            loop_count: 0,
-            penetration_distance: 0.0,
-            first_survey_date: None,
-            last_survey_date: None,
-        };
+            )
+            .unwrap();
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        assert!(project.validate().is_empty());
 
         // The merge endpoint must serialize as positional wire form
-        // ({line_id, station_index}), NOT the internal StationKey shape
-        // ({line_id, anchor}). This is what makes the JSON load/create routes
-        // match what the frontend reads (and the binary route emits).
+        // ({line_id, station_index}), NOT a station id or an internal key
+        // shape. This is what makes the JSON load/create routes match what
+        // the frontend reads (and the binary route emits).
         let assert_wire = |v: &serde_json::Value, label: &str| {
             let sa = &v["project"]["station_merges"][0]["station_a"];
             assert!(
-                sa.get("station_index").is_some(),
+                sa.get("station_index").is_some() && sa.get("line_id").is_some(),
                 "{label}: cross-ref must be positional wire form, got {sa}"
             );
             assert!(
                 sa.get("anchor").is_none(),
-                "{label}: cross-ref must NOT be the internal StationKey shape, got {sa}"
+                "{label}: cross-ref must NOT be an internal key shape, got {sa}"
             );
         };
 
-        let load = LoadProjectFullResult {
-            loading_id: 1,
-            project: project.clone(),
-            stations: Vec::new(),
-            stats,
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-        assert_wire(
-            &serde_json::to_value(&load).expect("serialize load result"),
-            "LoadProjectFullResult",
+        let raw = project.raw_positions();
+        let load = LoadProjectFullResult::from_envelope(
+            1,
+            project.load_envelope_input_with(&raw, false),
+            Vec::new(),
+            DisplaySettings::default(),
+            false,
+        );
+        let load_json = serde_json::to_value(&load).expect("serialize load result");
+        assert_wire(&load_json, "LoadProjectFullResult");
+        assert!(
+            load_json.get("envelope_extra").is_none(),
+            "the envelope-only parts never reach the JSON wire"
         );
 
         let create = CreateProjectFullResult {
             loading_id: 1,
-            project,
+            project: project.project_wire(),
             display_settings: DisplaySettings::default(),
         };
         assert_wire(
@@ -1477,24 +1465,76 @@ mod unsafe_file_tests {
         );
     }
 
-    /// The production load maps a schema refusal to UNSAFE_FILE before the
-    /// permission and corruption classifiers can claim it. Guarded by order in
-    /// the source: the load needs a Wry AppHandle no unit test has (the idiom of
-    /// `the_production_load_refuses_a_managed_file_before_it_opens_the_database`).
+    /// The version 2 refusal routes of the production load (a version 2 file
+    /// has no schema SQL, so it has no UNSAFE_FILE case): a file that is
+    /// neither format, a newer major version, and a survey that breaks an
+    /// invariant (offered salvage: the recovery dialog).
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
-    fn the_production_load_reports_a_refused_schema_as_unsafe_file() {
-        let src = include_str!("state/project_load.rs");
-        let start = src.find("fn do_load_project_full").unwrap();
-        let body = &src[start..];
-        // The open's error arm: the refusal check, then (in the same arm) the
-        // permission and corruption classifiers it must run ahead of.
-        let open = body.find("Database::open_existing(&path)").unwrap();
-        let arm = &body[open..];
-        let refused = arm.find("loading::refused_schema(&e)").unwrap();
-        let unsafe_file = arm.find("LoadError::unsafe_file(").unwrap();
-        let permission = arm.find("loading::is_permission_denied(&e)").unwrap();
-        let corrupt = arm.find("LoadError::corrupt(").unwrap();
-        assert!(refused < unsafe_file && unsafe_file < permission && permission < corrupt);
+    fn the_production_load_refuses_version_2_files_by_route() {
+        use crate::core::state::AppState;
+        use crate::models::survey::{LineMeta, Project, StartAt};
+        use crate::persistence::stalx_v2::{self, Extras, Mode};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut project = Project::new("Routes", None);
+        let line = project
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![crate::models::ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        let start = project.line(line).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        let text = String::from_utf8(
+            stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap(),
+        )
+        .unwrap();
+        let at = text.find("\"placements\":[").unwrap();
+        let end = at + text[at..].find("],\n").unwrap() + 3;
+        let cases = [
+            (
+                "notes.stalx",
+                "plain text".to_string(),
+                "CORRUPT",
+                "not a Stalagmight project",
+            ),
+            (
+                "newer.stalx",
+                text.replacen("\"version\":2,", "\"version\":3,", 1),
+                "NEWER_SCHEMA",
+                "newer version of Stalagmight (file format 3; this version reads up to 2)",
+            ),
+            (
+                "invalid.stalx",
+                format!("{}{}", &text[..at], &text[end..]),
+                "CORRUPT",
+                "cannot be opened normally",
+            ),
+        ];
+        let state = AppState::new().unwrap();
+        for (name, content, code, says) in cases {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &content).unwrap();
+
+            let Err(err) = state.read_project_file(&path) else {
+                unreachable!("{name} must be refused");
+            };
+
+            assert_eq!(err.code, code, "{name}: {}", err.message);
+            assert!(err.message.contains(says), "{name}: {}", err.message);
+            assert_eq!(
+                err.details.as_deref(),
+                Some(path.display().to_string().as_str())
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                content,
+                "never written"
+            );
+        }
     }
 }

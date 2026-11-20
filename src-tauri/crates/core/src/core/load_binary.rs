@@ -511,50 +511,14 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(sg_unported)]
-#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::core::loading::DisplaySettings;
-    use crate::models::ShotKind;
-    use crate::models::{Coordinates, Line, Project, ProjectStats, Shot, Station, StationRef};
-    use chrono::Utc;
+    use crate::models::survey::{LineMeta, Project, StartAt};
+    use crate::models::{ShotData, ShotKind};
     use serde::Deserialize;
-
-    fn empty_stats() -> ProjectStats {
-        ProjectStats {
-            line_count: 0,
-            shot_count: 0,
-            total_length: 0.0,
-            min_depth: 0.0,
-            max_depth: 0.0,
-            station_count: 0,
-            loop_count: 0,
-            penetration_distance: 0.0,
-            first_survey_date: None,
-            last_survey_date: None,
-        }
-    }
-
-    fn new_project(name: &str) -> Project {
-        Project::new(name.to_string(), None)
-    }
-
-    fn new_line(id: u32, name: &str, color: &str) -> Line {
-        use crate::models::LineData;
-        Line::new(
-            id,
-            LineData {
-                name: Some(name.to_string()),
-                surveyor: None,
-                date: None,
-                color: color.to_string(),
-                direction: None,
-                quality: 1.0,
-                shots: Vec::new(),
-            },
-        )
-    }
 
     /// Mirror of `LoadProjectFullBinaryResult` for decoding inside tests.
     /// Keeping it in this file (rather than exposing public `Deserialize`)
@@ -577,6 +541,9 @@ mod tests {
         stations_floats: ByteBuf,
         stations_uints: ByteBuf,
         stations_flags: ByteBuf,
+        station_merged_with: Vec<(u32, Vec<StationRef>)>,
+        station_names: Vec<(u32, String)>,
+        stations_ids: ByteBuf,
     }
     #[derive(Deserialize)]
     struct DecodedHeader {
@@ -602,65 +569,77 @@ mod tests {
         date: Option<NaiveDate>,
     }
 
-    fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
-        Shot {
-            id,
-            uuid: None,
+    fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
+        ShotData {
             azimuth_in: azimuth,
             azimuth_out: azimuth,
             length,
             depth_in,
             depth_out,
-            pitch_in: None,
-            pitch_out: None,
-            left: None,
-            right: None,
-            up: None,
-            down: None,
-            comment: None,
-            kind: ShotKind::Normal,
-            marker_index: None,
-            temperature: None,
-            credit: None,
+            ..ShotData::default()
         }
+    }
+
+    fn meta(name: &str, color: &str) -> LineMeta {
+        LineMeta {
+            name: Some(name.to_string()),
+            color: color.to_string(),
+            ..LineMeta::default()
+        }
+    }
+
+    /// A line of `shots` on a fresh station, its piece placed at the origin.
+    fn add_free_line(project: &mut Project, meta: LineMeta, shots: Vec<ShotData>) -> LineId {
+        let line = project.add_line(meta, StartAt::New, shots).unwrap();
+        let start = project.line(line).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        line
+    }
+
+    /// The envelope of `project` as a load builds it (raw layout, wire
+    /// stations), loading id `loading_id`.
+    fn result_for(project: &Project, loading_id: u64) -> LoadProjectFullResult {
+        assert!(project.validate().is_empty(), "{:?}", project.validate());
+        let raw = project.raw_positions();
+        LoadProjectFullResult::from_envelope(
+            loading_id,
+            project.load_envelope_input_with(&raw, false),
+            Vec::new(),
+            DisplaySettings::default(),
+            false,
+        )
+    }
+
+    fn decode(project: &Project) -> DecodedResult {
+        rmp_serde::from_slice(&encode(result_for(project, 1)).unwrap()).unwrap()
+    }
+
+    fn u32s(bytes: &[u8]) -> Vec<u32> {
+        bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
     }
 
     #[test]
     fn round_trip_two_lines() {
-        let mut project = new_project("test");
-        let mut sec_a = new_line(1, "A", "#ff0000");
-        sec_a.shots.push(shot(101, 0.0, 10.0, 0.0, -1.0));
-        sec_a.shots.push(shot(102, 90.0, 5.0, -1.0, -2.0));
-        sec_a.next_shot_id = 103;
-        let mut sec_b = new_line(2, "B", "#00ff00");
-        sec_b.shots.push(shot(201, 45.0, 7.0, 0.0, -0.5));
-        sec_b.next_shot_id = 202;
-        project.lines.push(sec_a);
-        project.lines.push(sec_b);
-        project.next_line_id = 3;
+        let mut project = Project::new("test", None);
+        add_free_line(
+            &mut project,
+            meta("A", "#ff0000"),
+            vec![shot(0.0, 10.0, 0.0, -1.0), shot(90.0, 5.0, -1.0, -2.0)],
+        );
+        add_free_line(
+            &mut project,
+            meta("B", "#00ff00"),
+            vec![shot(45.0, 7.0, 0.0, -0.5)],
+        );
 
-        let stations = vec![
-            Station::with_coordinates(StationRef::new(1, 0), Coordinates::new(0.0, 0.0, 0.0)),
-            Station::with_coordinates(StationRef::new(1, 1), Coordinates::new(10.0, 0.0, -1.0)),
-            Station::with_coordinates(StationRef::new(1, 2), Coordinates::new(10.0, 5.0, -2.0)),
-            Station::with_coordinates(StationRef::new(2, 0), Coordinates::new(0.0, 0.0, 0.0)),
-            Station::with_coordinates(StationRef::new(2, 1), Coordinates::new(4.95, 4.95, -0.5)),
-        ];
-
-        let result = LoadProjectFullResult {
-            loading_id: 42,
-            project,
-            stations,
-            stats: empty_stats(),
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-
-        let bytes = encode(result).unwrap();
+        let bytes = encode(result_for(&project, 42)).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
 
         assert_eq!(decoded.version, BINARY_FORMAT_VERSION);
+        assert_eq!(decoded.version, 9, "the station-graph envelope (W9)");
         assert_eq!(decoded.loading_id, 42);
         assert_eq!(decoded.project_header.name, "test");
         assert_eq!(decoded.project_header.lines.len(), 2);
@@ -668,76 +647,139 @@ mod tests {
         assert_eq!(decoded.shots_floats.len(), 3 * SHOT_FLOAT_STRIDE);
         assert_eq!(decoded.shots_uints.len(), 3 * SHOT_UINT_STRIDE);
         assert_eq!(decoded.shots_flags.len(), 3);
-        assert_eq!(decoded.station_count, 5);
+        assert_eq!(decoded.station_count, 5, "one entry per slot");
         assert_eq!(decoded.stations_floats.len(), 5 * STATION_FLOAT_STRIDE);
         assert_eq!(decoded.stations_uints.len(), 5 * STATION_UINT_STRIDE);
         assert_eq!(decoded.stations_flags.len(), 5);
         assert!(decoded.shot_comments.is_empty());
 
-        // Line offsets index into the flat shots array
-        assert_eq!(decoded.project_header.lines[0].id, 1);
+        // Line offsets index into the flat shots array.
+        let (a, b) = (project.lines()[0].id, project.lines()[1].id);
+        assert_eq!(decoded.project_header.lines[0].id, a);
         assert_eq!(decoded.project_header.lines[0].shot_offset, 0);
         assert_eq!(decoded.project_header.lines[0].shot_count, 2);
-        assert_eq!(decoded.project_header.lines[1].id, 2);
+        assert_eq!(decoded.project_header.lines[1].id, b);
         assert_eq!(decoded.project_header.lines[1].shot_offset, 2);
         assert_eq!(decoded.project_header.lines[1].shot_count, 1);
 
-        // Verify a known float at a known offset: line 1, shot index 1
-        // (the second shot, azimuth=90, length=5). Floats live at byte
-        // offset (global_shot_index 1 * SHOT_FLOAT_STRIDE) of shots_floats.
+        // A known float at a known offset: line A, shot index 1 (azimuth 90,
+        // length 5), at byte offset 1 * SHOT_FLOAT_STRIDE of shots_floats.
         let base = SHOT_FLOAT_STRIDE;
         let azimuth_in_bytes: [u8; 4] = decoded.shots_floats[base..base + 4].try_into().unwrap();
-        let azimuth_in = f32::from_le_bytes(azimuth_in_bytes);
-        assert!((azimuth_in - 90.0).abs() < 1e-3);
+        assert!((f32::from_le_bytes(azimuth_in_bytes) - 90.0).abs() < 1e-3);
 
-        let _ = Utc::now(); // silence unused-import on chrono::Utc
+        // The second station of line A sits due north of the origin, at the
+        // first shot's horizontal length (10 m slope, 1 m of depth change).
+        let at = STATION_FLOAT_STRIDE;
+        let y: [u8; 8] = decoded.stations_floats[at + 8..at + 16].try_into().unwrap();
+        assert!((f64::from_le_bytes(y) - 99.0_f64.sqrt()).abs() < 1e-9);
     }
 
-    fn result_for(project: Project) -> LoadProjectFullResult {
-        LoadProjectFullResult {
-            loading_id: 1,
-            project,
-            stations: Vec::new(),
-            stats: empty_stats(),
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
+    /// The envelope drops `line_offsets` (W9): the station graph derives
+    /// every position, so the header has no such member.
+    #[test]
+    fn the_header_carries_no_line_offsets() {
+        let mut project = Project::new("w9", None);
+        add_free_line(
+            &mut project,
+            meta("A", "#ff0000"),
+            vec![shot(0.0, 1.0, 0.0, 0.0)],
+        );
+
+        #[derive(Deserialize)]
+        struct HeaderOnly {
+            project_header: serde_json::Value,
         }
+        let decoded: HeaderOnly =
+            rmp_serde::from_slice(&encode(result_for(&project, 1)).unwrap()).unwrap();
+
+        assert!(decoded.project_header.get("line_offsets").is_none());
+        assert!(decoded.project_header.get("lines").is_some());
+    }
+
+    /// A junction is one station on two lines: both of its slots carry the
+    /// same Station ID and name, and each lists the other as merged with it.
+    #[test]
+    fn a_junction_sends_one_station_id_on_both_slots() {
+        let mut project = Project::new("junction", None);
+        let main = add_free_line(
+            &mut project,
+            meta("Main", "#ff0000"),
+            vec![shot(0.0, 4.0, 0.0, 0.0), shot(0.0, 4.0, 0.0, 0.0)],
+        );
+        let junction = project.line(main).unwrap().station(1).unwrap();
+        project
+            .add_line(
+                meta("Side", "#00ff00"),
+                StartAt::Station(junction),
+                vec![shot(90.0, 3.0, 0.0, 0.0)],
+            )
+            .unwrap();
+
+        let decoded = decode(&project);
+
+        assert_eq!(decoded.station_count, 5);
+        let ids = u32s(&decoded.stations_ids);
+        // Slots in line order: Main 0, 1 (junction), 2; Side 0 (junction), 1.
+        assert_eq!(ids[1], junction);
+        assert_eq!(ids[3], junction);
+        assert_eq!(
+            ids.iter().filter(|id| **id == junction).count(),
+            2,
+            "{ids:?}"
+        );
+        let names: std::collections::BTreeMap<u32, &str> = decoded
+            .station_names
+            .iter()
+            .map(|(i, n)| (*i, n.as_str()))
+            .collect();
+        assert_eq!(names.get(&1), names.get(&3), "one name for the junction");
+        let merged: Vec<u32> = decoded
+            .station_merged_with
+            .iter()
+            .map(|(i, _)| *i)
+            .collect();
+        assert_eq!(merged, [1, 3]);
     }
 
     #[test]
     fn credit_rides_as_one_people_table_and_per_line_indices() {
         let person = |n: &str| Person::named(n).unwrap();
         let day = NaiveDate::from_ymd_opt(2024, 2, 3);
-        let ann_bo = SurveyCredit {
+        let ann_bo = std::sync::Arc::new(SurveyCredit {
             surveyors: vec![person("Ann"), person("Bo")],
             explorers: vec![person("Ex")],
             date: day,
-        };
-        let bo = SurveyCredit {
+        });
+        let bo = std::sync::Arc::new(SurveyCredit {
             surveyors: vec![person("Bo")],
             explorers: Vec::new(),
             date: None,
+        });
+        let credited = |credit: Option<&std::sync::Arc<SurveyCredit>>| ShotData {
+            length: 1.0,
+            credit: credit.cloned(),
+            ..ShotData::default()
         };
-        let mut project = new_project("credit");
-        let mut a = new_line(1, "A", "#ff0000");
-        for (i, credit) in [Some(&ann_bo), None, Some(&ann_bo), Some(&bo)]
-            .into_iter()
-            .enumerate()
-        {
-            let mut s = shot(100 + i as u32, 0.0, 1.0, 0.0, 0.0);
-            s.credit = credit.cloned().map(std::sync::Arc::new);
-            a.shots.push(s);
-        }
-        let mut b = new_line(2, "B", "#00ff00");
-        let mut s = shot(200, 0.0, 1.0, 0.0, 0.0);
-        s.set_credit(bo);
-        b.shots.push(s);
-        project.lines.push(a);
-        project.lines.push(b);
+        let mut project = Project::new("credit", None);
+        add_free_line(
+            &mut project,
+            meta("A", "#ff0000"),
+            vec![
+                credited(Some(&ann_bo)),
+                credited(None),
+                credited(Some(&ann_bo)),
+                credited(Some(&bo)),
+            ],
+        );
+        add_free_line(
+            &mut project,
+            meta("B", "#00ff00"),
+            vec![credited(Some(&bo))],
+        );
 
-        let decoded: DecodedResult =
-            rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
+        let decoded = decode(&project);
+
         let names: Vec<&str> = decoded
             .project_header
             .credit_people
@@ -746,13 +788,8 @@ mod tests {
             .collect();
         // Each person once, project-wide, in first-appearance order.
         assert_eq!(names, ["Ann", "Bo", "Ex"]);
-        let index: Vec<u32> = decoded
-            .shots_credit
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
         // Line A: two distinct credits; line B its own list.
-        assert_eq!(index, [0, u32::MAX, 0, 1, 0]);
+        assert_eq!(u32s(&decoded.shots_credit), [0, u32::MAX, 0, 1, 0]);
         let a = &decoded.project_header.lines[0].credits;
         assert_eq!(a.len(), 2);
         assert_eq!(
@@ -768,13 +805,15 @@ mod tests {
 
     #[test]
     fn an_uncredited_project_sends_no_credit_bytes() {
-        let mut project = new_project("bare");
-        let mut a = new_line(1, "A", "#ff0000");
-        a.shots.push(shot(100, 0.0, 1.0, 0.0, 0.0));
-        a.shots.push(shot(101, 0.0, 1.0, 0.0, 0.0));
-        project.lines.push(a);
-        let decoded: DecodedResult =
-            rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
+        let mut project = Project::new("bare", None);
+        add_free_line(
+            &mut project,
+            meta("A", "#ff0000"),
+            vec![shot(0.0, 1.0, 0.0, 0.0), shot(0.0, 1.0, 0.0, 0.0)],
+        );
+
+        let decoded = decode(&project);
+
         assert!(decoded.shots_credit.is_empty());
         assert!(decoded.project_header.credit_people.is_empty());
         assert!(decoded.project_header.lines[0].credits.is_empty());
@@ -782,51 +821,32 @@ mod tests {
 
     #[test]
     fn nan_round_trips_for_optional_fields() {
-        let mut project = new_project("t");
-        let mut sec = new_line(1, "S", "#abcdef");
-        sec.shots.push(Shot {
-            id: 1,
-            uuid: None,
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            length: 1.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            pitch_in: Some(10.0),
-            pitch_out: None,
-            left: Some(0.5),
-            right: None,
-            up: None,
-            down: None,
-            comment: Some("hello".to_string()),
-            kind: ShotKind::Reference,
-            marker_index: Some(7),
-            temperature: None,
-            credit: None,
-        });
-        sec.next_shot_id = 2;
-        project.lines.push(sec);
+        let mut project = Project::new("t", None);
+        add_free_line(
+            &mut project,
+            meta("S", "#abcdef"),
+            vec![ShotData {
+                length: 1.0,
+                pitch_in: Some(10.0),
+                left: Some(0.5),
+                comment: Some("hello".to_string()),
+                kind: ShotKind::Reference,
+                marker_index: Some(7),
+                ..ShotData::default()
+            }],
+        );
 
-        let result = LoadProjectFullResult {
-            loading_id: 1,
-            project,
-            stations: vec![],
-            stats: empty_stats(),
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-        let bytes = encode(result).unwrap();
-        let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
+        let decoded = decode(&project);
 
         assert_eq!(decoded.shot_count, 1);
-        // pitch_out at f32 index 6
         let bytes_at =
             |i: usize| -> [u8; 4] { decoded.shots_floats[i * 4..i * 4 + 4].try_into().unwrap() };
         let pitch_in = f32::from_le_bytes(bytes_at(5));
         let pitch_out = f32::from_le_bytes(bytes_at(6));
         assert!((pitch_in - 10.0).abs() < 1e-3);
         assert!(pitch_out.is_nan(), "pitch_out should be NaN for None");
+        assert!((f32::from_le_bytes(bytes_at(7)) - 0.5).abs() < 1e-6, "left");
+        assert!(f32::from_le_bytes(bytes_at(8)).is_nan(), "right");
 
         // Shot kind occupies bits 0-1 of the flags byte (#27).
         assert_eq!(
@@ -834,16 +854,11 @@ mod tests {
             ShotKind::Reference
         );
 
-        // Comment carried over
-        assert_eq!(decoded.shot_comments.len(), 1);
-        assert_eq!(decoded.shot_comments[0], (0u32, "hello".to_string()));
+        // Comment carried over.
+        assert_eq!(decoded.shot_comments, [(0u32, "hello".to_string())]);
 
-        // marker_index encoded as u32 (third uint slot)
-        let marker_bytes: [u8; 4] = decoded.shots_uints[8..12].try_into().unwrap();
-        assert_eq!(u32::from_le_bytes(marker_bytes), 7);
-
-        // Survey direction (unused suffix, just to ensure import is referenced)
-        let _ = SurveyDirection::default();
+        // marker_index encoded as u32 (third uint slot).
+        assert_eq!(u32s(&decoded.shots_uints)[2], 7);
     }
 
     /// #438: the binary envelope carries BOTH halves of the north reference.
@@ -856,35 +871,29 @@ mod tests {
     fn azimuth_references_survive_the_binary_envelope() {
         use crate::models::{AzimuthReference as Ref, CorrectionSource};
 
-        let mut project = new_project("declination");
-        project.default_azimuth_reference =
+        let mut project = Project::new("declination", None);
+        project.settings.default_azimuth_reference =
             Some(Ref::magnetic(-4.25, CorrectionSource::FileDeclared));
-
-        let mut declared = new_line(1, "Declared", "#ff0000");
-        declared.shots.push(shot(101, 0.0, 10.0, 0.0, 0.0));
-        declared.azimuth_reference = Some(Ref::magnetic(
-            10.5,
-            CorrectionSource::IgrfAuto { epoch_year: 2024 },
-        ));
+        add_free_line(
+            &mut project,
+            LineMeta {
+                azimuth_reference: Some(Ref::magnetic(
+                    10.5,
+                    CorrectionSource::IgrfAuto { epoch_year: 2024 },
+                )),
+                ..meta("Declared", "#ff0000")
+            },
+            vec![shot(0.0, 10.0, 0.0, 0.0)],
+        );
         // Declares nothing of its own: it inherits, and the INHERITANCE is what
         // the project-level field has to preserve.
-        let mut inheriting = new_line(2, "Inheriting", "#00ff00");
-        inheriting.shots.push(shot(201, 0.0, 10.0, 0.0, 0.0));
-        assert!(inheriting.azimuth_reference.is_none(), "premise");
-        project.lines.push(declared);
-        project.lines.push(inheriting);
+        add_free_line(
+            &mut project,
+            meta("Inheriting", "#00ff00"),
+            vec![shot(0.0, 10.0, 0.0, 0.0)],
+        );
 
-        let result = LoadProjectFullResult {
-            loading_id: 1,
-            project,
-            stations: vec![],
-            stats: empty_stats(),
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-        let bytes = encode(result).unwrap();
-        let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
+        let decoded = decode(&project);
 
         assert_eq!(
             decoded.version, BINARY_FORMAT_VERSION,
@@ -911,22 +920,15 @@ mod tests {
 
     #[test]
     fn empty_project_round_trips() {
-        let project = new_project("empty");
-        let result = LoadProjectFullResult {
-            loading_id: 0,
-            project,
-            stations: vec![],
-            stats: empty_stats(),
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-        let bytes = encode(result).unwrap();
+        let project = Project::new("empty", None);
+        let bytes = encode(result_for(&project, 0)).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded.shot_count, 0);
         assert_eq!(decoded.station_count, 0);
         assert!(decoded.shots_floats.is_empty());
         assert!(decoded.stations_floats.is_empty());
+        assert!(decoded.stations_uints.is_empty());
+        assert!(decoded.stations_flags.is_empty());
         assert!(decoded.project_header.lines.is_empty());
     }
 }

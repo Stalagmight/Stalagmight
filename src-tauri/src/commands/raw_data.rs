@@ -1,13 +1,14 @@
-//! Read-only browsing of the raw sqlite tables in the current project
-//! database (data table fullscreen mode). Values are stringified server-side;
-//! see `Database::read_raw_table`.
+//! Read-only browsing of the open project's saved file (data table fullscreen
+//! mode, "Raw data"): the members of the version 2 `.stalx`, one table per
+//! member and one row per record, as of the last save. Values are stringified
+//! server-side; see `AppState::read_raw_table`.
 
 use tauri::State;
 
 use crate::core::AppState;
 use crate::persistence::RawTableData;
 
-/// List the raw sqlite table names in the current project database
+/// List the raw tables (the saved file's members) of the open project
 #[tauri::command]
 pub fn get_raw_table_names(state: State<AppState>) -> Result<Vec<String>, String> {
     get_raw_table_names_impl(state.inner())
@@ -17,7 +18,7 @@ pub(crate) fn get_raw_table_names_impl(state: &AppState) -> Result<Vec<String>, 
     state.list_raw_table_names().map_err(|e| e.to_string())
 }
 
-/// Read a page of stringified rows from a raw sqlite table
+/// Read a page of stringified rows from a raw table
 #[tauri::command]
 pub fn get_raw_table(
     state: State<AppState>,

@@ -196,7 +196,7 @@ pub fn set_generator(version: &str) {
     let _ = GENERATOR.set(format!("Stalagmight {version}"));
 }
 
-fn generator() -> String {
+pub(super) fn generator() -> String {
     GENERATOR
         .get()
         .cloned()
@@ -210,7 +210,7 @@ pub(super) fn upgrade_backup_dir() -> Option<PathBuf> {
 
 /// The files a legacy original was moved or copied into before its first
 /// version 2 write, so a failed write can put the sidecars back.
-struct UpgradeBackup {
+pub(super) struct UpgradeBackup {
     /// `(sidecar at the project, where it went)`.
     moved: Vec<(PathBuf, PathBuf)>,
 }
@@ -219,7 +219,7 @@ impl UpgradeBackup {
     /// Copy the SQLite original into the backups folder and MOVE its
     /// `-journal` / `-wal` / `-shm` sidecars there (R2 L19: a stale journal
     /// beside the JSON file could be rolled into it by an old build).
-    fn take(original: &Path) -> Result<Self, String> {
+    pub(super) fn take(original: &Path) -> Result<Self, String> {
         let dir = upgrade_backup_dir()
             .ok_or_else(|| "the app data folder is not available".to_string())?;
         std::fs::create_dir_all(&dir)
@@ -255,7 +255,7 @@ impl UpgradeBackup {
     }
 
     /// The write failed: put the sidecars back beside the untouched original.
-    fn put_back(self) {
+    pub(super) fn put_back(self) {
         for (sidecar, to) in self.moved {
             if let Err(e) = std::fs::rename(&to, &sidecar) {
                 tracing::error!(error = %e, sidecar = ?sidecar, "could not put a legacy sidecar back");

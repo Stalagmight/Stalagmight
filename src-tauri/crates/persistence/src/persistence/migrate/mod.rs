@@ -332,3 +332,160 @@ pub fn migrate(
         had_history: legacy.history.any(),
     })
 }
+
+/// The cheap header of a legacy (SQLite) `.stalx` at `path`, in the shape
+/// [`super::stalx_v2::probe_path`] gives a version 2 file (plan 6.1, F13):
+/// the `project` member, a `summary` and the SpeleoDB link identity, so
+/// Recents and the other header readers treat both formats alike.
+///
+/// Read-only and cheap: one read-only connection, the frozen reader's schema
+/// guard (a file whose schema would run its own SQL is refused, as every
+/// legacy open refuses it), then aggregate queries only. No migration, no
+/// integrity check, no project load: a newer schema still lists (the full
+/// open refuses it), and a file with a hot journal fails the read-only open
+/// (its first read would have to roll the journal back).
+///
+/// `summary.stations` counts slots (shots plus one start per line), as 0.6.0
+/// listed a file; once the file is converted it counts station entities (a
+/// junction once). `summary.length` leaves Reference shots out (#689) and is
+/// an upper bound for a file not yet opened since the shot-kind backfill.
+/// `version` is the SQLite `user_version` stamp.
+pub fn legacy_header(path: &Path) -> Result<super::stalx_v2::Header, LegacyError> {
+    use std::io::Read as _;
+
+    use rusqlite::{Connection, OpenFlags, OptionalExtension as _};
+
+    use super::stalx_v2::{Format, Header, ProjectInfo, SpeleoDbLink, Summary, SQLITE_MAGIC};
+    use crate::models::survey::ZeroDatum;
+    use crate::models::{GpsCoordinates, UndoMode};
+
+    let mut magic = [0u8; 16];
+    std::fs::File::open(path)?
+        .read_exact(&mut magic)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::UnexpectedEof => LegacyError::NotSqlite,
+            _ => LegacyError::Io(e),
+        })?;
+    if magic.as_slice() != SQLITE_MAGIC {
+        return Err(LegacyError::NotSqlite);
+    }
+    let sql = |e: rusqlite::Error| match e.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::NotADatabase) => LegacyError::NotSqlite,
+        _ => LegacyError::Corrupt(e.to_string()),
+    };
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(sql)?;
+    stalagmight_legacy::persistence::check_schema(&conn)
+        .map_err(|e| LegacyError::Corrupt(format!("{e:#}")))?;
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(sql)?;
+    let (name, location, created, modified): (String, Option<String>, String, String) = conn
+        .query_row(
+            "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(sql)?;
+    let time = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    };
+    let count = |table: &str| -> u64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_or(0, |n| u64::try_from(n).unwrap_or(0))
+    };
+    let lines = count("sections");
+    let shots = count("shots");
+    // The 0.6.0 listing's rule (#689): only an INTEGER-stored Normal (0) or
+    // Jump (1) counts; a file without the column predates the shot kinds.
+    let length_sql = if conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok() {
+        "SELECT COALESCE(SUM(length), 0.0) FROM shots \
+         WHERE typeof(kind) = 'integer' AND kind IN (0, 1)"
+    } else {
+        "SELECT COALESCE(SUM(length), 0.0) FROM shots"
+    };
+    let length: f64 = conn
+        .query_row(length_sql, [], |row| row.get(0))
+        .unwrap_or(0.0);
+    // The datums' GPS only, for the summary's center and bounds (list order:
+    // the first row is the center, as 0.6.0 listed it).
+    let mut datums = Project::new(name.clone(), None);
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT latitude, longitude, depth_reference FROM zero_datums")
+    {
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        });
+        if let Ok(rows) = rows {
+            for (latitude, longitude, depth) in rows.flatten() {
+                if let Ok(gps) = GpsCoordinates::new(latitude, longitude, depth) {
+                    datums.datums.push(ZeroDatum {
+                        station: 0,
+                        via: None,
+                        gps,
+                        accuracy_m: None,
+                        entrance: None,
+                        correction: None,
+                    });
+                }
+            }
+        }
+    }
+    // A pre-v9 file has no link table: no link.
+    let speleodb = conn
+        .query_row(
+            "SELECT endpoint, project_id, project_name, undo_mode FROM speleo_link WHERE id = 1",
+            [],
+            |row| {
+                Ok(SpeleoDbLink {
+                    endpoint: row.get(0)?,
+                    project_id: row.get(1)?,
+                    project_name: row.get(2)?,
+                    undo_mode: row
+                        .get::<_, Option<String>>(3)?
+                        .map(|mode| UndoMode::from_db_str(&mode)),
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let geo = Summary::of(&datums, speleodb.as_ref());
+    let summary = Summary {
+        name: name.clone(),
+        lines,
+        stations: shots.saturating_add(lines),
+        shots,
+        length: length.is_finite().then_some(length),
+        center: geo.center,
+        bounds: geo.bounds,
+        speleodb: geo.speleodb,
+    };
+    Ok(Header {
+        format: Format::Legacy,
+        version: u64::try_from(version).ok().filter(|v| *v > 0),
+        requires: Vec::new(),
+        generator: None,
+        summary: Some(summary),
+        project: Some(ProjectInfo {
+            name,
+            location,
+            created: time(&created),
+            modified: time(&modified),
+        }),
+        speleodb,
+        local: None,
+        complete: true,
+    })
+}

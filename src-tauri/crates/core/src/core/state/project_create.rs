@@ -350,7 +350,7 @@ impl AppState {
     }
 }
 
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
@@ -478,6 +478,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             None
         );
@@ -492,6 +493,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(42.5)
         );
@@ -506,6 +508,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             None
         );
@@ -521,6 +524,7 @@ mod tests {
                     .unwrap()
                     .as_ref()
                     .unwrap()
+                    .settings
                     .surface_elevation,
                 None,
                 "a rejected value must not be stored"
@@ -546,6 +550,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(20.0)
         );
@@ -559,6 +564,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(10.0),
             "undo must restore the prior elevation"
@@ -573,6 +579,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(20.0),
             "redo must reapply the edit"
