@@ -119,9 +119,11 @@ gates (a read-only SpeleoDB session or a read-only file refuses), pop the
 entry and step it (`changeset::step`):
 
 - on a refusal the entry goes back where it was and the refusal is the error;
-- an entry decoded from a file (no session ids) is validated after its step;
-  a violation is rolled back with the inverse step (exact) and the step is
-  refused;
+- an entry decoded from a file (no session ids) is stepped on a project kept
+  aside first and validated after its step; on a violation the project is put
+  back from that copy and the step is refused. Not the inverse step: a step
+  checks only the side it reads, so a crafted entry's other side (its runs,
+  edits or hash) can be refused, and the survey must never be left invalid;
 - on success it moves to the other stack, `modified_at` is stamped, the
   revision is bumped, the file is marked dirty and, on a linked project, the
   SpeleoDB dirty bit is set (an undo is not a forward edit: the Unwind
