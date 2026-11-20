@@ -147,6 +147,14 @@ mod fuzz_shrink_tests;
 #[cfg(sg_unported)]
 mod fuzz_undo_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point; the profiler prints"
+)]
+mod import_commands_tests;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;
 #[cfg(sg_unported)]
