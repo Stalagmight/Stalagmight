@@ -37,7 +37,8 @@
 //! - `frame-change-moved`: a frame change moved one station relative to
 //!   another (plan 4.3: the survey translates rigidly, the new frame station
 //!   to the origin), or removing a placement datum that held its piece alone
-//!   moved anything.
+//!   moved anything (both when the topology stays: a sweep promotion moves a
+//!   piece on purpose).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
 //!   `adjust.rs`: constraint groups over the closures the solve ties,
@@ -223,8 +224,11 @@ fn same_up_to_counters(want: &str, got: &str) -> Option<String> {
         }
         if w.starts_with("\"counters\":") && g.starts_with("\"counters\":") {
             let parse = |line: &str| -> BTreeMap<String, u64> {
-                serde_json::from_str(line.trim_start_matches("\"counters\":").trim_end_matches(','))
-                    .unwrap_or_default()
+                serde_json::from_str(
+                    line.trim_start_matches("\"counters\":")
+                        .trim_end_matches(','),
+                )
+                .unwrap_or_default()
             };
             let (wc, gc) = (parse(w), parse(g));
             if wc.keys().eq(gc.keys()) && wc.iter().all(|(k, v)| gc[k] >= *v) {
@@ -241,7 +245,10 @@ fn same_up_to_counters(want: &str, got: &str) -> Option<String> {
 fn diff(want: &Snap, got: &Snap, ids: bool) -> Option<String> {
     if let Some(d) = same_up_to_counters(&want.text, &got.text) {
         if want.datums != got.datums {
-            return Some(format!("datums {:?} -> {:?} ({d})", want.datums, got.datums));
+            return Some(format!(
+                "datums {:?} -> {:?} ({d})",
+                want.datums, got.datums
+            ));
         }
         return Some(d);
     }
@@ -577,7 +584,10 @@ impl Chain {
         let raw = p.raw_positions();
         for (s, [x, y, z]) in raw.iter() {
             if !(x.is_finite() && y.is_finite() && z.is_finite()) {
-                return Err(fail("nonfinite", format!("raw station {s} at ({x}, {y}, {z})")));
+                return Err(fail(
+                    "nonfinite",
+                    format!("raw station {s} at ({x}, {y}, {z})"),
+                ));
             }
         }
         for (i, d) in p.datums.iter().enumerate() {
@@ -750,10 +760,7 @@ impl Chain {
             if !same(c[0], gx) || !same(c[1], gy) {
                 let lines = component_lines(p, s);
                 let all_held = p.stations.keys().all(|t| {
-                    !p.topology()
-                        .lines_of(*t)
-                        .iter()
-                        .any(|l| lines.contains(l))
+                    !p.topology().lines_of(*t).iter().any(|l| lines.contains(l))
                         || held.contains(&groups.find(*t))
                 });
                 let class = if all_held {
@@ -775,10 +782,20 @@ impl Chain {
     /// edit, never move raw geometry; a frame change translates the survey
     /// rigidly (plan 4.3); removing a datum that held its piece alone moves
     /// nothing.
-    fn check_step(op: &Op, p0: &Project, s0: &Snap, s1: &Snap, stats: &mut Stats) -> Result<(), Failure> {
+    fn check_step(
+        op: &Op,
+        p0: &Project,
+        s0: &Snap,
+        s1: &Snap,
+        stats: &mut Stats,
+    ) -> Result<(), Failure> {
         let same_topology = s0.lines == s1.lines
             && s0.junctions == s1.junctions
-            && s0.closures.iter().map(|c| (c.1, c.2)).eq(s1.closures.iter().map(|c| (c.1, c.2)));
+            && s0
+                .closures
+                .iter()
+                .map(|c| (c.1, c.2))
+                .eq(s1.closures.iter().map(|c| (c.1, c.2)));
         let moved_most = || -> f64 {
             s0.xyz
                 .iter()
@@ -806,7 +823,12 @@ impl Chain {
                 }
             }
         }
-        let role_on = |s: &Snap| s.datums.iter().find(|d| d.station == target).map(|d| d.role);
+        let role_on = |s: &Snap| {
+            s.datums
+                .iter()
+                .find(|d| d.station == target)
+                .map(|d| d.role)
+        };
         let (role_before, role_after) = (role_on(s0).flatten(), role_on(s1).flatten());
         let stores_fix = !matches!(op, Op::Remove { .. })
             && role_after == Some(DatumRole::GpsFix)
@@ -829,10 +851,21 @@ impl Chain {
             let alone = removed.is_some_and(|r| {
                 let lines = component_lines(p0, r.station);
                 s0.datums.iter().enumerate().all(|(j, d)| {
-                    j == *k || !p0.topology().lines_of(d.station).iter().any(|l| lines.contains(l))
+                    j == *k
+                        || !p0
+                            .topology()
+                            .lines_of(d.station)
+                            .iter()
+                            .any(|l| lines.contains(l))
                 })
             });
-            if alone && removed.is_some_and(|r| r.role == Some(DatumRole::Placement)) {
+            // Only when the topology stays: a closure that was the sole tie
+            // to another placed piece is promoted by the sweep (plan 5.5),
+            // and then the piece legitimately moves onto the other.
+            if same_topology
+                && alone
+                && removed.is_some_and(|r| r.role == Some(DatumRole::Placement))
+            {
                 if frame_before == Some(*k) {
                     // A frame change: one translation for every station.
                     let Some((s, t)) = s0.xyz.iter().find_map(|(s, [x, y, _])| {
@@ -954,7 +987,10 @@ impl Chain {
                 self.say(&format!("  refused: {why}"));
                 let s1 = snap(&project(&self.state));
                 if let Some(d) = diff(&s0, &s1, true) {
-                    return Err(fail("refusal-mutated", format!("{op} refused ({why}): {d}")));
+                    return Err(fail(
+                        "refusal-mutated",
+                        format!("{op} refused ({why}): {d}"),
+                    ));
                 }
                 if s0.text != s1.text || self.undo_depth() != depth0 {
                     return Err(fail(
@@ -975,9 +1011,12 @@ impl Chain {
             let placed_component = |at: &StationRef| {
                 station_at(&p0, *at).is_some_and(|s| {
                     let lines = component_lines(&p0, s);
-                    p0.datums
-                        .iter()
-                        .any(|d| p0.topology().lines_of(d.station).iter().any(|l| lines.contains(l)))
+                    p0.datums.iter().any(|d| {
+                        p0.topology()
+                            .lines_of(d.station)
+                            .iter()
+                            .any(|l| lines.contains(l))
+                    })
                 })
             };
             if placed_component(a) && placed_component(b) {
@@ -1005,14 +1044,20 @@ impl Chain {
         // Undo it at once, then redo it: both to the bit, session ids too.
         let r = self.state.undo();
         if !r.success {
-            return Err(fail("undo-inexact", format!("undo of {op} refused: {:?}", r.error)));
+            return Err(fail(
+                "undo-inexact",
+                format!("undo of {op} refused: {:?}", r.error),
+            ));
         }
         if let Some(d) = diff(&s0, &snap(&project(&self.state)), true) {
             return Err(fail("undo-inexact", format!("undo of {op}: {d}")));
         }
         let r = self.state.redo();
         if !r.success {
-            return Err(fail("redo-inexact", format!("redo of {op} refused: {:?}", r.error)));
+            return Err(fail(
+                "redo-inexact",
+                format!("redo of {op} refused: {:?}", r.error),
+            ));
         }
         if let Some(d) = diff(&s1, &snap(&project(&self.state)), true) {
             return Err(fail("redo-inexact", format!("redo of {op}: {d}")));
@@ -1035,7 +1080,10 @@ impl Chain {
             if r.success {
                 return Err(fail(
                     "undo-across-reopen",
-                    format!("an undo below the persisted window (floor {}) succeeded", self.floor),
+                    format!(
+                        "an undo below the persisted window (floor {}) succeeded",
+                        self.floor
+                    ),
                 ));
             }
             if let Some(d) = diff(&prev, &snap(&project(&self.state)), true) {
@@ -1084,17 +1132,26 @@ impl Chain {
             path: Some(self.path.clone()),
         });
         if !saved.success {
-            return Err(fail("reopen-drift", format!("save refused: {:?}", saved.error)));
+            return Err(fail(
+                "reopen-drift",
+                format!("save refused: {:?}", saved.error),
+            ));
         }
         let closed = self.state.execute(Command::CloseProject);
         if !closed.success {
-            return Err(fail("reopen-drift", format!("close refused: {:?}", closed.error)));
+            return Err(fail(
+                "reopen-drift",
+                format!("close refused: {:?}", closed.error),
+            ));
         }
         let opened = self.state.execute(Command::OpenProject {
             path: self.path.clone(),
         });
         if !opened.success {
-            return Err(fail("reopen-drift", format!("open refused: {:?}", opened.error)));
+            return Err(fail(
+                "reopen-drift",
+                format!("open refused: {:?}", opened.error),
+            ));
         }
         let p1 = project(&self.state);
         let s1 = snap(&p1);

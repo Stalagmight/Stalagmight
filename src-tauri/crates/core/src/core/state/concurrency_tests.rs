@@ -460,9 +460,9 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
         return outcome;
     };
     let Some((state, files)) = starting_state(seed, temp.path()) else {
-        outcome
-            .problems
-            .push(format!("seed {seed}: the starting survey could not be saved"));
+        outcome.problems.push(format!(
+            "seed {seed}: the starting survey could not be saved"
+        ));
         return outcome;
     };
     let state = Arc::new(state);
@@ -631,10 +631,9 @@ fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
 
     // GUARD ON DISK: the fingerprint describes the file, so a plain save
     // succeeds and the file reads back as the survey.
-    if let Some(path) = project.file_path.clone() {
+    if let Some(path) = project.file_path {
         let expected = state.with_file(|file| file.fingerprint.clone());
-        if let (Some(expected), Ok((_, on_disk))) = (expected, Fingerprint::read(&path, u64::MAX))
-        {
+        if let (Some(expected), Ok((_, on_disk))) = (expected, Fingerprint::read(&path, u64::MAX)) {
             if !on_disk.same_content(&expected) {
                 problems.push(format!(
                     "the guard's fingerprint does not describe {} any more, so the next save \
@@ -750,7 +749,9 @@ fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<S
         return Vec::new();
     };
     let Some((state, files)) = starting_state(seed, temp.path()) else {
-        return vec![format!("seed {seed}: the starting survey could not be saved")];
+        return vec![format!(
+            "seed {seed}: the starting survey could not be saved"
+        )];
     };
     let progress = Progress::new(1);
     let stop = AtomicBool::new(false);
@@ -862,7 +863,7 @@ fn a_full_load_racing_edits_never_leaves_a_stale_derived_cache() {
         })
     };
     let editor = {
-        let (state, stop, config) = (Arc::clone(&state), Arc::clone(&stop), config.clone());
+        let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
         std::thread::spawn(move || {
             let _config = config.adopt();
             let mut rng = Rng::new(11);
@@ -957,7 +958,7 @@ fn a_display_toggle_racing_undo_never_writes_a_history_that_does_not_fit_the_bod
     let stop = Arc::new(AtomicBool::new(false));
     let config = crate::test_helpers::ConfigHandoff::capture();
     let toggler = {
-        let (state, stop, config) = (Arc::clone(&state), Arc::clone(&stop), config.clone());
+        let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
         std::thread::spawn(move || {
             let _config = config.adopt();
             let mut on = false;

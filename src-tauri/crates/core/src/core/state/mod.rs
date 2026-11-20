@@ -326,17 +326,17 @@ mod raw_data_tests;
 mod recents_tests;
 #[cfg(test)]
 #[expect(
-    clippy::expect_used,
-    reason = "test kit: a setup step that fails is a broken fixture"
-)]
-mod robustness_kit;
-#[cfg(test)]
-#[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test kit: a setup step that fails is a broken fixture"
+)]
+mod robustness_kit;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

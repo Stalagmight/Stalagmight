@@ -31,7 +31,7 @@
 //! A panic fails the run; the last `FZ706-STEP` line printed names the seed
 //! and the step.
 //!
-//! Knobs (the farm's, unchanged):
+//! Knobs (unchanged from the SQLite build):
 //! - `FZ706_FIRST`: first seed, default 0.
 //! - `FZ706_SEEDS`: number of seeds, default 64.
 //! - `FZ706_STEPS`: steps per seed, default 40.
@@ -197,9 +197,10 @@ fn canonical(project: &Project) -> String {
     let mut p = project.clone();
     p.modified_at = p.created_at;
     p.file_path = None;
-    stalx_v2::encode(&p, &Extras::default(), Mode::Normal)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_else(|e| format!("<unencodable: {e}>"))
+    stalx_v2::encode(&p, &Extras::default(), Mode::Normal).map_or_else(
+        |e| format!("<unencodable: {e}>"),
+        |b| String::from_utf8_lossy(&b).into_owned(),
+    )
 }
 
 /// The survey in memory, or `None` with no project open.
@@ -1002,7 +1003,11 @@ fn a_file_truncated_under_the_app_is_neither_read_nor_overwritten() {
             .open(&open)
             .and_then(|f| f.set_len(0))
             .expect("another program truncates the open file");
-        assert_eq!(memory(&world.state), before, "the survey in memory is untouched");
+        assert_eq!(
+            memory(&world.state),
+            before,
+            "the survey in memory is untouched"
+        );
         let saved = project::save_project_impl(&world.state, None);
         assert!(
             !saved.success
@@ -1070,7 +1075,11 @@ fn f1_b_a_restore_of_the_renamed_open_file_leaves_the_survey_alone() {
         let backup_bytes = std::fs::read(&backup).expect("backup");
         recovery::restore_from_backup_impl(&world.state, renamed.clone(), backup)
             .expect("the renamed file is not the open project's path");
-        assert_eq!(memory(&world.state), before, "the survey in memory is untouched");
+        assert_eq!(
+            memory(&world.state),
+            before,
+            "the survey in memory is untouched"
+        );
         assert_eq!(std::fs::read(&renamed).expect("restored"), backup_bytes);
         let saved = project::save_project_impl(&world.state, None);
         assert!(

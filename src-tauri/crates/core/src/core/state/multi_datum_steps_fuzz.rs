@@ -17,9 +17,9 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
-    local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick,
-    Coordinates, GpsCoordinates, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions, SplitSide,
-    StationId, StationRef,
+    local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick, Coordinates,
+    GpsCoordinates, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions, SplitSide, StationId,
+    StationRef,
 };
 
 /// Accuracies a datum is given: the default (a hard pin), an explicit hard
@@ -89,25 +89,48 @@ pub(super) enum Op {
         acc: Option<f64>,
     },
     /// Set datum `k` again with its own GPS: only the accuracy changes.
-    Accuracy { k: usize, acc: Option<f64> },
+    Accuracy {
+        k: usize,
+        acc: Option<f64>,
+    },
     /// Remove datum `k`.
-    Remove { k: usize },
-    Merge { a: StationRef, b: StationRef },
+    Remove {
+        k: usize,
+    },
+    Merge {
+        a: StationRef,
+        b: StationRef,
+    },
     /// Detach `b`'s line from the station `a` and `b` share.
-    Unmerge { a: StationRef, b: StationRef },
-    Closure { a: StationRef, b: StationRef },
+    Unmerge {
+        a: StationRef,
+        b: StationRef,
+    },
+    Closure {
+        a: StationRef,
+        b: StationRef,
+    },
     /// Split `line` at station `at`. `side_b` is kept in the trail for old
     /// replay strings; the halves share the station now (plan 5.4, S9), so
     /// there is no datum side to choose.
-    Split { line: LineId, at: u32, side_b: bool },
+    Split {
+        line: LineId,
+        at: u32,
+        side_b: bool,
+    },
     Combine {
         kept: LineId,
         kept_end: LineEnd,
         other: LineId,
         other_end: LineEnd,
     },
-    DeleteLine { line: LineId },
-    DeleteShot { line: LineId, index: usize },
+    DeleteLine {
+        line: LineId,
+    },
+    DeleteShot {
+        line: LineId,
+        index: usize,
+    },
     /// Add a shot: `pos` -1 before the first shot, `k` after shot `k`, or
     /// `None` at the end.
     AddShot {
@@ -120,7 +143,11 @@ pub(super) enum Op {
     },
     /// Move Line by `(dx, dy)`: a free piece's placement moves (refused on a
     /// datum-held piece).
-    MoveLine { line: LineId, dx: f64, dy: f64 },
+    MoveLine {
+        line: LineId,
+        dx: f64,
+        dy: f64,
+    },
     Undo,
     Redo,
     Reopen,
@@ -429,11 +456,12 @@ pub(super) fn next_op(
     let frame = p.frame_datum();
     let frame_station = frame.and_then(|f| p.datums.get(f)).map(|d| d.station);
     let spare_frame = |rng: &mut Rng, at: StationRef| -> Option<Op> {
-        (station_at(p, at).is_some() && station_at(p, at) == frame_station && !rng.chance(15))
-            .then(|| Op::Accuracy {
+        (station_at(p, at).is_some() && station_at(p, at) == frame_station && !rng.chance(15)).then(
+            || Op::Accuracy {
                 k: frame.unwrap_or(0),
                 acc,
-            })
+            },
+        )
     };
     Some(match roll {
         0..=16 => {
@@ -472,7 +500,12 @@ pub(super) fn next_op(
         }
         37..=46 => {
             // Two separately placed pieces on purpose now and then.
-            let placed: Vec<StationId> = p.placement_datums().into_iter().flatten().filter_map(|d| p.datums.get(d).map(|d| d.station)).collect();
+            let placed: Vec<StationId> = p
+                .placement_datums()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| p.datums.get(d).map(|d| d.station))
+                .collect();
             let (a, b) = if placed.len() >= 2 && rng.chance(40) {
                 let (x, y) = (rng.pick(&placed)?, rng.pick(&placed)?);
                 (
@@ -699,15 +732,13 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             },
         ),
         Op::DeleteLine { line } => state.execute(Command::DeleteLine { line_id: *line }),
-        Op::DeleteShot { line, index } => {
-            match p.line(*line).and_then(|s| s.shots.get(*index)) {
-                Some(shot) => state.execute(Command::DeleteShot {
-                    line_id: *line,
-                    shot_id: shot.id,
-                }),
-                None => return Applied::Skipped("no shot".to_string()),
-            }
-        }
+        Op::DeleteShot { line, index } => match p.line(*line).and_then(|s| s.shots.get(*index)) {
+            Some(shot) => state.execute(Command::DeleteShot {
+                line_id: *line,
+                shot_id: shot.id,
+            }),
+            None => return Applied::Skipped("no shot".to_string()),
+        },
         Op::AddShot {
             line,
             pos,

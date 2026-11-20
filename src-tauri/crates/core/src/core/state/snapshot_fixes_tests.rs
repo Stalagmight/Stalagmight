@@ -92,7 +92,13 @@ fn surveyed() -> (AppState, LineId, LineId) {
 
 /// Each datum as (slot, latitude bits, accuracy, role, entrance), in list
 /// order.
-type Summary = Vec<(Option<StationRef>, u64, Option<f64>, Option<DatumRole>, Option<bool>)>;
+type Summary = Vec<(
+    Option<StationRef>,
+    u64,
+    Option<f64>,
+    Option<DatumRole>,
+    Option<bool>,
+)>;
 
 fn summary(project: &Project) -> Summary {
     project
@@ -177,7 +183,10 @@ fn each_datums_entrance_answer_survives_undo_and_a_reopen() {
     }
     let answers = |s: &Summary| s.iter().map(|d| d.4).collect::<Vec<_>>();
     let expected = live(&state);
-    assert_eq!(answers(&expected), vec![Some(true), Some(false), None, None]);
+    assert_eq!(
+        answers(&expected),
+        vec![Some(true), Some(false), None, None]
+    );
 
     let r = state.execute(Command::DeleteLine { line_id: d });
     assert!(r.success, "{:?}", r.error);

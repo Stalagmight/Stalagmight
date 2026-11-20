@@ -34,8 +34,7 @@ use super::robustness_kit::NullSink;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    reminted_shot_uuid, ClosureStrategy, LineData, LineId, ShotData, StationRef,
-    FEATURE_ID_STRIDE,
+    reminted_shot_uuid, ClosureStrategy, LineData, LineId, ShotData, StationRef, FEATURE_ID_STRIDE,
 };
 use crate::persistence::stalx_v2::{self, DecodeOptions, Format};
 use crate::persistence::{Database, ResolvedWarning};
@@ -141,7 +140,10 @@ fn all_ids(state: &AppState) -> Vec<Vec<String>> {
 fn assert_ids_unique(state: &AppState, at: &str) {
     let mut seen = BTreeSet::new();
     for uuid in all_ids(state).into_iter().flatten() {
-        assert!(seen.insert(uuid.clone()), "{at}: shot UUID {uuid} held twice");
+        assert!(
+            seen.insert(uuid.clone()),
+            "{at}: shot UUID {uuid} held twice"
+        );
     }
     let violations = state.integrity_violation_messages();
     assert!(violations.is_empty(), "{at}: {violations:?}");
@@ -168,7 +170,10 @@ fn check_the_opened_copies(state: &AppState, how: &str) {
         "{how}: the copy's repeats are renamed"
     );
     assert_ids_unique(state, how);
-    assert!(short_shot_resolved(state, 1), "{how}: the ignore follows the rename");
+    assert!(
+        short_shot_resolved(state, 1),
+        "{how}: the ignore follows the rename"
+    );
     assert!(
         !short_shot_resolved(state, 0),
         "{how}: and does not leak to the first copy"
@@ -196,7 +201,11 @@ fn reopening_without_saving_derives_the_same_ids_and_a_save_persists_them() {
     let path = legacy_file(dir.path(), 3, true);
     let first = all_ids(&open(&path));
     let state = open(&path);
-    assert_eq!(all_ids(&state), first, "two opens of the unsaved file agree");
+    assert_eq!(
+        all_ids(&state),
+        first,
+        "two opens of the unsaved file agree"
+    );
 
     // The first save upgrades the file: the derived ids, and the ignore
     // under the copy's new id.

@@ -51,9 +51,7 @@ use super::robustness_kit::{
 };
 use super::{AppState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::core::{Command, CommandResult};
-use crate::models::{
-    ClosureStrategy, GpsCoordinates, LineUpdates, ShotUpdates, StationRef,
-};
+use crate::models::{ClosureStrategy, GpsCoordinates, LineUpdates, ShotUpdates, StationRef};
 use crate::persistence::stalx_v2::{self, Format};
 use crate::test_helpers::isolated_config;
 
@@ -211,7 +209,12 @@ fn history_labels(state: &AppState) -> (Vec<String>, Vec<String>) {
     let labels = |items: Vec<crate::core::UndoHistoryItem>| {
         items
             .into_iter()
-            .map(|i| format!("{} | {} | {:?}", i.command_type, i.description, i.preview_data))
+            .map(|i| {
+                format!(
+                    "{} | {} | {:?}",
+                    i.command_type, i.description, i.preview_data
+                )
+            })
             .collect()
     };
     (
@@ -593,9 +596,7 @@ fn inject_into_first_station(text: &str) -> Option<String> {
     let start = text.find("\"stations\":[\n")? + "\"stations\":[\n".len();
     let end = start + text[start..].find('\n')?;
     let record = &text[start..end];
-    let (body, tail) = record
-        .strip_suffix(',')
-        .map_or((record, ""), |b| (b, ","));
+    let (body, tail) = record.strip_suffix(',').map_or((record, ""), |b| (b, ","));
     let body = body.strip_suffix(']')?;
     let changed = if let Some(open) = body.find('{') {
         format!(
@@ -642,7 +643,9 @@ fn check_unknown_members(seed: u32) -> Vec<String> {
         return Vec::new();
     }
     let Some(state) = open_fresh(&path) else {
-        return vec![label("a file with tier 2 and 3 unknown content would not open")];
+        return vec![label(
+            "a file with tier 2 and 3 unknown content would not open",
+        )];
     };
     let mut problems = Vec::new();
     if state.read_only_reason().is_some() {
@@ -729,7 +732,13 @@ fn check_unknown_record(seed: u32) -> Vec<String> {
     }
     let before = canonical_snapshot(&state);
     let edit = mutate(&state, &mut Rng::new(seed));
-    if edit.success || !edit.error.as_deref().unwrap_or("").starts_with(READ_ONLY_FILE_CODE) {
+    if edit.success
+        || !edit
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with(READ_ONLY_FILE_CODE)
+    {
         problems.push(label(&format!(
             "an edit was not refused as {READ_ONLY_FILE_CODE}: {:?}",
             edit.error
@@ -843,7 +852,9 @@ fn check_degradation(seed: u32, degradation: &Degradation) -> Option<Vec<String>
     let label = |what: &str| format!("seed {seed} [{}]: {what}", degradation.id);
     crate::app_dirs::init_for_test();
     let temp = TempDir::new().ok()?;
-    let path = temp.path().join(format!("degraded-{seed}-{}.stalx", degradation.id));
+    let path = temp
+        .path()
+        .join(format!("degraded-{seed}-{}.stalx", degradation.id));
     write_legacy(&path, &mut Rng::new(seed), "Degraded");
     // A surgery SQLite refuses is a skip: nothing was built.
     let connection = Connection::open(&path).ok()?;
@@ -945,7 +956,10 @@ fn format_properties_gate() {
                 problems.extend(found);
                 *checked.entry("degradation").or_default() += 1;
             }
-            None => problems.push(format!("[{}]: the degradation was not built", degradation.id)),
+            None => problems.push(format!(
+                "[{}]: the degradation was not built",
+                degradation.id
+            )),
         }
     }
     println!("format properties: {checked:?}");

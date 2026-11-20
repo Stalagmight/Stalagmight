@@ -142,8 +142,16 @@ fn build_reference(seed: u32, moves: usize, extra: usize) -> Option<(TempDir, Re
     if old == new {
         return None;
     }
-    let old_view = observe(&open_fresh(&write_copy(stash.path(), "old-view.stalx", &old)?)?);
-    let new_view = observe(&open_fresh(&write_copy(stash.path(), "new-view.stalx", &new)?)?);
+    let old_view = observe(&open_fresh(&write_copy(
+        stash.path(),
+        "old-view.stalx",
+        &old,
+    )?)?);
+    let new_view = observe(&open_fresh(&write_copy(
+        stash.path(),
+        "new-view.stalx",
+        &new,
+    )?)?);
     if differences(&old_view, &new_view).is_empty() {
         return None;
     }
@@ -271,7 +279,11 @@ struct Outcome {
 fn stray_temps(dir: &Path) -> Vec<String> {
     entries(dir)
         .into_iter()
-        .filter(|name| name.ends_with(".tmp"))
+        .filter(|name| {
+            Path::new(name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("tmp"))
+        })
         .collect()
 }
 
@@ -351,7 +363,8 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
     }
 
     // No panic; it opens; exactly the expected reference.
-    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open_fresh(&destination)));
+    let opened =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open_fresh(&destination)));
     let state = match opened {
         Err(payload) => {
             outcome.problems.push(label(&format!(
@@ -431,8 +444,8 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
             match fresh.restore_project_from_backup(&destination, &temp) {
                 Ok(_) => {
                     match open_fresh(&destination) {
-                        Some(state) if differences(&reference.new_view, &observe(&state))
-                            .is_empty() => {}
+                        Some(state)
+                            if differences(&reference.new_view, &observe(&state)).is_empty() => {}
                         _ => outcome.problems.push(label(
                             "restoring the complete temp did not install the interrupted save",
                         )),
@@ -445,9 +458,9 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
                     }
                     *outcome.notes.entry("complete-temp-restored").or_default() += 1;
                 }
-                Err(e) => outcome
-                    .problems
-                    .push(label(&format!("restoring the complete temp was refused: {e}"))),
+                Err(e) => outcome.problems.push(label(&format!(
+                    "restoring the complete temp was refused: {e}"
+                ))),
             }
         }
     }
@@ -577,7 +590,11 @@ fn stage_upgrade(dir: &Path, original: &LegacyOriginal, step: usize) -> Option<(
         // The sidecars moved beside the copy; then the temp written.
         2 | 3 => {
             std::fs::write(&destination, &original.main).ok()?;
-            place_legacy(&backups, "cave.20261120T000000.000000000Z.pre-v2.stalx", original)?;
+            place_legacy(
+                &backups,
+                "cave.20261120T000000.000000000Z.pre-v2.stalx",
+                original,
+            )?;
             if step == 3 {
                 std::fs::write(temp_path_of(&destination), &original.upgraded).ok()?;
             }
@@ -585,7 +602,11 @@ fn stage_upgrade(dir: &Path, original: &LegacyOriginal, step: usize) -> Option<(
         // Renamed.
         _ => {
             std::fs::write(&destination, &original.upgraded).ok()?;
-            place_legacy(&backups, "cave.20261120T000000.000000000Z.pre-v2.stalx", original)?;
+            place_legacy(
+                &backups,
+                "cave.20261120T000000.000000000Z.pre-v2.stalx",
+                original,
+            )?;
         }
     }
     Some((destination, backup))
@@ -741,7 +762,10 @@ fn the_engine_injects_at_the_temp_path_the_pipeline_uses() {
     let state = build_state(1, false, 6).unwrap();
     let temp = TempDir::new().unwrap();
     let destination = temp.path().join("cave.stalx");
-    assert_eq!(temp_path_of(&destination), temp.path().join("cave.stalx.tmp"));
+    assert_eq!(
+        temp_path_of(&destination),
+        temp.path().join("cave.stalx.tmp")
+    );
     assert!(state.save_project(Some(destination.clone())).success);
     let before = std::fs::read(&destination).unwrap();
     mutate(&state, &mut Rng::new(3));
@@ -805,10 +829,7 @@ fn a_completed_upgrade_moves_the_hot_journal_beside_the_kept_original() {
         "the open rolled the journal back"
     );
     assert!(state.save_project(None).success);
-    assert_eq!(
-        stalx_v2::sniff(&std::fs::read(&path).unwrap()),
-        Format::V2
-    );
+    assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
     for suffix in ["-journal", "-wal", "-shm"] {
         assert!(
             !sidecar_path(&path, suffix).exists(),
@@ -846,7 +867,9 @@ fn a_failed_upgrade_puts_the_journal_back() {
     let _config = isolated_config();
     crate::app_dirs::init_for_test();
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join(format!("upgrade-fails-{}.stalx", std::process::id()));
+    let path = temp
+        .path()
+        .join(format!("upgrade-fails-{}.stalx", std::process::id()));
     write_legacy(&path, &mut Rng::new(5), "Legacy");
     let (interrupted, journal) = mid_transaction(&std::fs::read(&path).unwrap()).unwrap();
     std::fs::write(&path, &interrupted).unwrap();

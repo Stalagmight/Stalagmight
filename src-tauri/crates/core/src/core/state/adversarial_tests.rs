@@ -382,9 +382,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
                 direction: None,
                 shots: (0..rng.below(3)).map(|_| hostile_shot(rng)).collect(),
-                cave_section_id: rng
-                    .chance(20)
-                    .then(|| *rng.pick(&[0, u32::MAX, 999_999])),
+                cave_section_id: rng.chance(20).then(|| *rng.pick(&[0, u32::MAX, 999_999])),
             }),
         },
         11 => Move {
@@ -476,8 +474,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
         20 => {
             // `GpsCoordinates::new` validates, so an out-of-range pair yields
             // no command at all: confirmed rather than worked around.
-            match GpsCoordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng))
-            {
+            match GpsCoordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng)) {
                 Ok(coordinates) => Move {
                     label: format!("SetZeroDatum({line_id}/{index}, hostile gps)"),
                     result: state.execute(Command::SetZeroDatum {
