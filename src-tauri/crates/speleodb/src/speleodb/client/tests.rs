@@ -266,6 +266,25 @@ fn revisions_and_native_file_routes_are_exact() {
     assert!(r[0].contains("filename=\"project.stalx\""));
     assert!(r[0].contains("My commit"));
     assert!(r[0].contains("SQLite format 3\0synthetic bytes"));
+    assert!(r[0].contains("application/vnd.sqlite3"));
+}
+
+#[test]
+fn a_version_2_upload_is_sent_as_json() {
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        f.path(),
+        b"{\"format\":\"stalx\",\"version\":2,\"end\":true}\n",
+    )
+    .unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "My commit").unwrap();
+    let r = s.finish();
+    assert!(r[0].contains("filename=\"project.stalx\""));
+    assert!(r[0].contains("Content-Type: application/json"), "{}", r[0]);
+    assert!(!r[0].contains("vnd.sqlite3"));
 }
 
 #[test]

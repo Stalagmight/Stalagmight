@@ -150,7 +150,7 @@ impl AppState {
     /// Caller holds project and excludes command mutations.
     pub(super) fn speleodb_require_clean_project(
         &self,
-        project: Option<&crate::models::Project>,
+        project: Option<&crate::models::survey::Project>,
     ) -> Result<(), SpeleoDbError> {
         let _ = (&project,);
         crate::core::stub::not_ported("speleodb_admin::speleodb_require_clean_project")

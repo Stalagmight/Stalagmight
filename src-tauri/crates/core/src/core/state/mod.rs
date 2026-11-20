@@ -339,7 +339,7 @@ mod snapshot_fixes_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_acquire_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
@@ -363,21 +363,26 @@ mod speleodb_edit_gate_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_explicit_release_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_install_sidecar_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_nonblocking_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_push_v2_tests;
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
@@ -396,6 +401,12 @@ mod split_combine_kit;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_line_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test fixtures: a refused build is a broken test setup"
+)]
+mod stalx_v2_fixtures;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

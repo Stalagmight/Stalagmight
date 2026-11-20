@@ -1548,20 +1548,48 @@ impl AppState {
     ///
     /// `reason` goes to the log so the disappearance of a visible history is explicable.
     fn speleodb_clear_inherited_undo(&self, reason: &str) {
-        // A fresh edit session starts at BASE, so any chain position from an earlier one
-        // is stale: the next Unwind restarts from BASE rather than resuming a walk that
-        // described a different working copy.
-        self.speleodb_set_unwound_from(None);
-        // ...and with the inherited history about to go with it, nothing in the stack is
-        // inherited any more. A watermark left behind would cut this session's own work
-        // out of its first push.
-        self.speleodb_set_inherited_through(None);
-        if let Ok(mut stack) = self.undo_stack.lock() {
-            if stack.is_empty() && !stack.can_redo() {
-                return;
-            }
+        let dropped = {
+            let mut stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // ...and with the inherited history going, nothing in the stack is
+            // inherited any more. A watermark left behind would cut this session's own
+            // work out of its first push.
+            stack.set_inherited_through(None);
+            let had_history = !stack.is_empty() || stack.can_redo();
             let dropped = stack.len();
             stack.clear();
+            had_history.then_some(dropped)
+        };
+        let chain_moved = self.with_file(|file| {
+            let sync = &mut file.extras.local.speleodb;
+            let moved = sync.unwound_from.is_some() || sync.inherited_through.is_some();
+            // A fresh edit session starts at BASE, so any chain position from an earlier
+            // one is stale: the next Unwind restarts from BASE rather than resuming a walk
+            // that described a different working copy.
+            sync.unwound_from = None;
+            sync.inherited_through = None;
+            if dropped.is_some() {
+                // The copy is clean (the caller checked), so the file's history is the
+                // stack's: it goes too.
+                file.saved_history = crate::persistence::stalx_v2::History::default();
+            }
+            moved
+        });
+        if dropped.is_none() && !chain_moved {
+            return;
+        }
+        // One local-only save makes the clear durable, history and chain together
+        // (R2 B3): a reopen never brings the stranger's history back.
+        if let Err(e) = self.persist_local_state() {
+            tracing::warn!(
+                error = %e,
+                purpose = "never inherit another editor's undo history (#194 b3 / #303)",
+                "could not persist the cleared history; it is cleared in memory"
+            );
+        }
+        if let Some(dropped) = dropped {
             tracing::info!(
                 dropped,
                 reason,
@@ -1746,7 +1774,7 @@ pub(super) struct PendingReverify {
     pub(super) probe: std::thread::JoinHandle<bool>,
 }
 
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 #[expect(
     clippy::panic,
@@ -1764,15 +1792,14 @@ mod tests {
     use std::path::Path;
     // [#275] The push half now lives in `speleodb_push`; these tests still exercise it
     // from here (they share this module's fixtures), so they reach it by its new path.
-    use crate::core::state::speleodb_cache::{
-        preserved_display_settings, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-    };
-    use crate::core::state::speleodb_push::{
-        clear_snapshot_dirty, head_with_empty_retry, type_still_says_ariane,
+    use crate::core::state::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
+    use crate::core::state::speleodb_push::{head_with_empty_retry, type_still_says_ariane};
+    use crate::core::state::stalx_v2_fixtures::{
+        display_at, empty_survey, extras_for, name_at, seed_linked, seed_unlinked, set_display,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
-    use crate::models::{Project, SpeleoLink};
-    use crate::persistence::Database;
+    use crate::models::survey::Project;
+    use crate::models::SpeleoLink;
     use crate::speleodb::auth::TokenStore;
     use crate::speleodb::{DoneResult, PushResult, RemoteState, SpeleoDbError, TransportCause};
     use tempfile::TempDir;
@@ -1979,116 +2006,87 @@ mod tests {
     }
 
     #[test]
-    fn clear_snapshot_dirty_clears_the_flag_in_the_copy() {
-        // #197 guardrail: the push snapshot must never carry has_unpushed_edits to
-        // the server - clear_snapshot_dirty wipes the dirty bit (and last_edit_at)
-        // in the COPY while preserving the hand-off identity.
-        let temp = TempDir::new().expect("temp dir");
-        let path = temp.path().join("snap.stalx");
-        {
-            let mut db = Database::open(&path).expect("open snapshot");
-            db.save_project(&Project::new("Snap".to_owned(), None))
-                .expect("save project");
-            db.save_speleo_link(Some(&SpeleoLink {
-                endpoint: "http://x".to_owned(),
-                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
-                project_name: "Snap".to_owned(),
-                base_commit_sha: Some("abc".to_owned()),
-                has_unpushed_edits: true,
-                last_edit_at: Some("2026-06-27T10:00:00+00:00".to_owned()),
-                last_verify_at: None,
-                undo_mode: None,
-            }))
-            .expect("stamp dirty link");
-        }
-
-        clear_snapshot_dirty(&path, false, None).expect("sanitize the snapshot");
-
-        let db = Database::open_existing(&path).expect("reopen snapshot");
-        let link = db
-            .load_speleo_link()
-            .expect("load link")
-            .expect("link present");
+    fn the_push_snapshot_carries_no_dirty_bit_or_machine_state() {
+        // #197: the live copy is dirty (that's why we're pushing), but the copy sent to
+        // the server must not carry the dirty bit, the edit time, the view or any other
+        // per-machine state: the push mode leaves `local` out entirely, and keeps the
+        // shared link identity (and the project's undo policy) as they are.
+        let mut link = crate::core::state::stalx_v2_fixtures::fixture_link("http://x/", true);
+        link.base_commit_sha = Some("abc".to_owned());
+        let mut extras = extras_for(Some(&link));
+        extras
+            .local
+            .display
+            .insert("grid".to_owned(), "off".to_owned());
+        let project = empty_survey("Snap");
+        let snapshot = crate::core::state::speleodb_push::push_snapshot(
+            &project,
+            &extras,
+            true,
+            crate::speleodb::client::SERVER_UPLOAD_LIMIT_BYTES,
+        )
+        .expect("serialize the snapshot");
+        assert!(!snapshot.undo_history_omitted);
+        let pushed = crate::persistence::stalx_v2::decode(
+            &snapshot.bytes,
+            &crate::persistence::stalx_v2::DecodeOptions::default(),
+        )
+        .expect("the snapshot is a valid file");
         assert!(
-            !link.has_unpushed_edits,
-            "dirty bit cleared in the snapshot copy"
+            pushed.extras.local.is_empty(),
+            "no dirty bit, edit time, BASE or view rides to the server"
         );
-        assert_eq!(link.last_edit_at, None, "last_edit_at cleared too");
-        // Identity is preserved - only the dirty bit / timestamp change.
-        assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
-        assert_eq!(link.project_id, "11111111-1111-1111-1111-111111111111");
+        let identity = pushed.extras.speleodb.expect("the link identity rides");
+        assert_eq!(identity.project_id, "11111111-1111-1111-1111-111111111111");
+        assert_eq!(identity.undo_mode, Some(crate::models::UndoMode::Full));
+        assert_eq!(pushed.project.name, "Snap");
     }
 
     #[test]
-    fn local_display_settings_survive_a_download_replace() {
-        // #197: view toggles are stripped from the server copy, so a fast-forward /
-        // re-open (which replaces the whole local .stalx with the server's) must
-        // carry the user's local display_settings across the overwrite - otherwise
-        // their view resets to defaults on every sync.
+    fn the_open_projects_view_in_memory_survives_a_download_replace() {
+        // #197: view toggles never ride to the server, so a replace of the OPEN copy
+        // must carry the user's view across the overwrite - and the open project's
+        // toggles in memory are the authority (a legacy or never-saved copy holds them
+        // in memory only).
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
-
-        // The user's local file with their view prefs (a project row is present, as
-        // in any real pulled .stalx, so open_existing's validation passes).
-        {
-            let mut db = Database::open(&dest).expect("open local cache");
-            db.save_project(&Project::new("Cache".to_owned(), None))
-                .expect("save project");
-            db.save_display_setting("grid", "off").expect("save grid");
-            db.save_display_setting("color_mode", "depth")
-                .expect("save color_mode");
-        }
-
-        // Snapshot the prefs, then simulate the server file landing (a fresh file
-        // with NO display_settings, as stripped on push).
-        let preserved = preserved_display_settings(&dest);
-        assert_eq!(preserved.len(), 2, "both local prefs captured");
-        std::fs::remove_file(&dest).expect("remove old file");
-        {
-            let mut db = Database::open(&dest).expect("open replaced file");
-            db.save_project(&Project::new("Cache".to_owned(), None))
-                .expect("save project");
-            assert!(
-                db.load_display_settings().expect("load").is_empty(),
-                "server copy carries no view prefs"
-            );
-            restore_display_settings(&db, &preserved);
-        }
-
-        // The user's view survived the replace.
-        let after = Database::open_existing(&dest)
-            .expect("reopen")
-            .load_display_settings()
-            .expect("load restored");
-        assert_eq!(after.get("grid").map(String::as_str), Some("off"));
-        assert_eq!(after.get("color_mode").map(String::as_str), Some("depth"));
-
-        // A first open (no prior local file) has nothing to preserve → defaults.
-        let fresh = temp.path().join("fresh.stalx");
-        assert!(
-            preserved_display_settings(&fresh).is_empty(),
-            "first open preserves nothing"
+        seed_linked_stalx(&dest, GUARD_ID, false);
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        state.with_file(|file| {
+            file.extras
+                .local
+                .display
+                .insert("grid".to_owned(), "off".to_owned());
+        });
+        let native = server_stalx();
+        install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
+            .expect("replace the open copy");
+        assert_eq!(
+            display_at(&dest).get("grid").map(String::as_str),
+            Some("off"),
+            "the in-memory view is kept"
         );
+        let fresh = temp.path().join("fresh.stalx");
+        install_over(&state, native.path(), &fresh, LocalEditsPolicy::Protect)
+            .expect("a first install");
+        assert!(display_at(&fresh).is_empty(), "a first open has defaults");
     }
 
     // --- closing the open project around a cache download-replace ---
 
-    /// Write a minimal openable `.stalx` at `path` and return it.
+    /// Write a minimal openable, unlinked `.stalx` at `path`.
     fn seed_stalx(path: &Path, name: &str) {
-        let mut db = Database::open(path).expect("open seed db");
-        db.save_project(&Project::new(name.to_owned(), None))
-            .expect("save seed project");
+        seed_unlinked(path, name);
     }
 
-    /// Whether a project (and its database handle) is currently open in `state`.
+    /// Whether a project is currently open in `state`.
     fn project_is_open(state: &AppState) -> bool {
-        let project = state.project.lock().expect("project lock").is_some();
-        let database = state.database.lock().expect("database lock").is_some();
-        assert_eq!(
-            project, database,
-            "project and database handles should open/close together"
-        );
-        project
+        state
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
     }
 
     /// Install `source` over `dest` through the session-bound replace, under the
@@ -2098,32 +2096,31 @@ mod tests {
         source: &Path,
         dest: &Path,
         policy: LocalEditsPolicy,
-    ) -> Result<std::collections::HashMap<String, String>, SpeleoDbError> {
-        state.replace_cache_for_session(
+    ) -> Result<(), SpeleoDbError> {
+        let prepared = state.prepare_download(
             source,
+            crate::core::state::stalx_v2_fixtures::fixture_link("http://speleo.test/", false),
+            InheritedUndo::Drop,
+            &crate::persistence::stalx_v2::DecodeOptions::default(),
+        )?;
+        state.replace_cache_for_session(
+            prepared,
             dest,
             GUARD_ID,
             policy,
-            InheritedUndo::Drop,
             state.speleodb_session_generation(),
         )
     }
 
     fn project_name_at(path: &Path) -> String {
-        Database::open_existing(path)
-            .expect("open replaced file")
-            .load_project()
-            .expect("load replaced project")
-            .name
+        name_at(path)
     }
 
     #[test]
     fn replacing_the_open_project_closes_it() {
-        // The download-replace must not leave a live mmap-enabled SQLite connection
-        // on a file it renamed over (SIGBUS / torn reads on Unix, a denied rename on
-        // Windows), so the install drops the handle before the rename (pinned by
-        // `the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock`)
-        // and closes the project once the new bytes are in place.
+        // The open project IS the file the download replaced, so it is closed once
+        // the new bytes are in place (the frontend reopens the cache path), under the
+        // same `project` acquisition as the write.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2169,7 +2166,7 @@ mod tests {
     #[test]
     fn a_first_install_leaves_the_open_project_alone() {
         // A first pull writes into an empty cache: `dest` cannot be canonicalized
-        // and cannot be the file a live connection holds.
+        // and cannot be the open file.
         let temp = TempDir::new().expect("temp dir");
         let open_path = temp.path().join("open.stalx");
         seed_stalx(&open_path, "Open");
@@ -2187,14 +2184,10 @@ mod tests {
 
     #[test]
     fn replacing_the_open_project_under_a_poisoned_lock_still_closes_it() {
-        // The end state of a successful replace under a poisoned mutex: project and
-        // handle both gone. Poisoning only means an earlier call panicked while
-        // holding the lock; the guarded value is an `Option`, and emptying it is
-        // exactly the recovery. Whether the handle went BEFORE the rename cannot be
-        // seen from here (Linux renames over an open file); that is pinned by
-        // `the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock`.
-        // The policy is beside the point, so the confirmed discard keeps the guard
-        // out of the way.
+        // Poisoning only means an earlier call panicked while holding the lock; the
+        // guarded value is still there, and the install recovers it. The file state's
+        // mutex is the one the install reads the outgoing view through. The policy is
+        // beside the point, so the confirmed discard keeps the guard out of the way.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_stalx(&dest, "Cache");
@@ -2204,36 +2197,21 @@ mod tests {
         assert!(state.open_project(dest.clone()).success, "open the cache");
         assert!(project_is_open(&state));
 
-        // Poison the database lock the way a real panic would: panic while its
+        // Poison the file-state lock the way a real panic would: panic while its
         // guard is held, and swallow the unwind so the test itself survives.
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = state.database.lock().expect("database lock");
-            panic!("simulated panic while holding the database lock");
+            let _guard = state.file.lock().expect("file lock");
+            panic!("simulated panic while holding the file lock");
         }));
         assert!(poisoned.is_err(), "the closure must have panicked");
         assert!(
-            state.database.is_poisoned(),
-            "the database lock must now be poisoned"
+            state.file.is_poisoned(),
+            "the file lock must now be poisoned"
         );
 
         install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
             .expect("the open copy is replaced, poisoned lock or not");
-        assert!(
-            state
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none(),
-            "the live database handle must be gone, poisoned or not"
-        );
-        assert!(
-            state
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none(),
-            "the project must be dropped too"
-        );
+        assert!(!project_is_open(&state), "the project must be dropped too");
         assert_eq!(project_name_at(&dest), "Server Copy");
     }
 
@@ -2267,32 +2245,28 @@ mod tests {
     #[test]
     fn the_session_replace_closes_preserves_and_swaps_atomically() {
         // The chokepoint the pull goes through: preserve the local view toggles,
-        // drop the live handle to the destination, then swap in the downloaded copy
-        // via temp+rename.
+        // close the open copy, and swap in the downloaded copy via temp+rename.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
-        Database::open(&dest)
-            .expect("open local cache")
-            .save_display_setting("grid", "off")
-            .expect("save grid");
+        set_display(&dest, "grid", "off");
 
         let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
 
-        let preserved = install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
+        install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
             .expect("replace the cache file");
 
         assert_eq!(
-            preserved.get("grid").map(String::as_str),
+            display_at(&dest).get("grid").map(String::as_str),
             Some("off"),
-            "local view toggles are captured before the replace"
+            "local view toggles ride into the replaced copy"
         );
         assert!(
             !project_is_open(&state),
-            "the live handle is dropped when the file is replaced"
+            "the open copy is closed when its file is replaced"
         );
         assert_eq!(
             project_name_at(&dest),
@@ -2320,31 +2294,28 @@ mod tests {
     /// Write a cache `.stalx` at `path` carrying a SpeleoDB link for `project_id`
     /// with the given dirty bit.
     fn seed_linked_stalx(path: &Path, project_id: &str, dirty: bool) {
-        let mut db = Database::open(path).expect("open seed db");
-        db.save_project(&Project::new("Cached".to_owned(), None))
-            .expect("save seed project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://speleo.test/".to_owned(),
-            project_id: project_id.to_owned(),
-            project_name: "Cached".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: dirty,
-            last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
-            last_verify_at: None,
-            // Current linked fixtures carry an explicit project policy. Legacy NULL
-            // behavior is covered separately by the undo-policy migration tests.
-            undo_mode: Some(crate::models::UndoMode::Full),
-        }))
-        .expect("save link");
+        seed_linked(
+            path,
+            "Cached",
+            &SpeleoLink {
+                endpoint: "http://speleo.test/".to_owned(),
+                project_id: project_id.to_owned(),
+                project_name: "Cached".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
+                last_verify_at: None,
+                // Current linked fixtures carry an explicit project policy. Legacy
+                // NULL behavior is covered separately by the undo-policy tests.
+                undo_mode: Some(crate::models::UndoMode::Full),
+            },
+        );
     }
 
     /// A native server project whose `.stalx` payload is recognisable on disk.
     fn server_stalx() -> tempfile::NamedTempFile {
-        let temp = TempDir::new().expect("server project temp dir");
-        let project = temp.path().join("server.stalx");
-        seed_stalx(&project, "Server Copy");
         let native = tempfile::NamedTempFile::new().expect("native file");
-        std::fs::copy(&project, native.path()).expect("copy native file");
+        seed_stalx(native.path(), "Server Copy");
         native
     }
     /// [#303] The discard verb destroys un-pushed work with no way back, and until now it
@@ -2418,9 +2389,10 @@ mod tests {
             dest.to_string_lossy(),
             "and the copy 'keep local' would open"
         );
+        // The file stores the instant; it reads back in RFC 3339 with an offset.
         assert_eq!(
             last_edit_at.as_deref(),
-            Some("2026-07-26T09:00:00Z"),
+            Some("2026-07-26T09:00:00+00:00"),
             "and when the work was last touched"
         );
     }
@@ -2453,8 +2425,8 @@ mod tests {
     #[test]
     fn guard_allows_a_clean_or_absent_local_copy() {
         // No behaviour change when there is nothing to lose: a clean cached copy,
-        // an unmanaged `.stalx` with no link row, and a first pull into an empty
-        // cache all replace exactly as before.
+        // an unmanaged `.stalx` with no link, and a first pull into an empty cache
+        // all replace exactly as before.
         let temp = TempDir::new().expect("temp dir");
         let state = AppState::new().expect("state");
 
@@ -2479,15 +2451,13 @@ mod tests {
         // `has_unpushed_edits: false`, so "I cannot read this file" was recorded as
         // "this file is clean" and the server copy was pulled straight over it.
         //
-        // The realistic causes are exactly the ones where work is recoverable: a hot
-        // journal after a kill or power loss, which a READ-ONLY connection cannot roll
-        // back (`SQLITE_READONLY_ROLLBACK`) though a read-write open would, and a
-        // transient `SQLITE_BUSY` while another writer is mid-commit. Refusing is
-        // recoverable (the prompt offers keep-local, or an explicit take-remote);
-        // overwriting is not.
+        // The realistic causes are exactly the ones where work is recoverable: a
+        // legacy copy with a hot journal after a kill or power loss, or a damaged
+        // file. Refusing is recoverable (the prompt offers keep-local, or an explicit
+        // take-remote); overwriting is not.
         let temp = TempDir::new().expect("temp dir");
         let unreadable = temp.path().join("unreadable.stalx");
-        std::fs::write(&unreadable, b"not a sqlite database at all").expect("write junk");
+        std::fs::write(&unreadable, b"not a project at all").expect("write junk");
         let state = AppState::new().expect("state");
 
         let err = state
@@ -2500,13 +2470,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_staging_leaves_the_open_project_open() {
+    fn a_failed_download_read_leaves_the_open_project_open() {
         // A failed install must not leave the project closed backend-side while the
         // frontend still displays it - every later command, auto-save included, would
-        // then fail with "no project open". The install stages to a temp before it
-        // touches the open project, so a staging failure leaves `dest` untouched and
-        // never closes the project. A failure AFTER the handle is dropped is pinned by
-        // `a_failed_sidecar_move_reopens_the_open_projects_database`.
+        // then fail with "no project open". The download is read and checked before
+        // anything is locked, so a failure there leaves `dest` untouched and never
+        // closes the project. A failure at the write is pinned by
+        // `a_failed_sidecar_move_keeps_the_open_project`.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2522,10 +2492,10 @@ mod tests {
             &dest,
             LocalEditsPolicy::Discard,
         )
-        .expect_err("staging a missing download must fail");
+        .expect_err("reading a missing download must fail");
         assert!(
             !matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
-            "the failure here is the staging, not the guard: {err:?}"
+            "the failure here is the download, not the guard: {err:?}"
         );
 
         assert_eq!(
@@ -2540,10 +2510,9 @@ mod tests {
         );
     }
 
-    /// Make the install's sidecar step fail: an inert `-shm` beside `dest`, and a
-    /// non-empty directory where it would be parked, so moving it aside cannot succeed.
-    /// That step runs after the open project's database handle has been dropped and
-    /// before the rename, which is exactly the window the tests below need to observe.
+    /// Make the install's sidecar step fail: an inert `-shm` beside `dest` (a legacy
+    /// copy's leftover), and a non-empty directory where it would be parked, so moving
+    /// it aside cannot succeed. That step runs before the write.
     fn block_the_sidecar_move(dest: &Path) {
         let shm = std::path::PathBuf::from(format!("{}-shm", dest.display()));
         std::fs::write(&shm, b"").expect("inert shm sidecar");
@@ -2553,11 +2522,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_sidecar_move_reopens_the_open_projects_database() {
-        // The install drops the open project's database handle before it moves the
-        // sidecars and renames (a live handle must not survive into the rename). A
-        // failure in between must reopen the ORIGINAL file, or the project stays open
-        // in memory with no database behind it.
+    fn a_failed_sidecar_move_keeps_the_open_project() {
+        // A sidecar that cannot be moved aside fails the install before the write:
+        // the original copy, its sidecar and the open project are all as they were.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2579,71 +2546,10 @@ mod tests {
             before,
             "the original bytes are still in place"
         );
-        assert!(
-            project_is_open(&state),
-            "the project AND its reopened database are both there again"
-        );
+        assert!(project_is_open(&state), "the project is still open");
         assert!(
             std::path::PathBuf::from(format!("{}-shm", dest.display())).exists(),
             "and the sidecar is back beside the original"
-        );
-    }
-
-    /// Unix only: it makes the original unreadable to observe the handle, and only unix
-    /// permissions make a file unopenable to its owner.
-    #[cfg(unix)]
-    #[test]
-    #[expect(
-        clippy::print_stderr,
-        reason = "say so when a privileged run has to skip the check"
-    )]
-    fn the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock() {
-        // A drop written as `if let Ok(..)` does nothing on a poisoned mutex, and the
-        // install then renames a new file over a live SQLite handle and its 256 MB mmap
-        // (SIGBUS / torn reads on Unix, a denied rename on Windows). Linux renames over
-        // an open file anyway, so the end state of a successful install cannot show
-        // whether the handle went first. This stops the install between the drop and
-        // the rename instead, with the original made unreopenable: the slot can only
-        // be empty afterwards if the drop really happened.
-        use std::os::unix::fs::PermissionsExt;
-        let temp = TempDir::new().expect("temp dir");
-        let dest = temp.path().join("project.stalx");
-        seed_stalx(&dest, "Cache");
-        let native = server_stalx();
-
-        let state = AppState::new().expect("state");
-        assert!(state.open_project(dest.clone()).success, "open the cache");
-        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = state.database.lock().expect("database lock");
-            panic!("simulated panic while holding the database lock");
-        }));
-        assert!(poisoned.is_err() && state.database.is_poisoned());
-
-        block_the_sidecar_move(&dest);
-        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o000))
-            .expect("make the original unreadable");
-        if std::fs::File::open(&dest).is_ok() {
-            // Privileged runs (root in a container) ignore the mode, so the reopen
-            // would succeed and nothing could be observed.
-            eprintln!("skipped: this user can open a mode-000 file");
-            return;
-        }
-
-        let err = install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
-            .expect_err("the sidecar move fails, and so does the reopen");
-        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644))
-            .expect("restore the mode for cleanup");
-        assert!(
-            err.to_string().contains("could not be reopened"),
-            "the reopen of the original was attempted and refused, got {err:?}"
-        );
-        assert!(
-            state
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none(),
-            "the live handle was dropped before the rename, poisoned lock or not"
         );
     }
 
@@ -2655,14 +2561,9 @@ mod tests {
         // UPDATED: this used to assert the opposite half, that a dirty OPEN copy
         // vetoes a replace of a DIFFERENT, clean copy of the same project. It cannot
         // legitimately: replacing `cached` destroys nothing that lives in `open_path`,
-        // and the shape is reachable in normal use (Save-As carries the `speleo_link`
-        // row forward, so a user can keep their own copy of P open while re-opening P
-        // from the browser). The refusal it produced named the CACHE path and the
-        // OTHER file's edit time - describing work living in a file it did not name -
-        // and its "take the server copy and discard my local changes" route would have
-        // destroyed the clean cache copy while leaving the dirty edits untouched. It
-        // also blocked every pull, fast-forward and revision-restore on P for as long
-        // as that unrelated copy stayed dirty.
+        // and the shape is reachable in normal use (Save-As carries the link forward,
+        // so a user can keep their own copy of P open while re-opening P from the
+        // browser).
         let temp = TempDir::new().expect("temp dir");
         // A clean copy in the cache...
         let cached = temp.path().join("cached.stalx");
@@ -2718,9 +2619,8 @@ mod tests {
 
         install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
             .expect("the confirmed discard still overwrites on purpose");
-        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            replaced.load_project().expect("load replaced project").name,
+            project_name_at(&dest),
             "Server Copy",
             "the confirmed-discard path keeps working"
         );
@@ -2847,6 +2747,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "C11: counts BASE writes across the family, and the publish tip recovery is in C12's speleodb_publish (a stub on this branch); un-ignore at integration"]
     fn base_commit_sha_advances_only_at_sanctioned_sites() {
         // Tripwire (mirrors the MUTATION_ENTRYPOINTS guard): BASE may change ONLY
         // via the sanctioned triggers. If a count below changes, a base write was
@@ -2891,10 +2792,10 @@ mod tests {
 
     #[test]
     fn push_flushes_to_disk_before_snapshotting() {
-        // #195 quiescent-point invariant: the push must flush in-memory edits to the
-        // live .stalx (save_project) BEFORE taking the VACUUM snapshot, or the
-        // uploaded snapshot would miss the last edit (data loss). The snapshot - NOT
-        // the live bytes - is then what upload_stalx streams. The ordering can't be
+        // #195 quiescent-point invariant: the push saves the in-memory edits to the
+        // local .stalx BEFORE it serializes the push snapshot, so the commit and the
+        // local copy describe the same survey. The snapshot is then what upload_stalx
+        // streams. The ordering can't be
         // observed without a client seam, so pin it structurally (like the
         // BASE-advance tripwire); the live round-trips prove the behaviour itself.
         let src = push_prod_source();
@@ -2906,19 +2807,19 @@ mod tests {
         let save = upload
             .find(".save_project_at_generation(")
             .expect("push flushes via save_project");
-        let vacuum = upload
-            .find("vacuum_snapshot(")
-            .expect("push snapshots via vacuum_snapshot");
+        let snapshot = upload
+            .find("push_snapshot(")
+            .expect("push serializes via push_snapshot");
         let upload_call = upload
             .find("upload_stalx(")
             .expect("push streams via upload_stalx");
         assert!(
-            save < vacuum,
-            "save_project (flush) must precede vacuum_snapshot - the snapshot must be quiescent (#195)"
+            save < snapshot,
+            "the save must precede the push snapshot - the push carries what is on disk (#195)"
         );
         assert!(
-            vacuum < upload_call,
-            "the VACUUM snapshot must be taken before upload_stalx streams it (#195)"
+            snapshot < upload_call,
+            "the snapshot must be taken (and fitted to the limit) before upload_stalx streams it (#195, sdk#3)"
         );
     }
 
@@ -2943,21 +2844,20 @@ mod tests {
         // gate, so a token-less session can't keep mutating a project it can't push.
         let temp = TempDir::new().expect("temp");
         let path = temp.path().join("remote.stalx");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Remote".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
-            project_name: "Remote".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_linked(
+            &path,
+            "Remote",
+            &SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                project_name: "Remote".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: None,
+            },
+        );
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(path).success, "open remote fixture");
@@ -2983,21 +2883,20 @@ mod tests {
     fn remote_fixture_with_dirty_bit(dirty: bool) -> (TempDir, AppState) {
         let temp = TempDir::new().expect("temp");
         let path = temp.path().join("remote.stalx");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Remote".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
-            project_name: "Remote".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: dirty,
-            last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_linked(
+            &path,
+            "Remote",
+            &SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                project_name: "Remote".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
+                last_verify_at: None,
+                undo_mode: None,
+            },
+        );
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(path).success, "open remote fixture");
@@ -3100,15 +2999,8 @@ mod tests {
     fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
-        let mut link = state.speleodb_open_link().expect("link");
-        link.endpoint = endpoint.to_owned();
         state
-            .database
-            .lock()
-            .expect("database")
-            .as_ref()
-            .expect("open")
-            .save_speleo_link(Some(&link))
+            .speleodb_mutate_link(|link| endpoint.clone_into(&mut link.endpoint))
             .expect("save link");
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
@@ -3329,22 +3221,32 @@ mod tests {
             .expect("project")
             .file_path
             .expect("path");
-        let bytes = serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot");
-        let result = state.open_project_prepared(
-            path,
-            Some((state.speleodb_session_generation(), bytes)),
-            || {
-                state
-                    .project
-                    .lock()
-                    .expect("project")
-                    .as_mut()
-                    .expect("open")
-                    .name = "Concurrent edit".into();
-                Ok(())
-            },
+        // The consent is taken over the project as it is now...
+        let consent = {
+            let _project = state.project.lock().expect("project");
+            state.open_project_token_locked()
+        };
+        let native = server_stalx();
+        let prepared = state
+            .prepare_download(
+                native.path(),
+                state.speleodb_open_link().expect("link"),
+                InheritedUndo::Drop,
+                &crate::persistence::stalx_v2::DecodeOptions::default(),
+            )
+            .expect("prepare");
+        // ...and an edit lands while the download runs.
+        let _ = state.with_project_mut(|project| {
+            project.name = "Concurrent edit".into();
+            crate::core::CommandResult::success()
+        });
+        let before = std::fs::read(&path).expect("cache");
+        let result = state.open_project_download(prepared, path.clone(), consent, true);
+        assert!(
+            matches!(result, Err(SpeleoDbError::SessionMoved)),
+            "{result:?}"
         );
-        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).expect("cache"), before);
         assert_eq!(
             state.get_project_state().expect("project kept").name,
             "Concurrent edit"
@@ -3352,6 +3254,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "C11: the cold-file access probe (speleodb_admin) is C12's and still reads SQLite on this branch; un-ignore at integration"]
     fn local_only_access_inspection_never_contacts_the_current_server() {
         let (base, _listener, seen) = recording_stub("{}");
         let (temp, state) = editing_fixture(&base);
@@ -3375,6 +3278,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "C11: the cold-file access probe (speleodb_admin) is C12's and still reads SQLite on this branch; un-ignore at integration"]
     fn cold_file_open_preflight_reads_link_and_remote_access_without_switching() {
         let (base, _listener, seen) = recording_stub(
             r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Restricted","permission":"READ_ONLY","active_mutex":{"user":"other@x"}}"#,
@@ -3540,6 +3444,7 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
+    #[ignore = "C11: the pre-push name fold (speleodb_fold_local_name) is C12's stub on this branch; un-ignore at integration"]
     fn a_late_metadata_response_cannot_rename_a_different_open_project() {
         let (_temp, state) = editing_fixture("https://unused.example/");
         let original = state
@@ -5495,12 +5400,7 @@ mod tests {
     /// see `speleodb_foreign`).
     #[test]
     fn the_push_snapshot_path_refuses_a_crafted_link_id() {
-        let temp = TempDir::new().expect("temp");
         for bad in CRAFTED_IDS {
-            let path = temp.path().join(format!("crafted-{}.stalx", bad.len()));
-            let mut db = Database::open(&path).expect("open db");
-            db.save_project(&Project::new("Crafted".to_owned(), None))
-                .expect("save project");
             let link = SpeleoLink {
                 endpoint: "https://sdb.invalid".to_owned(),
                 project_id: bad.to_owned(),
@@ -5511,10 +5411,9 @@ mod tests {
                 last_verify_at: None,
                 undo_mode: None,
             };
-            db.save_speleo_link(Some(&link)).expect("save link");
             let state = AppState::new().expect("state");
             state.set_project_for_tests(Project::new("Crafted".to_owned(), None));
-            state.set_database_for_tests(db);
+            state.set_speleo_link_for_tests(Some(&link));
             let generation = state.speleodb_session_generation();
 
             // The verbs read the link through the validated snapshot first...

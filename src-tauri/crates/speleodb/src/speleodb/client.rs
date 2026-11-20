@@ -902,6 +902,16 @@ pub fn patch_project(
         )
     })
 }
+/// The media type of an uploaded `.stalx`: a legacy SQLite file says so, a
+/// version 2 file (canonical JSON, plan 10.1) is `application/json`.
+fn upload_content_type(content: &[u8]) -> &'static str {
+    if content.starts_with(b"SQLite format 3\0") {
+        "application/vnd.sqlite3"
+    } else {
+        "application/json"
+    }
+}
+
 pub fn upload_stalx(
     base: &str,
     token: &str,
@@ -931,7 +941,7 @@ pub fn upload_stalx(
             artifact: vec![types::MultipartFile {
                 content: content.clone().into(),
                 file_name: Some("project.stalx".into()),
-                content_type: Some("application/vnd.sqlite3".into()),
+                content_type: Some(upload_content_type(&content).into()),
             }],
         };
         let response = sdk_reply(

@@ -21,13 +21,9 @@
 use std::path::Path;
 
 use super::speleodb::local_dto;
-use super::speleodb_cache::{
-    preserved_display_settings, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
-use super::speleodb_cache_install::{stage_download, sync_staged_file};
+use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy, OpenProjectToken};
 use super::AppState;
 use crate::models::SpeleoLink;
-use crate::persistence::Database;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 /// The open project a revision swap was asked for, captured under ONE `project`
@@ -40,29 +36,26 @@ use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 /// matter (a close, an open, a logout, another install) bumps the generation on
 /// its own, and the swap's commit consumes the generation it was bound to.
 pub(super) struct SwapBinding {
-    generation: u64,
+    /// The open project exactly as it was (session generation and project
+    /// revision), so an edit made while the download ran refuses the swap
+    /// instead of being discarded by it.
+    token: OpenProjectToken,
     /// The open project's persisted link when the swap started.
     pub(super) link: SpeleoLink,
-    /// The open project exactly as it was, so an edit made while the download
-    /// ran refuses the swap instead of being discarded by it.
-    snapshot: Vec<u8>,
 }
 
 impl AppState {
     /// Bind a revision swap to the project open now (see [`SwapBinding`]).
     /// `NoRemoteProject` when that is not a linked project.
     pub(super) fn speleodb_swap_binding(&self) -> Result<SwapBinding, SpeleoDbError> {
-        let project = self
+        let _project = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let link = self.speleodb_open_link()?;
-        let snapshot =
-            serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         Ok(SwapBinding {
-            generation: self.speleodb_session_generation(),
+            token: self.open_project_token_locked(),
             link,
-            snapshot,
         })
     }
 
@@ -91,30 +84,18 @@ impl AppState {
             self.guard_local_edits(&link.project_id, dest)
                 .map_err(local_dto)?;
         }
-        self.stamp_downloaded_link(native, link)
+        // C11: the download is read and checked in memory (a legacy SQLite revision
+        // migrated), then installed and opened in one commit.
+        let prepared = self
+            .prepare_download(
+                native,
+                link,
+                undo,
+                &super::speleodb_pull::download_decode_options(),
+            )
             .map_err(local_dto)?;
-        let staged = stage_download(native, dest, undo, sync_staged_file).map_err(local_dto)?;
-        {
-            let db = Database::open_existing(&staged)
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-            restore_display_settings(&db, &preserved_display_settings(dest));
-        }
-        sync_staged_file(&staged).map_err(local_dto)?;
-        let result = self.open_project_download(
-            staged.to_path_buf(),
-            dest.to_path_buf(),
-            (binding.generation, binding.snapshot),
-            editing,
-        )?;
-        if result.success {
-            Ok(())
-        } else {
-            Err(local_dto(SpeleoDbError::Io(
-                result
-                    .error
-                    .unwrap_or_else(|| "Could not reload project".into()),
-            )))
-        }
+        self.open_project_download(prepared, dest.to_path_buf(), binding.token, editing)
+            .map_err(local_dto)
     }
 
     /// Run `then` only while the copy a swap installed at `dest` is still the
