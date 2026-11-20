@@ -437,9 +437,9 @@ impl Project {
         let edited = if range.kind == RangeDeleteKind::WholeLine {
             None
         } else if split_only {
-            Some(copy.run_edit(|p| p.split_out_range(line, range, None))?)
+            Some(copy.run_edit(self, |p| p.split_out_range(line, range, None))?)
         } else {
-            Some(copy.run_edit(|p| p.gap_close(line, range))?)
+            Some(copy.run_edit(self, |p| p.gap_close(line, range))?)
         };
         let (removed_closures, promoted_closures, swept_closures, across) = match edited {
             Some(edited) => (

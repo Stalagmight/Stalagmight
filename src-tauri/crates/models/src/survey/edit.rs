@@ -250,21 +250,27 @@ impl Project {
         edit: impl FnOnce(&mut Project) -> Result<(T, Epilogue), EditError>,
     ) -> Result<Edited<T>, EditError> {
         let mut work = self.clone();
-        let edited = work.run_edit(edit)?;
+        let edited = work.run_edit(self, edit)?;
         *self = work;
         Ok(edited)
     }
 
-    /// The operation protocol on `self` itself (a working copy): snapshot,
-    /// mutate, epilogue, validate. On `Err` `self` is part-way and must be
-    /// dropped.
+    /// The operation protocol on `self`, a working copy of `original`:
+    /// snapshot, mutate, epilogue, validate. On `Err` `self` is part-way and
+    /// must be dropped. `original` (the state before the edit) is read only
+    /// when the epilogue removes closures newly across one shot.
     pub(super) fn run_edit<T>(
         &mut self,
+        original: &Project,
         edit: impl FnOnce(&mut Project) -> Result<(T, Epilogue), EditError>,
     ) -> Result<Edited<T>, EditError> {
         let before = self.anchor_snapshot();
-        let skipped_before = self.closures_across_one_shot_in(before.positions());
         let (value, epilogue) = edit(self)?;
+        let skipped_before = if epilogue.remove_across_one_shot {
+            original.closures_across_one_shot_in(before.positions())
+        } else {
+            Vec::new()
+        };
         let report = self.finish_edit(&before, &skipped_before, &epilogue);
         let violations = self.validate();
         if !violations.is_empty() {

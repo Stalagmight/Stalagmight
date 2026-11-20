@@ -163,7 +163,7 @@ impl Project {
         let hand_move_copied = station.is_some_and(|s| l.hand_moves.contains_key(&s));
         let total = l.shots.len() + usize::from(matches!(cut, Cut::InShot { .. }));
         let mut copy = self.clone();
-        let edited = copy.run_edit(|p| {
+        let edited = copy.run_edit(self, |p| {
             let second = p.split_line_in_place(line, cut, (name_a, name_b), options)?;
             Ok((second, split_epilogue(line)))
         })?;

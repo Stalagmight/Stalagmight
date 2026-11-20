@@ -607,7 +607,7 @@ impl Project {
             .collect();
         let reasons = self.delete_shift_blocked_reasons(line, index);
         let mut copy = self.clone();
-        let edited = copy.run_edit(|p| {
+        let edited = copy.run_edit(self, |p| {
             let deleted = p.remove_shot_station(line, index)?;
             Ok((deleted, Epilogue::topology(EditContext::geometry(line))))
         })?;
