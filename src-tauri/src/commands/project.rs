@@ -627,3 +627,147 @@ mod close_lock_tests {
         );
     }
 }
+
+/// The `.stalx` v2 file-status commands, end to end on an [`AppState`]: what
+/// the frontend's banners, save prompt and dirty tracking read.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: a failed setup step is the point"
+)]
+mod file_status_tests {
+    use std::path::{Path, PathBuf};
+
+    use tempfile::TempDir;
+
+    use crate::core::state::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+    use crate::core::{AppState, Command, CommandResult};
+    use crate::models::survey::{LineMeta, Project, StartAt};
+    use crate::models::{ShotData, ShotUpdates};
+    use crate::persistence::stalx_v2::{self, Extras, Mode};
+
+    /// One free line of two shots, laid out from its start at the origin.
+    fn survey() -> Project {
+        let mut p = Project::new("File status", None);
+        let shot = |length: f64| ShotData {
+            length,
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            depth_in: 1.0,
+            depth_out: 1.0,
+            ..ShotData::default()
+        };
+        let line = p
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![shot(10.0), shot(7.5)],
+            )
+            .unwrap();
+        let start = p.line(line).unwrap().start;
+        p.set_placement(start, 0.0, 0.0).unwrap();
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+        p
+    }
+
+    fn write_v2(dir: &Path) -> PathBuf {
+        let path = dir.join("status.stalx");
+        let bytes = stalx_v2::encode(&survey(), &Extras::default(), Mode::Normal).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn open(path: &Path) -> AppState {
+        let state = AppState::new().unwrap();
+        let r = state.execute(Command::OpenProject {
+            path: path.to_path_buf(),
+        });
+        assert!(r.success, "{:?}", r.error);
+        state
+    }
+
+    fn edit(state: &AppState) -> CommandResult {
+        let project = state.get_project_state().unwrap();
+        let line = &project.lines()[0];
+        state.execute(Command::UpdateShot {
+            line_id: line.id,
+            shot_id: line.shots[0].id,
+            updates: ShotUpdates {
+                length: Some(11.25),
+                ..ShotUpdates::default()
+            },
+        })
+    }
+
+    #[test]
+    fn an_ordinary_v2_file_reports_nothing_and_tracks_unsaved_changes() {
+        let dir = TempDir::new().unwrap();
+        let state = open(&write_v2(dir.path()));
+        assert_eq!(state.read_only_reason(), None);
+        assert_eq!(state.take_conversion_notice(), None);
+        assert!(!state.has_unsaved_changes());
+
+        assert!(edit(&state).success);
+        assert!(state.has_unsaved_changes());
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(r.success, "{:?}", r.error);
+        assert!(!state.has_unsaved_changes());
+    }
+
+    #[test]
+    fn a_file_changed_on_disk_is_refused_and_the_overwrite_answer_writes_it() {
+        let dir = TempDir::new().unwrap();
+        let path = write_v2(dir.path());
+        let state = open(&path);
+        assert!(edit(&state).success);
+
+        // Another program rewrites the file (same survey, other bytes).
+        let mut theirs = std::fs::read_to_string(&path).unwrap();
+        theirs.push('\n');
+        std::fs::write(&path, &theirs).unwrap();
+
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(!r.success);
+        assert!(r
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(EXTERNALLY_MODIFIED_CODE));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+        assert!(state.has_unsaved_changes());
+
+        let r = state.save_project_overwriting(None);
+        assert!(r.success, "{:?}", r.error);
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), theirs);
+        assert!(!state.has_unsaved_changes());
+        // And the guard follows the bytes it wrote: a plain save passes again.
+        assert!(edit(&state).success);
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(r.success, "{:?}", r.error);
+    }
+
+    #[test]
+    fn a_file_made_with_a_newer_stalagmight_says_why_it_is_read_only() {
+        let dir = TempDir::new().unwrap();
+        let path = write_v2(dir.path());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-lofts\"]", 1);
+        assert_ne!(patched, text);
+        std::fs::write(&path, patched.as_bytes()).unwrap();
+        let state = open(&path);
+
+        let reason = state.read_only_reason().expect("read-only");
+        assert!(reason.contains("newer Stalagmight"), "{reason}");
+        assert!(reason.contains("x-lofts"), "{reason}");
+        // The Overwrite answer is no way around it.
+        let r = state.save_project_overwriting(None);
+        assert!(!r.success);
+        assert!(r
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(READ_ONLY_FILE_CODE));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), patched);
+    }
+}

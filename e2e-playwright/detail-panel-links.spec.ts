@@ -675,6 +675,38 @@ test.describe('Detail Panel Links', () => {
       }).toBe(false);
     });
 
+    test('a junction lists the shots that meet it on the other lines, and shares its name', async ({ page }) => {
+      // On the station graph a merge is ONE station two lines pass (plan 9.3):
+      // its Connected section names the other line's shot too, and both slots
+      // show the one Station ID.
+      await createProjectWithLines(page);
+
+      const lineIds = await getLineIds(page);
+      const mainLineId = lineIds[0]!;
+      const sideLineId = lineIds[1]!;
+
+      await createDirectMerge(
+        page,
+        { line_id: mainLineId, station_index: 3 },
+        { line_id: sideLineId, station_index: 0 }
+      );
+
+      await selectStation(page, mainLineId, 3);
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+      const otherShot = page.getByTestId(`station-detail-other-shot-${sideLineId}-0`);
+      await expect(otherShot).toBeVisible();
+      await expect(otherShot).toContainText('On ');
+      const id = await page.getByTestId('station-detail-id').textContent();
+
+      await selectStation(page, sideLineId, 0);
+      await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
+      await expect(page.getByTestId(`detail-unmerge-${mainLineId}-3`)).toHaveAttribute(
+        'aria-label',
+        /^Detach .+ from this station$/
+      );
+    });
+
     test('clicking broken-chain icon removes the listed closure', async ({ page }) => {
       await createProjectWithLines(page);
 
@@ -1153,10 +1185,11 @@ test.describe('Detail Panel Links', () => {
 
       await selectStation(page, mainLineId, 1);
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
-      // The merge partner is named with its line: this is where two lines meet.
+      // The merge partner is the SAME station on the other line (the station
+      // graph, plan 9.3): it shows the junction's one name, with that line.
       const partner = page.getByTestId(`station-${sideLineId}-0-link`);
-      await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 0');
-      await expect(partner).toContainText('0');
+      await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 8');
+      await expect(partner).toContainText('8');
       await expect(partner).toContainText('Side Passage');
 
       // Every station has a name: one never renamed keeps the one seeded from its index.

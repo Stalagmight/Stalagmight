@@ -655,8 +655,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Section commands (#327) record one: every other mocked mutation stays
       // a no-op under undo, as before.
       const structuralUndo: Array<Record<string, unknown>> = [];
-      // Joins a split left co-located but unmerged, `[first half end, second
-      // half start]`: what the real backend finds by position.
+      // Ends left co-located but unmerged, `[a, b]`: what the real backend finds
+      // by position. (A split no longer leaves one: its halves share the split
+      // station, recorded as a merge.)
       let colocatedJoins: Array<[{ line_id: number; station_index: number }, { line_id: number; station_index: number }]> = [];
       // The ties a combine at `keptJoin` / `otherJoin` removes because, combined,
       // they would be a loop closure across one shot (#746). A narrow model of
@@ -5816,10 +5817,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             line.name = options.name_a;
             line.color = options.color_a;
             lines.push(newLine);
-            colocatedJoins.push([
-              { line_id: line.id, station_index: line.shots.length },
-              { line_id: newLine.id, station_index: 0 },
-            ]);
+            // The station graph (plan 5.4): the second half starts ON the split
+            // station, so the halves share it, one junction. The mock records
+            // it as a merge of the two slots.
+            (currentProject!.station_merges as Array<{ station_a: MockStationRef; station_b: MockStationRef }>).push({
+              station_a: { line_id: line.id, station_index: line.shots.length },
+              station_b: { line_id: newLine.id, station_index: 0 },
+            });
             // The backend touches the project, as every edit does (the ruler and the reach
             // field reset on modified_at); the undo snapshot keeps the value from before.
             if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
