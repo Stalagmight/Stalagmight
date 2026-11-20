@@ -648,7 +648,7 @@ fn map_based_reports(p: &Project) -> Vec<Violation> {
     }
     let mut parent: BTreeMap<crate::StationId, crate::StationId> = BTreeMap::new();
     fn find(
-        parent: &mut BTreeMap<crate::StationId, crate::StationId>,
+        parent: &BTreeMap<crate::StationId, crate::StationId>,
         x: crate::StationId,
     ) -> crate::StationId {
         let mut root = x;
@@ -665,7 +665,7 @@ fn map_based_reports(p: &Project) -> Vec<Violation> {
         let mut from = line.start;
         for (index, shot) in line.shots.iter().enumerate() {
             parent.entry(shot.to).or_insert(shot.to);
-            let (ra, rb) = (find(&mut parent, from), find(&mut parent, shot.to));
+            let (ra, rb) = (find(&parent, from), find(&parent, shot.to));
             if ra == rb {
                 out.push(Violation::Cycle {
                     line: line.id,
@@ -738,7 +738,7 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
         let extra = add(&mut p, StartAt::New, vec![flat(30.0, 4.0); 6]);
         let lines = [lines[0], lines[1], lines[2], extra];
         let stations: Vec<crate::StationId> = p.stations.keys().copied().collect();
-        for _ in 0..1 + below(3) {
+        for _ in 0..=below(3) {
             let line = lines[below(lines.len())];
             let shots = p.line(line).unwrap().shots.len();
             if shots == 0 {

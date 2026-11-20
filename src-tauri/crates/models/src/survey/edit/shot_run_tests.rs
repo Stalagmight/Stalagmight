@@ -183,7 +183,7 @@ fn a_run_is_its_updates_one_at_a_time_to_the_bit() {
     let mut runs: BTreeMap<&str, usize> = BTreeMap::new();
     for seed in 0..120 {
         let mut p = random_survey(seed, 60);
-        let mut rng = Lcg(seed ^ 0x5eed_0f_2026);
+        let mut rng = Lcg(seed ^ 0x5eed_2026);
         if seed % 3 == 0 {
             with_hand_moves(&mut p, &mut rng);
         }
@@ -355,19 +355,14 @@ fn a_run_refuses_as_update_shot_does() {
         assert!(matches!(one, Err((1, _))), "{one:?}");
         assert_eq!(as_a_run(&mut b, &edits), one);
     }
-    let gone = vec![(
-        line,
-        9_999,
-        ShotUpdates {
-            length: Some(7.0),
-            ..ShotUpdates::default()
-        },
-    )];
+    let gone = ShotUpdates {
+        length: Some(7.0),
+        ..ShotUpdates::default()
+    };
     let mut q = p.clone();
     let mut run = ShotEditRun::new(&mut q);
-    let (l, s, u) = &gone[0];
     assert_eq!(
-        run.update_shot(*l, *s, u),
+        run.update_shot(line, 9_999, &gone),
         Err(EditError::refused(crate::SHOT_GONE))
     );
 }

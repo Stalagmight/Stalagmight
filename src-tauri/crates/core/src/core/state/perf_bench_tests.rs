@@ -779,7 +779,7 @@ fn perf_parts_20k() {
             |mut q| {
                 drop(black_box(
                     q.settle_anchors(&before, &EditContext::geometry(line)),
-                ))
+                ));
             },
         ),
     );
@@ -882,7 +882,7 @@ fn perf_parts_combine_open_20k() {
             |()| {
                 drop(black_box(
                     b.state.combine_candidates(StationRef::new(b.leaf, 0)),
-                ))
+                ));
             },
         ),
     );
@@ -944,7 +944,7 @@ fn perf_parts_combine_open_20k() {
     add(
         "open: v2 read_project_file",
         timed(fresh_state, |state| {
-            drop(black_box(state.read_project_file(&b.path).unwrap()))
+            drop(black_box(state.read_project_file(&b.path).unwrap()));
         }),
     );
     report.write();
