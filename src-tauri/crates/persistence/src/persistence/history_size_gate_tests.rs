@@ -23,7 +23,7 @@ use stalagmight_models::survey::changeset::testkit::{
     entry_text, gate_shot, gate_survey, gps, persisted, same_state, session_ids_sound, set_credit,
     GateSurvey, SHOTS_PER_LINE,
 };
-use stalagmight_models::survey::changeset::{capture, redo, undo, Changeset};
+use stalagmight_models::survey::changeset::{capture, redo, undo};
 use stalagmight_models::survey::{
     LineMeta, Project, RangeDeleteMode, ShotPlace, SplitOptions, StartAt,
 };
@@ -637,7 +637,7 @@ fn a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell() {
         let lines = &gate.lines[10..10 + lines];
         let mut after = gate.project.clone();
         let cells = paste_left(&mut after, lines).expect("paste");
-        let changes: Changeset = capture(&gate.project, &after);
+        let changes = capture(&gate.project, &after);
         let bytes = entry_text(&changes, "Update shots").len();
         let mut live = after.clone();
         undo(&mut live, &changes).expect("undo the paste");
