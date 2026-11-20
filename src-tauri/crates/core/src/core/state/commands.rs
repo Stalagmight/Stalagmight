@@ -169,12 +169,17 @@ pub(crate) fn apply_command(
         Command::UntrackImport { .. } => import_tracking::apply(project, record, cmd),
         Command::Batch { commands, .. } => {
             let mut applied = Applied::default();
+            // Several slots of one station move it once (plan 9.1).
+            let mut station_moves = command_move::StationMoves::default();
             for sub in commands {
                 if !AppState::is_batch_allowed(sub) {
                     return Err(format!(
                         "{} cannot be part of a batch",
                         crate::core::command_kind(sub)
                     ));
+                }
+                if station_moves.repeats(project, sub) {
+                    continue;
                 }
                 applied.merge(apply_command(project, record, sub)?);
             }

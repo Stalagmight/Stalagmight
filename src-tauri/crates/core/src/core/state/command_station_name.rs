@@ -1,102 +1,120 @@
-//! Station identity at the state layer: the Set Station Name command and the
-//! normalization epilogue every mutation path runs
-//! ([`AppState::settle_station_identities`]).
+//! Station names at the state layer: the Set Station Name command (plan 5.3)
+//! and the UI's check of a new line's name.
+//!
+//! A station's identity is structural on the station graph (its
+//! `StationId`, shared by every slot of a junction), so there is no
+//! identity epilogue any more: a command that mints a station names it.
 
+use super::commands::{Applied, Record};
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{LineId, LineUpdates, Project, StationRef};
+use crate::models::project::station_naming::name_characters_refusal;
+use crate::models::survey::Project;
+use crate::models::{StationId, StationRef, LINE_GONE};
 
 impl AppState {
-    /// Rename a station: trimmed, non-empty and unique within its line
-    /// (`Project::validate_station_name`), so a duplicate is refused with
-    /// "Line X already has a station named Y".
-    pub(super) fn set_station_name(&self, station_ref: StationRef, name: &str) -> CommandResult {
-        let _ = (&station_ref, &name);
-        crate::core::stub::not_ported("command_station_name::set_station_name")
-    }
-
     /// Line names are required and unique in the project, so a user's new
     /// line must be named, and not after another line ("A line named X
     /// already exists"). The UI path (the `create_line` IPC commands) asks
     /// here; the automatic paths (imports, split and combine default names)
-    /// are de-duplicated by the epilogue instead.
+    /// name and de-duplicate their lines themselves. `None` when the name is
+    /// fine or no project is open (the command then fails on its own).
     pub fn refuse_new_line_name(&self, name: Option<&str>) -> Option<CommandResult> {
-        self.with_open_project(|project| {
-            project
-                .validate_line_name(name.unwrap_or_default(), None)
-                .err()
-                .map(CommandResult::failure)
-        })
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let project = guard.as_ref()?;
+        project
+            .validate_line_name(name.unwrap_or_default(), &[])
+            .err()
+            .map(|e| CommandResult::failure(e.to_string()))
     }
-
-    /// A user rename of a line ([`Command::UpdateLineMetadata`] carrying a
-    /// name) must keep it named and unique, as [`Self::refuse_new_line_name`].
-    /// Asked by the forward command only - an undo or redo puts back a name the
-    /// project already held - and `None` for any other command.
-    pub(super) fn refuse_line_rename(&self, cmd: &Command) -> Option<CommandResult> {
-        let Command::UpdateLineMetadata {
-            line_id,
-            updates: LineUpdates {
-                name: Some(name), ..
-            },
-        } = cmd
-        else {
-            return None;
-        };
-        let line_id: LineId = *line_id;
-        self.with_open_project(|project| {
-            project.get_line(line_id)?;
-            project
-                .validate_line_name(name.as_deref().unwrap_or_default(), Some(line_id))
-                .err()
-                .map(CommandResult::failure)
-        })
-    }
-
-    /// `f` on the open project; `None` when there is none (the command then
-    /// fails on its own, with the usual message).
-    fn with_open_project<R>(&self, f: impl FnOnce(&Project) -> Option<R>) -> Option<R> {
-        let _ = (&f,);
-        crate::core::stub::not_ported("command_station_name::with_open_project")
-    }
-
-    /// The station-identity epilogue: give every station that lacks one a
-    /// name and a Station ID, and every line a unique name
-    /// (`Project::ensure_station_identities`). Run after every successful
-    /// mutating command, before its undo entry is finalized, after every
-    /// undo/redo step, and on the after-snapshot of every command that records
-    /// a snapshot pair, so the id an edit allocates is part of the state its
-    /// undo entry recorded. Leaves a valid id or name untouched. Costs
-    /// O(stations) even when nothing is missing, so a forward command that
-    /// cannot change station identity skips it
-    /// (`Command::can_change_station_identity`).
-    pub(super) fn settle_station_identities(&self) {
-        crate::core::stub::not_ported::<()>("command_station_name::settle_station_identities");
-    }
-}
-
-/// [`AppState::settle_station_identities`] on a project already held.
-pub(super) fn settle(project: &mut Project) {
-    project.ensure_station_identities();
 }
 
 /// The execute pipeline's mutation for the station name family (`commands.rs`
 /// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
-/// validates, captures and records around it; `record` is the entry being
-/// recorded (worded before the edit), for rows only the result can say.
+/// validates, captures and records around it. A data-table paste of names is
+/// a `Batch` of these, one entry for the whole paste.
 pub(super) fn apply(
-    project: &mut crate::models::survey::Project,
-    record: &mut super::commands::Record,
+    project: &mut Project,
+    _record: &mut Record,
     cmd: &Command,
-) -> Result<super::commands::Applied, String> {
-    let _ = (&mut *project, &mut *record);
+) -> Result<Applied, String> {
     match cmd {
-        Command::SetStationName { .. } => {
-            Err(super::commands::not_ported("execute::set_station_name"))
+        Command::SetStationName { station_ref, name } => {
+            set_station_name(project, *station_ref, name)?;
+            Ok(Applied::default())
         }
         _ => Err(format!(
             "{} is not a station name command",
             crate::core::command_kind(cmd)
         )),
     }
+}
+
+/// Rename the station at `slot` to `name`, trimmed (0.6.0's
+/// `set_station_name` on the station graph). The name the station already
+/// holds is a no-op before any other check, as 0.6.0's execute answered it
+/// (the pipeline then records nothing and keeps the redo branch). Otherwise
+/// the name must be non-empty, free of control and invisible formatting
+/// characters, and held by no other station on any line the station is on: a
+/// junction is checked on all of its lines (plan 5.3).
+fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Result<(), String> {
+    let station = named_station(project, slot)?;
+    let name = name.trim();
+    let current = project.stations.get(&station).map(|s| s.name.as_str());
+    if !name.is_empty() && current == Some(name) {
+        return Ok(());
+    }
+    if let Some(refusal) = station_name_refusal(project, station, slot, name) {
+        return Err(refusal);
+    }
+    if let Some(s) = project.stations.get_mut(&station) {
+        s.name = name.to_string();
+    }
+    tracing::info!(
+        ?slot,
+        station,
+        purpose = "rename station",
+        "Station name updated"
+    );
+    Ok(())
+}
+
+/// The station a rename addresses, or 0.6.0's refusal: the line is gone, or
+/// the index is past its last station.
+fn named_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
+    if project.line(slot.line_id).is_none() {
+        return Err(LINE_GONE.to_string());
+    }
+    project
+        .station_at(slot)
+        .ok_or_else(|| "Station not found".to_string())
+}
+
+/// Why `station` (addressed at `slot`) cannot be named `name` (trimmed), in
+/// 0.6.0's words. A clash is reported on the slot's own line when the name is
+/// taken there, else on the first other line of the station that holds it.
+fn station_name_refusal(
+    project: &Project,
+    station: StationId,
+    slot: StationRef,
+    name: &str,
+) -> Option<String> {
+    if name.is_empty() {
+        return Some("A station name cannot be empty".to_string());
+    }
+    if let Some(refusal) = name_characters_refusal("station", name) {
+        return Some(refusal);
+    }
+    let conflicts = project.conflicts_with_name(station, name);
+    let clash = conflicts
+        .iter()
+        .find(|c| c.line == slot.line_id)
+        .or_else(|| conflicts.first())?;
+    Some(format!(
+        "Line \"{}\" already has a station named \"{name}\"",
+        project.line_label_of(clash.line)
+    ))
 }
