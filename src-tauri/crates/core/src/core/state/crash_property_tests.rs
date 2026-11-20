@@ -598,7 +598,7 @@ fn an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole() {
     let _config = isolated_config();
     for kind in [Kind::HotJournal, Kind::Wal] {
         let original = Original::build(2, kind).unwrap();
-        for step in [Step::Replaced, Step::SidecarRemoved, Step::BackupKept] {
+        for step in [Step::SidecarRemoved, Step::BackupKept, Step::Replaced] {
             let temp = TempDir::new().unwrap();
             let stem = unique_stem("repro");
             let destination = original

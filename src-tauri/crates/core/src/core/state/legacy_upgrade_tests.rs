@@ -786,6 +786,44 @@ fn a_kill_after_any_step_of_the_real_upgrade_leaves_the_survey_whole() {
     );
 }
 
+/// The SWEEP over both engines (the staged states also run in
+/// `crash_property_tests::crash_property_sweep`).
+///
+/// ```text
+/// STALAGMIGHT_RUST_CRASH_SEEDS=40 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
+///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
+///   --lib legacy_upgrade_sweep -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "sweep: both upgrade engines over STALAGMIGHT_RUST_CRASH_SEEDS seeds"]
+fn legacy_upgrade_sweep() {
+    let _config = isolated_config();
+    let seeds: u32 = std::env::var("STALAGMIGHT_RUST_CRASH_SEEDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20);
+    let mut notes = std::collections::BTreeMap::new();
+    let mut dirty = Vec::new();
+    for seed in 1..=seeds {
+        let mut problems = Vec::new();
+        for kind in Kind::ALL {
+            problems.extend(check_upgrade_states(seed, kind, &mut notes));
+            problems.extend(check_real_kills(seed, kind));
+        }
+        if !problems.is_empty() {
+            eprintln!("{}", problems.join("\n\n"));
+            dirty.push(seed);
+        }
+    }
+    eprintln!(
+        "legacy upgrade sweep: {seeds} seed(s), staged states {notes:?}, real kills {} per \
+         seed; seeds with a failure ({}): {dirty:?}",
+        Kind::ALL.len() * Step::ALL.len(),
+        dirty.len()
+    );
+    assert!(dirty.is_empty(), "seeds with a failure: {dirty:?}");
+}
+
 /// The originals are what they claim: a hot journal or a WAL holds part of the
 /// survey (the file alone opens as another one), the debris holds nothing.
 #[test]
