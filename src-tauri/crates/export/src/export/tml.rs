@@ -35,6 +35,8 @@ use super::tml_topology::{
 
 #[path = "tml_datums.rs"]
 mod datums;
+#[path = "tml_survey.rs"]
+pub(crate) mod survey;
 use datums::{closure_shot, stamp_starts, start_shot};
 
 // ============================================================================
@@ -179,7 +181,12 @@ fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
 /// legs. So the reverse leg is the negation of the forward pitch, whichever leg
 /// recorded it.
 fn reversed_leg_pitch(shot: &Shot) -> Option<f64> {
-    shot.pitch_in.or(shot.pitch_out).map(|p| -p)
+    reversed_pitch(shot.pitch_in, shot.pitch_out)
+}
+
+/// [`reversed_leg_pitch`] from the two pitch readings (either model).
+fn reversed_pitch(pitch_in: Option<f64>, pitch_out: Option<f64>) -> Option<f64> {
+    pitch_in.or(pitch_out).map(|p| -p)
 }
 
 // ============================================================================
@@ -305,6 +312,39 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 
 fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u8>, Vec<String>)> {
     let azimuth_export = AzimuthExport::decide(project);
+    let (shots, unwritten_datums) =
+        build_export_shots_with_report(project, profile, azimuth_export);
+    write_document(
+        &DocumentHead {
+            cave_name: &project.name,
+            surface_elevation: project.surface_elevation,
+            azimuth_export,
+        },
+        &shots,
+        unwritten_datums,
+        n,
+        profile,
+    )
+}
+
+/// The document-level values the rows do not carry. Shared by both models.
+struct DocumentHead<'a> {
+    cave_name: &'a str,
+    surface_elevation: Option<f64>,
+    azimuth_export: AzimuthExport,
+}
+
+/// The export notes, the orphan-root guard and the XML document for finished
+/// rows. Shared by both models: everything after the rows are built is the
+/// same.
+fn write_document(
+    head: &DocumentHead<'_>,
+    shots: &[ExportShot],
+    unwritten_datums: usize,
+    n: &Names,
+    profile: TmlProfile,
+) -> Result<(Vec<u8>, Vec<String>)> {
+    let azimuth_export = head.azimuth_export;
     // The two azimuth compromises are decisions the FILE carries and the
     // project does not, so they are stated rather than done quietly (#438):
     // returned to the caller, which raises a toast, and logged for a run that
@@ -320,15 +360,13 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
         );
         notes.push(code.to_string());
     }
-    let (shots, unwritten_datums) =
-        build_export_shots_with_report(project, profile, azimuth_export);
     // Same contract as the azimuth notes above (#438): a fact the FILE carries
     // and the project does not must reach the user, not just the log. The
     // detailed warn lives in the GPS pass; this is its UI-facing code.
     if unwritten_datums > 0 {
         notes.push("gps-anchors-not-written".to_string());
     }
-    ensure_rooted_chain(&shots, profile)?;
+    ensure_rooted_chain(shots, profile)?;
 
     let mut buf = Vec::new();
     let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
@@ -344,17 +382,17 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
     writer.write_event(Event::Start(BytesStart::new(n.cave_file)))?;
 
     // Metadata elements
-    write_text_element(&mut writer, n.cave_name, &project.name)?;
+    write_text_element(&mut writer, n.cave_name, head.cave_name)?;
     write_text_element(
         &mut writer,
         n.first_start_absolute_elevation,
-        &format_f64(project.surface_elevation.unwrap_or(0.0)),
+        &format_f64(head.surface_elevation.unwrap_or(0.0)),
     )?;
 
     // <Data>
     writer.write_event(Event::Start(BytesStart::new(n.data)))?;
 
-    for shot in &shots {
+    for shot in shots {
         write_shot(&mut writer, n, shot)?;
     }
 
@@ -705,7 +743,12 @@ fn list_capped(names: &[&str]) -> String {
 /// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
 /// is worse than an ephemeral one (it reads as a real, shared key).
 fn shot_export_uuid(shot: &Shot) -> String {
-    match shot.uuid.as_deref() {
+    export_uuid(shot.uuid.as_deref())
+}
+
+/// [`shot_export_uuid`] for a stored uuid (either model).
+fn export_uuid(stored: Option<&str>) -> String {
+    match stored {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => uuid::Uuid::new_v4().to_string(),
     }
@@ -1649,7 +1692,7 @@ fn build_export_shots_with_report(
         profile,
     );
     enforce_ariane_geometry_invariants(&mut all_shots, profile);
-    let unwritten_datums = datum_gps.append_fix_starts(project, &mut all_shots, next_id);
+    let unwritten_datums = datum_gps.append_fix_starts(&mut all_shots, next_id);
 
     match profile {
         TmlProfile::SpeleoDbSidecar => harden_for_speleodb(&mut all_shots),

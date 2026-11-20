@@ -92,7 +92,7 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
 /// formula too, and there is no way to tell the two apart without guessing.
 /// The station-name columns (`from`, `to`) go through it as well: a name is
 /// user text, and an imported one is file-controlled.
-fn escape_csv(s: &str) -> String {
+pub(crate) fn escape_csv(s: &str) -> String {
     // Order matters: neutralise first, then quote, so the apostrophe is inside
     // the quotes rather than stranded outside them.
     let neutralised = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
@@ -108,7 +108,7 @@ fn escape_csv(s: &str) -> String {
 }
 
 /// Format an optional f64 value
-fn format_optional(value: Option<f64>) -> String {
+pub(crate) fn format_optional(value: Option<f64>) -> String {
     value.map(|v| format!("{v:.2}")).unwrap_or_default()
 }
 

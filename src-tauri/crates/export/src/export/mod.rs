@@ -7,6 +7,7 @@ pub mod image;
 mod image_labels;
 mod image_scope;
 pub mod json;
+pub mod survey;
 pub mod tml;
 mod tml_azimuth;
 mod tml_topology;
