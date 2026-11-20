@@ -945,6 +945,103 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
         return pairs;
       };
+      type MockClosureRef = {
+        closure_id: bigint;
+        station_ref: MockStationRef;
+        via_station: MockStationRef | null;
+        is_transitive: boolean;
+      };
+      /** Every slot's `closures_with`, by the backend's rule
+       *  (`survey/wire/stations.rs`), keyed "lineId:stationIndex": a closure
+       *  lists its far end directly on the end's own slot and transitively
+       *  (via that slot) on the end station's other slots, plus the far
+       *  station's other slots (via the far end); then a slot with two or more
+       *  direct closures lets each of its partners see the others, via it,
+       *  under the id of the closure that reaches the far one (the
+       *  "closure-chain" entries the move tools must not follow, plan D15). */
+      const mockClosureRefs = (
+        junctions: Map<string, MockStationRef[]>,
+        closures: ReadonlyArray<{ id: bigint; station_a: MockStationRef; station_b: MockStationRef }>,
+      ): Map<string, MockClosureRef[]> => {
+        const sameSlot = (a: MockStationRef, b: MockStationRef): boolean =>
+          a.line_id === b.line_id && a.station_index === b.station_index;
+        const slotsOf = (ref: MockStationRef): MockStationRef[] =>
+          junctions.get(mockSlotKey(ref)) ?? [ref];
+        const copy = (ref: MockStationRef): MockStationRef => ({
+          line_id: ref.line_id,
+          station_index: ref.station_index,
+        });
+        const out = new Map<string, MockClosureRef[]>();
+        const push = (at: MockStationRef, entry: MockClosureRef): void => {
+          const key = mockSlotKey(at);
+          const list = out.get(key) ?? [];
+          list.push(entry);
+          out.set(key, list);
+        };
+        for (const closure of closures) {
+          // Both ends on one station: the backend lists nothing.
+          if (slotsOf(closure.station_a).some((s) => sameSlot(s, closure.station_b))) continue;
+          for (const [nearRef, farRef] of [
+            [closure.station_a, closure.station_b],
+            [closure.station_b, closure.station_a],
+          ] as const) {
+            for (const slot of slotsOf(nearRef)) {
+              const via = sameSlot(slot, nearRef) ? null : copy(nearRef);
+              push(slot, {
+                closure_id: closure.id,
+                station_ref: copy(farRef),
+                via_station: via,
+                is_transitive: via !== null,
+              });
+              for (const member of slotsOf(farRef)) {
+                if (sameSlot(member, farRef)) continue;
+                push(slot, {
+                  closure_id: closure.id,
+                  station_ref: copy(member),
+                  via_station: copy(farRef),
+                  is_transitive: true,
+                });
+              }
+            }
+          }
+        }
+        const chained: Array<[MockStationRef, MockClosureRef]> = [];
+        for (const [key, list] of out) {
+          const direct = list.filter((r) => !r.is_transitive);
+          if (direct.length < 2) continue;
+          const [lineId, stationIndex] = key.split(':').map(Number);
+          const shared = { line_id: lineId!, station_index: stationIndex! };
+          for (const [i, a] of direct.entries()) {
+            for (const [j, b] of direct.entries()) {
+              if (i === j || sameSlot(a.station_ref, b.station_ref)) continue;
+              chained.push([
+                a.station_ref,
+                {
+                  closure_id: b.closure_id,
+                  station_ref: copy(b.station_ref),
+                  via_station: copy(shared),
+                  is_transitive: true,
+                },
+              ]);
+            }
+          }
+        }
+        for (const [slot, entry] of chained) {
+          const list = out.get(mockSlotKey(slot)) ?? [];
+          const known = list.some(
+            (r) =>
+              sameSlot(r.station_ref, entry.station_ref) &&
+              r.via_station !== null &&
+              entry.via_station !== null &&
+              sameSlot(r.via_station, entry.via_station),
+          );
+          if (!known) {
+            list.push(entry);
+            out.set(mockSlotKey(slot), list);
+          }
+        }
+        return out;
+      };
       /** Every slot of the junction `ref` is on (itself when it is on no other line). */
       const mockJunctionSlots = (ref: MockStationRef): MockStationRef[] => {
         const merges = (currentProject?.station_merges ?? []) as Array<{
@@ -996,6 +1093,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         const key = `${lineId}:${stationIndex}`;
         if (name === null) delete mockStationNames[key];
         else mockStationNames[key] = name;
+      };
+      // The backend derives `is_aligned` from the geometry (a snap or a tie is
+      // aligned); the mock creates every closure unaligned, so a spec that
+      // needs an aligned one flips it here, then refreshes the project state.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_CLOSURE_ALIGNED__ = (
+        closureId: number | bigint,
+        aligned: boolean,
+      ): boolean => {
+        const closures = (currentProject?.loop_closures ?? []) as Array<{ id: bigint; is_aligned: boolean }>;
+        const closure = closures.find((c) => c.id === BigInt(closureId));
+        if (!closure) return false;
+        closure.is_aligned = aligned;
+        return true;
       };
 
       // Track last export_image call for test assertions
@@ -1587,6 +1697,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_a: { line_id: number; station_index: number };
               station_b: { line_id: number; station_index: number };
             }>;
+            const loadClosureRefs = mockClosureRefs(loadJunctions, currentClosures);
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const loadDatums = (currentProject.zero_datums ?? []) as Array<{
@@ -1615,31 +1726,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 const loadDatum = loadDatums.find(
                   (d) => d.station_ref.line_id === line.id && d.station_ref.station_index === i
                 );
-                const closuresWith = currentClosures.flatMap((closure) => {
-                  const isA =
-                    closure.station_a.line_id === stationRef.line_id &&
-                    closure.station_a.station_index === stationRef.station_index;
-                  const isB =
-                    closure.station_b.line_id === stationRef.line_id &&
-                    closure.station_b.station_index === stationRef.station_index;
-                  if (isA) {
-                    return [{
-                      closure_id: closure.id,
-                      station_ref: closure.station_b,
-                      via_station: null,
-                      is_transitive: false,
-                    }];
-                  }
-                  if (isB) {
-                    return [{
-                      closure_id: closure.id,
-                      station_ref: closure.station_a,
-                      via_station: null,
-                      is_transitive: false,
-                    }];
-                  }
-                  return [];
-                });
+                const closuresWith = loadClosureRefs.get(mockSlotKey(stationRef)) ?? [];
 
                 mockStations.push({
                   station_ref: stationRef,
@@ -2158,6 +2245,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_a: { line_id: number; station_index: number };
               station_b: { line_id: number; station_index: number };
             }>;
+            const stateClosureRefs = mockClosureRefs(stateJunctions, stateClosures);
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const zeroDatums = (currentProject?.zero_datums ?? []) as Array<{
@@ -2178,31 +2266,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   const matchingDatum = zeroDatums.find(
                     (d) => d.station_ref.line_id === line.id && d.station_ref.station_index === i
                   );
-                  const closuresWith = stateClosures.flatMap((closure) => {
-                    const isA =
-                      closure.station_a.line_id === stationRef.line_id &&
-                      closure.station_a.station_index === stationRef.station_index;
-                    const isB =
-                      closure.station_b.line_id === stationRef.line_id &&
-                      closure.station_b.station_index === stationRef.station_index;
-                    if (isA) {
-                      return [{
-                        closure_id: closure.id,
-                        station_ref: closure.station_b,
-                        via_station: null,
-                        is_transitive: false,
-                      }];
-                    }
-                    if (isB) {
-                      return [{
-                        closure_id: closure.id,
-                        station_ref: closure.station_a,
-                        via_station: null,
-                        is_transitive: false,
-                      }];
-                    }
-                    return [];
-                  });
+                  const closuresWith = stateClosureRefs.get(mockSlotKey(stationRef)) ?? [];
 
                   mockStations.push({
                     station_ref: stationRef,

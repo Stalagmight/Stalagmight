@@ -1,9 +1,12 @@
 import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../types/survey-data';
+import { alignedClosureTargets } from './closureTies';
 
 /**
  * The set of immovable station keys (`"lineId:stationIndex"`) for the move
  * tools: a station is immovable if it is zero-datum, or transitively reachable
- * from one via `merged_with` and ALIGNED `closures_with` links.
+ * from one via `merged_with` and the ALIGNED closures that tie it. A
+ * closure-chain entry of `closures_with` names a closure the station is not an
+ * end of, so it is not followed (plan D15, `closureTies.ts`).
  *
  * Reads the SoA `SurveyData` directly (line ids / indices / flags + the sparse
  * merged/closure maps) rather than a materialized `Station[]`. The move-tool memo
@@ -12,8 +15,8 @@ import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../types/survey-dat
  * loader's lazy memory win (#customRender, Codex round 5). Only a `Map<string,
  * number>` of keys (plus the result set) is allocated here.
  *
- * Behavior is identical to the previous `Station[]` BFS; the unit test pins that
- * with the original algorithm as an oracle.
+ * The unit test pins the SoA walk against a `Station[]` walk of the same rule
+ * (written by Station ID) as an oracle.
  */
 export function computeImmovableStationKeys(
   data: SurveyData,
@@ -44,9 +47,15 @@ export function computeImmovableStationKeys(
     for (const ref of data.stationMergedWith.get(g) ?? []) {
       queue.push(keyOf(ref.line_id, ref.station_index));
     }
-    for (const cr of data.stationClosuresWith.get(g) ?? []) {
-      if (!alignedClosureIds.has(cr.closure_id)) continue;
-      queue.push(keyOf(cr.station_ref.line_id, cr.station_ref.station_index));
+    const holder = { line_id: data.stationLineIds[g]!, station_index: data.stationIndices[g]! };
+    const tied = alignedClosureTargets(
+      holder,
+      data.stationMergedWith.get(g),
+      data.stationClosuresWith.get(g),
+      alignedClosureIds,
+    );
+    for (const ref of tied) {
+      queue.push(keyOf(ref.line_id, ref.station_index));
     }
   }
   return immovable;

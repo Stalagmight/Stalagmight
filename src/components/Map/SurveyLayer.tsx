@@ -86,6 +86,7 @@ import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemove
 import { raisedLineOf } from './surveyLayer/raisedLine';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
+import { alignedClosureTargets } from '../../utils/closureTies';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -2899,7 +2900,9 @@ export default class SurveyLayer {
 
     // 1. Find clicked station and all co-located stations via BFS:
     //    - merged_with: always co-located
-    //    - closures_with: only when the closure has been aligned
+    //    - closures_with: only when the closure has been aligned, and only
+    //      a closure that ties this station (never a closure-chain entry,
+    //      whose closure joins two OTHER stations: plan D15)
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
     // key -> global SoA index, built from NUMBERS only. Mapping the lazy
     // `Station[]` proxy here materialized the whole ~89k station object graph on
@@ -2936,12 +2939,14 @@ export default class SurveyLayer {
       movingRefKeys.add(key);
       const g = globalByKey.get(key);
       if (g === undefined) continue;
-      for (const ref of data.stationMergedWith.get(g) ?? []) {
+      const merged = data.stationMergedWith.get(g);
+      for (const ref of merged ?? []) {
         queue.push(`${ref.line_id}:${ref.station_index}`);
       }
-      for (const cr of data.stationClosuresWith.get(g) ?? []) {
-        if (!alignedClosureIds.has(cr.closure_id)) continue;
-        queue.push(`${cr.station_ref.line_id}:${cr.station_ref.station_index}`);
+      const holder = { line_id: data.stationLineIds[g]!, station_index: data.stationIndices[g]! };
+      const tied = alignedClosureTargets(holder, merged, data.stationClosuresWith.get(g), alignedClosureIds);
+      for (const ref of tied) {
+        queue.push(`${ref.line_id}:${ref.station_index}`);
       }
     }
     // The moving set is a merge/closure cluster (small); resolve each member's
