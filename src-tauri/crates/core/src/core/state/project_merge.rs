@@ -275,3 +275,14 @@ impl AppState {
         Ok(())
     }
 }
+
+impl AppState {
+    /// `Command::MergeProjects` (reached through `execute`): write a NEW
+    /// version 2 project from the sources (plan 5.8: `survey::append_project`
+    /// per source, sources sniffed and migrated as needed), optionally
+    /// archiving the originals. Not ported in C0.
+    pub(super) fn execute_merge_projects(&self, cmd: &crate::core::Command) -> CommandResult {
+        let _ = cmd;
+        crate::core::stub::not_ported("project_merge::execute_merge_projects")
+    }
+}

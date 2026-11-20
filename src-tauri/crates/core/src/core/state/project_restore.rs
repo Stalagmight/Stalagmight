@@ -515,3 +515,22 @@ fn name(path: &Path) -> String {
         |n| n.to_string_lossy().into_owned(),
     )
 }
+
+impl AppState {
+    /// Repair the open project's integrity. A loaded project is valid by
+    /// construction now (load refuses an invalid file and offers salvage,
+    /// plan 6.6), so Repair becomes the salvage route's "repair into a copy";
+    /// ported by the recovery work package. Reports what is left, changes
+    /// nothing.
+    pub fn repair_open_project_integrity(&self) -> crate::core::IntegrityRepairResult {
+        let _: Option<()> =
+            crate::core::stub::not_ported("project_restore::repair_open_project_integrity");
+        let remaining =
+            u32::try_from(self.integrity_violation_messages().len()).unwrap_or(u32::MAX);
+        crate::core::IntegrityRepairResult {
+            fixed: 0,
+            remaining,
+            changed: false,
+        }
+    }
+}

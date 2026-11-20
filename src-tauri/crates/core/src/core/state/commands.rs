@@ -313,9 +313,7 @@ impl AppState {
             Command::OpenProject { path } => return self.open_project(path.clone()),
             Command::SaveProject { path } => return self.save_project(path.clone()),
             Command::CloseProject => return self.close_project(),
-            Command::MergeProjects { .. } => {
-                return crate::core::stub::not_ported("execute::merge_projects");
-            }
+            Command::MergeProjects { .. } => return self.execute_merge_projects(&cmd),
             Command::RepairIntegrity
             | Command::UpdateProjectSettings
             | Command::SetSurfaceElevation => {
@@ -365,20 +363,6 @@ impl AppState {
         IntegrityCheckResult {
             save_blocked: !messages.is_empty(),
             messages,
-        }
-    }
-
-    /// Repair is the salvage route now (plan 6.6), ported by the recovery
-    /// work package. Reports what is left, changes nothing.
-    pub fn repair_open_project_integrity(&self) -> crate::core::IntegrityRepairResult {
-        let _: Option<()> =
-            crate::core::stub::not_ported("commands::repair_open_project_integrity");
-        let remaining =
-            u32::try_from(self.integrity_violation_messages().len()).unwrap_or(u32::MAX);
-        crate::core::IntegrityRepairResult {
-            fixed: 0,
-            remaining,
-            changed: false,
         }
     }
 }
