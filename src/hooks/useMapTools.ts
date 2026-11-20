@@ -10,6 +10,7 @@ import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
+import { currentIdentityLabels } from './useIdentityLabels';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { LineId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
@@ -477,10 +478,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!mergeStationA) {
             setMergeStationA(ref);
           } else {
-            // Check if clicking the same station
+            // Check if clicking the same station: the same slot, or another
+            // slot of the same station (a junction is ONE station on the
+            // station graph, so its slots share one Station ID, plan 9.3).
+            const labels = currentIdentityLabels();
+            const idA = labels.stationId(mergeStationA);
             if (
-              mergeStationA.line_id === ref.line_id &&
-              mergeStationA.station_index === ref.station_index
+              (mergeStationA.line_id === ref.line_id &&
+                mergeStationA.station_index === ref.station_index) ||
+              (idA !== null && idA === labels.stationId(ref))
             ) {
               // Clear selection
               clearMergeStations();
