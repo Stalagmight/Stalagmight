@@ -2,7 +2,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult, CommentHolder};
 use crate::models::{
-    ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef, ZeroDatumPreview,
+    ClosureStrategy, ConnectivityResult, Coordinates, DetachLinePreview, GpsCoordinates, LineId,
+    StationRef, ZeroDatumPreview,
 };
 
 /// Check merge connectivity between two stations (read-only, NOT a Command):
@@ -92,6 +93,40 @@ pub fn unmerge_stations(state: State<AppState>, station_ref: StationRef) -> Comm
 
 pub(crate) fn unmerge_stations_impl(state: &AppState, station_ref: StationRef) -> CommandResult {
     state.execute(Command::UnmergeStations { station_ref })
+}
+
+/// What detaching line `line_id` from the station at `station_ref` would give
+/// the line (read-only, NOT a Command): the new station's name and Station
+/// ID, and whether they are the line's own from before the merge (review
+/// finding UX-4). Refused as the detach is.
+#[tauri::command]
+pub fn preview_detach_line(
+    state: State<AppState>,
+    station_ref: StationRef,
+    line_id: LineId,
+) -> Result<DetachLinePreview, String> {
+    preview_detach_line_impl(state.inner(), station_ref, line_id)
+}
+
+pub(crate) fn preview_detach_line_impl(
+    state: &AppState,
+    station_ref: StationRef,
+    line_id: LineId,
+) -> Result<DetachLinePreview, String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    let station = project
+        .station_at(station_ref)
+        .ok_or_else(|| "Station not found".to_string())?;
+    let naming = project
+        .detach_naming(station, line_id)
+        .map_err(|e| e.to_string())?;
+    Ok(DetachLinePreview {
+        name: naming.name,
+        station_id: naming.id,
+        restored: naming.restored_alias,
+    })
 }
 
 /// Unmerge a specific station pair: the two slots must be one station on two

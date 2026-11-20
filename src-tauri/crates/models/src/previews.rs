@@ -38,6 +38,17 @@ pub struct ClosurePair {
     pub station_b: StationRef,
 }
 
+/// What Detach Line from Station gives the detached line
+/// (`preview_detach_line`, review finding UX-4): the new station's name and
+/// Station ID, and whether they are the ones the line had before it was
+/// merged there (the junction's alias that names the line).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct DetachLinePreview {
+    pub name: String,
+    pub station_id: u32,
+    pub restored: bool,
+}
+
 /// What deleting one shot does to station relationships
 /// (`preview_delete_shot`). The station graph never re-anchors a merge or a
 /// closure onto a neighbour, so 0.6.0's `replacement_merges`,

@@ -4296,6 +4296,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, line_ids: [] };
           }
 
+          case 'preview_detach_line': {
+            // What Detach gives the line (UX-4). The mock keeps no aliases, so
+            // the line always gets a new station named like the junction.
+            console.log('[Mock IPC] preview_detach_line called with:', args);
+            const stationRef = (args?.stationRef ?? args?.station_ref) as MockStationRef | undefined;
+            const name = stationRef ? String(stationRef.station_index) : '0';
+            return { name, station_id: 0, restored: false };
+          }
+
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
             const stationA = (args?.stationA ?? args?.station_a) as { line_id: number; station_index: number } | undefined;

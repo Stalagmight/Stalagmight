@@ -4284,6 +4284,49 @@ fn test_unmerge_stations_removes_merge() {
     assert!(wire.project.station_merges.is_empty());
 }
 
+/// Review finding UX-4: the Detach dialog's preview says what the line gets,
+/// and the detach gives exactly that: the merged line its own station back.
+#[test]
+fn test_preview_detach_line_names_what_the_detach_gives() {
+    let app = app_with_state();
+    create_project(&app);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let before = state(&app).get_project_state().unwrap();
+    let (a1, b0) = (StationRef::new(0, 1), StationRef::new(1, 0));
+    let own = |p: &Project, slot| {
+        let id = p.station_at(slot).unwrap();
+        (id, p.stations[&id].name.clone())
+    };
+    let (a1_own, b0_own) = (own(&before, a1), own(&before, b0));
+    assert_success(&station::merge_stations(state(&app), a1, b0));
+    let previews = [
+        station::preview_detach_line(state(&app), a1, 0).unwrap(),
+        station::preview_detach_line(state(&app), a1, 1).unwrap(),
+    ];
+    let restored: Vec<_> = previews.iter().filter(|p| p.restored).collect();
+    assert_eq!(
+        restored.len(),
+        1,
+        "only the retired station's line: {previews:?}"
+    );
+    let (line, slot, was) = if previews[0].restored {
+        (0, a1, &a1_own)
+    } else {
+        (1, b0, &b0_own)
+    };
+    assert_eq!((restored[0].station_id, &restored[0].name), (was.0, &was.1));
+    let other = if line == 0 { b0 } else { a1 };
+    assert_success(&station::unmerge_station_pair(state(&app), other, slot));
+    let after = state(&app).get_project_state().unwrap();
+    assert_eq!(
+        own(&after, slot),
+        was.clone(),
+        "the line has its own station back"
+    );
+    assert!(station::preview_detach_line(state(&app), slot, line).is_err());
+}
+
 #[test]
 fn test_set_zero_datum_success() {
     let app = app_with_state();

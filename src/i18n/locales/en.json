@@ -1198,7 +1198,9 @@
     "detachLine": {
       "title": "Detach a Line from This Station",
       "lead": "{{station}} is where {{count}} lines meet. Choose the line to detach:",
-      "explain": "The line you detach keeps its shots and gets its own copy of the station here, with the same name and no comment. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
+      "explain": "The line you detach keeps its shots and gets its own station here, with no comment. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
+      "restores": "{{line}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
+      "copies": "{{line}} gets a new station here named {{name}}.",
       "thisLine": "{{line}} (the line you clicked)",
       "notFound": "Station not found.",
       "close": "Close",
