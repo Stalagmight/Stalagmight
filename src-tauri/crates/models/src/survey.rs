@@ -19,6 +19,7 @@
 //! - `anchors` - the post-edit anchor algorithm and the frame-change routine
 //!   ([`AnchorSnapshot`], [`EditContext`]).
 //! - `naming` - station-name uniqueness and shot-uuid checks.
+//! - `gas` - the Plan-mode gas engine on the station graph ([`GasReach`]).
 //!
 //! The legacy model ([`crate::project`]) is untouched and independent.
 
@@ -33,6 +34,7 @@ use crate::{LineId, Section, StationId};
 
 mod anchors;
 mod build;
+mod gas;
 mod graph;
 mod naming;
 mod positions;
@@ -98,6 +100,7 @@ mod validate_tests;
 
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
+pub use gas::{GasProfilePoint, GasReach};
 pub use graph::{AlongLine, RulerPoint, StationDistances, StationPositions};
 pub use naming::NameConflict;
 pub use positions::{
