@@ -26,7 +26,6 @@ mod import_tracking;
 mod labels;
 mod open_file;
 mod project_add;
-mod project_append;
 mod project_create;
 mod project_io;
 mod project_load;
@@ -227,6 +226,14 @@ mod legacy_disk_vectors_dump_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod line_commands_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod merge_projects_tests;
 #[cfg(sg_unported)]
 mod metamorphic_undo_tests;
 #[cfg(sg_unported)]
@@ -261,7 +268,7 @@ mod multi_datum_tests;
 mod name_rules_tests;
 #[cfg(sg_unported)]
 mod open_undo_bugs_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
