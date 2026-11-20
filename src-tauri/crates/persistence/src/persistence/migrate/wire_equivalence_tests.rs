@@ -275,7 +275,7 @@ impl<'a> Case<'a> {
         if moved {
             if self.positions_may_move(adjusted) {
                 self.tally.note(if adjusted {
-                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails)"
+                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision)"
                 } else {
                     "raw: slot moved by a migration class (torn merge collapsed)"
                 });
@@ -915,10 +915,6 @@ impl<'a> Case<'a> {
             } else if old_promoted > new_promoted && self.kept_between_placed(line, shot) {
                 self.tally.note(
                     "delete: a closure on the removed member stays between two placed pieces (a GPS fix the delete promotes places the junction's piece; today promoted it)",
-                );
-            } else if old_promoted >= 2 && new_promoted >= 1 && old_promoted > new_promoted {
-                self.tally.note(
-                    "delete: today also promoted a second closure on the removed member whose ends the first promotion had joined (a merge cycle); it stays a loop closure",
                 );
             } else if tied {
                 self.tally.note(

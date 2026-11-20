@@ -213,8 +213,9 @@ instead of slots:
   numbered by their lowest Station ID.
 - **Observations**: every shot between two groups, with today's per-axis weights
   from `base_sigma_length_m * quality` and `base_sigma_azimuth_deg * quality`
-  (`base_sigma_depth_m` is read but the solve is horizontal-only); soft GPS
-  fixes add a diagonal term (below).
+  (`base_sigma_depth_m` is read but the solve is horizontal-only), each axis's
+  sigma floored at `sigma_len x sigma_az` (below); soft GPS fixes add a
+  diagonal term (below).
 - **Held**: each placement datum's group at its raw position (two placement
   datums in one group fail the component), hard GPS fixes at their GPS, else
   the **gauge**: the component's `Placement` station at its raw position. The
@@ -227,7 +228,25 @@ instead of slots:
 - Solved with a sparse Jacobi-preconditioned Conjugate Gradient per axis (see
   [performance.md](performance.md)). Everything iterates in sorted order, so
   reordering lines or closures changes no bit; results match 0.6.0's within
-  1e-6 m (D13).
+  1e-6 m (D13), except where 0.6.0's own solve was degenerate or imprecise
+  (the sigma floor below, and kilometre-scale shots; plan Deviations G9).
+
+**The sigma floor (G9).** A shot's per-axis variance is first order:
+`(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin
+swapped for y). On a grid axis the axis across the shot keeps only the
+length-times-azimuth term, which vanishes as the shot gets short: a
+zero-length "0 0 0" connector at azimuth 0 had no weight on x at all, so the
+solve left the loop's misclosure in it and the connector opened by the whole
+misclosure; a 1 mm shot weighed 3e9 against tens to hundreds, and the
+ill-conditioned solve could move stations by kilometres. The first-order
+formula drops the product of the length and azimuth errors, which has
+variance `sigma_len^2 * sigma_az^2` on the axis across the shot, so each
+axis's sigma is now at least `sigma_len * sigma_az` (8.7e-4 m with the
+defaults; `ShotSigmas` in `survey/adjust.rs`). It binds only for shots shorter
+than `sigma_len` (5 cm) within about `sigma_az` (1 degree) of a grid axis;
+every other shot keeps 0.6.0's weight bit for bit. A file such a shot sits in
+can show its Computed View differently from 0.6.0 there, where 0.6.0 was
+wrong; the migration reports it as `LegacyWeightsDegenerate`.
 
 **Across one shot (#737).** `closures_across_one_shot` (`survey/closures.rs`)
 builds knots with a union-find over stations, taking every closure that ties
@@ -267,8 +286,8 @@ frame's local metres. It is the observation `p = gps` on each horizontal axis wi
 one diagonal term and one right-hand-side term on its group's unknown. Shots use the same units,
 so the two compare directly. A shot's per-axis variance is
 `(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin swapped for y),
-with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`,
-and variances add along a traverse.
+with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`
+(at least `(sigma_len * sigma_az)^2`, the floor above), and variances add along a traverse.
 
 What a soft fix means at the default config (0.05 m, 1 deg), taking an accuracy of 5 m as the
 example: a level 500 m traverse of 10 m shots is trusted to about 0.35 m along its length and

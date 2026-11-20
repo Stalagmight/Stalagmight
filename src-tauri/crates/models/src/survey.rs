@@ -95,6 +95,13 @@ mod test_helpers;
 
 #[cfg(test)]
 #[expect(
+    clippy::panic,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod adjust_floor_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::panic,
     clippy::float_cmp,
@@ -226,7 +233,7 @@ mod ops_scenario_tests;
 )]
 mod ops_test_helpers;
 
-pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, SolveHold};
+pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, ShotSigmas, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
