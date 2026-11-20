@@ -20,16 +20,24 @@
 //! F8): the lock bookkeeping is keyed by project id alone, so a second copy's
 //! session is indistinguishable from the first's.
 //!
-//! The probe is deliberately read-only (`Database::open_for_metadata`): a
-//! refusal must not write a byte to - or migrate, or mmap - a file the user
-//! may not want touched.
+//! The probe is deliberately read-only (the shared link probe,
+//! `speleodb_local_state::probe_link`: a version 2 header, or a legacy file's
+//! link row): a refusal must not write a byte to - or migrate, or decode - a
+//! file the user may not want touched. Before the station-graph switch this
+//! read SQLite only, so a version 2 copy read as unlinked and was waved
+//! through.
 
 use std::path::{Path, PathBuf};
 
+use super::open_file::FileState;
 use super::speleodb::local_dto;
+use super::speleodb_local_state::{probe_link, FileLink, LegacyRead};
 use super::AppState;
 use crate::core::loading::SpeleoManagedFile;
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
+use crate::persistence::stalx_v2::{
+    self, write_atomic, DecodeOptions, Fingerprint, Format, Guard, Mode,
+};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 /// What the probe established about the spelling the load was handed.
@@ -130,11 +138,12 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpellin
     })
 }
 
-/// The `speleo_link` row of the `.stalx` at `path`, read the cheapest way that
-/// can answer.
+/// The SpeleoDB link of the `.stalx` at `path`, read the cheapest way that can
+/// answer (the shared probe, [`LegacyRead::Recover`]).
 ///
-/// Read-only FIRST, because that is the answer for every ordinary file and it
-/// neither migrates nor mmaps a file this probe may be about to refuse. But a
+/// A version 2 file is read from its header. A legacy SQLite file is read
+/// read-only FIRST, because that is the answer for every ordinary file and it
+/// neither migrates nor writes a file this probe may be about to refuse. But a
 /// read-only connection cannot recover a hot rollback journal - it fails with
 /// `SQLITE_READONLY_ROLLBACK` where a read-write open rolls the journal back and
 /// succeeds - so a read-only miss is NOT evidence that the file is unopenable.
@@ -142,40 +151,178 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpellin
 /// guards; without it the guard fell open in exactly the state where the file
 /// was about to become a fully usable second managed copy.
 ///
-/// The escalation goes through [`Database::open_for_metadata_recovering`], NOT
-/// `open_existing`, and that distinction is load-bearing. The only write this
-/// probe may make is the journal rollback itself: unavoidable (it is the only
-/// way to see what the file committed) and identical to what the next ordinary
-/// open would do anyway. `open_existing` would go on to run
-/// `ensure_schema_version`, whose v15 migration drops `collab_state` and the
-/// persisted undo/redo history - so a file this probe is about to REFUSE would
-/// have been migrated and stripped of its history before the user ever saw the
-/// prompt, with "Cancel" unable to put it back.
+/// The escalation rolls the journal back and does nothing else (no migration,
+/// no integrity check), and that distinction is load-bearing. The only write
+/// this probe may make is the journal rollback itself: unavoidable (it is the
+/// only way to see what the file committed) and identical to what the next
+/// ordinary open would do anyway. A full open would also run the migration
+/// chain, whose v15 step drops the persisted undo/redo history - so a file this
+/// probe is about to REFUSE would have been rewritten before the user ever saw
+/// the prompt, with "Cancel" unable to put it back.
 ///
-/// `None` covers both "no link row" (an unmanaged project) and "neither open
-/// could read one" - the caller treats them the same, and the full open
-/// immediately after reports the unreadable case far better than this probe
-/// could (see [`foreign_link_in`]'s degradation list). Both handles are dropped
-/// before returning, which matters on Windows: SQLite holds the file without
+/// `None` covers both "no link" (an unmanaged project) and "nothing could read
+/// one" - the caller treats them the same, and the full open immediately after
+/// reports the unreadable case far better than this probe could (see
+/// [`foreign_link_in`]'s degradation list). Every handle is dropped before
+/// returning, which matters on Windows: SQLite holds the file without
 /// `FILE_SHARE_DELETE` and the real open follows immediately.
-fn link_row_of(path: &Path) -> Option<crate::models::SpeleoLink> {
-    match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
-        Ok(link) => link,
-        Err(read_only_error) => Database::open_for_metadata_recovering(path)
-            .and_then(|db| db.load_speleo_link())
-            .inspect_err(|e| {
-                tracing::warn!(
-                    path = %path.display(),
-                    read_only_error = %read_only_error,
-                    error = %e,
-                    purpose = "keep one local copy per SpeleoDB project",
-                    "Neither open could read a speleo_link row; the load reports the \
-                     open failure itself"
-                );
-            })
-            .ok()
-            .flatten(),
+fn link_row_of(path: &Path) -> Option<SpeleoLink> {
+    match probe_link(path, LegacyRead::Recover) {
+        FileLink::Read(link) => link,
+        FileLink::Missing => None,
+        FileLink::Unreadable(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                purpose = "keep one local copy per SpeleoDB project",
+                "No read could find a SpeleoDB link; the load reports the open \
+                 failure itself"
+            );
+            None
+        }
     }
+}
+
+/// The link a closed file at `path` carries, and how to rewrite it without
+/// that link. Read once, so the check and the write describe the same bytes:
+/// the write is guarded by their fingerprint.
+enum Strip {
+    /// A version 2 file: `rewrite_local` with the link cleared.
+    V2 {
+        original: Vec<u8>,
+        extras: stalx_v2::Extras,
+    },
+    /// A legacy file: its first write upgrades it (plan 6.5's rule for any
+    /// write to a closed legacy file, as the Recents rename), so the original
+    /// is kept in the backups folder first.
+    Legacy {
+        project: Box<crate::models::survey::Project>,
+        extras: stalx_v2::Extras,
+    },
+}
+
+/// Read the closed file at `path` for a strip: its link (`None`: already
+/// unlinked) and what to write. A file that is not a Stalagmight project, or
+/// breaks an invariant, is refused instead of half-edited.
+fn read_for_strip(
+    path: &Path,
+    adjustment: &crate::models::config::ClosureAdjustmentConfig,
+    validation: &crate::models::config::ValidationConfig,
+) -> Result<(Option<SpeleoLink>, Strip, Fingerprint), String> {
+    let options = DecodeOptions::default();
+    let (bytes, fingerprint) = Fingerprint::read(path, options.max_file_bytes)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    match stalx_v2::sniff(&bytes) {
+        Format::V2 => {
+            let decoded = stalx_v2::decode(&bytes, &options).map_err(|e| e.to_string())?;
+            let mut file = FileState {
+                extras: decoded.extras,
+                ..FileState::default()
+            };
+            let link = file.speleo_link();
+            file.set_speleo_link(None);
+            Ok((
+                link,
+                Strip::V2 {
+                    original: bytes,
+                    extras: file.extras,
+                },
+                fingerprint,
+            ))
+        }
+        Format::Legacy => {
+            drop(bytes);
+            let migrated = crate::persistence::migrate::migrate_path_for_app(path, adjustment)
+                .map_err(|e| e.to_string())?;
+            let mut project = migrated.project;
+            if !migrated.extras.validation_stored {
+                project.settings.validation = validation.clone();
+            }
+            let mut file =
+                FileState::from_migrated(migrated.extras, None, &migrated.report.verification);
+            let link = file.speleo_link();
+            file.set_speleo_link(None);
+            Ok((
+                link,
+                Strip::Legacy {
+                    project: Box::new(project),
+                    extras: file.extras,
+                },
+                fingerprint,
+            ))
+        }
+        Format::Unknown => Err(format!("{} is not a Stalagmight project", path.display())),
+    }
+}
+
+/// Move a legacy original's SQLite sidecars beside the copy that keeps it
+/// (`<app data>/backups/<stem>.<stamp>.pre-v2.stalx`), as the upgrading save
+/// does (`project_io::UpgradeBackup`, C3): a stale journal beside the JSON
+/// file could be rolled into it by an old build. Returns what moved, so a
+/// failed write can put it back.
+fn back_up_legacy_original(original: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let dir = super::project_io::upgrade_backup_dir()
+        .ok_or_else(|| "the app data folder is not available".to_owned())?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let stem = original
+        .file_stem()
+        .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
+    let base = dir.join(format!("{stem}.{stamp}.pre-v2.stalx"));
+    std::fs::copy(original, &base)
+        .map_err(|e| format!("could not back up {}: {e}", original.display()))?;
+    let mut moved = Vec::new();
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut name = original.as_os_str().to_os_string();
+        name.push(suffix);
+        let sidecar = PathBuf::from(name);
+        if sidecar.exists() {
+            let mut to = base.as_os_str().to_os_string();
+            to.push(suffix);
+            let to = PathBuf::from(to);
+            if let Err(e) = std::fs::rename(&sidecar, &to) {
+                put_back(moved);
+                return Err(format!("could not move {}: {e}", sidecar.display()));
+            }
+            moved.push((sidecar, to));
+        }
+    }
+    tracing::info!(
+        backup = ?base,
+        sidecars = moved.len(),
+        purpose = "keep the original of a legacy file a link strip upgrades",
+        "Backed up the legacy original before writing version 2"
+    );
+    Ok(moved)
+}
+
+fn put_back(moved: Vec<(PathBuf, PathBuf)>) {
+    for (sidecar, to) in moved {
+        if let Err(e) = std::fs::rename(&to, &sidecar) {
+            tracing::error!(error = %e, sidecar = ?sidecar, "could not put a legacy sidecar back");
+        }
+    }
+}
+
+/// Write `strip` over `path`, guarded by the fingerprint of the bytes read.
+fn write_strip(path: &Path, strip: Strip, fingerprint: &Fingerprint) -> Result<(), String> {
+    match strip {
+        Strip::V2 { original, extras } => {
+            let bytes = stalx_v2::rewrite_local(&original, &extras).map_err(|e| e.to_string())?;
+            write_atomic(path, &bytes, Guard::Expect(fingerprint)).map_err(|e| e.to_string())?;
+        }
+        Strip::Legacy { project, extras } => {
+            let bytes =
+                stalx_v2::encode(&project, &extras, Mode::Normal).map_err(|e| e.to_string())?;
+            let moved = back_up_legacy_original(path)?;
+            if let Err(e) = write_atomic(path, &bytes, Guard::Expect(fingerprint)) {
+                put_back(moved);
+                return Err(e.to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether the LAST component of `path` is itself a symlink.
@@ -202,28 +349,29 @@ impl AppState {
     }
 
     /// Turn the foreign managed copy at `path` into a plain unmanaged project by
-    /// deleting its `speleo_link` row. The counterpart for the OPEN project is
+    /// removing its SpeleoDB link. The counterpart for the OPEN project is
     /// `speleodb_unlink`, which also releases the held write lock and moves the
     /// edit gates; `path` here is a file this session does not have open, so
     /// there is no lock and no gate to move.
     ///
-    /// `open_existing` rather than the metadata probe: this DOES mutate the
-    /// file, so it should refuse one that is not a Stalagmight project and run
-    /// the same integrity check + migration a real open would - a corrupt file
-    /// is reported instead of half-edited. The handle drops before returning,
-    /// which matters on Windows: the frontend reopens this very file right
-    /// afterwards, and SQLite holds it without FILE_SHARE_DELETE.
+    /// The whole file is read (a version 2 decode, or a legacy file's full
+    /// open and migration) rather than probed: this DOES write the file, so it
+    /// refuses one that is not a Stalagmight project, or breaks an invariant,
+    /// instead of half-editing it. A version 2 file keeps every member but the
+    /// link (`rewrite_local` clears `speleodb` and the SpeleoDB sync state in
+    /// `local`). A legacy file is upgraded by this write, as by its first save:
+    /// the SQLite original (and any journal) goes to the backups folder first.
     ///
-    /// The row delete itself is idempotent (`DELETE FROM speleo_link`), so a
-    /// second invocation - or one against a file whose link is already gone -
-    /// succeeds harmlessly.
+    /// Idempotent: a file whose link is already gone is left untouched, and the
+    /// call succeeds (a second confirm, or a legacy file the user never meant to
+    /// convert).
     ///
-    /// The refusal and the delete share ONE `project` acquisition, for the same
+    /// The refusal and the write share ONE `project` acquisition, for the same
     /// reason `delete_project`'s check and teardown do. Asking
-    /// `open_project_path` (which releases the lock) and only then deleting is a
+    /// `open_project_path` (which releases the lock) and only then writing is a
     /// TOCTOU against load finalization: a load of THIS path finishing in the
     /// gap makes it the open project - gates already derived as remote - and the
-    /// row then vanishes from underneath a live remote session, leaving a gate
+    /// link then vanishes from underneath a live remote session, leaving a gate
     /// and possibly an acquired server mutex with no link left to release or
     /// push through. Every installer of a file-backed project finalizes under
     /// this same lock, so holding it here orders this command strictly before
@@ -232,17 +380,20 @@ impl AppState {
     /// see it open and refuse).
     ///
     /// `expected` is the link the REFUSAL reported, and it is re-checked against
-    /// the file under the handle that does the delete. The prompt can sit on
-    /// screen indefinitely, and a path is not a file: the `.stalx` there can be
-    /// replaced, renamed over or restored from a backup in between. Stripping
-    /// whatever now occupies the path would silently unmanage a project the user
-    /// never saw a prompt about - possibly the canonical cache copy of something
-    /// else, which is the one file this module exists to keep managed.
+    /// the bytes the write replaces: the write is guarded by their fingerprint,
+    /// so a file changed between the check and the write is refused rather than
+    /// stripped. The prompt can sit on screen indefinitely, and a path is not a
+    /// file: the `.stalx` there can be replaced, renamed over or restored from a
+    /// backup in between. Stripping whatever now occupies the path would silently
+    /// unmanage a project the user never saw a prompt about - possibly the
+    /// canonical cache copy of something else, which is the one file this module
+    /// exists to keep managed.
     pub fn speleodb_remove_link_at(
         &self,
         path: PathBuf,
         expected: SpeleoManagedFile,
     ) -> Result<(), SpeleoErrorDto> {
+        let config = self.get_config();
         let open = self
             .project
             .lock()
@@ -250,12 +401,10 @@ impl AppState {
         // Read through the guard rather than `open_project_path`, which takes
         // the same lock and would deadlock here.
         // Resolved ONCE, and everything below - the checks and the write - is
-        // about the file this names. Re-asking the original path after opening
-        // it is a TOCTOU with symlinks in it: `open_existing` follows the link
-        // as it was, so replacing the link afterwards makes the checks describe
-        // a file the open handle is not writing to. Canonicalizing first leaves
-        // one resolution for both, and the checks can no longer be pointed at a
-        // different file than the delete.
+        // about the file this names. Re-asking the original path later is a
+        // TOCTOU with symlinks in it. Canonicalizing first leaves one resolution
+        // for both, and the checks can no longer be pointed at a different file
+        // than the write.
         let path = std::fs::canonicalize(&path).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
                 "cannot resolve {}: {e}",
@@ -272,67 +421,61 @@ impl AppState {
                     .to_owned(),
             )));
         }
-        let db = Database::open_existing(&path)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        // Read and compare through the SAME handle that is about to write, so
-        // nothing can slip between the check and the delete.
-        //
+        let (found, strip, fingerprint) =
+            read_for_strip(&path, &config.closure_adjustment, &config.validation)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e)))?;
         // A link naming a DIFFERENT project is the case this exists for, and the
-        // only one that refuses. NO link row at all is still a success: the
-        // desired end state is already there, nothing is unmanaged by saying so,
-        // and the idempotency this command documents (a second confirm, a file
-        // whose link is already gone) survives.
-        let found = db
-            .load_speleo_link()
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        if let Some(link) = &found {
-            let same_project = link.project_id == expected.project_id
-                && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
-                    == crate::speleodb::auth::normalize_endpoint(&expected.endpoint);
-            if !same_project {
-                tracing::warn!(
-                    path = %path.display(),
-                    prompted_for = %expected.project_id,
-                    found = %link.project_id,
-                    purpose = "keep one local copy per SpeleoDB project",
-                    "Refusing to strip a link: the file at this path is a different \
-                     managed project than the prompt was raised for"
-                );
-                return Err(local_dto(SpeleoDbError::Io(
-                    "that file is a different SpeleoDB project than the one this \
-                     prompt was about; reopen it to see what it is now"
-                        .to_owned(),
-                )));
-            }
-            // Right project, and STILL the wrong file if this resolves to the
-            // canonical copy - a path whose final component was replaced by a
-            // link to the cache copy passes the identity check above on every
-            // field (same project, same deployment) while the file underneath is
-            // the one this module exists to keep managed. Asked of the RESOLVED
-            // path, which is also the path the handle above was opened at, so
-            // the answer describes the file that is about to be written.
-            // `foreign_link_in` recognises the same spelling at open time
-            // (`LinkedSpelling::Canonical`). No cache root means no canonical
-            // slot to protect, which is the module's standing degradation rule.
-            if super::speleodb_local_state::cache_root().is_some_and(|root| {
-                super::speleodb_local_state::is_the_cached_copy(&root, &link.project_id, &path)
-            }) {
-                tracing::warn!(
-                    path = %path.display(),
-                    project_id = %link.project_id,
-                    purpose = "keep one local copy per SpeleoDB project",
-                    "Refusing to strip a link: this path now resolves to the \
-                     project's canonical cache copy"
-                );
-                return Err(local_dto(SpeleoDbError::Io(
-                    "that path now leads to this project's managed copy, which \
-                     cannot be unlinked here; reopen it to see what it is now"
-                        .to_owned(),
-                )));
-            }
+        // only one that refuses. NO link at all is still a success: the desired
+        // end state is already there, nothing is unmanaged by saying so, and the
+        // idempotency this command documents survives.
+        let Some(link) = found else {
+            return Ok(());
+        };
+        let same_project = link.project_id == expected.project_id
+            && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                == crate::speleodb::auth::normalize_endpoint(&expected.endpoint);
+        if !same_project {
+            tracing::warn!(
+                path = %path.display(),
+                prompted_for = %expected.project_id,
+                found = %link.project_id,
+                purpose = "keep one local copy per SpeleoDB project",
+                "Refusing to strip a link: the file at this path is a different \
+                 managed project than the prompt was raised for"
+            );
+            return Err(local_dto(SpeleoDbError::Io(
+                "that file is a different SpeleoDB project than the one this \
+                 prompt was about; reopen it to see what it is now"
+                    .to_owned(),
+            )));
         }
-        db.save_speleo_link(None)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        // Right project, and STILL the wrong file if this resolves to the
+        // canonical copy - a path whose final component was replaced by a link
+        // to the cache copy passes the identity check above on every field
+        // (same project, same deployment) while the file underneath is the one
+        // this module exists to keep managed. Asked of the RESOLVED path, which
+        // is also the path the bytes were read from, so the answer describes the
+        // file that is about to be written. `foreign_link_in` recognises the
+        // same spelling at open time (`LinkedSpelling::Canonical`). No cache root
+        // means no canonical slot to protect, which is the module's standing
+        // degradation rule.
+        if super::speleodb_local_state::cache_root().is_some_and(|root| {
+            super::speleodb_local_state::is_the_cached_copy(&root, &link.project_id, &path)
+        }) {
+            tracing::warn!(
+                path = %path.display(),
+                project_id = %link.project_id,
+                purpose = "keep one local copy per SpeleoDB project",
+                "Refusing to strip a link: this path now resolves to the \
+                 project's canonical cache copy"
+            );
+            return Err(local_dto(SpeleoDbError::Io(
+                "that path now leads to this project's managed copy, which \
+                 cannot be unlinked here; reopen it to see what it is now"
+                    .to_owned(),
+            )));
+        }
+        write_strip(&path, strip, &fingerprint).map_err(|e| local_dto(SpeleoDbError::Io(e)))?;
         drop(open);
         tracing::info!(
             path = %path.display(),
@@ -349,19 +492,17 @@ impl AppState {
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
+    use super::super::synthetic_stalx_tests::{
+        legacy_linked_project, link_on_disk, write_legacy_link_only, write_v2,
+    };
     use super::*;
-    use crate::models::{Project, SpeleoLink};
 
     const ID: &str = "11111111-1111-1111-1111-111111111111";
     const OTHER_ID: &str = "22222222-2222-2222-2222-222222222222";
 
-    /// Write a linked `.stalx` at `path` whose `speleo_link` names `project_id`.
-    fn seed_linked(path: &Path, project_id: &str) {
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let mut db = Database::open(path).expect("open db");
-        db.save_project(&Project::new("Linked".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
+    /// The link every fixture here carries, naming `project_id`.
+    fn linked(project_id: &str) -> SpeleoLink {
+        SpeleoLink {
             endpoint: "http://x/".to_owned(),
             project_id: project_id.to_owned(),
             project_name: "Linked".to_owned(),
@@ -371,8 +512,12 @@ mod tests {
             last_verify_at: None,
             // [#303] NULL exercises the legacy initialization path.
             undo_mode: None,
-        }))
-        .expect("save link");
+        }
+    }
+
+    /// Write a linked version 2 `.stalx` at `path` whose link names `project_id`.
+    fn seed_linked(path: &Path, project_id: &str) {
+        write_v2(path, "Linked", Some(&linked(project_id)));
     }
 
     /// The refusal payload a prompt for `project_id` at `path` would carry -
@@ -471,31 +616,31 @@ mod tests {
         assert!(managed.can_open_remote, "a valid id can be opened remotely");
     }
 
-    /// The read-only probe is not the last word on whether a file is a second
-    /// managed copy, because it fails in a state where the file is about to open
-    /// perfectly well: a hot rollback journal defeats `SQLITE_OPEN_READ_ONLY`
-    /// (`SQLITE_READONLY_ROLLBACK`) while the read-write open a few lines later
-    /// rolls it back and succeeds. Reading that miss as "cannot become a second
-    /// usable copy" waved a foreign linked file straight through the one guard
-    /// that exists to stop it.
+    /// The read-only probe is not the last word on whether a LEGACY file is a
+    /// second managed copy, because it fails in a state where the file is about
+    /// to open perfectly well: a hot rollback journal defeats
+    /// `SQLITE_OPEN_READ_ONLY` (`SQLITE_READONLY_ROLLBACK`) while the legacy open
+    /// a few lines later rolls it back (on its private copy) and succeeds.
+    /// Reading that miss as "cannot become a second usable copy" waved a foreign
+    /// linked file straight through the one guard that exists to stop it.
     #[test]
-    fn a_foreign_copy_is_refused_even_when_only_a_read_write_open_can_read_it() {
+    fn a_legacy_foreign_copy_is_refused_even_when_only_a_read_write_open_can_read_it() {
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path().join("cache");
         let foreign = temp.path().join("elsewhere").join("copy.stalx");
-        seed_linked(&foreign, ID);
+        write_legacy_link_only(&foreign, &linked(ID));
 
-        // An OLD file, so a migration would be visible: `ensure_schema_version`
-        // would raise this to the current version (and, at v15, drop the
-        // persisted undo/redo history with it).
+        // An OLD file, so a migration would be visible.
         set_user_version(&foreign, 1);
         let hot = temp.path().join("elsewhere").join("hot.stalx");
         copy_with_a_hot_journal(&foreign, &hot);
 
         assert!(
-            Database::open_for_metadata(&hot)
-                .and_then(|db| db.load_speleo_link())
-                .is_err(),
+            crate::persistence::legacy_link::read_link(
+                &hot,
+                &crate::persistence::legacy_link::ReadOptions::default()
+            )
+            .is_err(),
             "precondition: a read-only connection cannot roll back a hot journal"
         );
 
@@ -508,21 +653,26 @@ mod tests {
             "and the refused file was NOT migrated: the probe may recover the \
              journal, because that is the only way to read what the file \
              committed and the next open would do it anyway, but it must not \
-             rewrite a schema - the user has not even answered the prompt yet, \
-             and Cancel cannot put a v15 migration's dropped history back"
+             rewrite a schema - the user has not even answered the prompt yet"
         );
+    }
 
-        // What the full open WOULD have done to it, which is why the escalation
-        // does not use one. Both recover the journal; only this one migrates.
-        let migrated = temp.path().join("elsewhere").join("hot2.stalx");
-        copy_with_a_hot_journal(&foreign, &migrated);
-        drop(Database::open_existing(&migrated).expect("recovers the journal as well"));
-        assert_ne!(
-            user_version(&migrated),
-            1,
-            "precondition for the assertion above: `open_existing` migrates, so \
-             the probe reaching for it would have rewritten a refused file"
+    /// The bug the switch fixed: the probe read SQLite only, so a version 2
+    /// copy of a managed project read as unlinked and opened as a second copy.
+    #[test]
+    fn a_version_2_foreign_copy_is_refused_and_a_legacy_one_too() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let v2 = temp.path().join("v2.stalx");
+        seed_linked(&v2, ID);
+        assert_eq!(
+            stalx_v2::sniff(&std::fs::read(&v2).expect("bytes")),
+            Format::V2
         );
+        assert!(refusal(foreign_link_in(Some(&root), &v2)).is_some());
+        let legacy = temp.path().join("legacy.stalx");
+        write_legacy_link_only(&legacy, &linked(ID));
+        assert!(refusal(foreign_link_in(Some(&root), &legacy)).is_some());
     }
 
     /// ...but a file NOTHING can read is still left to the open that follows,
@@ -678,10 +828,7 @@ mod tests {
     fn an_unlinked_stalx_is_not_refused() {
         let temp = tempfile::TempDir::new().expect("temp");
         let plain = temp.path().join("plain.stalx");
-        let mut db = Database::open(&plain).expect("open db");
-        db.save_project(&Project::new("Plain".to_owned(), None))
-            .expect("save project");
-        drop(db);
+        write_v2(&plain, "Plain", None);
 
         assert!(
             accepted_as_spelled(&foreign_link_in(Some(temp.path()), &plain)),
@@ -695,11 +842,9 @@ mod tests {
         let junk = temp.path().join("junk.stalx");
         std::fs::write(&junk, b"not a database at all").expect("write junk");
 
-        // The read really does fail on this input (pinned by
-        // `metadata_open_still_propagates_a_genuinely_unreadable_file` in
-        // persistence/sqlite/tests.rs) - and the probe still does not refuse:
-        // the full open right after it reports CORRUPT through the existing
-        // recovery UI, which is the better surface for this file.
+        // The read really does fail on this input - and the probe still does
+        // not refuse: the full open right after it reports CORRUPT through the
+        // existing recovery UI, which is the better surface for this file.
         assert!(
             accepted_as_spelled(&foreign_link_in(Some(temp.path()), &junk)),
             "an unreadable file is the corruption path's problem, not this probe's"
@@ -762,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_link_at_clears_the_row_and_leaves_the_project_readable() {
+    fn remove_link_at_clears_the_link_and_leaves_the_project_readable() {
         let temp = tempfile::TempDir::new().expect("temp");
         let foreign = temp.path().join("copy.stalx");
         seed_linked(&foreign, ID);
@@ -772,24 +917,71 @@ mod tests {
             .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
             .expect("removing the link from a closed foreign copy succeeds");
 
-        let db = Database::open_for_metadata(&foreign).expect("reopen");
+        assert_eq!(link_on_disk(&foreign), None, "the link is gone");
+        let bytes = std::fs::read(&foreign).expect("bytes");
+        let decoded = stalx_v2::decode(&bytes, &DecodeOptions::default())
+            .expect("the stripped file still decodes");
         assert_eq!(
-            db.load_speleo_link().expect("read link"),
-            None,
-            "the link row is gone"
-        );
-        drop(db);
-        let db = Database::open_existing(&foreign).expect("full open still works");
-        assert_eq!(
-            db.load_project().expect("project still loads").name,
-            "Linked",
+            decoded.project.name, "Linked",
             "the project data is untouched"
         );
+        assert!(decoded.extras.speleodb.is_none());
+        assert!(
+            decoded.extras.local.speleodb.is_empty(),
+            "and no SpeleoDB sync state is left behind"
+        );
 
-        // Idempotent: a second removal (nothing left to delete) still succeeds.
+        // Idempotent: a second removal (nothing left to remove) still succeeds
+        // and writes nothing.
         state
             .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
             .expect("a second removal is a harmless no-op");
+        assert_eq!(std::fs::read(&foreign).expect("bytes"), bytes);
+    }
+
+    /// A legacy foreign copy is upgraded by the strip, as by its first save: the
+    /// SQLite original is kept in the backups folder and the file reopens as a
+    /// plain version 2 project. A legacy file with no link is never converted.
+    #[test]
+    fn remove_link_at_upgrades_a_legacy_copy_and_keeps_its_original() {
+        crate::app_dirs::init_for_test();
+        crate::test_helpers::with_isolated_config(|| {
+            let temp = tempfile::TempDir::new().expect("temp");
+            let foreign = legacy_linked_project(&temp.path().join("old.stalx"), Some(&linked(ID)));
+            let original = std::fs::read(&foreign).expect("bytes");
+            let state = AppState::new().expect("state");
+
+            state
+                .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
+                .expect("a legacy foreign copy strips");
+
+            let upgraded = std::fs::read(&foreign).expect("bytes");
+            assert_eq!(
+                stalx_v2::sniff(&upgraded),
+                Format::V2,
+                "the strip upgraded it"
+            );
+            assert_eq!(link_on_disk(&foreign), None, "without the link");
+            let backups = super::super::project_io::upgrade_backup_dir().expect("backups");
+            let kept = std::fs::read_dir(&backups)
+                .expect("backups folder")
+                .filter_map(Result::ok)
+                .any(|e| std::fs::read(e.path()).ok().as_deref() == Some(original.as_slice()));
+            assert!(kept, "the SQLite original is kept in {}", backups.display());
+            assert!(state.open_project(foreign).success, "and it opens");
+            assert!(state.speleo_link().is_none(), "as a local project");
+
+            let plain = legacy_linked_project(&temp.path().join("plain.stalx"), None);
+            let before = std::fs::read(&plain).expect("bytes");
+            state
+                .speleodb_remove_link_at(plain.clone(), prompted_for(&plain, ID))
+                .expect("nothing to strip is a success");
+            assert_eq!(
+                std::fs::read(&plain).expect("bytes"),
+                before,
+                "an unlinked legacy file is not converted"
+            );
+        });
     }
 
     #[test]
@@ -810,26 +1002,14 @@ mod tests {
         state
             .speleodb_remove_link_at(path.clone(), prompted.clone())
             .expect_err("the file at that path is not the one the prompt was about");
-        assert!(
-            Database::open_for_metadata(&path)
-                .and_then(|db| db.load_speleo_link())
-                .expect("readable")
-                .is_some(),
-            "and its link row is untouched"
-        );
+        assert!(link_on_disk(&path).is_some(), "and its link is untouched");
 
         // The file the prompt WAS about still strips.
         seed_linked(&path, ID);
         state
             .speleodb_remove_link_at(path.clone(), prompted)
             .expect("the expected file strips as before");
-        assert!(
-            Database::open_for_metadata(&path)
-                .and_then(|db| db.load_speleo_link())
-                .expect("readable")
-                .is_none(),
-            "its link row is gone"
-        );
+        assert!(link_on_disk(&path).is_none(), "its link is gone");
     }
 
     /// Round 12: the identity re-check passes on every field when the path is
@@ -864,10 +1044,7 @@ mod tests {
             .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
             .expect_err("the canonical copy must not be unlinked through an alias");
         assert!(
-            Database::open_for_metadata(&cached)
-                .and_then(|db| db.load_speleo_link())
-                .expect("readable")
-                .is_some(),
+            link_on_disk(&cached).is_some(),
             "the canonical copy keeps its link"
         );
         let _ = std::fs::remove_file(&cached);
@@ -888,10 +1065,9 @@ mod tests {
             .speleodb_remove_link_at(open_path.clone(), prompted_for(&open_path, ID))
             .expect_err("the open project must detach via speleodb_unlink instead");
 
-        let db = Database::open_for_metadata(&open_path).expect("reopen");
         assert!(
-            db.load_speleo_link().expect("read link").is_some(),
-            "the refusal must not have touched the row"
+            link_on_disk(&open_path).is_some(),
+            "the refusal must not have touched the link"
         );
     }
 
@@ -908,28 +1084,32 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
-    fn the_production_load_refuses_a_managed_file_before_it_opens_the_database() {
+    fn the_production_load_refuses_a_managed_file_before_it_reads_the_project() {
         // Guarded by ORDER in the source, the `the_pull_runs_the_local_guard_
         // before_it_downloads_the_dump` idiom: a behavioural version would need a
         // Wry AppHandle (`do_load_project_full` hard-requires one), which no unit
         // test has. The ordering is what matters - the probe must run before
-        // `open_existing` migrates the file and quick_checks every page.
+        // the full read (a version 2 decode, or a legacy file's migration).
         let src = include_str!("project_load.rs");
-        let start = src
-            .find("fn do_load_project_full")
-            .expect("the production load is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let fn_body = |name: &str| {
+            let start = src.find(name).expect("the production load is present");
+            let body = &src[start..];
+            &body[..body.find("\n    }\n").expect("fn body terminates")]
+        };
+        assert!(
+            fn_body("fn do_load_project_full").contains("self.load_full("),
+            "the production load runs `load_full`"
+        );
+        let body = fn_body("fn load_full(");
         let probe = body
             .find("self.foreign_link(")
             .expect("the production load must run the canonical-storage probe");
         let open = body
-            .find("Database::open_existing(")
-            .expect("the production load opens the database");
+            .find("self.read_project_file(")
+            .expect("the production load reads the project file");
         assert!(
             probe < open,
-            "the canonical-storage refusal must run BEFORE open_existing, not after it"
+            "the canonical-storage refusal must run BEFORE the project is read, not after it"
         );
     }
 }

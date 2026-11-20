@@ -7,13 +7,19 @@
 //! answer lives in the local pull cache. This module supplies that half of the
 //! join, so the frontend can offer "push and release" instead of a bare "release".
 //!
+//! It also holds [`probe_link`], the ONE reader of a file's SpeleoDB link that
+//! every link reader shares (plan 6.1): this listing, the replace guard, the
+//! foreign-copy probe, logout's forget-recents, the access probe and the
+//! fast-forward arm.
+//!
 //! Two rules shape the whole module:
 //!
-//! 1. **Cheap and read-only.** A cached `.stalx` is opened with
-//!    `Database::open_for_metadata` (`SQLITE_OPEN_READ_ONLY`, no integrity check,
-//!    no migration, no 256 MB mmap) for a single `SELECT`. Never `open_existing`:
-//!    this runs over every cached project to paint a list, and it must not
-//!    migrate, write to, or mmap files the user did not ask to open.
+//! 1. **Cheap and read-only.** A version 2 `.stalx` is read through its header
+//!    (`stalx_v2::probe_path`: the members before the survey body, from the first
+//!    bytes); a legacy SQLite one through its `speleo_link` row
+//!    (`persistence::legacy_link`: read-only, no integrity check, no migration).
+//!    Never a full open: this runs over every cached project to paint a list, and
+//!    it must not migrate, write to, or decode files the user did not ask to open.
 //! 2. **One bad file never blanks the list.** A missing, unreadable, corrupt or
 //!    link-less file degrades to a "nothing to act on" row and the walk continues.
 //!    An unreadable one is degraded WITH `state_unknown` set, so the frontend can
@@ -21,15 +27,118 @@
 //!    the guard below fails closed on that same input, and the two must not
 //!    silently disagree.
 //!
-//! The OPEN project is answered from the live open database instead of its file on
+//! The OPEN project is answered from its in-memory link (`FileState`, the
+//! authority: every link change is made durable from it) instead of its file on
 //! disk - see [`AppState::speleodb_local_project_states`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::open_file::FileState;
 use super::AppState;
+use crate::models::SpeleoLink;
+use crate::persistence::legacy_link::{self, ReadOptions};
+use crate::persistence::stalx_v2::{self, Extras, Format};
 use crate::speleodb::models::SpeleoLocalProjectState;
 use crate::speleodb::SpeleoDbError;
+
+/// What one file on disk says about its SpeleoDB link (see [`probe_link`]).
+#[derive(Debug)]
+pub(super) enum FileLink {
+    /// The file was read. `None`: it is not a managed project (no `speleodb`
+    /// member, no `speleo_link` row, or an empty file).
+    Read(Option<SpeleoLink>),
+    /// Nothing is at the path.
+    Missing,
+    /// The file is there but its link could not be read: nothing is known about
+    /// it, in particular NOT that it is free of un-uploaded edits. The text is
+    /// for the log only (it can quote the file).
+    Unreadable(String),
+}
+
+/// How [`probe_link`] treats a legacy SQLite file. A version 2 file is written
+/// whole by an atomic rename and has no journal, so these only matter for the
+/// SQLite copies older builds left on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LegacyRead {
+    /// Read-only; a hot journal makes the read fail (`SQLITE_READONLY_ROLLBACK`).
+    ReadOnly,
+    /// A hot rollback journal beside the file makes it [`FileLink::Unreadable`]
+    /// by rule, before any connection: its committed state is the file PLUS that
+    /// journal, which is what a replace would otherwise throw away (see
+    /// `speleodb_sidecars`).
+    HotJournalUnreadable,
+    /// Read-only first; on a miss, again read-write so SQLite rolls a hot
+    /// journal back (the only write, and the one the next open would make).
+    Recover,
+}
+
+/// The SpeleoDB link of the `.stalx` at `path`, the one reader every link
+/// reader shares (plan 6.1): the identity from `speleodb` and the sync state
+/// from `local.speleodb` of a version 2 header, or the `speleo_link` row of a
+/// legacy file.
+pub(super) fn probe_link(path: &Path, legacy: LegacyRead) -> FileLink {
+    let header = match stalx_v2::probe_path(path) {
+        Ok(header) => header,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FileLink::Missing,
+        Err(e) => return FileLink::Unreadable(e.to_string()),
+    };
+    match header.format {
+        Format::V2 if header.complete => {
+            let mut extras = Extras {
+                speleodb: header.speleodb,
+                ..Extras::default()
+            };
+            if let Some(local) = header.local {
+                extras.local = local;
+            }
+            FileLink::Read(
+                FileState {
+                    extras,
+                    ..FileState::default()
+                }
+                .speleo_link(),
+            )
+        }
+        Format::V2 => FileLink::Unreadable("the file's header could not be read".to_owned()),
+        Format::Legacy => legacy_link_at(path, legacy),
+        // An empty file holds nothing to lose (0.6.0 read one as an empty,
+        // unlinked database); anything else is not a project we can read.
+        Format::Unknown => match std::fs::metadata(path) {
+            Ok(meta) if meta.len() == 0 => FileLink::Read(None),
+            Ok(_) => FileLink::Unreadable("not a Stalagmight project".to_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileLink::Missing,
+            Err(e) => FileLink::Unreadable(e.to_string()),
+        },
+    }
+}
+
+/// [`probe_link`] for a legacy SQLite file.
+fn legacy_link_at(path: &Path, legacy: LegacyRead) -> FileLink {
+    if legacy == LegacyRead::HotJournalUnreadable && super::speleodb_sidecars::has_hot_journal(path)
+    {
+        return FileLink::Unreadable("a hot rollback journal is beside it".to_owned());
+    }
+    let read_only = legacy_link::read_link(path, &ReadOptions::default());
+    let read = match (read_only, legacy) {
+        (Err(read_only_error), LegacyRead::Recover) => legacy_link::read_link(
+            path,
+            &ReadOptions {
+                recover: true,
+                ..ReadOptions::default()
+            },
+        )
+        .map_err(|e| format!("{e:#} (read-only: {read_only_error:#})")),
+        (read, _) => read.map_err(|e| format!("{e:#}")),
+    };
+    match read {
+        Ok(link) => FileLink::Read(link),
+        // `try_exists` rather than `exists`: an Err there (a permission denial on
+        // a parent component) is itself "cannot tell", never "absent".
+        Err(_) if !path.try_exists().unwrap_or(true) => FileLink::Missing,
+        Err(e) => FileLink::Unreadable(e),
+    }
+}
 
 /// The file inside each per-project cache directory.
 pub(super) const CACHE_STALX: &str = "project.stalx";
@@ -141,11 +250,11 @@ enum LocalRead {
 /// `Known` too (a `.stalx` in the cache that is not a managed project has nothing
 /// to push). Only a file that is present and unreadable is `Unreadable`.
 ///
-/// A present file with a HOT rollback journal beside it is `Unreadable` by rule,
+/// A legacy copy with a HOT rollback journal beside it is `Unreadable` by rule,
 /// before any connection is tried: its committed state is the file PLUS that
 /// journal, and the journal is what a replace would otherwise throw away (see
-/// `speleodb_sidecars`). A read-only open trips over the same journal today, but
-/// the guard's answer must not hang on that.
+/// `speleodb_sidecars`). A read-only open trips over the same journal, but the
+/// guard's answer must not hang on that.
 fn read_local_state_at(path: &Path) -> LocalRead {
     match read_cached_link(path) {
         CachedLink::Linked(link) => LocalRead::Known(SpeleoLocalProjectState {
@@ -164,7 +273,7 @@ fn read_local_state_at(path: &Path) -> LocalRead {
 /// reader of the cache shares (see [`read_local_state_at`]).
 pub(super) enum CachedLink {
     /// The file was read and carries a SpeleoDB link.
-    Linked(crate::models::SpeleoLink),
+    Linked(SpeleoLink),
     /// Nothing managed is there: no file at all, or a `.stalx` with no link row.
     NotManaged,
     /// The file EXISTS but its committed state could not be read (a hot journal,
@@ -173,29 +282,25 @@ pub(super) enum CachedLink {
     Unreadable,
 }
 
-/// Read one cached `.stalx`'s link row, read-only. The single reader behind both
+/// Read one cached `.stalx`'s link, read-only. The single reader behind both
 /// the local-state listing and the cached-copies listing, so the two cannot
-/// disagree about what counts as unreadable.
+/// disagree about what counts as unreadable; a legacy copy with a hot journal is
+/// unreadable by rule ([`LegacyRead::HotJournalUnreadable`]).
 pub(super) fn read_cached_link(path: &Path) -> CachedLink {
-    if super::speleodb_sidecars::has_hot_journal(path) && path.try_exists().unwrap_or(true) {
-        tracing::debug!(
-            path = %path.display(),
-            purpose = "never read an interrupted write as the copy's state",
-            "speleodb: cached .stalx has a hot rollback journal"
-        );
-        return CachedLink::Unreadable;
-    }
-    // C11: version 2 copies through the header probe, legacy ones through the
-    // frozen reader (`speleodb_cache::read_cache_file`); C12 owns this reader.
-    match super::speleodb_cache::read_cache_file(path) {
-        super::speleodb_cache::CacheFile::Read {
-            link: Some(link), ..
-        } => CachedLink::Linked(link),
-        // No link: a `.stalx` sitting in the cache that is not a managed project
-        // (or no file at all). Nothing to report, and nothing to push.
-        super::speleodb_cache::CacheFile::Read { link: None, .. }
-        | super::speleodb_cache::CacheFile::Absent => CachedLink::NotManaged,
-        super::speleodb_cache::CacheFile::Unreadable => CachedLink::Unreadable,
+    match probe_link(path, LegacyRead::HotJournalUnreadable) {
+        FileLink::Read(Some(link)) => CachedLink::Linked(link),
+        // No link: a `.stalx` sitting in the cache that is not a managed
+        // project, or no file at all. Nothing to report, and nothing to push.
+        FileLink::Read(None) | FileLink::Missing => CachedLink::NotManaged,
+        FileLink::Unreadable(error) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %error,
+                purpose = "report local SpeleoDB state for a project list",
+                "speleodb: cached .stalx could not be read"
+            );
+            CachedLink::Unreadable
+        }
     }
 }
 
@@ -334,10 +439,11 @@ impl AppState {
         cache_root: Option<&Path>,
         project_ids: Option<Vec<String>>,
     ) -> HashMap<String, SpeleoLocalProjectState> {
-        // The OPEN project's live link, read from the open database. It is FOLDED IN
-        // below rather than read from disk, because its dirty bit is stamped into the
-        // open database on every accepted edit - so it is at least as fresh as, and
-        // often fresher than, that project's file on disk.
+        // The OPEN project's live link, read from memory. It is FOLDED IN below
+        // rather than read from disk, because its dirty bit is set in memory on every
+        // accepted edit and only then made durable - so it is at least as fresh as,
+        // and (for a legacy file not yet upgraded) fresher than, that project's file
+        // on disk.
         let open = self.speleodb_open_link().ok().map(|link| {
             (
                 link.project_id,
@@ -365,9 +471,9 @@ impl AppState {
                     // Release offered the moment the app dirs failed. Every other
                     // "could not establish it" path in this file fails to `unknown`;
                     // so does this one.
-                    let state = cache_root
-                        .map(|root| local_state_at(&cache_path_in(root, &id)))
-                        .unwrap_or_else(unknown_local_state);
+                    let state = cache_root.map_or_else(unknown_local_state, |root| {
+                        local_state_at(&cache_path_in(root, &id))
+                    });
                     (id, state)
                 })
                 .collect(),
@@ -418,8 +524,8 @@ impl AppState {
     /// download, no "the copies differ" prompt.
     ///
     /// `Some` only when ALL of these hold, read from the same source
-    /// [`Self::local_copy_state`] trusts (the live open database when `dest` IS the
-    /// open project, the file's own link row otherwise):
+    /// [`Self::local_copy_state`] trusts (the live in-memory link when `dest` IS the
+    /// open project, the file's own link otherwise):
     ///
     /// - `tip` is known. An unknown tip (history failed, empty repository, an
     ///   unusable sha) proves nothing, so the caller falls back to the guarded
@@ -460,11 +566,9 @@ impl AppState {
             });
         let link = match live {
             Some(link) => link,
-            None => match super::speleodb_cache::read_cache_file(dest) {
-                super::speleodb_cache::CacheFile::Read {
-                    link: Some(link), ..
-                } => link,
-                _ => return None,
+            None => match probe_link(dest, LegacyRead::ReadOnly) {
+                FileLink::Read(Some(link)) => link,
+                FileLink::Read(None) | FileLink::Missing | FileLink::Unreadable(_) => return None,
             },
         };
         let same_server = crate::speleodb::auth::normalize_endpoint(&link.endpoint)
@@ -541,14 +645,16 @@ fn scan_cache(root: &Path) -> HashMap<String, SpeleoLocalProjectState> {
         .collect()
 }
 
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
+    use super::super::synthetic_stalx_tests::{
+        instant, link_on_disk, write_legacy_link_only, write_v2,
+    };
     use super::*;
-    use crate::models::{Project, SpeleoLink};
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";
     const ID_B: &str = "22222222-2222-2222-2222-222222222222";
@@ -561,22 +667,20 @@ mod tests {
     /// recorded as [`ME`]'s.
     fn seed_based(root: &Path, base: Option<&str>, dirty: bool) -> PathBuf {
         let path = cache_path_in(root, ID_A);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Cached".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: SERVER.to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Cached".to_owned(),
-            base_commit_sha: base.map(str::to_owned),
-            has_unpushed_edits: dirty,
-            last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        write_v2(
+            &path,
+            "Cached",
+            Some(&SpeleoLink {
+                endpoint: SERVER.to_owned(),
+                project_id: ID_A.to_owned(),
+                project_name: "Cached".to_owned(),
+                base_commit_sha: base.map(str::to_owned),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        );
         AppState::new()
             .expect("state")
             .speleodb_record_cache_owner(&path, SERVER, ME, "Cached");
@@ -588,11 +692,7 @@ mod tests {
     }
 
     fn link_at(path: &Path) -> SpeleoLink {
-        Database::open_for_metadata(path)
-            .expect("open")
-            .load_speleo_link()
-            .expect("read")
-            .expect("linked")
+        link_on_disk(path).expect("linked")
     }
 
     #[test]
@@ -758,15 +858,18 @@ mod tests {
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_none());
-        // The edit's dirty stamp, set as a fixture (see the forward-edit tripwire).
-        state
-            .database
-            .lock()
-            .expect("database")
-            .as_ref()
-            .expect("open")
-            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
-            .expect("stamp the dirty bit");
+        // The edit's dirty stamp, set IN MEMORY only (the file stays clean): the arm
+        // must answer from the live link, which is at least as fresh as the file.
+        state.with_file(|file| {
+            let mut link = file.speleo_link().expect("linked");
+            link.has_unpushed_edits = true;
+            link.last_edit_at = Some("2026-11-09T10:00:00Z".to_owned());
+            file.set_speleo_link(Some(&link));
+        });
+        assert!(
+            !link_at(&path).has_unpushed_edits,
+            "precondition: the file is clean"
+        );
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_some());
@@ -805,11 +908,12 @@ mod tests {
     /// bit, and return its path.
     fn seed_cache(root: &Path, project_id: &str, dirty: bool) -> PathBuf {
         let path = cache_path_in(root, project_id);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Cached".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
+        write_v2(&path, "Cached", Some(&cached_link(project_id, dirty)));
+        path
+    }
+
+    fn cached_link(project_id: &str, dirty: bool) -> SpeleoLink {
+        SpeleoLink {
             endpoint: "http://x/".to_owned(),
             project_id: project_id.to_owned(),
             project_name: "Cached".to_owned(),
@@ -818,9 +922,26 @@ mod tests {
             last_edit_at: dirty.then(|| "2026-07-26T00:00:00Z".to_owned()),
             last_verify_at: None,
             undo_mode: None,
-        }))
-        .expect("save link");
-        path
+        }
+    }
+
+    /// A copy of `project_id` open from outside the cache (the Save-As shape),
+    /// named `name`, with the given dirty bit.
+    fn seed_elsewhere(path: &Path, project_id: &str, name: &str, dirty: bool) {
+        write_v2(
+            path,
+            name,
+            Some(&SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: project_id.to_owned(),
+                project_name: name.to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: dirty,
+                last_edit_at: dirty.then(|| "2026-07-26T12:00:00Z".to_owned()),
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        );
     }
 
     #[test]
@@ -836,8 +957,8 @@ mod tests {
         let a = all.get(ID_A).expect("dirty project reported");
         assert!(a.has_local_copy && a.has_unpushed_edits, "A is dirty");
         assert_eq!(
-            a.last_edit_at.as_deref(),
-            Some("2026-07-26T00:00:00Z"),
+            instant(a.last_edit_at.as_deref()),
+            instant(Some("2026-07-26T00:00:00Z")),
             "the dirty copy carries its edit time"
         );
         assert!(!a.is_open, "nothing is open in this fixture");
@@ -850,7 +971,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path();
         seed_cache(root, ID_A, true);
-        // A corrupt cache entry for B: a file of the right name that is not SQLite.
+        // A corrupt cache entry for B: a file of the right name that is not a project.
         let corrupt = cache_path_in(root, ID_B);
         std::fs::create_dir_all(corrupt.parent().expect("parent")).expect("mkdir");
         std::fs::write(&corrupt, b"not a database at all").expect("write corrupt");
@@ -919,21 +1040,7 @@ mod tests {
         seed_cache(&root, ID_A, false);
         // The open copy of A lives elsewhere and is dirty.
         let open_path = temp.path().join("open.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Open".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Open".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: true,
-            last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Open", true);
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(open_path).success, "open the fixture");
@@ -945,7 +1052,10 @@ mod tests {
             "the live open link wins over the clean file in the cache"
         );
         assert!(a.is_open, "and is flagged as the open project");
-        assert_eq!(a.last_edit_at.as_deref(), Some("2026-07-26T12:00:00Z"));
+        assert_eq!(
+            instant(a.last_edit_at.as_deref()),
+            instant(Some("2026-07-26T12:00:00Z"))
+        );
     }
 
     #[test]
@@ -962,28 +1072,14 @@ mod tests {
         // A's cache copy is present and UNREADABLE; B's is present and DIRTY.
         let cached_a = cache_path_in(&root, ID_A);
         std::fs::create_dir_all(cached_a.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&cached_a, b"not a sqlite database at all").expect("write junk");
+        std::fs::write(&cached_a, b"not a project file at all").expect("write junk");
         seed_cache(&root, ID_B, true);
 
         // A CLEAN copy of BOTH projects cannot be open at once, so run the shape
         // twice - once per project - against a clean copy open from outside the cache.
         for (id, assertion) in [(ID_A, "unreadable"), (ID_B, "dirty")] {
             let open_path = temp.path().join(format!("my-copy-{id}.stalx"));
-            let mut db = Database::open(&open_path).expect("open db");
-            db.save_project(&Project::new("Mine".to_owned(), None))
-                .expect("save project");
-            db.save_speleo_link(Some(&SpeleoLink {
-                endpoint: "http://x/".to_owned(),
-                project_id: id.to_owned(),
-                project_name: "Mine".to_owned(),
-                base_commit_sha: Some("abc123".to_owned()),
-                has_unpushed_edits: false,
-                last_edit_at: None,
-                last_verify_at: None,
-                undo_mode: None,
-            }))
-            .expect("save link");
-            drop(db);
+            seed_elsewhere(&open_path, id, "Mine", false);
 
             let state = AppState::new().expect("state");
             assert!(
@@ -1046,7 +1142,7 @@ mod tests {
         let root = temp.path();
         let path = cache_path_in(root, ID_A);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, b"not a sqlite database at all").expect("write junk");
+        std::fs::write(&path, b"not a project file at all").expect("write junk");
         let state = AppState::new().expect("state");
 
         let out = state.speleodb_local_project_states_in(Some(root), Some(vec![ID_A.to_owned()]));
@@ -1093,22 +1189,21 @@ mod tests {
 
     #[test]
     fn a_legacy_cached_stalx_reads_as_a_known_local_copy_not_as_unreadable() {
-        // A `.stalx` pulled by an older build has a NARROWER `speleo_link` table, and
-        // `open_for_metadata` runs no migration - so the reader used to fail it with
-        // `no such column` and the failure landed in the Unreadable branch. That
-        // wedged the project permanently in both directions at once: the guard refused
-        // every pull / adopt / revision-restore with a factually wrong "has local edits
-        // that were never pushed", while the cache scan claimed there was no local copy
-        // at all. Neither statement was true, and neither could be cleared by anything
-        // the user could do.
+        // A `.stalx` pulled by an older build is SQLite, often with a NARROWER
+        // `speleo_link` table, and the link reader runs no migration - so a reader that
+        // selected the newer columns failed it with `no such column` and the failure
+        // landed in the Unreadable branch. That wedged the project permanently in both
+        // directions at once: the guard refused every pull / adopt / revision-restore
+        // with a factually wrong "has local edits that were never pushed", while the
+        // cache scan claimed there was no local copy at all.
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path();
-        let path = seed_cache(root, ID_A, false);
-        // Rebuild the link table in its pre-v10 shape, as an older build wrote it.
-        let conn = rusqlite::Connection::open(&path).expect("open to narrow the table");
+        let path = cache_path_in(root, ID_A);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        // The link table in its pre-v10 shape, as an older build wrote it.
+        let conn = rusqlite::Connection::open(&path).expect("create the legacy copy");
         conn.execute_batch(
-            "DROP TABLE speleo_link;
-             CREATE TABLE speleo_link (
+            "CREATE TABLE speleo_link (
                  id INTEGER PRIMARY KEY CHECK (id = 1),
                  endpoint TEXT NOT NULL,
                  project_id TEXT NOT NULL,
@@ -1141,6 +1236,88 @@ mod tests {
         );
     }
 
+    /// A hot rollback journal beside a LEGACY copy makes it unknown by rule: its
+    /// committed state is the file plus the journal. A version 2 copy is written
+    /// whole by a rename and has no journal, so a stray `-journal` beside one (left
+    /// from its SQLite past) means nothing and the copy reads as it is.
+    #[test]
+    fn a_hot_journal_makes_only_a_legacy_copy_unknown() {
+        const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+        let journal_of = |path: &Path| {
+            let mut name = path.as_os_str().to_owned();
+            name.push("-journal");
+            PathBuf::from(name)
+        };
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path();
+        let legacy = cache_path_in(root, ID_A);
+        write_legacy_link_only(&legacy, &cached_link(ID_A, false));
+        std::fs::write(journal_of(&legacy), JOURNAL_MAGIC).expect("armed journal");
+        let v2 = seed_cache(root, ID_B, false);
+        std::fs::write(journal_of(&v2), JOURNAL_MAGIC).expect("stray journal");
+
+        let state = AppState::new().expect("state");
+        let rows = state.speleodb_local_project_states_in(Some(root), None);
+        assert!(
+            rows.get(ID_A).is_some_and(|row| row.state_unknown),
+            "the legacy copy with a hot journal is unknown: {rows:?}"
+        );
+        assert!(
+            state.local_copy_state(ID_A, &legacy).is_none(),
+            "and the guard fails closed on it"
+        );
+        assert!(
+            rows.get(ID_B)
+                .is_some_and(|row| row.has_local_copy && !row.state_unknown),
+            "the version 2 copy reads as it is: {rows:?}"
+        );
+    }
+
+    /// The probe the whole module stands on, on the shapes a link reader meets.
+    #[test]
+    fn the_link_probe_reads_both_formats_and_says_what_it_could_not_read() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let v2 = temp.path().join("v2.stalx");
+        write_v2(&v2, "V2", Some(&cached_link(ID_A, true)));
+        let legacy = temp.path().join("legacy.stalx");
+        write_legacy_link_only(&legacy, &cached_link(ID_B, false));
+        let plain = temp.path().join("plain.stalx");
+        write_v2(&plain, "Plain", None);
+        let empty = temp.path().join("empty.stalx");
+        std::fs::write(&empty, b"").expect("empty");
+        let junk = temp.path().join("junk.stalx");
+        std::fs::write(&junk, b"not a project file at all").expect("junk");
+        let truncated = temp.path().join("truncated.stalx");
+        std::fs::write(
+            &truncated,
+            br#"{"format":"stalx","version":2,"solver":1,"requi"#,
+        )
+        .expect("truncated");
+
+        let read = |path: &Path| probe_link(path, LegacyRead::ReadOnly);
+        assert!(
+            matches!(read(&v2), FileLink::Read(Some(ref l)) if l.project_id == ID_A && l.has_unpushed_edits),
+            "{:?}",
+            read(&v2)
+        );
+        assert!(
+            matches!(read(&legacy), FileLink::Read(Some(ref l)) if l.project_id == ID_B && !l.has_unpushed_edits),
+            "{:?}",
+            read(&legacy)
+        );
+        assert!(matches!(read(&plain), FileLink::Read(None)));
+        assert!(
+            matches!(read(&empty), FileLink::Read(None)),
+            "nothing to lose"
+        );
+        assert!(matches!(read(&junk), FileLink::Unreadable(_)));
+        assert!(matches!(read(&truncated), FileLink::Unreadable(_)));
+        assert!(matches!(
+            read(&temp.path().join("missing.stalx")),
+            FileLink::Missing
+        ));
+    }
+
     #[test]
     fn a_live_link_only_vouches_for_an_unreadable_copy_when_it_is_that_file() {
         // The waiver the fail-closed guard had. In the Unreadable branch the live open
@@ -1159,21 +1336,7 @@ mod tests {
 
         // A CLEAN copy of the same project, open from elsewhere (the Save-As shape).
         let open_path = temp.path().join("my-copy.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Mine".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Mine".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Mine", false);
 
         let state = AppState::new().expect("state");
         assert!(
@@ -1213,21 +1376,7 @@ mod tests {
 
         // A DIRTY copy of the same project, open from elsewhere (the Save-As shape).
         let open_path = temp.path().join("my-copy.stalx");
-        let mut db = Database::open(&open_path).expect("open db");
-        db.save_project(&Project::new("Mine".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID_A.to_owned(),
-            project_name: "Mine".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: true,
-            last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        seed_elsewhere(&open_path, ID_A, "Mine", true);
 
         let state = AppState::new().expect("state");
         assert!(

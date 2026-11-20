@@ -3,9 +3,13 @@
 use super::speleodb::validate_project_id;
 use super::speleodb_session::LockClaim;
 use super::AppState;
+use crate::models::survey::Project;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
+
+/// The refusal of a switch to read-only over work not yet saved or uploaded.
+const SAVE_FIRST: &str = "Save your changes using Save Changes before switching to read-only mode.";
 
 /// Map a local (non-endpoint) [`SpeleoDbError`] - a lock-resolution / not-linked
 /// failure raised before any HTTP call - into the IPC error DTO. Mirrors
@@ -32,23 +36,23 @@ impl AppState {
         Ok((link, endpoint, token, insecure_http))
     }
 
-    /// Inspect a linked SQLite file before replacing the open project. Reads only
-    /// local metadata and the existing project endpoint; never acquires a lock.
+    /// Inspect a linked `.stalx` before replacing the open project. Reads only
+    /// the file's link (the shared probe: a version 2 header, or a legacy
+    /// file's link row) and the existing project endpoint; never acquires a
+    /// lock.
     pub fn speleodb_project_access_at(
         &self,
         path: String,
         local_only: bool,
     ) -> Result<Option<crate::speleodb::SpeleoFileAccess>, SpeleoErrorDto> {
+        use super::speleodb_local_state::{probe_link, FileLink, LegacyRead};
         use crate::speleodb::{SpeleoAccessVerification, SpeleoFileAccess, SpeleoProjectSummary};
         let path = std::path::Path::new(&path);
-        let Ok(db) = crate::persistence::Database::open_for_metadata(path) else {
-            return Ok(None); // The normal loader reports invalid/missing files.
-        };
-        let Some(link) = db
-            .load_speleo_link()
-            .map_err(|e| admin_dto(SpeleoDbError::Io(e.to_string())))?
-        else {
-            return Ok(None);
+        let link = match probe_link(path, LegacyRead::ReadOnly) {
+            FileLink::Read(Some(link)) => link,
+            FileLink::Read(None) => return Ok(None),
+            // The normal loader reports invalid and missing files.
+            FileLink::Missing | FileLink::Unreadable(_) => return Ok(None),
         };
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         // Unknown access (offline, signed out, another deployment) opens read-only.
@@ -143,17 +147,112 @@ impl AppState {
         &self,
         expected: Option<crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<(), SpeleoErrorDto> {
-        let _ = (&expected,);
-        crate::core::stub::not_ported("speleodb_admin::speleodb_release_current_lock")
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        self.speleodb_check_expected_context(expected.as_ref())
+            .map_err(admin_dto)?;
+        let generation = self.speleodb_session_generation();
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        if link.has_unpushed_edits {
+            return Err(admin_dto(SpeleoDbError::Io(SAVE_FIRST.into())));
+        }
+        {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
+        }
+        let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
+        let holder = self
+            .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        // Clean check and gate transition under ONE `command_lock` + `project`
+        // acquisition: mutations and session boundaries cannot slip between them.
+        // Taking the claim out IS shutting the gate (`speleodb_edit_gate`), and a
+        // failed POST can put back exactly what was there.
+        let (gate_was_open, claim) = {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation()
+                || expected.as_ref().is_none_or(|expected| {
+                    expected.session_generation != generation.to_string()
+                        || project.as_ref().is_none_or(|project| {
+                            project.modified_at.to_rfc3339() != expected.project_modified_at
+                        })
+                })
+            {
+                return Err(admin_dto(SpeleoDbError::SessionMoved));
+            }
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
+            let open = self.edit_enabled();
+            let claim = self.speleodb_forget_lock_acquired_for(&link.project_id);
+            (open, claim)
+        };
+        if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
+            if let Err(e) = client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
+            {
+                // Still ours: give the same session its gate back, exactly as it was
+                // before this call. A boundary that landed during the POST owns the
+                // gate now, so leave it alone - but the claim goes back either way:
+                // it is the only local pointer to a mutex the server still holds,
+                // and with the session gone it is what the janitor retries from.
+                let _project = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let authored = claim.as_ref().is_some_and(LockClaim::is_authored);
+                self.speleodb_restore_lock_claim(claim);
+                if gate_was_open && generation == self.speleodb_session_generation() {
+                    // Re-bound through the one way in, as the same kind of claim
+                    // it was; never recorded as a flow's fresh acquisition.
+                    let _ = self.speleodb_bind_edit_claim(
+                        &link.project_id,
+                        &link.endpoint,
+                        authored,
+                        false,
+                    );
+                }
+                return Err(dto_for_error(Endpoint::Release, &e));
+            }
+        }
+        Ok(())
     }
 
-    /// Caller holds project and excludes command mutations.
+    /// Refuse unless the open project has nothing a switch to read-only would
+    /// strand: no survey change since the last save (`FileState::dirty`) and no
+    /// un-uploaded edits on its link. The caller holds `project` (passed in) and
+    /// excludes command mutations (`command_lock`); this takes only `file`, which
+    /// nests inside `project`.
     pub(super) fn speleodb_require_clean_project(
         &self,
-        project: Option<&crate::models::survey::Project>,
+        project: Option<&Project>,
     ) -> Result<(), SpeleoDbError> {
-        let _ = (&project,);
-        crate::core::stub::not_ported("speleodb_admin::speleodb_require_clean_project")
+        if project.is_none() {
+            return Err(SpeleoDbError::NoRemoteProject);
+        }
+        let clean = self.with_file(|file| {
+            !file.dirty
+                && file
+                    .speleo_link()
+                    .is_some_and(|link| !link.has_unpushed_edits)
+        });
+        if clean {
+            Ok(())
+        } else {
+            Err(SpeleoDbError::Io(SAVE_FIRST.into()))
+        }
     }
 
     /// Bind UI consent to the open project and authenticated backend session.
