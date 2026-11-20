@@ -15,11 +15,11 @@
 //!  fsync the folder
 //! ```
 //!
-//! The first save of a legacy (SQLite) file runs `UpgradeBackup::take` first:
-//! it COPIES the original into the app-data `backups/` folder as
-//! `<stem>.<UTC stamp>.pre-v2.stalx` and MOVES its `-journal` / `-wal` /
-//! `-shm` beside that copy (so no old build can roll a stale journal into the
-//! JSON file), then writes as above; a failed write moves the sidecars back.
+//! The first save of a legacy (SQLite) file runs `legacy_upgrade::upgrade`
+//! instead: it makes the original whole (an old build's hot journal rolled
+//! back, a WAL checkpointed, through a settled copy renamed over it), removes
+//! its sidecars, keeps it in the app-data `backups/` folder as
+//! `<stem>.<UTC stamp>.pre-v2.stalx`, then writes as above.
 //!
 //! The destination is only ever touched by the rename, so before it the
 //! destination holds the OLD file byte for byte, after it the NEW one.
@@ -52,25 +52,14 @@
 //!
 //! # The legacy upgrade, interrupted at each step
 //!
-//! | injected state | the kill lands |
-//! |---|---|
-//! | the SQLite original (+ its journal) | before the backup |
-//! | + the backup copy | after the copy, before the sidecars move |
-//! | the original alone; the copy and its sidecars in the backups folder | after the move, before the write |
-//! | the same + the complete temp | after the sync, before the rename |
-//! | the v2 file; the backup pair | after the rename |
-//!
-//! Every state: never a JSON file beside an armed journal (or a WAL), the
-//! destination opens as the survey the user had (OLD) or the upgraded one
-//! (NEW), and the backup pair opens as OLD. Measured on a clean original and on
-//! one an old build left with a hot journal. With a hot journal the original
-//! read without it is NOT the old survey (the journal holds the pre-images of
-//! the pages the interrupted transaction spilled), so that state is reported,
-//! not asserted, and pinned as a known bug by
-//! `an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole`
-//! (ignored, see its reason). The real pipeline is pinned on both ends: a
-//! completed upgrade leaves the JSON file with no sidecar beside it and the
-//! pair in the backups folder; a write that fails puts the journal back.
+//! The gate and the sweep also run every state of the upgrade
+//! (`legacy_upgrade_tests::check_upgrade_states`): on a clean original, one
+//! with debris sidecars, one an old build left with a hot journal and one in
+//! WAL mode with a commit not checkpointed, a kill between any two steps leaves
+//! the project's path opening as the survey the open showed (or, once renamed,
+//! the upgraded one), never a JSON file beside an armed journal or a WAL, and a
+//! kept original that Recovery offers and restores as that survey. The module
+//! `legacy_upgrade_tests` also kills the real pipeline after each step.
 //!
 //! # Data
 //!
@@ -80,17 +69,20 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
 use tempfile::TempDir;
 
 use super::format_property_tests::{build_state, mutate};
+use super::legacy_upgrade::{Step, KILL_AT};
+use super::legacy_upgrade_tests::{
+    check_upgrade_states, forget_backups, mid_transaction, unique_stem, Kind, Original,
+};
 use super::robustness_kit::{
     canonical_snapshot, differences, entries, first_difference, observe, open_fresh, panic_text,
     write_legacy, Observed, Rng,
 };
 use super::speleodb_sidecars::{has_hot_journal, sidecar_path};
 use super::AppState;
-use crate::persistence::stalx_v2::{self, DecodeOptions, Format};
+use crate::persistence::stalx_v2::{self, DecodeOptions};
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -491,220 +483,6 @@ fn check_crash_states(seed: u32, moves: usize, extra: usize) -> Outcome {
 }
 
 // ===========================================================================
-// The legacy upgrade
-// ===========================================================================
-
-/// A legacy file caught mid-transaction, with the hot rollback journal a kill
-/// at that instant leaves beside it. The one-page cache makes the transaction
-/// SPILL its pages into the database file, the state a kill must be
-/// recoverable from. Returns `(database bytes, journal bytes)`.
-fn mid_transaction(bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let scratch = TempDir::new().ok()?;
-    let path = scratch.path().join("interrupted.stalx");
-    std::fs::write(&path, bytes).ok()?;
-    let connection = Connection::open(&path).ok()?;
-    connection.execute_batch("PRAGMA cache_size = 1;").ok()?;
-    connection
-        .execute_batch(
-            "BEGIN IMMEDIATE;
-             UPDATE project SET name = 'interrupted-write';
-             UPDATE shots SET length = length + 1000.0;
-             UPDATE sections SET name = 'interrupted-write';",
-        )
-        .ok()?;
-    let interrupted = std::fs::read(&path).ok()?;
-    let journal = std::fs::read(sidecar_path(&path, "-journal")).ok()?;
-    let _ = connection.execute_batch("ROLLBACK;");
-    drop(connection);
-    Some((interrupted, journal))
-}
-
-/// The legacy original as the upgrade meets it: the database file and, when
-/// an old build was killed mid-write, its hot journal.
-struct LegacyOriginal {
-    main: Vec<u8>,
-    journal: Option<Vec<u8>>,
-    /// The survey the app opens it as (canonical text).
-    survey: String,
-    /// The v2 file the upgrading save writes for it.
-    upgraded: Vec<u8>,
-}
-
-fn place_legacy(dir: &Path, name: &str, original: &LegacyOriginal) -> Option<PathBuf> {
-    let path = dir.join(name);
-    std::fs::write(&path, &original.main).ok()?;
-    if let Some(journal) = &original.journal {
-        std::fs::write(sidecar_path(&path, "-journal"), journal).ok()?;
-    }
-    Some(path)
-}
-
-/// Build the original (hot or clean) and what the real pipeline makes of it.
-fn legacy_original(seed: u32, hot: bool) -> Option<LegacyOriginal> {
-    crate::app_dirs::init_for_test();
-    let scratch = TempDir::new().ok()?;
-    let clean = scratch.path().join("clean.stalx");
-    write_legacy(&clean, &mut Rng::new(seed), "Legacy");
-    let clean_bytes = std::fs::read(&clean).ok()?;
-    let (main, journal) = if hot {
-        let (main, journal) = mid_transaction(&clean_bytes)?;
-        (main, Some(journal))
-    } else {
-        (clean_bytes, None)
-    };
-    let mut original = LegacyOriginal {
-        main,
-        journal,
-        survey: String::new(),
-        upgraded: Vec::new(),
-    };
-    // A unique stem: the backups folder is shared by every test.
-    let stem = format!("crash-upgrade-{seed}-{hot}-{}", std::process::id());
-    let path = place_legacy(scratch.path(), &format!("{stem}.stalx"), &original)?;
-    let state = open_fresh(&path)?;
-    original.survey = canonical_snapshot(&state);
-    if !state.save_project(None).success {
-        return None;
-    }
-    original.upgraded = std::fs::read(&path).ok()?;
-    Some(original)
-}
-
-/// The upgrade's crash states, built in `dir`. Returns the destination and
-/// the backup copy's path.
-fn stage_upgrade(dir: &Path, original: &LegacyOriginal, step: usize) -> Option<(PathBuf, PathBuf)> {
-    let destination = dir.join("cave.stalx");
-    let backups = dir.join("backups");
-    std::fs::create_dir_all(&backups).ok()?;
-    let backup = backups.join("cave.20261120T000000.000000000Z.pre-v2.stalx");
-    match step {
-        // Before the backup.
-        0 => {
-            place_legacy(dir, "cave.stalx", original)?;
-        }
-        // The copy taken, the sidecars not moved yet.
-        1 => {
-            place_legacy(dir, "cave.stalx", original)?;
-            std::fs::write(&backup, &original.main).ok()?;
-        }
-        // The sidecars moved beside the copy; then the temp written.
-        2 | 3 => {
-            std::fs::write(&destination, &original.main).ok()?;
-            place_legacy(
-                &backups,
-                "cave.20261120T000000.000000000Z.pre-v2.stalx",
-                original,
-            )?;
-            if step == 3 {
-                std::fs::write(temp_path_of(&destination), &original.upgraded).ok()?;
-            }
-        }
-        // Renamed.
-        _ => {
-            std::fs::write(&destination, &original.upgraded).ok()?;
-            place_legacy(
-                &backups,
-                "cave.20261120T000000.000000000Z.pre-v2.stalx",
-                original,
-            )?;
-        }
-    }
-    Some((destination, backup))
-}
-
-const UPGRADE_STEPS: [&str; 5] = [
-    "before-the-backup",
-    "backup-copied",
-    "sidecars-moved",
-    "temp-written",
-    "renamed",
-];
-
-fn check_upgrade_states(seed: u32, hot: bool, notes: &mut BTreeMap<String, usize>) -> Vec<String> {
-    let Some(original) = legacy_original(seed, hot) else {
-        return vec![format!(
-            "seed {seed} hot={hot}: the legacy original or its upgrade could not be built"
-        )];
-    };
-    let Ok(arena) = TempDir::new() else {
-        return Vec::new();
-    };
-    let mut problems = Vec::new();
-    for (step, id) in UPGRADE_STEPS.iter().enumerate() {
-        let label = |what: &str| format!("seed {seed} hot={hot} [upgrade {id}]: {what}");
-        let dir = arena.path().join(id);
-        let Some((destination, backup)) = std::fs::create_dir_all(&dir)
-            .ok()
-            .and_then(|()| stage_upgrade(&dir, &original, step))
-        else {
-            problems.push(label("the state could not be built"));
-            continue;
-        };
-        // Never a JSON file beside an armed journal or a WAL.
-        let format = stalx_v2::sniff(&std::fs::read(&destination).unwrap_or_default());
-        if format == Format::V2
-            && (has_hot_journal(&destination) || sidecar_path(&destination, "-wal").exists())
-        {
-            problems.push(label("a JSON file sits beside an armed journal or a WAL"));
-        }
-        // The destination opens as the old survey or the upgraded one.
-        let expected = if step == 4 {
-            stalx_v2::decode(&original.upgraded, &DecodeOptions::default())
-                .ok()
-                .map(|d| super::robustness_kit::canonical(&d.project))
-                .unwrap_or_default()
-        } else {
-            original.survey.clone()
-        };
-        // The original alone at the project's path, its journal moved away.
-        let journal_gone = hot && (2..=3).contains(&step);
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open_fresh(&destination))) {
-            Err(payload) => problems.push(label(&format!(
-                "opening the destination PANICKED: {}",
-                panic_text(payload.as_ref())
-            ))),
-            Ok(opened) => {
-                let as_expected = opened
-                    .as_ref()
-                    .is_some_and(|s| canonical_snapshot(s) == expected);
-                if journal_gone {
-                    // The known bug: measured, reported, pinned by the
-                    // ignored test below.
-                    let what = match &opened {
-                        Some(_) if as_expected => "opens-as-the-old-survey",
-                        Some(_) => "opens-as-another-survey",
-                        None => "refused",
-                    };
-                    *notes
-                        .entry(format!("hot original read without its journal: {what}"))
-                        .or_default() += 1;
-                } else if !as_expected {
-                    problems.push(label(&match &opened {
-                        Some(s) => format!(
-                            "the destination is not the survey it must be: {}",
-                            first_difference(&expected, &canonical_snapshot(s))
-                        ),
-                        None => "the destination would not open".to_string(),
-                    }));
-                }
-            }
-        }
-        // The backup pair, once the sidecars moved, is the old survey.
-        if step >= 2 {
-            match open_fresh(&backup) {
-                Some(s) if canonical_snapshot(&s) == original.survey => {}
-                Some(s) => problems.push(label(&format!(
-                    "the backup pair is not the old survey: {}",
-                    first_difference(&original.survey, &canonical_snapshot(&s))
-                ))),
-                None => problems.push(label("the backup pair would not open")),
-            }
-        }
-    }
-    problems
-}
-
-// ===========================================================================
 // The gate
 // ===========================================================================
 
@@ -730,14 +508,12 @@ fn crash_properties_gate() {
         for (id, count) in outcome.notes {
             *notes.entry(id.to_string()).or_default() += count;
         }
-        for hot in [false, true] {
-            problems.extend(check_upgrade_states(seed, hot, &mut notes));
+        for kind in Kind::ALL {
+            problems.extend(check_upgrade_states(seed, kind, &mut notes));
         }
     }
     println!(
-        "crash properties: {checked} injected v2 state(s) and {} upgrade state(s) over {} \
-         seed(s); measured: {notes:?}",
-        GATE_SEEDS.len() * 2 * UPGRADE_STEPS.len(),
+        "crash properties: {checked} injected v2 state(s) over {} seed(s); measured: {notes:?}",
         GATE_SEEDS.len()
     );
     assert!(
@@ -806,112 +582,52 @@ fn the_hot_journal_injection_is_a_real_interrupted_write() {
     );
 }
 
-/// The real upgrading save over a legacy file an old build left with a hot
-/// journal: the JSON file has no sidecar beside it, the original and its
-/// journal are kept together in the backups folder, and that pair opens as
-/// the survey the user had (the rolled-back one).
+/// The C17 repro (wave B bug 3), on the real pipeline. An upgrade of a legacy
+/// file an old build left with a hot journal (or that another tool left in WAL
+/// mode with a commit not checkpointed), killed right after it dealt with the
+/// original's sidecars and before the version 2 rename, must leave the
+/// project's path opening as the survey the user had. The upgrade used to MOVE
+/// the journal (or WAL) beside its backup copy before writing: the original
+/// alone at the project's path was then the half-written transaction (or the
+/// survey before the last commit), and opened as another survey. Now the
+/// original is settled first (`legacy_upgrade`), so a kill after the settled
+/// copy replaced it, after its sidecars went, or after the backup was kept
+/// leaves it whole.
 #[test]
-fn a_completed_upgrade_moves_the_hot_journal_beside_the_kept_original() {
-    let _config = isolated_config();
-    crate::app_dirs::init_for_test();
-    let temp = TempDir::new().unwrap();
-    let stem = format!("upgrade-hot-{}", std::process::id());
-    let path = temp.path().join(format!("{stem}.stalx"));
-    write_legacy(&path, &mut Rng::new(4), "Legacy");
-    let (interrupted, journal) = mid_transaction(&std::fs::read(&path).unwrap()).unwrap();
-    std::fs::write(&path, &interrupted).unwrap();
-    std::fs::write(sidecar_path(&path, "-journal"), &journal).unwrap();
-
-    let state = open_fresh(&path).unwrap();
-    let survey = canonical_snapshot(&state);
-    assert!(
-        !survey.contains("interrupted-write"),
-        "the open rolled the journal back"
-    );
-    assert!(state.save_project(None).success);
-    assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
-    for suffix in ["-journal", "-wal", "-shm"] {
-        assert!(
-            !sidecar_path(&path, suffix).exists(),
-            "{suffix} is still beside the upgraded JSON file"
-        );
-    }
-    let folder = super::project_io::upgrade_backup_dir().unwrap();
-    let kept: Vec<PathBuf> = std::fs::read_dir(&folder)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with(&format!("{stem}.")))
-        })
-        .collect();
-    let original = kept
-        .iter()
-        .find(|p| p.to_string_lossy().ends_with(".pre-v2.stalx"))
-        .expect("the original is kept");
-    assert_eq!(std::fs::read(original).unwrap(), interrupted);
-    assert_eq!(
-        std::fs::read(sidecar_path(original, "-journal")).unwrap(),
-        journal,
-        "the journal moved beside the kept original"
-    );
-    let reopened = open_fresh(original).unwrap();
-    assert_eq!(canonical_snapshot(&reopened), survey);
-}
-
-/// A failed upgrading write puts the journal back beside the untouched
-/// original, which then reopens as the same survey.
-#[test]
-fn a_failed_upgrade_puts_the_journal_back() {
-    let _config = isolated_config();
-    crate::app_dirs::init_for_test();
-    let temp = TempDir::new().unwrap();
-    let path = temp
-        .path()
-        .join(format!("upgrade-fails-{}.stalx", std::process::id()));
-    write_legacy(&path, &mut Rng::new(5), "Legacy");
-    let (interrupted, journal) = mid_transaction(&std::fs::read(&path).unwrap()).unwrap();
-    std::fs::write(&path, &interrupted).unwrap();
-    std::fs::write(sidecar_path(&path, "-journal"), &journal).unwrap();
-    let state = open_fresh(&path).unwrap();
-    let survey = canonical_snapshot(&state);
-    // The write cannot stage its temp.
-    std::fs::create_dir_all(temp_path_of(&path)).unwrap();
-    assert!(!state.save_project(None).success);
-    assert_eq!(std::fs::read(&path).unwrap(), interrupted);
-    assert_eq!(
-        std::fs::read(sidecar_path(&path, "-journal")).unwrap(),
-        journal,
-        "the journal is back beside the original"
-    );
-    std::fs::remove_dir(temp_path_of(&path)).unwrap();
-    let again = open_fresh(&path).unwrap();
-    assert_eq!(canonical_snapshot(&again), survey);
-}
-
-/// KNOWN BUG, pinned. An upgrade killed after `UpgradeBackup::take` moved the
-/// hot journal away and before the rename leaves the original database file
-/// alone at the project's path. The journal held the pre-images of the pages
-/// the interrupted old-build transaction had spilled into it, so the file
-/// read without it is that half-written transaction, not the survey the user
-/// had: the next open shows another survey (or refuses it). The pair in the
-/// backups folder is whole (the gate checks it), but the recovery dialog
-/// refuses to restore a SQLite file with an armed journal beside it. The fix
-/// is the upgrade's (`project_io.rs`): roll the journal back into the
-/// original (a read-write open does it, under its own crash safety) and
-/// re-read the guard's fingerprint before taking the copy, so no state ever
-/// needs the journal.
-#[test]
-#[ignore = "known bug (C17 report): an upgrade killed between its sidecar move and the rename \
-            leaves the legacy original without its hot journal"]
 fn an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole() {
     let _config = isolated_config();
-    let original = legacy_original(2, true).unwrap();
-    let temp = TempDir::new().unwrap();
-    let (destination, _) = stage_upgrade(temp.path(), &original, 2).unwrap();
-    let opened = open_fresh(&destination).map(|s| canonical_snapshot(&s));
-    assert_eq!(opened.as_deref(), Some(original.survey.as_str()));
+    for kind in [Kind::HotJournal, Kind::Wal] {
+        let original = Original::build(2, kind).unwrap();
+        for step in [Step::Replaced, Step::SidecarRemoved, Step::BackupKept] {
+            let temp = TempDir::new().unwrap();
+            let stem = unique_stem("repro");
+            let destination = original
+                .place(temp.path(), &format!("{stem}.stalx"))
+                .unwrap();
+            let state = open_fresh(&destination).unwrap();
+            KILL_AT.with(|kill| kill.set(Some(step)));
+            let saved =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.save_project(None)));
+            KILL_AT.with(|kill| kill.set(None));
+            drop(state);
+            assert!(saved.is_err(), "{} {step:?}: the kill landed", kind.id());
+
+            let opened = open_fresh(&destination).map(|s| canonical_snapshot(&s));
+            assert!(
+                opened.as_deref() == Some(original.survey.as_str()),
+                "{} killed after {step:?}: the project's path opens as {}",
+                kind.id(),
+                opened.map_or_else(
+                    || "nothing".to_string(),
+                    |found| format!(
+                        "another survey: {}",
+                        first_difference(&original.survey, &found)
+                    )
+                )
+            );
+            forget_backups(&stem);
+        }
+    }
 }
 
 /// Determinism, so a failing state is a repro.
@@ -964,8 +680,8 @@ fn crash_property_sweep() {
             *notes.entry(id.to_string()).or_default() += count;
         }
         let mut problems = outcome.problems;
-        for hot in [false, true] {
-            problems.extend(check_upgrade_states(seed, hot, &mut notes));
+        for kind in Kind::ALL {
+            problems.extend(check_upgrade_states(seed, kind, &mut notes));
         }
         if !problems.is_empty() {
             dirty.push(seed);

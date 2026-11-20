@@ -191,7 +191,10 @@ fn the_settled_file_beside_its_old_wal_is_still_the_committed_one() {
     settle(&again).expect("settles again");
 
     no_sidecars(&again);
-    assert_eq!(labels_of_the_file_alone(&again), ["committed", "in-the-wal"]);
+    assert_eq!(
+        labels_of_the_file_alone(&again),
+        ["committed", "in-the-wal"]
+    );
 }
 
 #[test]

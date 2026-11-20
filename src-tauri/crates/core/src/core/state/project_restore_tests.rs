@@ -425,11 +425,12 @@ fn a_complete_save_temp_is_restored() {
 }
 
 /// An armed journal or a WAL with frames holds committed changes the file
-/// alone does not, beside the SQLite backup, the project or the safety copy a
-/// restore would replace (and might have to put back): refused, nothing
-/// changed.
+/// alone does not, beside the project or the safety copy a restore would
+/// replace (and might have to put back): refused, nothing changed. (Beside the
+/// backup they ride with it: see
+/// `a_sqlite_backup_restores_with_its_unfinished_changes`.)
 #[test]
-fn unfinished_changes_beside_any_of_the_sqlite_files_are_refused() {
+fn unfinished_changes_beside_the_project_or_the_safety_copy_are_refused() {
     let dir = TempDir::new().unwrap();
     let project = legacy_file(dir.path(), "cave.stalx", "Current");
     let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
@@ -438,18 +439,12 @@ fn unfinished_changes_beside_any_of_the_sqlite_files_are_refused() {
     armed.resize(512, 0);
     let cases = [
         (
-            "cave.stalx.backup-journal",
-            armed.clone(),
-            "Not restored: the backup cave.stalx.backup has changes that were never finished, \
-             in cave.stalx.backup-journal beside it, and a copy of the file alone would lose \
-             them. Pick another backup.",
-        ),
-        (
-            "cave.stalx.backup-wal",
+            "cave.stalx-wal",
             vec![1; 32],
-            "Not restored: the backup cave.stalx.backup has changes that were never finished, \
-             in cave.stalx.backup-wal beside it, and a copy of the file alone would lose them. \
-             Pick another backup.",
+            "Not restored: the project cave.stalx has changes that were never finished, in \
+             cave.stalx-wal beside it, and replacing the file would lose them. Open the \
+             project again so Stalagmight can finish them, or move that file away to restore \
+             without them.",
         ),
         (
             "cave.stalx-journal",
@@ -506,34 +501,180 @@ fn a_journal_beside_a_version_2_file_is_debris() {
     assert_eq!(label(&project), "Older");
 }
 
+/// A SQLite file at `db` caught mid-write, as a kill leaves it: the write
+/// renamed the project to "Rolled back" and spilled pages into the file, and
+/// the armed journal beside it holds their before-images. The pair is the
+/// committed project; the file alone is not. Returns the committed bytes.
+fn interrupt_a_write_on(db: &Path) -> Vec<u8> {
+    let journal = db.with_file_name(format!(
+        "{}-journal",
+        db.file_name().unwrap().to_string_lossy()
+    ));
+    let conn = rusqlite::Connection::open(db).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode = DELETE;
+         PRAGMA cache_size = 10;
+         CREATE TABLE IF NOT EXISTS ballast(blob BLOB);",
+    )
+    .unwrap();
+    let committed = std::fs::read(db).unwrap();
+    conn.execute_batch(
+        "BEGIN IMMEDIATE;
+         UPDATE project SET name = 'Rolled back';
+         INSERT INTO ballast
+             SELECT randomblob(2000) FROM (
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n LIMIT 400)
+                 SELECT i FROM n
+             );",
+    )
+    .unwrap();
+    let (main, armed) = (std::fs::read(db).unwrap(), std::fs::read(&journal).unwrap());
+    conn.execute_batch("ROLLBACK;").unwrap();
+    drop(conn);
+    std::fs::write(db, &main).unwrap();
+    std::fs::write(&journal, &armed).unwrap();
+    assert_eq!(
+        armed.get(..8),
+        Some(&JOURNAL_MAGIC[..]),
+        "the journal is armed"
+    );
+    assert_ne!(main, committed, "the write reached the file");
+    committed
+}
+
+/// A SQLite file at `db` in WAL mode whose last commit (the project renamed to
+/// `name`) is still in its WAL, as a kill leaves it.
+fn commit_into_a_wal(db: &Path, name: &str) {
+    let sidecar = |suffix: &str| {
+        db.with_file_name(format!(
+            "{}{suffix}",
+            db.file_name().unwrap().to_string_lossy()
+        ))
+    };
+    let conn = rusqlite::Connection::open(db).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    conn.execute_batch("PRAGMA wal_autocheckpoint = 0;")
+        .unwrap();
+    conn.execute("UPDATE project SET name = ?1", [name])
+        .unwrap();
+    let files: Vec<(PathBuf, Vec<u8>)> = [db.to_path_buf(), sidecar("-wal"), sidecar("-shm")]
+        .into_iter()
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    drop(conn);
+    for (path, bytes) in files {
+        std::fs::write(path, bytes).unwrap();
+    }
+}
+
+/// The label the file at `path` holds ALONE (read on a copy without any
+/// sidecar).
+fn label_alone(path: &Path) -> String {
+    let scratch = TempDir::new().unwrap();
+    let copy = scratch.path().join("alone.stalx");
+    std::fs::copy(path, &copy).unwrap();
+    label(&copy)
+}
+
+/// A SQLite backup whose committed state is partly in a sidecar restores as
+/// the pair opens: an old build's hot journal rolled back, a WAL read through.
+/// The backup and its sidecars are only read. A journal or WAL whose header
+/// SQLite would never act on is no change.
+#[test]
+fn a_sqlite_backup_restores_with_its_unfinished_changes() {
+    let mut armed = JOURNAL_MAGIC.to_vec();
+    armed.resize(512, 0);
+    for case in [
+        "hot journal",
+        "wal",
+        "unsynced journal header",
+        "foreign wal",
+    ] {
+        let dir = TempDir::new().unwrap();
+        let project = project_file(dir.path(), "cave.stalx", "Current");
+        let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
+        let restored_as = match case {
+            "hot journal" => {
+                interrupt_a_write_on(&backup);
+                "Older"
+            }
+            "wal" => {
+                commit_into_a_wal(&backup, "Newer in the WAL");
+                assert_eq!(label_alone(&backup), "Older");
+                "Newer in the WAL"
+            }
+            "unsynced journal header" => {
+                std::fs::write(dir.path().join("cave.stalx.backup-journal"), &armed).unwrap();
+                "Older"
+            }
+            _ => {
+                std::fs::write(dir.path().join("cave.stalx.backup-wal"), vec![1; 32]).unwrap();
+                "Older"
+            }
+        };
+        let backup_files: BTreeMap<String, (usize, u64)> = snapshot(dir.path())
+            .into_iter()
+            .filter(|(name, _)| name.starts_with("cave.stalx.backup"))
+            .collect();
+
+        let restored = state().restore_project_from_backup(&project, &backup);
+        assert!(restored.is_ok(), "{case}: {restored:?}");
+        let message = restored.unwrap();
+
+        assert!(message.starts_with("Restored from "), "{case}: {message}");
+        // Before anything reads the restored files (a read of a WAL-mode file
+        // makes its own sidecars).
+        assert_eq!(
+            names(dir.path())
+                .into_iter()
+                .filter(|n| !n.starts_with("cave.stalx.backup"))
+                .collect::<Vec<_>>(),
+            ["cave.stalx", "cave.stalx.pre-restore"],
+            "{case}: nothing staged is left, and no sidecar beside the restored file"
+        );
+        let after: BTreeMap<String, (usize, u64)> = snapshot(dir.path())
+            .into_iter()
+            .filter(|(name, _)| name.starts_with("cave.stalx.backup"))
+            .collect();
+        assert_eq!(
+            after, backup_files,
+            "{case}: the backup and its sidecars are only read"
+        );
+        assert_eq!(label(&project), restored_as, "{case}");
+        assert_eq!(label(&pre_restore_path(&project)), "Current", "{case}");
+    }
+}
+
 /// A backup reached through a link has its sidecars beside the file the link
-/// names, and that is where an unfinished journal is looked for.
+/// names, and those are the ones folded into the restored file.
 #[cfg(unix)]
 #[test]
-fn a_linked_backup_is_checked_beside_the_file_it_names() {
+fn a_linked_backup_restores_with_the_sidecars_beside_the_file_it_names() {
     let dir = TempDir::new().unwrap();
     let project = project_file(dir.path(), "cave.stalx", "Current");
     std::fs::create_dir(dir.path().join("elsewhere")).unwrap();
     let real = legacy_file(&dir.path().join("elsewhere"), "old.stalx", "Older");
-    let mut armed = JOURNAL_MAGIC.to_vec();
-    armed.resize(512, 0);
-    std::fs::write(dir.path().join("elsewhere/old.stalx-journal"), armed).unwrap();
+    interrupt_a_write_on(&real);
     let link = dir.path().join("cave.stalx.backup");
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    let before = snapshot(dir.path());
+    let elsewhere = snapshot(&dir.path().join("elsewhere"));
 
-    let err = state()
+    state()
         .restore_project_from_backup(&project, &link)
-        .unwrap_err();
+        .unwrap();
 
-    assert!(
-        err.starts_with(
-            "Not restored: the backup cave.stalx.backup has changes that were never finished, \
-             in old.stalx-journal beside it"
-        ),
-        "{err}"
+    assert_eq!(
+        label(&project),
+        "Older",
+        "the pair beside the file the link names"
     );
-    assert_eq!(snapshot(dir.path()), before);
+    assert_eq!(snapshot(&dir.path().join("elsewhere")), elsewhere);
 }
 
 /// A sidecar that is not a regular file (a FIFO would block any open of it)

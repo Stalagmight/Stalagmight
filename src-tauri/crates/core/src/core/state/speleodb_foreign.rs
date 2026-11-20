@@ -255,56 +255,6 @@ fn read_for_strip(
     }
 }
 
-/// Move a legacy original's SQLite sidecars beside the copy that keeps it
-/// (`<app data>/backups/<stem>.<stamp>.pre-v2.stalx`), as the upgrading save
-/// does (`project_io::UpgradeBackup`, C3): a stale journal beside the JSON
-/// file could be rolled into it by an old build. Returns what moved, so a
-/// failed write can put it back.
-fn back_up_legacy_original(original: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-    let dir = super::project_io::upgrade_backup_dir()
-        .ok_or_else(|| "the app data folder is not available".to_owned())?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let stem = original
-        .file_stem()
-        .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
-    let base = dir.join(format!("{stem}.{stamp}.pre-v2.stalx"));
-    std::fs::copy(original, &base)
-        .map_err(|e| format!("could not back up {}: {e}", original.display()))?;
-    let mut moved = Vec::new();
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let mut name = original.as_os_str().to_os_string();
-        name.push(suffix);
-        let sidecar = PathBuf::from(name);
-        if sidecar.exists() {
-            let mut to = base.as_os_str().to_os_string();
-            to.push(suffix);
-            let to = PathBuf::from(to);
-            if let Err(e) = std::fs::rename(&sidecar, &to) {
-                put_back(moved);
-                return Err(format!("could not move {}: {e}", sidecar.display()));
-            }
-            moved.push((sidecar, to));
-        }
-    }
-    tracing::info!(
-        backup = ?base,
-        sidecars = moved.len(),
-        purpose = "keep the original of a legacy file a link strip upgrades",
-        "Backed up the legacy original before writing version 2"
-    );
-    Ok(moved)
-}
-
-fn put_back(moved: Vec<(PathBuf, PathBuf)>) {
-    for (sidecar, to) in moved {
-        if let Err(e) = std::fs::rename(&to, &sidecar) {
-            tracing::error!(error = %e, sidecar = ?sidecar, "could not put a legacy sidecar back");
-        }
-    }
-}
-
 /// Write `strip` over `path`, guarded by the fingerprint of the bytes read.
 fn write_strip(path: &Path, strip: Strip, fingerprint: &Fingerprint) -> Result<(), String> {
     match strip {
@@ -315,11 +265,10 @@ fn write_strip(path: &Path, strip: Strip, fingerprint: &Fingerprint) -> Result<(
         Strip::Legacy { project, extras } => {
             let bytes =
                 stalx_v2::encode(&project, &extras, Mode::Normal).map_err(|e| e.to_string())?;
-            let moved = back_up_legacy_original(path)?;
-            if let Err(e) = write_atomic(path, &bytes, Guard::Expect(fingerprint)) {
-                put_back(moved);
-                return Err(e.to_string());
-            }
+            // The original is made whole and kept in the backups folder first,
+            // as the upgrading save does (`legacy_upgrade`).
+            super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(fingerprint))
+                .map_err(|failure| failure.error.to_string())?;
         }
     }
     Ok(())
@@ -359,8 +308,9 @@ impl AppState {
     /// refuses one that is not a Stalagmight project, or breaks an invariant,
     /// instead of half-editing it. A version 2 file keeps every member but the
     /// link (`rewrite_local` clears `speleodb` and the SpeleoDB sync state in
-    /// `local`). A legacy file is upgraded by this write, as by its first save:
-    /// the SQLite original (and any journal) goes to the backups folder first.
+    /// `local`). A legacy file is upgraded by this write, as by its first save
+    /// (`legacy_upgrade`): the SQLite original is made whole (a hot journal
+    /// rolled back, a WAL checkpointed) and kept in the backups folder first.
     ///
     /// Idempotent: a file whose link is already gone is left untouched, and the
     /// call succeeds (a second confirm, or a legacy file the user never meant to

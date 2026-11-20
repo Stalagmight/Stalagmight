@@ -24,6 +24,7 @@ mod import_overlap;
 mod import_suggest;
 mod import_tracking;
 mod labels;
+mod legacy_upgrade;
 mod open_file;
 mod project_add;
 mod project_create;
@@ -248,6 +249,13 @@ mod issue_756_tests;
     reason = "test kit: a setup step that fails is a broken fixture"
 )]
 mod legacy_fixture_kit;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point; a skipped case says why"
+)]
+mod legacy_upgrade_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

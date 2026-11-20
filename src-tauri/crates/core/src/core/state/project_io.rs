@@ -2,6 +2,7 @@ use super::AppState;
 use crate::core::CommandResult;
 use std::path::{Path, PathBuf};
 
+use super::legacy_upgrade::{self, UpgradeError};
 use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::models::survey::Project;
 use crate::persistence::stalx_v2::{write_atomic, Guard, History, Mode, WriteError};
@@ -208,62 +209,6 @@ pub(super) fn upgrade_backup_dir() -> Option<PathBuf> {
     Some(crate::app_dirs::data_local_dir()?.join("backups"))
 }
 
-/// The files a legacy original was moved or copied into before its first
-/// version 2 write, so a failed write can put the sidecars back.
-pub(super) struct UpgradeBackup {
-    /// `(sidecar at the project, where it went)`.
-    moved: Vec<(PathBuf, PathBuf)>,
-}
-
-impl UpgradeBackup {
-    /// Copy the SQLite original into the backups folder and MOVE its
-    /// `-journal` / `-wal` / `-shm` sidecars there (R2 L19: a stale journal
-    /// beside the JSON file could be rolled into it by an old build).
-    pub(super) fn take(original: &Path) -> Result<Self, String> {
-        let dir = upgrade_backup_dir()
-            .ok_or_else(|| "the app data folder is not available".to_string())?;
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-        let stem = original
-            .file_stem()
-            .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
-        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
-        let base = dir.join(format!("{stem}.{stamp}.pre-v2.stalx"));
-        std::fs::copy(original, &base)
-            .map_err(|e| format!("could not back up {}: {e}", original.display()))?;
-        let mut moved = Vec::new();
-        for suffix in ["-journal", "-wal", "-shm"] {
-            let mut name = original.as_os_str().to_os_string();
-            name.push(suffix);
-            let sidecar = PathBuf::from(name);
-            if sidecar.exists() {
-                let mut to = base.as_os_str().to_os_string();
-                to.push(suffix);
-                let to = PathBuf::from(to);
-                std::fs::rename(&sidecar, &to)
-                    .map_err(|e| format!("could not move {}: {e}", sidecar.display()))?;
-                moved.push((sidecar, to));
-            }
-        }
-        tracing::info!(
-            backup = ?base,
-            sidecars = moved.len(),
-            purpose = "keep the original of a legacy file the first save upgrades",
-            "Backed up the legacy original before writing version 2"
-        );
-        Ok(Self { moved })
-    }
-
-    /// The write failed: put the sidecars back beside the untouched original.
-    pub(super) fn put_back(self) {
-        for (sidecar, to) in self.moved {
-            if let Err(e) = std::fs::rename(&to, &sidecar) {
-                tracing::error!(error = %e, sidecar = ?sidecar, "could not put a legacy sidecar back");
-            }
-        }
-    }
-}
-
 impl AppState {
     /// [#92] Whether the open project's initial save is still deferred.
     pub fn initial_save_deferred(&self) -> bool {
@@ -438,33 +383,37 @@ impl AppState {
             // An explicit destination the save dialog confirmed.
             (OnDisk::Checked, false, _) => Guard::Overwrite,
         };
+        // The first write over a legacy file makes the original whole and keeps
+        // it in the backups folder before the rename (`legacy_upgrade`).
         let upgrade = !detached && to_open_file && file.origin == FileOrigin::Legacy;
-        let backup = if upgrade {
-            match UpgradeBackup::take(&target) {
-                Ok(backup) => Some(backup),
-                Err(e) => {
-                    tracing::error!(error = %e, "Could not back up the legacy original");
-                    return CommandResult::failure(format!(
-                        "Can't save: the original could not be backed up before the upgrade ({e})"
-                    ));
-                }
-            }
+        let written = if upgrade {
+            legacy_upgrade::upgrade(&target, &bytes, guard)
+                .map_err(|failure| (failure.error, failure.settled))
         } else {
-            None
+            write_atomic(&target, &bytes, guard).map_err(|e| (UpgradeError::Write(e), None))
         };
-        let fingerprint = match write_atomic(&target, &bytes, guard) {
+        let fingerprint = match written {
             Ok(fp) => fp,
-            Err(e) => {
-                if let Some(backup) = backup {
-                    backup.put_back();
+            Err((error, settled)) => {
+                if let Some(settled) = settled {
+                    // The original was settled in place (same survey, other
+                    // bytes): the next save's guard expects what is there now.
+                    file.fingerprint = Some(settled);
                 }
-                return match e {
-                    WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
+                return match error {
+                    UpgradeError::Write(
+                        e @ (WriteError::ExternallyModified { .. } | WriteError::Exists { .. }),
+                    ) => {
                         tracing::warn!(error = %e, "Save refused: the file changed on disk");
                         CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
                     }
-                    WriteError::Io { error, .. } => {
+                    UpgradeError::Write(WriteError::Io { error, .. })
+                    | UpgradeError::Sidecar { error, .. } => {
                         save_failure("Failed to save", &target, &anyhow::Error::from(error))
+                    }
+                    e @ (UpgradeError::Unfinished(_) | UpgradeError::Backup(_)) => {
+                        tracing::error!(error = %e, "Could not prepare the legacy original for its upgrade");
+                        CommandResult::failure(format!("Can't save: {e}"))
                     }
                 };
             }
