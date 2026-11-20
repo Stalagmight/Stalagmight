@@ -667,6 +667,8 @@ The full format is `docs/file-format.md`.
 - **G5. Cascade replay, phase 2,** reads closure `is_aligned` after the legacy load re-measured it (0.6.0 used the file's flags). It only orders merges in pieces merges alone cannot reach, which needs dangling references.
 - **G6. `migrate_path` computes the legacy Computed View** (about twice the open time) for G2; `OpenOptions::with_adjusted = false` skips it, and the comparison then reports `NoLegacyPositions`.
 - **G7. Publishing.** `stalagmight-persistence` depends on the unpublished `stalagmight-legacy` (path only); `cargo publish` of persistence (for stalx-reader) fails until legacy is published or the dependency is gated.
+- **G8. Dates are clamped at the migration too** (F10, wave B C24): a legacy credit or line date outside 0001-9999 becomes the date the v2 file would hold, so the migrated session equals its first save. Counted (`MigrationReport::dates_clamped`); the wire comparison declares the class.
+- **G9. Open migration findings (wave B C24, not fixed).** The hostile generator still makes the migration report unexplained Computed View slots in two shapes, and either can raise the conversion notice on a real file: F2, a shot under about 20 cm within 2 degrees of a grid axis gives a degenerate least-squares weight on that axis, and the 0.6.0 and the ported solves each go wrong their own way (candidate fix: a per-axis sigma floor); F3, shots or depth changes of 10 km and more make 0.6.0's Computed View fail its own 1e-6 m line-translation check (candidate: a declared class or a relative tolerance). Pinned by the ignored `migrate_fuzz_tests::short_shots_on_a_grid_axis_keep_the_computed_view` and `km_scale_shots_keep_the_computed_view`.
 
 ## Deviations (stream U, undo engine)
 
