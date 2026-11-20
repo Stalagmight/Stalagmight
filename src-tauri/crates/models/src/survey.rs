@@ -59,6 +59,9 @@ mod ops_datums;
 mod ops_detach;
 mod ops_merge;
 mod ops_move;
+// Stream M1: line and shot operations (`edit.rs`); the orphan sweep is M2's
+// (`sweep.rs` is a minimal local copy until M2 lands).
+mod edit;
 mod sweep;
 
 #[cfg(test)]
@@ -229,6 +232,15 @@ pub use ops_datums::{DatumChange, DatumSet};
 pub use ops_detach::DetachReport;
 pub use ops_merge::{MergeCheck, MergeDatumShift, MergeReport};
 pub use ops_move::{SegmentMoved, StationMoved};
+pub use edit::{
+    CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
+    TornTie, TornTieKind, TornTieReason,
+};
+pub use edit::{
+    CommentRule, CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
+    DeletedShot, EditError, EditReport, Edited, Fold, RangeDeleteMode, ShotPlace, SplitLinePreview,
+    SplitOptions, SplitShot,
+};
 pub use sweep::{Promotion, SweepReport};
 
 /// A survey project in the station-graph model (plan 1.2).
