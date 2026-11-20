@@ -152,6 +152,9 @@ pub enum ExpectedClass {
     /// differently from the legacy flag (its gap sits on the 1 cm boundary),
     /// so the depth tie through it changed.
     SnapAlignmentChanged,
+    /// The legacy position is not finite (a non-finite reading the 0.6.0
+    /// load kept and its save would have zeroed); nothing to compare.
+    LegacyNotFinite,
 }
 
 impl ExpectedClass {
@@ -159,6 +162,7 @@ impl ExpectedClass {
         match self {
             Self::TornMergeCollapsed => "torn-merge-collapsed",
             Self::SnapAlignmentChanged => "snap-alignment-changed",
+            Self::LegacyNotFinite => "legacy-not-finite",
         }
     }
 }

@@ -108,6 +108,22 @@ fn every_legacy_builder_migrates_with_every_station_in_place() {
         if let Err(e) = check(&legacy, &migrated) {
             panic!("{name}: {e}\n{}", migrated.report.summary());
         }
+        let r = &migrated.report;
+        match name {
+            // The split recorded a held gauge: the piece is placed there.
+            "held_gauge" => assert_eq!(r.placements_held_gauge, 1, "{name}"),
+            // The open demoted the merge torn between two datum pieces: the
+            // side line's GPS fix now places its own piece, which sits where
+            // the tear left it, off that GPS. A correction holds it there.
+            "torn_datum_merge" => assert_eq!(r.corrections_stored, 1, "{name}"),
+            // Every datum piece sits on its GPS: no correction.
+            "kitchen_sink" => {
+                assert_eq!(r.corrections_stored, 0, "{name}");
+                assert_eq!(r.placements_default_gauge, 2, "{name}");
+                assert_eq!(r.hand_moves_carried, 1, "{name}");
+            }
+            _ => {}
+        }
     }
 }
 
@@ -478,4 +494,27 @@ fn the_speleodb_link_and_validation_state_are_carried() {
     );
     // The 0.6.0 save always writes the thresholds it holds.
     assert!(out.extras.validation_stored);
+}
+
+#[test]
+fn a_non_finite_reading_in_the_file_is_already_sanitised_by_the_legacy_load() {
+    // The 0.6.0 reader zeroes a non-finite shot reading on load (the
+    // migration's own sanitising and its `LegacyNotFinite` class are a
+    // second line that a file cannot reach through the frozen reader).
+    let mut p = project();
+    let a = line(&mut p, "A", &[(90.0, 10.0), (0.0, 10.0), (270.0, 10.0)]);
+    let bytes = edit_sqlite(&write_v18(&p, &LegacyExtras::default()).unwrap(), |conn| {
+        conn.execute(
+            "UPDATE shots SET length = 9e999 WHERE sequence_order = 1",
+            [],
+        )
+        .unwrap();
+    });
+    let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
+    assert_eq!(legacy.project.lines[0].shots[1].length, 0.0);
+    let out = migrate(&legacy).unwrap();
+    check(&legacy, &out).unwrap();
+    assert_eq!(out.report.numbers_sanitized, 0);
+    assert_eq!(out.project.line(a).unwrap().shots[1].length, 0.0);
+    assert!(out.report.verification.expected.is_empty());
 }

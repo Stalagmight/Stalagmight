@@ -353,11 +353,15 @@ fn build_anchors(
     let lp = &legacy.project;
     let topology = project.topology_arc();
     let placement_datums = project.placement_datums();
+    // A legacy position that is not finite (a corrupt reading the old build
+    // drew as NaN) cannot anchor anything: the origin stands in.
     let legacy_xy = |dense: usize| {
         legacy
             .raw_positions
             .get(&slots.slot(dense))
-            .map_or([0.0, 0.0], |p| [p[0], p[1]])
+            .map(|p| [p[0], p[1]])
+            .filter(|p| p[0].is_finite() && p[1].is_finite())
+            .unwrap_or([0.0, 0.0])
     };
     let dense_of = |sr: old::StationRef| slots.dense(Slot::from(sr));
 
@@ -376,7 +380,9 @@ fn build_anchors(
     for (c, component) in topology.components().iter().enumerate() {
         if let Some(d) = placement_datums[c] {
             let dense = datum_slots[d];
-            let correction = project.correction_to_hold(d, legacy_xy(dense));
+            let correction = project
+                .correction_to_hold(d, legacy_xy(dense))
+                .filter(|c| c[0].is_finite() && c[1].is_finite());
             if correction.is_some() {
                 report.corrections_stored += 1;
             }

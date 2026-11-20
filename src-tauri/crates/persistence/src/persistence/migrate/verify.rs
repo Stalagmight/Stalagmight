@@ -65,6 +65,12 @@ pub(super) fn verify(built: &Built, legacy: &LegacySurvey) -> Verification {
                     .push(mismatch(slot, Axis::Missing, f64::INFINITY, 0.0));
                 continue;
             };
+            if !old.iter().all(|c| c.is_finite()) {
+                // The old build had no position to show here (a non-finite
+                // reading upstream); the migrated one sanitised it.
+                expect(&mut v, ExpectedClass::LegacyNotFinite, 0.0);
+                continue;
+            }
             let dxy = (new[0] - old[0]).hypot(new[1] - old[1]);
             let dz = (new[2] - old[2]).abs();
             v.max_xy_m = v.max_xy_m.max(dxy);
