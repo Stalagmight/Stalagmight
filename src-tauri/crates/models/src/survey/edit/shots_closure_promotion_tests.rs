@@ -183,3 +183,38 @@ fn a_promotion_joins_nothing_it_does_not_touch() {
         "D stays where its datum holds it",
     );
 }
+
+#[test]
+fn a_closure_doubled_from_the_replacement_member_leaves_with_the_line() {
+    // B:2 closes onto A:1 via B, and the junction closes onto A:1 again via
+    // C (C:1 is 0.6.0's replacement member there: the remaining slot with the
+    // lowest line id and index). 0.6.0 did not re-anchor B's closure onto
+    // C:1, which a closure already tied to A:1 (`closure_rewire_skipped`):
+    // the delete dropped it and the sweep promoted C's. The station graph
+    // used to promote B's first and sweep C's, which with a third bridge
+    // earlier in the list moved C by another closure's misclosure (farm seed
+    // 34014759, 18.8 m).
+    let (mut p, a, b, c) = survey();
+    let (a1, c1) = (st(&p, a, 1), st(&p, c, 1));
+    let doubled = plant(&mut p, b, a1, a);
+    let kept = p.push_closure(c1, Some(c), a1, Some(a), ClosureStrategy::Batch);
+    let (promoted, swept) = delete_as_previewed(&mut p, b);
+    assert_eq!(
+        promoted,
+        [kept],
+        "the replacement member's closure promotes"
+    );
+    assert!(swept.is_empty(), "{swept:?}");
+    assert!(
+        p.closures.iter().all(|closure| closure.id != doubled),
+        "the doubled closure left with the line"
+    );
+    assert_eq!(st(&p, c, 1), a1, "C:1 is the junction A:1");
+    let raw = p.raw_positions();
+    near(
+        xy(&raw, st(&p, c, 0)),
+        [30.0, 0.0],
+        TOL,
+        "C moved 10 m north",
+    );
+}

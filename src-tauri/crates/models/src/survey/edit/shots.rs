@@ -611,7 +611,7 @@ impl Project {
         }
         let mut gone = self.delete_stations_off_lines(&[station]);
         let left = self.leave_junctions(line, &[station], layout.as_ref());
-        gone.closures.extend(left.ties.iter().copied());
+        gone.closures.extend(left.removed.iter().copied());
         let deleted = DeletedShot {
             shot,
             index,

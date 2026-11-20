@@ -277,7 +277,7 @@ impl Project {
         l.shots.drain(range.start..=range.end);
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
-        gone.closures.extend(left.ties.iter().copied());
+        gone.closures.extend(left.removed.iter().copied());
         let deleted = DeletedRange {
             line,
             kind: range.kind,
@@ -351,7 +351,7 @@ impl Project {
 
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
-        gone.closures.extend(left.ties.iter().copied());
+        gone.closures.extend(left.removed.iter().copied());
         let deleted = DeletedRange {
             line,
             kind: range.kind,
