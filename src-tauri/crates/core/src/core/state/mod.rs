@@ -163,7 +163,7 @@ mod issue_485_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_517_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
