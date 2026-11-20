@@ -2018,6 +2018,8 @@ fn the_metamorphic_engine_is_deterministic() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib metamorphic_fuzz -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_META_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the metamorphic GATE_SEEDS"]
 fn metamorphic_fuzz() {
@@ -2037,7 +2039,7 @@ fn metamorphic_fuzz() {
     let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut signatures: BTreeSet<String> = BTreeSet::new();
     let mut dirty = Vec::new();
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_META_FIRST_SEED", seeds) {
         let outcomes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_pairs(seed, repeats, closures, prelude)
         }));

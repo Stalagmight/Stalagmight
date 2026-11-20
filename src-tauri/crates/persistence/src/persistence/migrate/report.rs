@@ -195,13 +195,21 @@ pub enum ExpectedClass {
     /// legacy aligned closure of a non-eligible strategy), which pulls the
     /// torn tie together.
     TieSolved,
-    /// Closures Computed View only (D11, G2): 0.6.0's solve failed a
-    /// component ("inconsistent line translation", shown measured) because it
-    /// united a merge before the across-one-shot check (a same-line merge, or
-    /// a cycle-closing merge spanning one shot); that merge is a `Tie` now,
-    /// which the solve ties as one point or skips (and reports), and the
-    /// component is adjusted by its other closures and GPS fixes.
+    /// Closures Computed View only (D11, G2, G10): 0.6.0's solve failed a
+    /// component (shown measured) because it united a merge before the
+    /// across-one-shot check (a same-line merge, or a cycle-closing merge
+    /// spanning one shot): "inconsistent line translation", or "multiple
+    /// placement zero datums" when that merge joined two placement datums'
+    /// groups. The merge is a `Tie` now, which the solve ties as one point or
+    /// skips (and reports), and the component is adjusted by its other
+    /// closures and GPS fixes.
     TieNoLongerFails,
+    /// Closures Computed View only (D11, G10): 0.6.0 united a merge spanning
+    /// one shot before its across-one-shot check and solved the merge's two
+    /// stations as one point; the migrated `Tie` is skipped as across one
+    /// shot (and reported), so the solve holds them apart (a GPS fix or the
+    /// loop pulls them).
+    MergeTieSkipped,
     /// Closures Computed View only (plan Deviations G9, C24 finding F2): the
     /// component holds a shot shorter than `sigma_len` within about
     /// `sigma_az` of a grid axis, whose least-squares sigma the solve floors
@@ -239,6 +247,7 @@ impl ExpectedClass {
             Self::LegacyNotFinite => "legacy-not-finite",
             Self::TieSolved => "tie-solved",
             Self::TieNoLongerFails => "tie-no-longer-fails",
+            Self::MergeTieSkipped => "merge-tie-skipped",
             Self::LegacyWeightsDegenerate => "legacy-weights-degenerate",
             Self::LegacyRewriteFailed => "legacy-rewrite-failed",
             Self::LegacySolvePrecision => "legacy-solve-precision",

@@ -364,6 +364,21 @@ pub fn real_config_resolution() -> RealConfigResolution {
     }
 }
 
+/// The seeds an ignored robustness sweep runs: `first..first + count`, where
+/// `first` is read from `first_var` (default 1, the sweeps' historical
+/// start). Rolling seed windows (a fuzz farm, or two machines splitting one
+/// sweep) set it so each window covers new seeds instead of re-running
+/// `1..=count`.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn sweep_seeds(first_var: &str, count: u32) -> std::ops::Range<u32> {
+    let first: u32 = std::env::var(first_var)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    first..first.saturating_add(count)
+}
+
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

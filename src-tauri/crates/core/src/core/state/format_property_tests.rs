@@ -1018,6 +1018,8 @@ fn the_format_properties_are_deterministic() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib format_property_sweep -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_FORMAT_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the format-property GATE_SEEDS"]
 fn format_property_sweep() {
@@ -1037,7 +1039,7 @@ fn format_property_sweep() {
     let closures = std::env::var("STALAGMIGHT_RUST_FORMAT_CLOSURES").is_ok();
     let mut dirty = Vec::new();
     let mut skipped = 0;
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_FORMAT_FIRST_SEED", seeds) {
         let mut found = Vec::new();
         let fixpoint = check_save_open_save(seed, closures, moves);
         if !fixpoint.checked {

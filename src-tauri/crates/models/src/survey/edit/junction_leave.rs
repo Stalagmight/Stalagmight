@@ -21,6 +21,12 @@
 //!   [`ALIGNMENT_TOLERANCE_M`]) and the edit leaves them in different pieces.
 //!   Kept, it is the orphan-closure sweep's to promote, which moves nothing
 //!   (its far end is the one retired, so the junction keeps its id);
+//! - a closure another closure already doubles from the junction's
+//!   replacement member (the remaining slot with the lowest line id and
+//!   index, 0.6.0's re-anchor target) to the same far slot leaves with the
+//!   line too: 0.6.0 did not re-anchor it (`closure_rewire_skipped`), so its
+//!   delete dropped it and the sweep then judged the other closures in list
+//!   order (farm seeds 34004586, 34008291, 34014759);
 //! - any other closure stays, and that end is the one whose piece moves if
 //!   the sweep promotes the closure (unless its piece is held by a datum and
 //!   the other is not).
@@ -29,18 +35,20 @@
 //! piece moved by the 0.6.0 misclosure, and a promoted closure moved its far
 //! piece instead of the junction's (wire equivalence seeds 5 and 23).
 
-use crate::{LineId, StationId};
+use crate::{LineId, StationId, StationRef};
 
 use super::super::{
-    ClosureEnd, ClosureId, ClosureStrategy, LoopClosure, Project, RawPositions,
+    ClosureEnd, ClosureId, ClosureStrategy, LoopClosure, Project, RawPositions, Topology,
     ALIGNMENT_TOLERANCE_M,
 };
 
 /// What [`Project::leave_junctions`] did.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct LeftJunctions {
-    /// `Tie`s removed with the line's slot, as they were, in list order.
-    pub(super) ties: Vec<LoopClosure>,
+    /// Closures removed with the line's slot, as they were, in list order:
+    /// its `Tie`s, and the closures another closure doubles from the
+    /// junction's replacement member.
+    pub(super) removed: Vec<LoopClosure>,
     /// The ends of the remaining closures that were on the line's slot: the
     /// end whose piece moves if the sweep promotes the closure.
     pub(super) moving_ends: Vec<(ClosureId, ClosureEnd)>,
@@ -87,6 +95,17 @@ impl Project {
                 None => false,
             };
         let mut out = LeftJunctions::default();
+        let doubled: Vec<ClosureId> = self
+            .closures
+            .iter()
+            .filter(|c| c.strategy != ClosureStrategy::Tie)
+            .filter(|c| {
+                let a_left = left(c.a, c.a_via);
+                let b_left = left(c.b, c.b_via);
+                (a_left != b_left) && self.doubled_by_replacement(&topology, c, a_left, line)
+            })
+            .map(|c| c.id)
+            .collect();
         let mut kept = Vec::with_capacity(self.closures.len());
         for closure in std::mem::take(&mut self.closures) {
             let ends = [
@@ -97,11 +116,15 @@ impl Project {
                 kept.push(closure);
                 continue;
             }
+            if doubled.contains(&closure.id) {
+                out.removed.push(closure);
+                continue;
+            }
             let tie = closure.strategy == ClosureStrategy::Tie;
             let re_stitched =
                 co_located(closure.a, closure.b) && !topology.connected(closure.a, closure.b);
             if tie && !re_stitched {
-                out.ties.push(closure);
+                out.removed.push(closure);
                 continue;
             }
             // The junction's end moves; a re-stitched `Tie` moves nothing, so
@@ -118,5 +141,48 @@ impl Project {
         }
         self.closures = kept;
         out
+    }
+
+    /// Whether another closure already ties the junction's replacement
+    /// member to `closure`'s far slot (0.6.0's `are_stations_in_closure`
+    /// between the re-anchor target and the far end). `left_is_a`: the end
+    /// on the station `line` left is `a`. Each end is the slot its `via`
+    /// names, else its station's first slot; a `via` of the line that left
+    /// names the removed member, never the replacement.
+    fn doubled_by_replacement(
+        &self,
+        topology: &Topology,
+        closure: &LoopClosure,
+        left_is_a: bool,
+        line: LineId,
+    ) -> bool {
+        let (junction, (far, far_via)) = if left_is_a {
+            (closure.a, (closure.b, closure.b_via))
+        } else {
+            (closure.b, (closure.a, closure.a_via))
+        };
+        let Some(replacement) = topology
+            .slots_of(junction)
+            .iter()
+            .filter(|slot| slot.line_id != line)
+            .min_by_key(|slot| (slot.line_id, slot.station_index))
+            .copied()
+        else {
+            return false;
+        };
+        let end_line = |station: StationId, via: Option<LineId>| {
+            via.or_else(|| topology.first_slot(station).map(|s: StationRef| s.line_id))
+        };
+        let far_line = end_line(far, far_via);
+        let ties = |a: (StationId, Option<LineId>), b: (StationId, Option<LineId>)| {
+            a.0 == junction
+                && end_line(a.0, a.1) == Some(replacement.line_id)
+                && b.0 == far
+                && end_line(b.0, b.1) == far_line
+        };
+        self.closures.iter().any(|other| {
+            let (a, b) = ((other.a, other.a_via), (other.b, other.b_via));
+            other.id != closure.id && (ties(a, b) || ties(b, a))
+        })
     }
 }

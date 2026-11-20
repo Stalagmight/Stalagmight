@@ -30,9 +30,16 @@
 //! - within `ADJUSTED_TOLERANCE_M` plus the slot's raw dust bound
 //!   horizontally, and `DEPTH_TOLERANCE_M` in depth: equal;
 //! - else, in a component 0.6.0's solve failed with "inconsistent line
-//!   translation" that holds a demoted merge (cycle or same-line):
+//!   translation" that holds a demoted merge (cycle or same-line), or with
+//!   "multiple placement zero datums in a single constraint group" where the
+//!   migrated solve skips a demoted merge as across one shot:
 //!   [`ExpectedClass::TieNoLongerFails`] (D11: merges were united before
-//!   the across-one-shot check);
+//!   the across-one-shot check; united, the skipped merge joined two
+//!   placement datums' groups);
+//! - else, in a component where the migrated solve skips a demoted merge as
+//!   across one shot and holds its two stations apart:
+//!   [`ExpectedClass::MergeTieSkipped`] (D11, G10: 0.6.0 united that merge
+//!   and solved its two stations as one point);
 //! - else, in a component 0.6.0 showed measured without a failure (every
 //!   legacy adjusted slot equals its raw one) that holds a migrated `Tie`:
 //!   [`ExpectedClass::TieSolved`] (D10: a `Tie` is eligible);
@@ -53,10 +60,12 @@
 //!
 //! The three G9 classes are detected from the legacy inputs (its shots, its
 //! raw layout and its solve's own failure), never from the positions
-//! compared; the bounded one explains a slot only up to its bound.
+//! compared; the bounded one explains a slot only up to its bound. The D11
+//! classes are detected from the demoted merges and the migrated solve's
+//! across-one-shot skips.
 //! The components each solve failed (and showed measured) must be the same,
-//! except a legacy failure a demoted merge behind a translation failure
-//! (D11), degenerate legacy weights or a failed rewrite explains.
+//! except a legacy failure the merges 0.6.0 united first (D11), degenerate
+//! legacy weights or a failed rewrite explains.
 //! A slot counts once per class (the larger of its two axes' differences
 //! when only one axis is out).
 
@@ -90,6 +99,10 @@ pub const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
 /// translated consistently (`adjustment_report.rs`, frozen).
 const INCONSISTENT_TRANSLATION: &str =
     "Least squares adjustment produced inconsistent line translation";
+
+/// 0.6.0's error text for a constraint group holding two placement datums
+/// (`lsq.rs`, frozen).
+const MULTIPLE_PLACEMENTS: &str = "Multiple placement zero datums in a single constraint group";
 
 /// How closely 0.6.0's destructive Closures Computed View can show a shot
 /// where its solve put it, metres (plan Deviations G9, C24 finding F3).
@@ -223,6 +236,13 @@ struct SolveFacts {
     legacy_failed: bool,
     /// 0.6.0's solve failed it with "inconsistent line translation".
     legacy_translation_failed: bool,
+    /// 0.6.0's solve failed it because a constraint group held two
+    /// placement datums.
+    legacy_placements_failed: bool,
+    /// The migrated solve skips a demoted merge in it as across one shot
+    /// (D11) and holds the merge's two stations apart, where 0.6.0 united
+    /// them before its across-one-shot check.
+    merge_tie_skipped: bool,
     new_failed: bool,
     /// One of its slots moved in the raw view (a torn merge collapsed).
     torn: bool,
@@ -247,10 +267,20 @@ impl SolveFacts {
         self.rewrite_precision_m > ADJUSTED_TOLERANCE_M
     }
 
+    /// 0.6.0 failed it because it united its merges before the
+    /// across-one-shot check (D11): a translation failure over a demoted
+    /// merge, or two placement datums in one group joined by a demoted merge
+    /// the migrated solve skips as across one shot.
+    fn legacy_merge_first_failure(&self) -> bool {
+        self.merge_tie
+            && (self.legacy_translation_failed
+                || self.legacy_placements_failed && self.merge_tie_skipped)
+    }
+
     /// Whether a legacy failure the new solve does not repeat is explained.
     fn legacy_failure_explained(&self) -> bool {
         self.new_failed
-            || self.merge_tie && self.legacy_translation_failed
+            || self.legacy_merge_first_failure()
             || self.degenerate_weights
             || self.legacy_translation_failed && self.rewrite_imprecise()
     }
@@ -258,8 +288,10 @@ impl SolveFacts {
     fn class(&self) -> Option<ExpectedClass> {
         if self.new_failed {
             None
-        } else if self.merge_tie && self.legacy_translation_failed {
+        } else if self.legacy_merge_first_failure() {
             Some(ExpectedClass::TieNoLongerFails)
+        } else if self.merge_tie_skipped && !self.legacy_failed {
+            Some(ExpectedClass::MergeTieSkipped)
         } else if self.tie && self.legacy_measured && !self.legacy_failed {
             Some(ExpectedClass::TieSolved)
         } else if self.degenerate_weights {
@@ -338,6 +370,21 @@ fn verify_adjusted(
             facts[k].torn = true;
         }
     }
+    // A demoted merge the migrated solve skips as across one shot, whose two
+    // stations it then solves apart: 0.6.0 united the merge first (D11).
+    for skipped in adjusted.skipped() {
+        let demoted_merge = built
+            .tie_origins
+            .get(&skipped.closure_id)
+            .is_some_and(|origin| *origin != TieOrigin::AlignedClosure);
+        let apart = match (adjusted.xy(skipped.a), adjusted.xy(skipped.b)) {
+            (Some(a), Some(b)) => (a[0] - b[0]).hypot(a[1] - b[1]) > ADJUSTED_TOLERANCE_M,
+            _ => false,
+        };
+        if let (true, true, Some(k)) = (demoted_merge, apart, solve_of_station(skipped.a)) {
+            facts[k].merge_tie_skipped = true;
+        }
+    }
     // From the legacy shots, as 0.6.0 weighed and rewrote them.
     let lp = &legacy.project;
     for line in &lp.lines {
@@ -385,6 +432,7 @@ fn verify_adjusted(
         if let Some(&k) = failure.line_ids.iter().find_map(|l| solve_of_line.get(l)) {
             facts[k].legacy_failed = true;
             facts[k].legacy_translation_failed |= failure.error == INCONSISTENT_TRANSLATION;
+            facts[k].legacy_placements_failed |= failure.error == MULTIPLE_PLACEMENTS;
             legacy_failed_lines.push((k, failure.line_ids.clone()));
         }
     }

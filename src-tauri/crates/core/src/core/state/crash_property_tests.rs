@@ -653,6 +653,8 @@ fn the_crash_properties_are_deterministic() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib crash_property_sweep -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_CRASH_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the crash-property GATE_SEEDS"]
 fn crash_property_sweep() {
@@ -670,7 +672,7 @@ fn crash_property_sweep() {
     let mut checked = 0;
     let mut skipped = 0;
     let mut notes: BTreeMap<String, usize> = BTreeMap::new();
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_CRASH_FIRST_SEED", seeds) {
         let outcome = check_crash_states(seed, moves, extra);
         checked += outcome.checked;
         if outcome.checked == 0 {
