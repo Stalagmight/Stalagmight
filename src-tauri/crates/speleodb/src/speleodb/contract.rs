@@ -210,6 +210,46 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
     }
 }
 
+/// What a refused upload of a version 2 file says about the format (plan 12.1).
+///
+/// A server that does not take version 2 yet refuses this build's every push.
+/// What it answers is not recorded anywhere this repository can check: the
+/// SDK's OpenAPI (speleodb-api 0.9.0) declares 400, 403, 404, 406, 415 and 500
+/// for the upload, and a malformed artifact was verified live to be a 400. So
+/// the push reads the status, never the server's text (D-186), and only for a
+/// body it knows is a version 2 file:
+///
+/// - [`UploadRefusal::Content`]: 400, 406, 415 and 422 refuse the request as
+///   sent. Every other cause of those this app can produce is checked before a
+///   byte is sent (the size limit, the commit message), so for a version 2 body
+///   the content is what was refused. Nothing landed.
+/// - [`UploadRefusal::IfNotLanded`]: a server error (5xx), except 503 and 504.
+///   It refuses the file only when nothing landed, which the push checks in the
+///   server's history before it says so; a 5xx after a commit stays the
+///   ambiguous "could not be confirmed".
+/// - [`UploadRefusal::Other`]: everything else keeps its own meaning: 401
+///   sign-in, 403 fence, 404 gone, 304 up to date, 413 or 429 from a proxy, and
+///   503 (try later) and 504 (still working: it may yet land).
+///
+/// Pure, like [`map_status`]; the action of the error is unchanged by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadRefusal {
+    Content,
+    IfNotLanded,
+    Other,
+}
+
+/// See [`UploadRefusal`].
+#[must_use]
+pub fn upload_refusal(status: u16) -> UploadRefusal {
+    match status {
+        400 | 406 | 415 | 422 => UploadRefusal::Content,
+        503 | 504 => UploadRefusal::Other,
+        500..=599 => UploadRefusal::IfNotLanded,
+        _ => UploadRefusal::Other,
+    }
+}
+
 /// Convert a [`SpeleoDbError`] into the IPC [`SpeleoErrorDto`], deriving the
 /// typed action from the endpoint the call came from (D-B2). This is the single
 /// conversion the IPC boundary uses; it needs the `endpoint` context, so it is a
@@ -253,6 +293,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         SpeleoDbError::InsecureEndpoint { refusal, .. } => Some(*refusal),
         _ => None,
     };
+    let format_refused = matches!(err, SpeleoDbError::UploadFormatRefused { .. }).then_some(true);
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -277,6 +318,11 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // its network window) and nothing was committed. Retryable by definition -
         // a retry runs in the successor world and does the right thing there.
         SpeleoDbError::SessionMoved => (SpeleoDbAction::Retry, None, err.to_string()),
+        // The server refused this build's file format (plan 12.1): surface it and
+        // keep the copy dirty, with the status the server answered.
+        SpeleoDbError::UploadFormatRefused { status, .. } => {
+            (SpeleoDbAction::Fatal, Some(*status), err.to_string())
+        }
         // Everything below fails closed; each Display is already user-facing.
         //
         // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,
@@ -307,6 +353,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         unpushed_local,
         newer_schema,
         endpoint_refusal,
+        format_refused,
     }
 }
 
@@ -524,6 +571,63 @@ mod tests {
         let json = serde_json::to_string(&other).expect("serialize dto");
         assert!(
             !json.contains("endpoint_refusal"),
+            "absent unless refused: {json}"
+        );
+    }
+
+    #[test]
+    fn upload_refusal_reads_the_status_only() {
+        use super::{upload_refusal, UploadRefusal};
+        for status in [400, 406, 415, 422] {
+            assert_eq!(upload_refusal(status), UploadRefusal::Content, "{status}");
+        }
+        for status in [500, 501, 502, 505, 599] {
+            assert_eq!(
+                upload_refusal(status),
+                UploadRefusal::IfNotLanded,
+                "{status}"
+            );
+        }
+        // Their own meanings: sign-in, fence, gone, up to date, a proxy's size or
+        // rate limit, try later, and a gateway timeout that may still land.
+        for status in [304, 401, 403, 404, 409, 413, 429, 503, 504] {
+            assert_eq!(upload_refusal(status), UploadRefusal::Other, "{status}");
+        }
+    }
+
+    #[test]
+    fn a_format_refusal_is_fatal_says_one_thing_and_keeps_its_status() {
+        let refused = SpeleoDbError::UploadFormatRefused {
+            status: 415,
+            detail: "Unsupported media type".to_owned(),
+        };
+        let dto = dto_for_error(Endpoint::UploadStalx, &refused);
+        assert_eq!(dto.action, SpeleoDbAction::Fatal);
+        assert_eq!(dto.status, Some(415));
+        assert_eq!(dto.format_refused, Some(true));
+        assert!(
+            dto.message.starts_with(
+                "This SpeleoDB server does not accept projects saved by this version yet."
+            ),
+            "{}",
+            dto.message
+        );
+        assert!(
+            !dto.message.contains("Unsupported media type"),
+            "the server's text is for the log"
+        );
+        // Only the refusal carries it, so it is a sound discriminant.
+        let other = dto_for_error(
+            Endpoint::UploadStalx,
+            &SpeleoDbError::Status {
+                status: 400,
+                message: "bad".to_owned(),
+            },
+        );
+        assert_eq!(other.format_refused, None);
+        let json = serde_json::to_string(&other).expect("serialize dto");
+        assert!(
+            !json.contains("format_refused"),
             "absent unless refused: {json}"
         );
     }

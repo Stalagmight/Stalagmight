@@ -39,6 +39,13 @@ fn publish_undo_history_omitted(upload: &Result<PushOutcome, SpeleoErrorDto>) ->
     .then_some(true)
 }
 
+/// Plan 12.1: what the publish result reports when the server refused the first
+/// upload for its file format: `Some(true)`, so the webview says the server
+/// project is empty instead of "created". Any other outcome reports nothing.
+fn publish_upload_format_refused(upload: &Result<PushOutcome, SpeleoErrorDto>) -> Option<bool> {
+    matches!(upload, Err(e) if e.format_refused == Some(true)).then_some(true)
+}
+
 /// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
 /// `CustomChoiceField` accepts the enum NAME case-insensitively on input; we send the
 /// UPPERCASE label it returns so a round-trip is byte-identical.
@@ -299,7 +306,12 @@ impl AppState {
         //    acquire/upload failure and STILL return the cache path: the webview reloads a
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
+        //    A server that refused the FILE FORMAT (plan 12.1) is the one failure
+        //    the result names (`upload_format_refused`): the server project is empty
+        //    and Save Changes would only be refused again, so the webview says so
+        //    instead of "use Save Changes to finish uploading".
         let mut undo_history_omitted = None;
+        let mut upload_format_refused = None;
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
@@ -328,6 +340,7 @@ impl AppState {
                     },
                 );
                 undo_history_omitted = publish_undo_history_omitted(&upload);
+                upload_format_refused = publish_upload_format_refused(&upload);
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,
@@ -398,6 +411,7 @@ impl AppState {
             endpoint,
             local_path: dest.to_string_lossy().into_owned(),
             undo_history_omitted,
+            upload_format_refused,
         })
     }
 }
@@ -424,7 +438,10 @@ fn rename_on_disk(path: Option<&Path>, file: &mut FileState, name: &str) -> Resu
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{build_create_body, publish_undo_history_omitted, visibility_label};
+    use super::{
+        build_create_body, publish_undo_history_omitted, publish_upload_format_refused,
+        visibility_label,
+    };
     use crate::core::state::speleodb_push::PushOutcome;
     use crate::speleodb::{SpeleoPublishParams, Visibility};
 
@@ -456,6 +473,38 @@ mod tests {
             &crate::speleodb::SpeleoDbError::UploadTooLarge { size: 2, limit: 1 },
         );
         assert_eq!(publish_undo_history_omitted(&Err(refused)), None);
+    }
+
+    #[test]
+    fn publish_reports_a_format_refusal_and_nothing_else() {
+        use crate::speleodb::contract::{dto_for_error, Endpoint};
+        use crate::speleodb::SpeleoDbError;
+        let refused = dto_for_error(
+            Endpoint::UploadStalx,
+            &SpeleoDbError::UploadFormatRefused {
+                status: 400,
+                detail: "synthetic".to_owned(),
+            },
+        );
+        assert_eq!(publish_upload_format_refused(&Err(refused)), Some(true));
+        let other = dto_for_error(
+            Endpoint::UploadStalx,
+            &SpeleoDbError::Status {
+                status: 403,
+                message: "fence".to_owned(),
+            },
+        );
+        assert_eq!(publish_upload_format_refused(&Err(other)), None);
+        assert_eq!(
+            publish_upload_format_refused(&Ok(PushOutcome::Unconfirmed)),
+            None
+        );
+        assert_eq!(
+            publish_upload_format_refused(&Ok(PushOutcome::Confirmed {
+                undo_history_omitted: false
+            })),
+            None
+        );
     }
 
     #[test]

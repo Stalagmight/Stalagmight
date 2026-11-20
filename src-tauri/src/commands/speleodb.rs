@@ -47,6 +47,7 @@ async fn run_blocking<T: Send + 'static>(
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         })?
 }
 
@@ -79,6 +80,7 @@ fn unstorable_commit_message(text: Option<&str>) -> Option<SpeleoErrorDto> {
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         }),
         Ok(()) | Err(CommitMessageError::Empty) => None,
     }

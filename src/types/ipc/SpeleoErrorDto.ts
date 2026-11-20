@@ -5,4 +5,4 @@ import type { SpeleoDbAction } from "./SpeleoDbAction";
 import type { TransportCause } from "./TransportCause";
 import type { UnpushedLocalEdits } from "./UnpushedLocalEdits";
 
-export interface SpeleoErrorDto { message: string, action: SpeleoDbAction, status: number | null, transport: TransportCause | null, unpushed_local: UnpushedLocalEdits | null, newer_schema: NewerSchema | null, endpoint_refusal?: EndpointRefusal, }
+export interface SpeleoErrorDto { message: string, action: SpeleoDbAction, status: number | null, transport: TransportCause | null, unpushed_local: UnpushedLocalEdits | null, newer_schema: NewerSchema | null, endpoint_refusal?: EndpointRefusal, format_refused?: boolean, }

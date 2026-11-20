@@ -130,6 +130,19 @@ pub enum SpeleoDbError {
         megabytes(.limit)
     )]
     UploadTooLarge { size: u64, limit: u64 },
+    /// Plan 12.1 (rollout): the server refused the project file this build
+    /// writes (`.stalx` version 2): it answered the upload of a version 2 file
+    /// with a refusal of the content ([`contract::upload_refusal`]), or with a
+    /// server error after which its history showed the upload had not landed.
+    /// Nothing was uploaded; the copy stays dirty and the lock stays held, as
+    /// after any failed push. One message wherever a push runs (Done, Save
+    /// Changes, the close and quit prompts, Publish); `status` and the server's
+    /// own `detail` are for the log. Fails closed (Fatal).
+    #[error(
+        "This SpeleoDB server does not accept projects saved by this version yet. Nothing \
+         was uploaded; your changes are still on this computer"
+    )]
+    UploadFormatRefused { status: u16, detail: String },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]

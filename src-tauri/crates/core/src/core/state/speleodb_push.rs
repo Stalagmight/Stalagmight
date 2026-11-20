@@ -18,8 +18,12 @@
 //! BASE over a "dirty" copy.
 //!
 //! Rollout (plan 12.1): a SpeleoDB server that still refuses non-SQLite uploads
-//! answers the version 2 upload with a hard rejection, which surfaces through the
-//! ordinary error path: the project stays dirty and the lock stays held.
+//! answers the version 2 upload with a refusal of the content (or a server error
+//! after which nothing landed). The upload recognises it by status
+//! (`contract::upload_refusal`) and fails with one error wherever the push ran,
+//! `SpeleoDbError::UploadFormatRefused` ("This SpeleoDB server does not accept
+//! projects saved by this version yet"); the project stays dirty and the lock
+//! stays held, as after any failed push.
 //!
 //! Also here: the two escape hatches a push offers when the copy is NOT something
 //! the user wants to publish - `speleodb_discard_changes` and the unwound-copy
@@ -35,7 +39,7 @@ use super::speleodb::{local_dto, managed_type_patch, type_needs_managed_label};
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
 use crate::speleodb::client;
-use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
+use crate::speleodb::contract::{self, dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
@@ -870,13 +874,18 @@ impl AppState {
 
         // A push first saves (plan 6.5): the local copy and the commit describe the
         // same survey, and an unsaved survey is never uploaded without being on disk.
-        if !self
-            .save_project_at_generation(None, Some(generation))
-            .success
-        {
-            return Err(local_dto(SpeleoDbError::Io(
-                "failed to flush project before push".to_owned(),
-            )));
+        // The save's own refusal rides the error (review G-speleodb-8): a file open
+        // read-only says READ_ONLY_FILE, a file another program changed says
+        // EXTERNALLY_MODIFIED, so the user is not left with a bare "failed".
+        let saved = self.save_project_at_generation(None, Some(generation));
+        if !saved.success {
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "failed to flush project before push: {}",
+                saved
+                    .error
+                    .as_deref()
+                    .unwrap_or("the save did not complete")
+            ))));
         }
 
         // Then the push serializes from the in-memory project, its file state and its
@@ -911,6 +920,11 @@ impl AppState {
             (snapshot, newest)
         };
         let undo_history_omitted = snapshot.undo_history_omitted;
+        // Plan 12.1: only a version 2 body can be refused for being one.
+        let uploading_v2 = matches!(
+            crate::persistence::stalx_v2::sniff(&snapshot.bytes),
+            crate::persistence::stalx_v2::Format::V2
+        );
         // [#303] The clear-on-push cutoff: every undo entry in the stack when the
         // snapshot was taken is on the server now (or older than what fit), so it is
         // the later of the stack's newest stamp at that instant and the push floor.
@@ -1033,6 +1047,34 @@ impl AppState {
                     self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                     return Ok(landed);
                 }
+                // Plan 12.1: a server that does not take version 2 yet refuses this
+                // build's file. One clear error, wherever the push ran; the copy
+                // stays dirty and the lock held, as after any failed push.
+                if let (true, SpeleoDbError::Status { status, message }) = (uploading_v2, &e) {
+                    if self.speleodb_upload_refused_format(
+                        endpoint,
+                        token,
+                        insecure_http,
+                        project_id,
+                        *status,
+                    ) {
+                        tracing::warn!(
+                            status,
+                            detail = %message,
+                            project_id,
+                            purpose = "the server refused this build's project file format (plan 12.1)",
+                            "speleodb push: refused by a server without version 2 support; \
+                             staying dirty and locked"
+                        );
+                        return Err(dto_for_error(
+                            Endpoint::UploadStalx,
+                            &SpeleoDbError::UploadFormatRefused {
+                                status: *status,
+                                detail: message.clone(),
+                            },
+                        ));
+                    }
+                }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
                 // don't know whether it landed - stay dirty, recover via ancestry
                 // on the next attempt.
@@ -1123,6 +1165,54 @@ impl AppState {
                 purpose = "label a landed project stalagmight (unfinished adoption or legacy other)",
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
+        }
+    }
+
+    /// Plan 12.1: does the refused upload of a version 2 file (`status`) mean the
+    /// server does not take that format? A refusal of the content does
+    /// ([`contract::UploadRefusal::Content`]). A server error does only when the
+    /// upload certainly did not land ([`sync::upload_not_landed`] over the history
+    /// read right after it): a 5xx after a commit is the ambiguous case the next
+    /// push recovers by ancestry, so it stays "could not be confirmed".
+    ///
+    /// The history read is a direct GET, NOT through the auth handler, like the
+    /// pre-push name fold: a spurious 401 on this follow-up must not drop the
+    /// session over a push that already failed. A failed read is not certain.
+    fn speleodb_upload_refused_format(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+        status: u16,
+    ) -> bool {
+        match contract::upload_refusal(status) {
+            contract::UploadRefusal::Content => true,
+            contract::UploadRefusal::Other => false,
+            contract::UploadRefusal::IfNotLanded => {
+                // The BASE the upload sat on: the open link's NOW, since an
+                // ancestry adoption just before the upload moved it in memory.
+                let base = self.speleo_link().and_then(|l| l.base_commit_sha);
+                let my_email = self.speleodb_my_email().unwrap_or_default();
+                match client::get_revisions(endpoint, token, insecure_http, project_id) {
+                    Ok(history) => sync::upload_not_landed(
+                        base.as_deref(),
+                        sync::tip_of(&history.commits),
+                        &history.commits,
+                        &my_email,
+                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            project_id,
+                            purpose = "tell a format refusal from an ambiguous upload (plan 12.1)",
+                            "speleodb push: could not read the history after a server error; \
+                             the upload stays unconfirmed"
+                        );
+                        false
+                    }
+                }
+            }
         }
     }
 
