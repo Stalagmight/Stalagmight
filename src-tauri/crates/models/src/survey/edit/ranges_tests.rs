@@ -246,3 +246,85 @@ fn a_range_through_a_junction_keeps_the_junction_for_the_other_line() {
     );
     assert_valid(&p);
 }
+
+/// Main `0..5` east with a datum on station 0, a side line from station 5
+/// to `t1`, and two closures `t1 - 3` and `3 - 0`: the tail side of the
+/// interior range `1..=2` (stations 2 and 3 go) reaches the datum only
+/// through station 3, which the gap-close deletes.
+fn tail_reaching_the_datum_through_a_deleted_station() -> (Project, u32) {
+    let (mut p, l) = east5();
+    let (s0, s3, s4) = (st(&p, l, 0), st(&p, l, 3), st(&p, l, 4));
+    add_datum(&mut p, s0, gps(20.5, -87.3));
+    let t = line_from(&mut p, "Side", s4, run("t", 0.0, 10.0, 1));
+    let t1 = st(&p, t, 1);
+    p.push_closure(t1, Some(t), s3, Some(l), ClosureStrategy::Batch);
+    p.push_closure(s3, Some(l), s0, Some(l), ClosureStrategy::Batch);
+    assert_valid(&p);
+    (p, l)
+}
+
+#[test]
+fn a_closure_on_a_station_the_gap_close_deletes_does_not_anchor_a_side() {
+    let (mut p, l) = tail_reaching_the_datum_through_a_deleted_station();
+    let (first, last) = (shot_id(&p, l, 1), shot_id(&p, l, 2));
+    let preview = p.preview_delete_shot_range(l, first, last).unwrap();
+    assert!(
+        !preview.shift_blocked,
+        "{:?}",
+        preview.shift_blocked_reasons
+    );
+    let done = ok(p.delete_shot_range(l, first, last, &RangeDeleteMode::Shift));
+    assert_eq!(done.closures_removed.len(), 2);
+    assert_valid(&p);
+
+    // Today (0.6.0) the same survey: the same verdict.
+    let mut old = crate::Project::new("legacy".to_string(), None);
+    let flat = |azimuth: f64| crate::ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length: 10.0,
+        ..crate::ShotData::default()
+    };
+    let main = old
+        .add_line(crate::LineData {
+            shots: vec![flat(90.0); 5],
+            quality: 1.0,
+            ..crate::LineData::default()
+        })
+        .id;
+    let side = old
+        .add_line(crate::LineData {
+            shots: vec![flat(0.0)],
+            quality: 1.0,
+            ..crate::LineData::default()
+        })
+        .id;
+    let at = crate::StationRef::new;
+    old.set_zero_datum(at(main, 0), gps(20.5, -87.3)).unwrap();
+    old.merge_stations(at(side, 0), at(main, 4)).unwrap();
+    for (a, b) in [(at(side, 1), at(main, 3)), (at(main, 3), at(main, 0))] {
+        old.create_loop_closure(a, b, crate::ClosureStrategy::Batch)
+            .unwrap();
+    }
+    let shots: Vec<u32> = old.lines[0].shots.iter().map(|s| s.id).collect();
+    let legacy = old
+        .preview_delete_shot_range(main, shots[1], shots[2])
+        .unwrap();
+    assert!(!legacy.shift_blocked, "{:?}", legacy.shift_blocked_reasons);
+}
+
+#[test]
+fn a_datum_reached_over_a_junction_the_gap_close_keeps_still_anchors_a_side() {
+    // The same shape, but station 3 is a junction (a second line passes
+    // it): it stays, so the tail still reaches the datum through it.
+    let (mut p, l) = tail_reaching_the_datum_through_a_deleted_station();
+    let s3 = st(&p, l, 3);
+    line_from(&mut p, "Through", s3, run("u", 180.0, 10.0, 1));
+    let preview = p
+        .preview_delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2))
+        .unwrap();
+    assert_eq!(
+        preview.shift_blocked_reasons,
+        ["Both sides are anchored to a zero datum."]
+    );
+}

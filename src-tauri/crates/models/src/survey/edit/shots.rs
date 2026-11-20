@@ -497,22 +497,39 @@ impl Project {
         excluded: &dyn Fn(LineId, usize) -> bool,
         closures: bool,
     ) -> Vec<BTreeSet<StationId>> {
+        self.reach_avoiding(starts, excluded, closures, &[])
+    }
+
+    /// [`Self::reach_without_shots`] that never enters a station of `avoid`
+    /// (stations the edit deletes): neither a shot nor a closure end there
+    /// carries a path, as today's range walk skips a removed station.
+    pub(super) fn reach_avoiding(
+        &self,
+        starts: &[StationId],
+        excluded: &dyn Fn(LineId, usize) -> bool,
+        closures: bool,
+        avoid: &[StationId],
+    ) -> Vec<BTreeSet<StationId>> {
         use std::collections::BTreeMap;
         let mut adjacency: BTreeMap<StationId, Vec<StationId>> = BTreeMap::new();
+        let mut link = |x: StationId, y: StationId| {
+            if !avoid.contains(&x) && !avoid.contains(&y) {
+                adjacency.entry(x).or_default().push(y);
+                adjacency.entry(y).or_default().push(x);
+            }
+        };
         for line in self.lines() {
             let mut from = line.start;
             for (i, shot) in line.shots.iter().enumerate() {
                 if !excluded(line.id, i) {
-                    adjacency.entry(from).or_default().push(shot.to);
-                    adjacency.entry(shot.to).or_default().push(from);
+                    link(from, shot.to);
                 }
                 from = shot.to;
             }
         }
         if closures {
             for c in &self.closures {
-                adjacency.entry(c.a).or_default().push(c.b);
-                adjacency.entry(c.b).or_default().push(c.a);
+                link(c.a, c.b);
             }
         }
         starts

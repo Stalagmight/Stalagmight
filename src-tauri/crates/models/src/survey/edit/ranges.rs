@@ -20,8 +20,9 @@
 //!
 //! Today's refusals of the shift: an interior range whose two sides are still
 //! connected without it (over shots and junctions: a loop), whose two sides
-//! are both held by a placement datum, or that would delete a zero datum
-//! ("Use split instead.").
+//! are both held by a placement datum (reached over shots, junctions and
+//! closures, never through a station the gap-close deletes), or that would
+//! delete a zero datum ("Use split instead.").
 
 use std::collections::BTreeSet;
 
@@ -174,7 +175,10 @@ impl Project {
                     .into_iter()
                     .filter(|s| !deleted.contains(s))
                     .collect();
-                let sides = self.reach_without_shots(&[head, tail], &excluded, true);
+                // Today's walk never enters a station the gap-close removes,
+                // so a closure ending on one is no path to a datum (a junction
+                // stays for its other lines and still carries one).
+                let sides = self.reach_avoiding(&[head, tail], &excluded, true, &deleted);
                 let reaches = |side: &BTreeSet<StationId>| held.iter().any(|s| side.contains(s));
                 if reaches(&sides[0]) && reaches(&sides[1]) {
                     reasons.push("Both sides are anchored to a zero datum.".to_string());
