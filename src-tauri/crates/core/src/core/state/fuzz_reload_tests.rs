@@ -298,9 +298,9 @@ impl Fuzzer {
 
     /// Replace the survey in the app's slot (a test-only back door), as a
     /// stale view or a third-party edit would leave it.
-    fn put_project(&self, project: crate::models::survey::Project) {
+    fn put_project(&self, survey: crate::models::survey::Project) {
         let mut guard = self.state.project.lock().unwrap();
-        *guard = Some(project);
+        *guard = Some(survey);
         drop(guard);
         self.state.bump_revision();
     }
