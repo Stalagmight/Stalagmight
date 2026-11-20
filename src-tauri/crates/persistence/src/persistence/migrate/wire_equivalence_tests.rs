@@ -11,6 +11,19 @@
 //! the test with the first few examples. `Tally::classes` names them; the
 //! sweep (`STALAGMIGHT_RUST_WIRE_SEEDS=<n>`, ignored) prints the counts.
 //!
+//! Positions are waived per component and checked per slot, never per case
+//! (J-docs-tests-truth-5): a slot may sit elsewhere than 0.6.0 sent it only
+//! in a component where the migration moved a slot (the migrated model's
+//! position against 0.6.0's, which `verify.rs` classified: its verification
+//! of that view must be clean), and only to exactly the migrated model's own
+//! position, with 0.6.0's payload exactly 0.6.0's own position. So a
+//! regression of the wire projection (a hand-move z applied twice, a slot
+//! mapped to the wrong station) fails here even in a case the migration
+//! moved, and so does any move outside a moved component. The derived
+//! figures that read positions (a GPS fix's gap, a far fix, a closure
+//! preview's misclosure, a merge's datum shift) are waived per component the
+//! same way.
+//!
 //! Synthetic data only (the generator's), plus the two tracked fixtures.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,9 +35,10 @@ use stalagmight_legacy::models as m;
 use stalagmight_legacy::{LegacySurvey, OpenOptions};
 
 use crate::models::config::ClosureAdjustmentConfig;
-use crate::models::survey::{ClosureStrategy, Project};
+use crate::models::survey::{AdjustedPositions, ClosureStrategy, Project, RawPositions};
 use crate::models::{StationId, StationRef};
 
+use super::merges::UnionFind;
 use super::test_support::{random_case, Rng};
 use super::{migrate, Migrated};
 
@@ -34,6 +48,9 @@ const SEEDS: u64 = 48;
 /// tighter per-slot bound; this only has to tell a match from a move).
 const XY_TOL: f64 = 1e-5;
 const Z_TOL: f64 = 1e-9;
+/// A wire coordinate is the model position it projects to within this (the
+/// JSON round trip of an f64 is exact; this only absorbs nothing).
+const SAME_POSITION_TOL: f64 = 1e-12;
 /// Closure metrics and gaps are compared within this.
 const METRIC_TOL: f64 = 1e-6;
 
@@ -153,8 +170,20 @@ impl NewDelete {
 struct Case<'a> {
     what: String,
     lp: &'a m::Project,
+    legacy: &'a LegacySurvey,
     p: &'a Project,
     migrated: &'a Migrated,
+    /// The migrated project's raw layout and Closures Computed View.
+    raw: RawPositions,
+    adjusted: AdjustedPositions,
+    /// Per view (`[raw, computed view]`), the components where the migrated
+    /// model's position of some slot differs from 0.6.0's: the only ones
+    /// whose positions may differ on the wire. Raw: shot components;
+    /// computed view: least-squares components (shot components joined by
+    /// closures, as `verify.rs` groups them).
+    moved_components: [BTreeSet<usize>; 2],
+    /// Per shot component, its least-squares component.
+    solve_of: Vec<usize>,
     /// Stations tied by `Tie` closures, grouped (a demoted merge's two
     /// stations are in one group).
     tie_group: BTreeMap<StationId, StationId>,
@@ -191,10 +220,27 @@ impl<'a> Case<'a> {
         }
         let tie_group = p.stations.keys().map(|&s| (s, root(&parent, s))).collect();
         let old_ids: BTreeSet<u64> = legacy.project.loop_closures.iter().map(|c| c.id).collect();
-        Self {
+        let raw = p.raw_positions();
+        let adjusted = p.adjusted_positions_from(&raw, &ClosureAdjustmentConfig::default());
+        let topology = p.topology();
+        let mut uf = UnionFind::new(topology.components().len());
+        for c in &p.closures {
+            if let (Some(a), Some(b)) = (topology.component_of(c.a), topology.component_of(c.b)) {
+                uf.union(a, b);
+            }
+        }
+        let solve_of = (0..topology.components().len())
+            .map(|c| uf.find(c))
+            .collect();
+        let mut case = Self {
             what,
             lp: &legacy.project,
+            legacy,
             p,
+            raw,
+            adjusted,
+            moved_components: [BTreeSet::new(), BTreeSet::new()],
+            solve_of,
             empty_comments: BTreeSet::new(),
             migrated,
             tie_group,
@@ -208,7 +254,123 @@ impl<'a> Case<'a> {
                 cases: 1,
                 ..Tally::default()
             },
+        };
+        for adjusted in [false, true] {
+            let mut moved = BTreeSet::new();
+            for line in p.lines() {
+                for index in 0..line.station_count() {
+                    let slot = StationRef::new(line.id, index as u32);
+                    let (new, old) = case.model_positions(slot, adjusted);
+                    let same = match (new, old) {
+                        (Some(n), Some(o)) => {
+                            (n[0] - o[0]).abs() <= XY_TOL
+                                && (n[1] - o[1]).abs() <= XY_TOL
+                                && (n[2] - o[2]).abs() <= Z_TOL
+                        }
+                        _ => false,
+                    };
+                    if let (false, Some(component)) = (same, case.component(slot, adjusted)) {
+                        moved.insert(component);
+                    }
+                }
+            }
+            case.moved_components[usize::from(adjusted)] = moved;
         }
+        case
+    }
+
+    /// The component of `slot` in a view (module docs).
+    fn component(&self, slot: StationRef, adjusted: bool) -> Option<usize> {
+        let component = self.p.topology().component_of(self.station(slot)?)?;
+        if adjusted {
+            self.solve_of.get(component).copied()
+        } else {
+            Some(component)
+        }
+    }
+
+    /// The migrated model's own position of `slot` in a view, and 0.6.0's
+    /// (what `verify.rs` compares).
+    fn model_positions(
+        &self,
+        slot: StationRef,
+        adjusted: bool,
+    ) -> (Option<[f64; 3]>, Option<[f64; 3]>) {
+        let legacy_slot = stalagmight_legacy::Slot {
+            line_id: slot.line_id,
+            station_index: slot.station_index,
+        };
+        if adjusted {
+            (
+                self.adjusted.slot(self.p, slot),
+                self.legacy
+                    .adjusted_positions
+                    .as_ref()
+                    .and_then(|a| a.get(&legacy_slot))
+                    .copied(),
+            )
+        } else {
+            (
+                self.raw.slot(self.p, slot),
+                self.legacy.raw_positions.get(&legacy_slot).copied(),
+            )
+        }
+    }
+
+    /// Whether the migration moved positions in the component of `slot` in a
+    /// view (the raw one for the derived figures).
+    fn moved_component(&self, slot: StationRef, adjusted: bool) -> bool {
+        self.component(slot, adjusted)
+            .is_some_and(|c| self.moved_components[usize::from(adjusted)].contains(&c))
+    }
+
+    /// Why a slot whose wire position differs from 0.6.0's is not explained
+    /// by the migration, if it is not (module docs): the move must be in a
+    /// moved component of a view whose verification is clean, and be exactly
+    /// the model's move.
+    fn unexplained_move(
+        &self,
+        slot: StationRef,
+        o: &Value,
+        n: &Value,
+        adjusted: bool,
+    ) -> Option<String> {
+        let v = &self.migrated.report.verification;
+        let verified = if adjusted {
+            matches!(&v.adjusted, super::AdjustedCheck::Compared(check) if check.mismatches.is_empty())
+        } else {
+            v.mismatches.is_empty()
+        };
+        if !verified {
+            return Some("the migration's own verification of this view is not clean".to_string());
+        }
+        if !self.moved_component(slot, adjusted) {
+            return Some("the migration moved nothing in this component".to_string());
+        }
+        let (Some(model), Some(legacy)) = self.model_positions(slot, adjusted) else {
+            return Some("no model position to compare".to_string());
+        };
+        let shows = |wire: &Value, at: [f64; 3]| {
+            ["x", "y", "z"]
+                .iter()
+                .zip(at)
+                .all(|(key, want)| match wire[*key].as_f64() {
+                    Some(got) => (got - want).abs() <= SAME_POSITION_TOL,
+                    // JSON has no NaN: 0.6.0's payload writes a non-finite one as null.
+                    None => wire[*key].is_null() && !want.is_finite(),
+                })
+        };
+        if !shows(n, model) {
+            return Some(format!(
+                "the wire does not show the migrated model's position {model:?}"
+            ));
+        }
+        if !shows(o, legacy) {
+            return Some(format!(
+                "0.6.0's payload does not show 0.6.0's position {legacy:?}"
+            ));
+        }
+        None
     }
 
     fn fail(&mut self, what: String) {
@@ -237,18 +399,6 @@ impl<'a> Case<'a> {
         r.merges_demoted_cycle + r.merges_demoted_same_line > 0
     }
 
-    fn positions_may_move(&self, adjusted: bool) -> bool {
-        let v = &self.migrated.report.verification;
-        if adjusted {
-            match &v.adjusted {
-                super::AdjustedCheck::Compared(check) => !check.expected.is_empty(),
-                super::AdjustedCheck::NoLegacyPositions => true,
-            }
-        } else {
-            !v.expected.is_empty() || self.migrated.report.merges_collapsed_torn > 0
-        }
-    }
-
     // --- the per-slot station list -------------------------------------
 
     fn stations(&mut self, view: &'static str, old: &Value, new: &Value, adjusted: bool) {
@@ -273,14 +423,13 @@ impl<'a> Case<'a> {
             || !close(&oc["y"], &nc["y"], XY_TOL)
             || !close(&oc["z"], &nc["z"], Z_TOL);
         if moved {
-            if self.positions_may_move(adjusted) {
-                self.tally.note(if adjusted {
-                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / MergeTieSkipped / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision)"
+            match self.unexplained_move(slot, oc, nc, adjusted) {
+                None => self.tally.note(if adjusted {
+                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / MergeTieSkipped / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision), to the migrated model's position"
                 } else {
-                    "raw: slot moved by a migration class (torn merge collapsed)"
-                });
-            } else {
-                self.fail(format!("{view} {slot}: coordinates {oc} -> {nc}"));
+                    "raw: slot moved by a migration class (torn merge collapsed), to the migrated model's position"
+                }),
+                Some(why) => self.fail(format!("{view} {slot}: coordinates {oc} -> {nc}: {why}")),
             }
         }
         if adjusted {
@@ -634,9 +783,11 @@ impl<'a> Case<'a> {
                     .iter()
                     .all(|k| close(&og[*k], &ng[*k], METRIC_TOL));
             if !gap_same {
-                if self.demotions() || self.positions_may_move(false) {
-                    self.tally
-                        .note("zero_datums: GPS-fix gap over a demoted merge / moved slot");
+                let slot = slot_of(&n["station_ref"]);
+                if self.demotions() || self.moved_component(slot, false) {
+                    self.tally.note(
+                        "zero_datums: GPS-fix gap over a demoted merge / in a moved component",
+                    );
                 } else {
                     self.fail(format!("datum {i}.gap {og} -> {ng}"));
                 }
@@ -1189,7 +1340,8 @@ impl<'a> Case<'a> {
                             &json(o.misclosure_distance),
                             &json(n.misclosure_distance),
                             METRIC_TOL,
-                        ) && !self.positions_may_move(false)
+                        ) && !self.moved_component(a, false)
+                            && !self.moved_component(b, false)
                         {
                             self.fail(format!("closure preview {a}-{b}: misclosure"));
                         }
@@ -1232,8 +1384,9 @@ impl<'a> Case<'a> {
                 if o["moving_line_ids"] != n["moving_line_ids"] || !same_station {
                     self.fail(format!("datum shift {a}-{b}: {o} -> {n}"));
                 } else if !close(&o["shift_m"], &n["shift_m"], XY_TOL) {
-                    if self.positions_may_move(false) {
-                        self.tally.note("merge datum shift: over a moved slot");
+                    if self.moved_component(a, false) || self.moved_component(b, false) {
+                        self.tally
+                            .note("merge datum shift: across a component the migration moved");
                     } else {
                         self.fail(format!("datum shift {a}-{b}: {o} -> {n}"));
                     }
@@ -1284,7 +1437,7 @@ impl<'a> Case<'a> {
             super::AdjustedCheck::Compared(a) if a.failure_mismatches.is_empty()
         );
         if failures(&old) != failures(&new) {
-            if self.positions_may_move(true) || failures_explained {
+            if failures_explained {
                 self.tally.note(
                     "adjustment report: failures differ by a Computed View class (D10 / D11)",
                 );
@@ -1295,11 +1448,23 @@ impl<'a> Case<'a> {
                 ));
             }
         }
-        let far = |v: &Value| v["far_gps_fixes"].as_array().map_or(0, Vec::len);
-        if far(&old) != far(&new) {
-            if self.demotions() || self.positions_may_move(false) {
-                self.tally
-                    .note("adjustment report: far GPS fixes over a demoted merge");
+        let far = |v: &Value| -> BTreeSet<StationRef> {
+            v["far_gps_fixes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|f| slot_of(&f["station"]))
+                .collect()
+        };
+        let (old_far, new_far) = (far(&old), far(&new));
+        if old_far.len() != new_far.len() {
+            let moved = old_far
+                .symmetric_difference(&new_far)
+                .all(|&slot| self.moved_component(slot, false));
+            if self.demotions() || moved {
+                self.tally.note(
+                    "adjustment report: far GPS fixes over a demoted merge / in a moved component",
+                );
             } else {
                 self.fail(format!(
                     "far fixes {} -> {}",
@@ -1598,4 +1763,129 @@ fn a_closure_on_the_member_a_delete_takes_promotes_as_today() {
     // delete promoted the one on the removed member first.
     assert_delete_moves_what_today_moves(23, 2, |n| n - 1);
     assert_delete_moves_what_today_moves(215, 0, |_| 0);
+}
+
+/// Bend one wire slot of `bytes` in a view (1 km in x, then 0.5 m in depth,
+/// a hand-move z applied twice), in a component the migration moved, and
+/// assert the comparison calls it unexplained while the untouched payload
+/// passes. `false` when the migration moved nothing in that view.
+fn a_bent_wire_slot_is_unexplained(what: &str, bytes: &[u8], adjusted: bool) -> bool {
+    let config = ClosureAdjustmentConfig::default();
+    let legacy = stalagmight_legacy::open_bytes(bytes, &OpenOptions::default()).unwrap();
+    let migrated = migrate(&legacy, &config).unwrap();
+    let probe = Case::new(what.to_string(), &legacy, &migrated);
+    if probe.moved_components[usize::from(adjusted)].is_empty() {
+        return false;
+    }
+    let (lp, p) = (&legacy.project, &migrated.project);
+    let (old, new) = if adjusted {
+        (
+            json(
+                &lp.compute_adjusted_stations(&m::config::ClosureAdjustmentConfig::default())
+                    .stations,
+            ),
+            json(p.adjusted_stations_wire(&probe.adjusted)),
+        )
+    } else {
+        (
+            json(lp.compute_station_coordinates()),
+            json(p.stations_wire(&probe.raw)),
+        )
+    };
+    let mut case = Case::new(what.to_string(), &legacy, &migrated);
+    case.stations("stations", &old, &new, adjusted);
+    assert!(
+        case.tally.unexplained.is_empty(),
+        "{what}: {:#?}",
+        case.tally.unexplained
+    );
+    // A slot of a component the migration moved: exactly where a whole-case
+    // waiver looked away.
+    let at = new
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|s| probe.moved_component(slot_of(&s["station_ref"]), adjusted))
+        .unwrap();
+    for (axis, by) in [("x", 1000.0), ("z", 0.5)] {
+        let mut bent = new.clone();
+        let c = &mut bent[at]["coordinates"][axis];
+        *c = Value::from(c.as_f64().unwrap() + by);
+        let mut case = Case::new(what.to_string(), &legacy, &migrated);
+        case.stations("stations", &old, &bent, adjusted);
+        assert!(
+            !case.tally.unexplained.is_empty(),
+            "{what}, adjusted {adjusted}: a {by} m {axis} move passed"
+        );
+    }
+    true
+}
+
+/// The oracle itself (J-docs-tests-truth-5): in a case where the migration
+/// did move positions (so a whole-case waiver would have let anything
+/// through), a wire slot moved off the migrated model's position is
+/// unexplained, in the Closures Computed View (generated cases: `TieSolved`
+/// and the other Computed View classes) and in the raw layout (a 0.6.0 merge
+/// torn by 5 m that the migration collapses, which the generator's default
+/// draw does not make); the same payloads untouched pass.
+#[test]
+fn a_wire_move_the_migration_did_not_make_fails_even_where_it_moved_positions() {
+    let mut computed = 0;
+    for seed in 1..=SEEDS {
+        if computed < 3
+            && a_bent_wire_slot_is_unexplained(
+                &format!("seed {seed}"),
+                &random_case(seed).write(),
+                true,
+            )
+        {
+            computed += 1;
+        }
+    }
+    assert_eq!(
+        computed, 3,
+        "too few generated cases with Computed View moves"
+    );
+
+    // C hangs off B; C's stored offset drifted 5 m, and a merge row that does
+    // not resolve keeps the 0.6.0 cascade from healing it (migrate_tests).
+    let leg = |az: f64, n: u32| m::ShotData {
+        azimuth_in: az,
+        azimuth_out: az,
+        length: 10.0,
+        uuid: Some(format!("{n:04}-torn-uuid")),
+        ..m::ShotData::default()
+    };
+    let mut p = m::Project::new("Torn".to_string(), None);
+    let mut add = |shots: Vec<m::ShotData>| {
+        p.add_line(m::LineData {
+            color: "#336699".to_string(),
+            quality: 1.0,
+            shots,
+            ..m::LineData::default()
+        })
+        .id
+    };
+    let a = add(vec![leg(90.0, 0)]);
+    let b = add(vec![leg(0.0, 1), leg(0.0, 2)]);
+    let c = add(vec![leg(90.0, 3)]);
+    p.merge_stations(m::StationRef::new(c, 0), m::StationRef::new(b, 1))
+        .unwrap();
+    p.adjust_line_offset(c, 5.0, 0.0);
+    let bytes = super::test_support::edit_sqlite(
+        &stalagmight_legacy::write_v18(&p, &stalagmight_legacy::LegacyExtras::default()).unwrap(),
+        |conn| {
+            conn.execute(
+                "INSERT INTO station_merges (station_a_section, station_a_index, \
+                 station_b_section, station_b_index, merged_at) \
+                 VALUES (?1, 999, ?2, 0, '2023-11-14T22:13:20+00:00')",
+                [a, b],
+            )
+            .unwrap();
+        },
+    );
+    assert!(
+        a_bent_wire_slot_is_unexplained("torn merge", &bytes, false),
+        "the torn merge moves the raw layout"
+    );
 }
