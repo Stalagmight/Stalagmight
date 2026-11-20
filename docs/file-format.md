@@ -99,9 +99,11 @@ Readers accept any valid JSON escape.
 **Times** are RFC 3339 strings, written in UTC with nine fractional digits and
 `Z`: `"2025-11-20T12:00:00.123456789Z"`. A reader accepts any RFC 3339 offset.
 Times are clamped into the years 0001 to 9999 and never hold a leap second, so
-every common date library (Python's `datetime.fromisoformat` included) parses
-them. The nanoseconds matter: a dive plan (`.plnx`) is matched to its project
-by the exact creation instant.
+common date libraries parse them. Python's `datetime.fromisoformat` does from
+Python 3.11 on (3.10 refuses the `Z`), but keeps only six fractional digits:
+a script that writes a time back must keep the original string. The
+nanoseconds matter: a dive plan (`.plnx`) is matched to its project by the
+exact creation instant.
 
 **Dates** (survey credit dates) are `"YYYY-MM-DD"` strings, clamped like
 times into 0001-01-01 to 9999-12-31.
@@ -612,11 +614,23 @@ guide](survey-model.md) for the details and the least-squares view).
 
 ## 10. Reading a file in Python
 
-A minimal reader, standard library only:
+A minimal reader, standard library only. It refuses what a reader must refuse
+(section 3: another major version, other conventions), tells the caller when
+the file requires features it does not know (then the caller must not modify
+the survey), and reads an unknown shot `kind` as `"reference"`, never as a
+swimmable leg (section 7).
 
 ```python
 import json
 import math
+
+CONVENTIONS = {
+    "length": "m", "angles": "deg", "azimuth": "cw-from-north",
+    "inclination": "+down", "depth": "+down", "local": "enu-m",
+    "gps": "wgs84-deg", "temperature": "degC",
+}
+KNOWN_FEATURES = set()                    # version 2.0 defines none
+KINDS = {"normal", "jump", "reference"}
 
 def read_stalx(path):
     with open(path, "rb") as f:
@@ -646,6 +660,11 @@ def read_stalx(path):
         raise ValueError("not a version 2 file")
     if doc.get("end") is not True:
         raise ValueError("incomplete file")
+    if doc.get("conventions") != CONVENTIONS:
+        raise ValueError("other units or sign conventions than version 2's")
+    # Not empty: made with a newer Stalagmight; read it, never rewrite it.
+    unknown_features = [f for f in doc.get("requires", [])
+                        if f not in KNOWN_FEATURES]
 
     stations = {}
     for row in doc.get("stations", []):
@@ -662,17 +681,18 @@ def read_stalx(path):
         extras = tail.pop() if tail and isinstance(tail[-1], dict) else {}
         left, right, up, down = (tail + [None] * 4)[:4]
         previous = line["shots"][-1]["to"] if line["shots"] else line["start"]
+        kind = extras.get("kind", "normal")
         line["shots"].append({
             "uuid": uuid, "from": previous, "to": to,
             "length": float(length), "azimuth_in": float(az_in),
             "azimuth_out": float(az_out), "depth_in": float(depth_in),
             "depth_out": float(depth_out),
             "lrud": (left, right, up, down),
-            "kind": extras.get("kind", "normal"),
+            "kind": kind if kind in KINDS else "reference",
             "comment": extras.get("comment"),
             "credit": extras["credit"] if "credit" in extras else line.get("credit"),
         })
-    return doc, stations, lines
+    return doc, stations, lines, unknown_features
 ```
 
 Python's `json` parses `-0` (no fraction) as the integer 0. Stalagmight always
