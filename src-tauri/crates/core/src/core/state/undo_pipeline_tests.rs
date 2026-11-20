@@ -307,6 +307,38 @@ fn test_redo_cleared_on_new_command() {
     assert!(state.get_redo_stack().is_empty());
 }
 
+/// The Full-mode byte budget never evicts the newest entry (0.6.0's
+/// `undo_budget_always_keeps_the_newest_entry`): an edit whose entry alone is
+/// over the budget stays undoable, and only the older entries go.
+#[test]
+fn the_byte_budget_keeps_the_newest_entry_even_when_it_alone_is_over() {
+    let state = new_state();
+    let line_id = create(&state, "Line", vec![test_shot_data(5.0)]);
+    let before = snapshot(&state);
+    let shot_id = shot_ids(&state, line_id)[0];
+    state.undo_stack.lock().unwrap().set_byte_budget(1);
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                line_id,
+                shot_id,
+                updates: ShotUpdates {
+                    length: Some(15.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(state.can_undo(), "the edit just made stays undoable");
+    assert_eq!(state.get_undo_stack().len(), 1, "only the older entry goes");
+    assert!(state.undo().success);
+    assert_eq!(lengths(&state, line_id), vec![5.0]);
+    assert_same(&snapshot(&state), &before, "undo under the byte budget");
+    assert!(state.can_redo(), "and the undone entry is redoable");
+    assert!(state.redo().success);
+    assert_eq!(lengths(&state, line_id), vec![15.0]);
+}
+
 /// 0.6.0 refused with "Failed to lock undo stack" when the stack's mutex was
 /// poisoned. The foundation takes every state lock poison-tolerantly (a
 /// panic elsewhere must not wedge the history), so an undo and a redo still

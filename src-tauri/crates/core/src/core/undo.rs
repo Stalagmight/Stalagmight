@@ -313,6 +313,12 @@ impl UndoStack {
     }
 
     /// Evict the oldest entries past the active bound.
+    ///
+    /// Under `Bytes`, the newest entry of each stack is always kept even if
+    /// it alone exceeds the budget, as 0.6.0 did: dropping it would silently
+    /// discard the operation the user just did (and, with it, every older
+    /// entry), and a single entry over the budget is a very large import, not
+    /// runaway growth.
     pub fn enforce_depth_limit(&mut self) {
         match self.depth_limit {
             DepthLimit::Count(limit) => {
@@ -328,14 +334,34 @@ impl UndoStack {
                 }
             }
             DepthLimit::Bytes(budget) => {
+                let mut dropped = 0_usize;
                 while self.bytes() > budget {
-                    if let Some(e) = self.undo.pop_front() {
-                        self.undo_bytes = self.undo_bytes.saturating_sub(e.bytes());
-                    } else if let Some(e) = self.redo.pop_front() {
-                        self.redo_bytes = self.redo_bytes.saturating_sub(e.bytes());
+                    let popped = if self.undo.len() > 1 {
+                        self.undo.pop_front().inspect(|e| {
+                            self.undo_bytes = self.undo_bytes.saturating_sub(e.bytes());
+                        })
+                    } else if self.redo.len() > 1 {
+                        self.redo.pop_front().inspect(|e| {
+                            self.redo_bytes = self.redo_bytes.saturating_sub(e.bytes());
+                        })
                     } else {
+                        None
+                    };
+                    if popped.is_none() {
                         break;
                     }
+                    dropped += 1;
+                }
+                if dropped > 0 {
+                    tracing::info!(
+                        dropped,
+                        undo_remaining = self.undo.len(),
+                        redo_remaining = self.redo.len(),
+                        bytes = self.bytes(),
+                        budget,
+                        purpose = "bound a Full-mode SpeleoDB project's undo history",
+                        "Trimmed the oldest undo entries to stay within the undo byte budget"
+                    );
                 }
             }
         }
