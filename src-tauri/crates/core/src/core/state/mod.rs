@@ -296,7 +296,7 @@ mod shot_uuid_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod snapshot_fixes_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
@@ -308,19 +308,19 @@ mod speleodb_acquire_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_cached_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_close_release_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_edit_gate_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"

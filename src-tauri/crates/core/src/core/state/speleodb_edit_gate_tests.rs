@@ -2,14 +2,14 @@
 //! SpeleoDB project editable without a claim of the signed-in account bound to
 //! the current session, and that every way out of an edit session leaves the gate
 //! shut once no such claim remains. Synthetic throughout: a dead loopback
-//! endpoint (or a recording one) and databases built here.
+//! endpoint (or a recording one) and version 2 files written here.
 
 use std::path::{Path, PathBuf};
 
 use super::speleodb_edit_gate::OpenProjectGate;
+use super::speleodb_test_files::write_v2;
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 
 const ID: &str = "33333333-3333-3333-3333-333333333333";
 const ME: &str = "diver@example.com";
@@ -18,20 +18,20 @@ const ME: &str = "diver@example.com";
 const UNREACHABLE: &str = "http://127.0.0.1:1/";
 
 fn seed_linked(path: &Path, endpoint: &str, name: &str) {
-    let mut db = Database::open(path).expect("open db");
-    db.save_project(&Project::new(name.to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: endpoint.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: name.to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
+    write_v2(
+        path,
+        name,
+        Some(&SpeleoLink {
+            endpoint: endpoint.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: name.to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }),
+    );
 }
 
 fn sign_in(state: &AppState, endpoint: &str) {
@@ -189,6 +189,7 @@ fn every_way_out_of_an_edit_session_leaves_the_gate_shut() {
 }
 
 #[test]
+#[ignore = "C11: drives open_project_download, which the SpeleoDB sync package ports"]
 fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
     // data#3, structurally: the in-place reload behind a fast-forward, Reload,
     // Restore and Take remote may CARRY a session into the generation it bumps to,
@@ -234,6 +235,7 @@ fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
 }
 
 #[test]
+#[ignore = "C11: drives open_project_download, which the SpeleoDB sync package ports"]
 fn a_view_reload_never_keeps_the_gate_open() {
     // A revision View reloads with `editing: false`: whatever session was open
     // before, the view is read-only - and the claim stays as the lock's pointer.
@@ -274,10 +276,7 @@ fn a_restored_claim_after_a_failed_release_opens_nothing() {
 fn a_local_project_is_always_editable_whatever_the_claims() {
     let temp = tempfile::TempDir::new().expect("temp");
     let path = temp.path().join("local.stalx");
-    Database::open(&path)
-        .expect("open")
-        .save_project(&Project::new("Local".to_owned(), None))
-        .expect("save");
+    write_v2(&path, "Local", None);
     let state = AppState::new().expect("state");
     sign_in(&state, UNREACHABLE);
     assert!(state.open_project(path).success);
@@ -318,8 +317,15 @@ fn the_gate_is_opened_only_through_the_claim_binding() {
             continue;
         }
         let src = std::fs::read_to_string(entry.path()).expect("source");
-        // Production region only: the top-level test gate starts the fixtures.
-        let prod = src.split("\n#[cfg(test)]").next().unwrap_or(&src);
+        // Production region only: the top-level test gate starts the fixtures (a
+        // test module parked by the station-graph switch, `cfg(sg_unported)`, is
+        // one too).
+        let end = ["\n#[cfg(test)]", "\n#[cfg(sg_unported)]"]
+            .iter()
+            .filter_map(|gate| src.find(gate))
+            .min()
+            .unwrap_or(src.len());
+        let prod = &src[..end];
         assert!(
             !prod.contains("set_edit_enabled"),
             "{name}: there is no production gate setter"
