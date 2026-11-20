@@ -57,14 +57,19 @@ pub(crate) struct Applied {
     pub(crate) line_ids: Vec<u32>,
     pub(crate) shot_id: Option<u32>,
     pub(crate) reversed: Vec<ReversedLine>,
+    /// The Section a `CreateCaveSection` created (#327).
+    pub(crate) cave_section_id: Option<u32>,
 }
 
 impl Applied {
+    /// A batch sub-command's report folded into the batch's, as 0.6.0's
+    /// `execute_batch` folded it: every sub-command's `line_id` and
+    /// `line_ids` go to `line_ids` (the batch itself names no `line_id`),
+    /// the warnings in order; the reverses are parity-reduced at the end
+    /// ([`Self::into_result`]).
     fn merge(&mut self, other: Applied) {
         self.warnings.extend(other.warnings);
-        if other.line_id.is_some() {
-            self.line_id = other.line_id;
-        }
+        self.line_ids.extend(other.line_id);
         self.line_ids.extend(other.line_ids);
         if other.shot_id.is_some() {
             self.shot_id = other.shot_id;
@@ -77,11 +82,28 @@ impl Applied {
         result.line_id = self.line_id;
         result.line_ids = self.line_ids;
         result.shot_id = self.shot_id;
-        if !self.reversed.is_empty() {
-            result = result.with_reversed_lines(self.reversed);
+        result.cave_section_id = self.cave_section_id;
+        let reversed = net_reversed(self.reversed);
+        if !reversed.is_empty() {
+            result = result.with_reversed_lines(reversed);
         }
         result
     }
+}
+
+/// The lines reversed an ODD number of times, in first-occurrence order
+/// (0.6.0's `Command::net_reversed`): a line a batch reverses twice is not
+/// renumbered at all, so it is not reported.
+fn net_reversed(reversed: Vec<ReversedLine>) -> Vec<ReversedLine> {
+    let mut counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for r in &reversed {
+        *counts.entry(r.line_id).or_insert(0) += 1;
+    }
+    let mut seen = std::collections::HashSet::new();
+    reversed
+        .into_iter()
+        .filter(|r| counts.get(&r.line_id).is_some_and(|n| n % 2 == 1) && seen.insert(r.line_id))
+        .collect()
 }
 
 /// The failure text of a command family C0 has not ported.
