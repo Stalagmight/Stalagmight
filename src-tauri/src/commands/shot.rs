@@ -109,7 +109,10 @@ pub(crate) fn preview_delete_shot_impl(
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    project.preview_delete_shot(line_id, shot_id)
+    let preview = project
+        .preview_delete_shot(line_id, shot_id)
+        .map_err(|e| e.to_string())?;
+    Ok(project.delete_shot_impact(&preview))
 }
 
 /// Delete a shot
@@ -250,9 +253,10 @@ pub(crate) fn preview_delete_shot_range_impl(
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    // The clone above is ours: the gap-close prediction runs on it rather than
-    // cloning the project a second time (#737).
-    project.into_preview_delete_shot_range(line_id, start_shot_id, end_shot_id)
+    let preview = project
+        .preview_delete_shot_range(line_id, start_shot_id, end_shot_id)
+        .map_err(|e| e.to_string())?;
+    Ok(project.delete_range_impact(&preview))
 }
 
 /// Delete a contiguous interior range of shots and split the line into two

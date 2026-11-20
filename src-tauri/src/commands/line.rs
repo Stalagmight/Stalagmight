@@ -241,12 +241,10 @@ pub(crate) fn get_line_relationships_impl(
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-
-    if project.get_line(line_id).is_none() {
+    if project.line(line_id).is_none() {
         return Err(crate::models::LINE_GONE.to_string());
     }
-
-    Ok(project.get_line_relationships(line_id))
+    Ok(project.line_relationships(line_id))
 }
 
 /// What the line ending at `station` can be combined with: one candidate

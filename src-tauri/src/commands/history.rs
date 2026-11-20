@@ -2,9 +2,7 @@ use tauri::State;
 
 use crate::core::{AppState, CommandResult};
 
-pub use crate::core::undo::history_view::{
-    entry_to_history_item, FieldChange, PreviewData, UndoHistoryItem,
-};
+pub use crate::core::undo::{FieldChange, PreviewData, UndoHistoryItem};
 
 /// Undo the last command
 #[tauri::command]

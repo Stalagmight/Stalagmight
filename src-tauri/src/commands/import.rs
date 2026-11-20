@@ -674,31 +674,8 @@ pub fn suggest_import_placement(
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
-
-    let existing_lines: Vec<ExistingLine> = project
-        .lines
-        .iter()
-        .map(|s| ExistingLine {
-            id: s.id,
-            name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
-            shots: s.shots.clone(),
-            azimuth_reference: project.azimuth_reference_for(s),
-        })
-        .collect();
-
-    let config = state.get_config();
-    Ok(suggest_placements(
-        &shots,
-        // The line does not exist yet, so its reference is whatever the
-        // importer declared for it; the project default is the fallback (#438).
-        azimuth_reference
-            .map(AzimuthReference::sanitised)
-            .or(project.default_azimuth_reference)
-            .unwrap_or_default(),
-        &existing_lines,
-        &config.placement_suggestion,
-    ))
+    let _ = (&state, &shots, &azimuth_reference);
+    crate::core::stub::not_ported("import::suggest_import_placement")
 }
 
 /// Suggest placements for ALL import lines against BOTH existing project
@@ -708,42 +685,8 @@ pub fn suggest_all_import_placements(
     state: State<'_, AppState>,
     import_lines: Vec<ImportLineForSuggestion>,
 ) -> Result<Vec<CrossLineSuggestion>, String> {
-    let existing_lines: Vec<ExistingLine> = match state.get_project_state() {
-        Some(project) => project
-            .lines
-            .iter()
-            .map(|s| ExistingLine {
-                id: s.id,
-                name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
-                shots: s.shots.clone(),
-                azimuth_reference: project.azimuth_reference_for(s),
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-    // Only the FALLBACK: each line carries its own reference and is scored
-    // in it (#438).
-    let fallback_reference = state
-        .get_project_state()
-        .and_then(|p| p.default_azimuth_reference)
-        .unwrap_or_default();
-    let import_lines: Vec<ImportLineForSuggestion> = import_lines
-        .into_iter()
-        .map(|mut line| {
-            // Deserialized straight off the wire: re-impose the type's
-            // invariants before anything computes with it.
-            line.azimuth_reference = line.azimuth_reference.map(AzimuthReference::sanitised);
-            line
-        })
-        .collect();
-
-    let config = state.get_config();
-    Ok(suggest_all_placements(
-        &import_lines,
-        fallback_reference,
-        &existing_lines,
-        &config.placement_suggestion,
-    ))
+    let _ = (&state, &import_lines);
+    crate::core::stub::not_ported("import::suggest_all_import_placements")
 }
 
 /// Suggest placements for orphaned lines' leaf ends against datum-anchored
@@ -760,19 +703,8 @@ pub async fn suggest_orphan_placements<R: tauri::Runtime>(
     app_handle: AppHandle<R>,
     newly_imported_line_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        let project = state.get_project_state().ok_or("No project open")?;
-        let config = state.get_config();
-        Ok(project
-            .suggest_orphan_placements(&newly_imported_line_ids, &config.placement_suggestion))
-    })
-    .await
-    .unwrap_or_else(|join_error| {
-        Err(format!(
-            "The placement suggestions did not finish: {join_error}"
-        ))
-    })
+    let _ = (&app_handle, &newly_imported_line_ids);
+    crate::core::stub::not_ported("import::suggest_orphan_placements")
 }
 
 /// Count lines not connected to a zero datum, restricted to components
@@ -784,8 +716,8 @@ pub fn count_unanchored_lines(
     state: State<'_, AppState>,
     newly_imported_line_ids: Vec<u32>,
 ) -> Result<u32, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
-    Ok(project.count_unanchored_lines(&newly_imported_line_ids))
+    let _ = (&state, &newly_imported_line_ids);
+    crate::core::stub::not_ported("import::count_unanchored_lines")
 }
 
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.

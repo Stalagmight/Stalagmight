@@ -35,9 +35,7 @@ pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning>
     let Some(project) = state.get_project_state() else {
         return Vec::new();
     };
-
-    // Delegate to AppState method (uses self.database since project is already loaded)
-    let warnings = state.compute_project_warnings(&project, None);
+    let warnings = state.compute_project_warnings(&project);
     tracing::debug!(
         count = warnings.len(),
         purpose = "surface validation issues",

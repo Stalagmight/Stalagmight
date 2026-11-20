@@ -167,29 +167,7 @@ pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
 }
 
 pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
-    let project = state.get_project_state()?;
-    let stations = project.compute_station_coordinates();
-    let mut stats = project.stats();
-
-    // Calculate penetration distance with computed stations. Reference ties are
-    // not swimmable, so they leave the route unless opted back in (#27 q13).
-    let include_reference_legs = state.get_config().gas.include_reference_legs;
-    stats.penetration_distance =
-        project.calculate_penetration_with(&stations, include_reference_legs);
-
-    // Depth is the absolute station range, not a per-line delta walk (#481).
-    let (min_depth, max_depth) = Project::depth_range(&stations);
-    stats.min_depth = min_depth;
-    stats.max_depth = max_depth;
-
-    let frozen_shots = project.compute_frozen_shots();
-
-    Some(ProjectState {
-        project,
-        stations,
-        stats,
-        frozen_shots,
-    })
+    state.project_state_wire()
 }
 
 /// Per-station along-cave distance from a chosen origin station, or from the
@@ -366,20 +344,9 @@ pub(crate) fn merge_projects_impl(
     })
 }
 
-/// Combined project state for frontend
-#[derive(serde::Serialize, TS)]
-pub struct ProjectState {
-    /// Serialized through [`ProjectIpc`] so cross-references reach the frontend
-    /// in positional wire form (the ts-rs `Project` shape), not the internal
-    /// `StationKey` shape that derived serde would emit. ts-rs still reads the
-    /// field type (`Project`) for the generated binding, so the TS contract is
-    /// unchanged; only the runtime serde payload is corrected.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: Project,
-    pub stations: Vec<Station>,
-    pub stats: ProjectStats,
-    pub frozen_shots: Vec<FrozenShotRef>,
-}
+/// Combined project state for frontend: the station-graph wire projection
+/// (`survey::wire::ProjectStateWire`, the TS `ProjectState`).
+pub type ProjectState = crate::models::survey::wire::ProjectStateWire;
 
 /// Load project with full progress reporting.
 /// Uses spawn_blocking for UI responsiveness during computation phases.
