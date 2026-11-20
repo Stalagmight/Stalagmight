@@ -691,9 +691,10 @@ fn list_capped(names: &[&str]) -> String {
 /// the frozen 0.6.0 reader heals an old file that repeats one, and a version 2
 /// file that repeats one is refused at load). Every edit and history step is
 /// validated, so a project the app holds has no repeat. The export still
-/// settles repeats after the full shot list is assembled -
-/// `remint_duplicate_uuids` (user profile) and `harden_for_speleodb` (sidecar)
-/// - as a safety net only: neither can fire on a valid project.
+/// settles repeats after the full shot list is assembled, with
+/// `remint_duplicate_uuids` (user profile) and `harden_for_speleodb`
+/// (sidecar), as a safety net only: neither can fire on a valid project.
+///
 /// Never returns an empty string: an empty stored UUID is treated as "no identity
 /// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
 /// is worse than an ephemeral one (it reads as a real, shared key).

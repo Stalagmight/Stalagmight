@@ -274,7 +274,6 @@ fn the_linear_guard_blocks_what_the_pairwise_guard_did() {
             .filter(|&a| a)
             .count();
     }
-    eprintln!("{compared} updated lines, {blocked} blocked, {aligned_snaps} aligned snaps");
     assert!(compared > 500, "only {compared} updated lines compared");
     assert!(
         blocked > 50,

@@ -96,7 +96,10 @@ fn random_survey(seed: u64) -> Project {
         let mut lines = vec![trunk];
         for i in 0..rng.below(9) {
             let from = lines[rng.below(lines.len())];
-            let count = survey.project.line(from).map_or(1, |l| l.station_count());
+            let count = survey
+                .project
+                .line(from)
+                .map_or(1, crate::models::survey::Line::station_count);
             // Every third branch leaves the trunk's first station: a hub.
             let index = if i % 3 == 0 { 0 } else { rng.below(count) } as u32;
             let shots = (0..rng.below(4))
@@ -125,7 +128,10 @@ fn random_survey(seed: u64) -> Project {
         }
         let pick = |rng: &mut Lcg, piece: &[LineId], survey: &Survey| {
             let line = piece[rng.below(piece.len())];
-            let count = survey.project.line(line).map_or(1, |l| l.station_count());
+            let count = survey
+                .project
+                .line(line)
+                .map_or(1, crate::models::survey::Line::station_count);
             survey.station(line, rng.below(count) as u32)
         };
         let (sa, sb) = (
@@ -139,7 +145,10 @@ fn random_survey(seed: u64) -> Project {
     for _ in 0..rng.below(3) {
         let piece = &pieces[rng.below(pieces.len())];
         let line = piece[rng.below(piece.len())];
-        let count = survey.project.line(line).map_or(1, |l| l.station_count());
+        let count = survey
+            .project
+            .line(line)
+            .map_or(1, crate::models::survey::Line::station_count);
         let slot = StationRef::new(line, rng.below(count) as u32);
         let _ = survey
             .project
