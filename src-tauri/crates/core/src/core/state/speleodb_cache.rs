@@ -65,10 +65,15 @@ pub(super) enum CacheFile {
 ///
 /// A version 2 file is read through the header probe (the first bytes only,
 /// plan 6.1). A legacy (SQLite) copy, which an older build left in the cache,
-/// is read through the frozen 0.6.0 reader and the migration, in memory: its
-/// file and journal are copied to a private temp first, so nothing is ever
-/// written beside it, and a hot journal is rolled back in the copy, which is
-/// exactly the committed state a read-write open would have recovered.
+/// is read like every other link reader reads one (review G-speleodb-6):
+/// read-only, its two tables under the frozen schema guard
+/// (`legacy_link::read_cached_copy`), never the full open. Only a copy that
+/// read cannot answer for - another schema version, whose open would migrate
+/// its view-toggle keys, or a hot journal - goes through the frozen 0.6.0
+/// reader and the migration, in memory: its file and journal are copied to a
+/// private temp first, so nothing is ever written beside it, and a hot journal
+/// is rolled back in the copy, which is exactly the committed state a
+/// read-write open would have recovered.
 pub(super) fn read_cache_file(path: &Path) -> CacheFile {
     let header = match probe_path(path) {
         Ok(header) => header,
@@ -94,22 +99,42 @@ pub(super) fn read_cache_file(path: &Path) -> CacheFile {
                 display: std::mem::take(&mut file.extras.local.display),
             }
         }
-        Format::Legacy => match crate::persistence::migrate::migrate_path(path) {
-            Ok(migrated) => CacheFile::Read {
-                link: migrated.extras.speleo_link,
-                display: migrated.extras.display_settings,
-            },
-            Err(e) => {
-                tracing::debug!(
-                    path = %path.display(),
-                    class = e.class(),
-                    purpose = "read a legacy SpeleoDB cache copy's link",
-                    "speleodb: the legacy cached copy could not be read"
-                );
-                CacheFile::Unreadable
-            }
-        },
+        Format::Legacy => read_legacy_cache_file(path),
         Format::V2 | Format::Unknown => CacheFile::Unreadable,
+    }
+}
+
+/// [`read_cache_file`] for a legacy copy: the cheap read, else the full open.
+fn read_legacy_cache_file(path: &Path) -> CacheFile {
+    use crate::persistence::legacy_link::{read_cached_copy, ReadOptions};
+    match read_cached_copy(path, &ReadOptions::default()) {
+        Ok(copy) => {
+            return CacheFile::Read {
+                link: copy.link,
+                display: copy.display,
+            }
+        }
+        Err(e) => tracing::debug!(
+            path = %path.display(),
+            error = %e,
+            purpose = "read a legacy SpeleoDB cache copy's link",
+            "speleodb: the cheap read of a legacy cached copy declined; reading it through the full open"
+        ),
+    }
+    match crate::persistence::migrate::migrate_path(path) {
+        Ok(migrated) => CacheFile::Read {
+            link: migrated.extras.speleo_link,
+            display: migrated.extras.display_settings,
+        },
+        Err(e) => {
+            tracing::debug!(
+                path = %path.display(),
+                class = e.class(),
+                purpose = "read a legacy SpeleoDB cache copy's link",
+                "speleodb: the legacy cached copy could not be read"
+            );
+            CacheFile::Unreadable
+        }
     }
 }
 
@@ -628,5 +653,62 @@ mod tests {
         assert!(link.has_unpushed_edits);
         assert_eq!(link.project_id, ID);
         assert_eq!(display.get("view").map(String::as_str), Some("kept"));
+    }
+
+    /// A whole legacy cache copy as 0.6.0 left it: linked and dirty, with two view
+    /// toggles in its `display_settings`.
+    fn legacy_cache_copy(dir: &Path) -> std::path::PathBuf {
+        let path = crate::core::state::stalx_fixtures::legacy_linked_project(
+            &dir.join("project.stalx"),
+            Some(&fixture_link("http://x/", true)),
+        );
+        let conn = rusqlite::Connection::open(&path).expect("open the copy");
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO display_settings (key, value) VALUES ('showJumps', 'false');
+             INSERT OR REPLACE INTO display_settings (key, value) VALUES ('gridSpacing', '25');",
+        )
+        .expect("view toggles");
+        path
+    }
+
+    #[test]
+    fn a_legacy_cache_copy_reads_as_the_full_open_reads_it() {
+        // Review G-speleodb-6: the cheap read answers what the full open answered.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = legacy_cache_copy(temp.path());
+        let migrated = crate::persistence::migrate::migrate_path(&path).expect("migrates");
+        let CacheFile::Read { link, display } = read_cache_file(&path) else {
+            panic!("a legacy copy reads");
+        };
+        assert_eq!(link, migrated.extras.speleo_link);
+        assert!(link.expect("linked").has_unpushed_edits);
+        assert_eq!(display, migrated.extras.display_settings);
+        assert_eq!(display.get("showJumps").map(String::as_str), Some("false"));
+    }
+
+    #[test]
+    fn a_legacy_cache_copy_reads_its_link_without_the_full_open() {
+        // Review G-speleodb-6: reading a cache copy's link and view toggles ran the
+        // whole legacy open (copy, heal, migrate, two solves, verify), so a copy that
+        // open refuses lost its toggles and its offline fallback. Here the survey
+        // tables are gone, which the full open refuses; the two rows still read.
+        // Injection: route the legacy arm back through `migrate_path` and this reads
+        // Unreadable.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = legacy_cache_copy(temp.path());
+        rusqlite::Connection::open(&path)
+            .expect("open the copy")
+            .execute_batch("DROP TABLE shots;")
+            .expect("break the survey");
+        assert!(crate::persistence::migrate::migrate_path(&path).is_err());
+        let CacheFile::Read { link, display } = read_cache_file(&path) else {
+            panic!("the link and the toggles still read");
+        };
+        assert_eq!(link.expect("linked").project_id, ID);
+        assert_eq!(display.get("gridSpacing").map(String::as_str), Some("25"));
+        assert_eq!(
+            file_display(&path).get("showJumps").map(String::as_str),
+            Some("false")
+        );
     }
 }

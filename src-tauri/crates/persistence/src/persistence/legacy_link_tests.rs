@@ -7,7 +7,7 @@ use std::time::Duration;
 use stalagmight_legacy::models::{SpeleoLink as OldLink, UndoMode as OldMode};
 use stalagmight_legacy::{write_v18, LegacyExtras, LegacyProject};
 
-use super::legacy_link::{read_link, ReadOptions};
+use super::legacy_link::{read_cached_copy, read_link, ReadOptions};
 use crate::models::UndoMode;
 
 const ID: &str = "11111111-1111-1111-1111-111111111111";
@@ -242,4 +242,61 @@ fn a_hot_journal_defeats_the_read_only_read_and_only_the_recovering_one_reads_it
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
     assert_eq!(version, 1, "the recovering read migrates nothing");
+}
+
+#[test]
+fn a_cache_copy_at_the_frozen_version_reads_its_link_and_view_toggles() {
+    // Review G-speleodb-6: the SpeleoDB cache's reader reads these two tables, not
+    // the whole project.
+    let dir = tempfile::tempdir().expect("temp");
+    let extras = LegacyExtras {
+        speleo_link: Some(old_link(Some(OldMode::Full), true)),
+        display_settings: [
+            ("showJumps".to_owned(), "false".to_owned()),
+            ("gridSpacing".to_owned(), "25".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+        ..LegacyExtras::default()
+    };
+    let bytes = write_v18(&LegacyProject::new("Synthetic".to_owned(), None), &extras)
+        .expect("the frozen writer writes a synthetic project");
+    let path = dir.path().join("cached.stalx");
+    std::fs::write(&path, &bytes).expect("write the legacy file");
+
+    let copy = read_cached_copy(&path, &ReadOptions::default()).expect("readable");
+    let link = copy.link.expect("linked");
+    assert_eq!(link.project_id, ID);
+    assert!(link.has_unpushed_edits);
+    assert_eq!(link.undo_mode, Some(UndoMode::Full));
+    assert_eq!(
+        copy.display.get("showJumps").map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        copy.display.get("gridSpacing").map(String::as_str),
+        Some("25")
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("bytes"),
+        bytes,
+        "no byte changed"
+    );
+}
+
+#[test]
+fn a_cache_copy_at_another_schema_version_is_left_to_the_full_open() {
+    // The frozen open migrates an older file, renaming and adding view-toggle keys
+    // on the way, so the cheap read refuses it rather than answer differently.
+    let dir = tempfile::tempdir().expect("temp");
+    let path = write_legacy(dir.path(), "old.stalx", Some(old_link(None, false)));
+    rusqlite::Connection::open(&path)
+        .expect("open")
+        .pragma_update(None, "user_version", 12)
+        .expect("backdate");
+    assert!(read_cached_copy(&path, &ReadOptions::default()).is_err());
+    assert!(
+        read_link(&path, &ReadOptions::default()).is_ok(),
+        "the link alone reads at any version"
+    );
 }
