@@ -1,194 +1,208 @@
-//! Split Line Here (#335) as one atomic undo/redo unit.
+//! Split Line Here (#335) as one atomic undo/redo unit, on the station
+//! graph (plan 5.4): the first half keeps the line's id and the shots before
+//! the cut, a new line takes the rest and starts on THE SAME station, so the
+//! halves stay joined at a junction. A cut inside a shot inserts that station
+//! first, in the same undo step.
+//!
+//! Declared change (plan 12.2, S9): the split station is no longer duplicated
+//! into two co-located unmerged stations, so it has one name, one comment and
+//! one set of datums, and the dialog's comment and datum sides choose nothing
+//! (`SplitLineOptions::comment_side` / `datum_side` are ignored; a datum "on
+//! both halves" is no longer refused, it IS on both). Nothing moves and no
+//! loop closure becomes a merge, so the preview always reports none.
+//!
+//! The model ([`crate::models::survey::Project::split_line`]) decides every
+//! refusal in 0.6.0's order and wording except one it leaves to the command
+//! layer (S12): a cut inside a frozen shot, checked here at the point 0.6.0
+//! checked it.
 
-use super::command_delete_split::line_budget_refusal;
+use super::commands::Record;
 use super::AppState;
-use crate::core::{Command, CommandResult};
+use crate::core::CommandResult;
+use crate::models::survey::changeset::{HistoryRefs, PreviewRow, RecordedPreview};
+use crate::models::survey::{Project, SplitOptions};
 use crate::models::{
-    Coordinates, LineId, OrphanClosureSweep, Project, RemovedClosure, ShotId, SplitAt,
-    SplitLineOptions, SplitPreview, SplitSide, StationRef, MIN_SPLIT_CHILD_LENGTH_M,
+    LineId, SplitAt, SplitLineOptions, SplitPreview, MAX_LINE_ID, MIN_SPLIT_CHILD_LENGTH_M,
 };
 
-/// Below this a half "did not move" in [`AppState::split_line_preview`]:
-/// float noise from the walk, far under anything a survey resolves.
-const SPLIT_PREVIEW_STILL_M: f64 = 1e-6;
+/// 0.6.0's refusal of a cut inside a frozen shot (Insert Station's guard: a
+/// new station inside a shot of an adjusted network changes that network).
+const FROZEN_SPLIT: &str =
+    "Cannot split a frozen shot. This shot is part of an adjusted survey network.";
+
+/// The model's options from the dialog's (S9: the comment and datum sides
+/// have nothing left to choose).
+fn split_options(options: &SplitLineOptions) -> SplitOptions {
+    SplitOptions {
+        name_a: options.name_a.clone(),
+        name_b: options.name_b.clone(),
+        color_a: options.color_a.clone(),
+        color_b: options.color_b.clone(),
+    }
+}
+
+/// The frozen-shot refusal of a cut inside a shot, where 0.6.0 decided it:
+/// after the halves' names are present, the line exists with a line id left
+/// for the second half, the shot is on it and the distance is on the shot
+/// and not snapped to one of its ends; before the line's room for the
+/// inserted station, the end-station rule and the names' uniqueness. Every
+/// earlier refusal is the model's, so this answers `None` for those and the
+/// model words them.
+fn frozen_cut_refusal(
+    project: &Project,
+    line_id: LineId,
+    at: SplitAt,
+    options: &SplitOptions,
+) -> Option<String> {
+    let SplitAt::Shot { shot_id, distance } = at else {
+        return None;
+    };
+    if options.name_a.trim().is_empty()
+        || options.name_b.trim().is_empty()
+        || project.next_line_id() > MAX_LINE_ID
+    {
+        return None;
+    }
+    let line = project.line(line_id)?;
+    let index = line.shots.iter().position(|s| s.id == shot_id)?;
+    let length = line.shots.get(index)?.length;
+    let inside = distance.is_finite()
+        && distance >= MIN_SPLIT_CHILD_LENGTH_M
+        && length - distance >= MIN_SPLIT_CHILD_LENGTH_M;
+    (inside && project.is_shot_frozen(line_id, index)).then(|| FROZEN_SPLIT.to_string())
+}
+
+/// What the history calls the split, read once it is made: `Split line
+/// "Main" at SP`, the line by the name it had before the cut (`line_name`;
+/// the halves are renamed) and the station it was cut at by its name now (a
+/// cut inside a shot names its new station only from here on), else its
+/// position on the first half.
+fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> String {
+    let at = project
+        .line(second)
+        .and_then(|l| project.stations.get(&l.start))
+        .map(|s| s.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());
+    format!("Split line \"{line_name}\" at {at}")
+}
 
 impl AppState {
     /// Split a line in two at a mid-line station, or at a point along a
     /// shot (inserting a station there first), deleting nothing. One undo
-    /// entry (`ProjectSnapshotPair`) covers the optional station insert and
-    /// the split. Returns the new second half's id as `line_id`, and both
-    /// halves as `line_ids` (first half first).
+    /// entry covers the optional station insert and the split. Returns the
+    /// new second half's id as `line_id`, and both halves as `line_ids`
+    /// (first half first).
     pub fn execute_split_line(
         &self,
         line_id: LineId,
         at: SplitAt,
         options: SplitLineOptions,
     ) -> CommandResult {
-        let _ = (&line_id, &at, &options);
-        crate::core::stub::not_ported("command_split_line::execute_split_line")
-    }
-
-    /// Make the validated `cut` in `project`: split the shot first when the
-    /// cut lands inside one, split the line, and turn every loop closure
-    /// the cut left as a sole tie into a merge (issue #8, as the
-    /// delete-and-split path does: a closure must close a loop), removing any
-    /// closure those merges leave between merged stations (#738). Returns the
-    /// second half's id, what that sweep did, and the closures it removed,
-    /// named by their stations before the cut and told apart by whether the cut
-    /// made them redundant or they already were (the whole-project sweep also
-    /// takes a closure between merged stations that an undo restored from a
-    /// history recorded before #738). The split and its preview both run this,
-    /// so the dialog names exactly what the split changes.
-    fn apply_cut(
-        project: &mut Project,
-        line_id: LineId,
-        cut: Cut,
-        options: &SplitLineOptions,
-    ) -> Result<CutOutcome, String> {
-        // Before anything changes. The cut adds and drops no closure, so the
-        // sweep's positions match these entries one to one.
-        let before = project.closures_before_sweep();
-        let station_index = match cut {
-            Cut::Station(station_index) => station_index,
-            Cut::InShot {
-                shot_id,
-                distance,
-                station_index,
-            } => {
-                project.split_shot_at_distance(line_id, shot_id, distance)?;
-                station_index
-            }
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        let second = project.split_line_at_station(line_id, station_index, options)?;
-        let sweep = project.sweep_orphan_closures();
-        let removed = project.removed_closures_named(&before, &sweep);
-        Ok(CutOutcome {
-            second,
-            sweep,
-            removed,
-        })
+        if let Err(refused) = self.guard_mutation("Split line") {
+            return refused;
+        }
+        tracing::info!(line_id, ?at, "Executing split_line as single undo unit");
+        let options = split_options(&options);
+        let result = self.run_recorded(
+            |_| Record {
+                kind: "batch".to_string(),
+                ..Record::default()
+            },
+            |project, record| {
+                if let Some(refusal) = frozen_cut_refusal(project, line_id, at, &options) {
+                    return Err(refusal);
+                }
+                let line_name = project.line_label_of(line_id);
+                let edited = project
+                    .split_line(line_id, at, &options)
+                    .map_err(|e| e.to_string())?;
+                let second = edited.value;
+                // Nothing to sweep in a valid model (the station graph does
+                // not change); logged here, not in the preview, if it ever
+                // does something.
+                let sweep = &edited.report.sweep;
+                if !sweep.is_empty() {
+                    tracing::warn!(
+                        removed = sweep.removed.len(),
+                        promoted = sweep.promoted.len(),
+                        purpose = "split line",
+                        "The orphan-closure sweep after a split changed closures"
+                    );
+                }
+                record.label = split_label(project, &line_name, line_id, second);
+                let mut lines = vec![line_id, second];
+                lines.sort_unstable();
+                record.refs = HistoryRefs {
+                    lines,
+                    stations: project.line(second).map(|l| l.start).into_iter().collect(),
+                    ..HistoryRefs::default()
+                };
+                let name_b = project
+                    .line(second)
+                    .and_then(|l| l.name.clone())
+                    .unwrap_or_else(|| options.name_b.trim().to_string());
+                record.preview = RecordedPreview {
+                    rows: vec![PreviewRow {
+                        field: format!("Create line \"{name_b}\""),
+                        old: String::new(),
+                        new: format!("Name: {name_b}"),
+                    }],
+                    more: 0,
+                };
+                Ok(second)
+            },
+        );
+        match result {
+            Ok(second) => {
+                tracing::info!(line_id, second_id = second, "Split line completed");
+                CommandResult::success()
+                    .with_line_id(second)
+                    .with_line_ids(vec![line_id, second])
+            }
+            Err(failure) => failure,
+        }
     }
 
-    /// What Split Line Here would do beyond the cut, without doing it: the
-    /// split runs on a copy of the project. A loop closure whose ends only the
-    /// cut line joined (a closure from before the cut to past it, with
-    /// nothing else tying the halves) becomes the halves' only tie, and the
-    /// split turns it into a merge, moving one half by the loop's misclosure.
-    /// Refusing that split would only make the user delete the closure, split
-    /// and merge by hand, with the same move, and keeping the closure is not an
-    /// option: every load and every later edit converts a sole-tie closure
-    /// (docs/closures.md). So the dialog shows the move before the user
-    /// confirms, and names any closure the split removes because that merge
-    /// makes its two stations one point (#738). A refused split returns its
-    /// reason.
+    /// What Split Line Here would do beyond the cut, for the dialog, without
+    /// doing it (the split runs on a copy). On the station graph the halves
+    /// share the split station, so the answer is always "nothing else": no
+    /// closure becomes a merge, no half moves, no closure is removed
+    /// (`split_preview_wire`). A refused split returns its reason, exactly as
+    /// [`Self::execute_split_line`] words it.
     pub fn split_line_preview(
         &self,
         line_id: LineId,
         at: SplitAt,
         options: &SplitLineOptions,
     ) -> Result<SplitPreview, String> {
-        let _ = (&line_id, &at, &options);
-        crate::core::stub::not_ported("command_split_line::split_line_preview")
-    }
-
-    /// Every refusal of Split Line Here, read-only and in the order the
-    /// command decides them: the read-only edit gate (#191, D-B6), the
-    /// options (a half with no name, a zero datum asked to stay on both
-    /// halves: [`SplitLineOptions::refusal`]), the cut itself
-    /// ([`Self::validate_cut`]), then the halves' names (empty, or another
-    /// line's: `Project::validate_replacement_line_names`). The command and
-    /// [`Self::split_line_preview`] both run it, so a preview refuses
-    /// exactly what the split would, with the same reason. The edit gate reads
-    /// only the SpeleoDB session, before the project lock is taken.
-    fn split_refusal(
-        &self,
-        line_id: LineId,
-        at: SplitAt,
-        options: &SplitLineOptions,
-    ) -> Result<Cut, String> {
-        let _ = (&line_id, &at, &options);
-        crate::core::stub::not_ported("command_split_line::split_refusal")
-    }
-
-    /// Resolve `at` to where the split cuts, or why it is refused. Read-only:
-    /// every refusal of the split is decided here, before anything changes.
-    fn validate_cut(project: &Project, line_id: LineId, at: SplitAt) -> Result<Cut, String> {
-        let Some(line) = project.get_line(line_id) else {
-            return Err(crate::models::LINE_GONE.to_string());
-        };
-        // The split mints the second half's id (#555); refuse rather than
-        // truncate the first half with nowhere to put the rest.
-        if let Some(refusal) = line_budget_refusal(project, line_id) {
-            return Err(refusal.error.unwrap_or_default());
-        }
-        let cut = match at {
-            SplitAt::Station { station_index } => Cut::Station(station_index),
-            SplitAt::Shot { shot_id, distance } => {
-                let Some(pos) = line.shots.iter().position(|s| s.id == shot_id) else {
-                    return Err(crate::models::SHOT_GONE.to_string());
-                };
-                let length = line.shots[pos].length;
-                if !distance.is_finite() || distance < 0.0 || distance > length {
-                    return Err(format!(
-                        "Distance {distance} is outside the shot (0 to {length} m)"
-                    ));
-                }
-                if distance < MIN_SPLIT_CHILD_LENGTH_M {
-                    Cut::Station(pos as u32)
-                } else if length - distance < MIN_SPLIT_CHILD_LENGTH_M {
-                    Cut::Station(pos as u32 + 1)
-                } else {
-                    // Same guard as Insert Station: a new station inside a
-                    // shot of an adjusted network changes that network.
-                    if project.is_shot_frozen_by_id(line_id, shot_id) {
-                        return Err("Cannot split a frozen shot. This shot is part of an \
-                                    adjusted survey network."
-                            .to_string());
-                    }
-                    // The station goes in as a new shot of this line,
-                    // so it needs room under the shot cap and an id left
-                    // in the line's window; checked here, before the
-                    // shot split changes anything.
-                    if let Some(refusal) = project.shot_insert_refusal(line_id) {
-                        return Err(refusal);
-                    }
-                    // The new station is always a mid-line one, so the
-                    // split cannot refuse it for being an end.
-                    return Ok(Cut::InShot {
-                        shot_id,
-                        distance,
-                        station_index: pos as u32 + 1,
-                    });
-                }
-            }
-        };
-        if let Cut::Station(station_index) = cut {
-            if let Some(refusal) = project.split_station_refusal(line_id, station_index) {
+        self.split_refusal()?;
+        let options = split_options(options);
+        self.with_project(|project| {
+            if let Some(refusal) = frozen_cut_refusal(project, line_id, at, &options) {
                 return Err(refusal);
             }
-        }
-        Ok(cut)
+            let preview = project
+                .preview_split_line(line_id, at, &options)
+                .map_err(|e| e.to_string())?;
+            Ok(project.split_preview_wire(&preview))
+        })
     }
-}
 
-/// What [`AppState::apply_cut`] did.
-struct CutOutcome {
-    /// The second half's id.
-    second: LineId,
-    /// The sweep that followed the cut.
-    sweep: OrphanClosureSweep,
-    /// The closures it removed, named for the user.
-    removed: Vec<RemovedClosure>,
-}
-
-/// Where a validated split cuts: at an existing station, or inside a shot,
-/// which first gets a station inserted `distance` along it.
-#[derive(Debug, Clone, Copy)]
-enum Cut {
-    Station(u32),
-    InShot {
-        shot_id: ShotId,
-        distance: f64,
-        station_index: u32,
-    },
+    /// The refusals of Split Line Here that come before the project is read,
+    /// in the order the command decides them: the SpeleoDB edit gate (#191,
+    /// D-B6), then a file made with a newer Stalagmight (open read-only, plan
+    /// 6.4). The preview runs it so it refuses exactly what the split does,
+    /// with the same reason; the split itself meets the same two gates in
+    /// `guard_mutation` and `run_recorded`.
+    fn split_refusal(&self) -> Result<(), String> {
+        if let Err(refused) = self.guard_mutation("Split line") {
+            return Err(refused.error.unwrap_or_default());
+        }
+        self.guard_file_writable()
+            .map_err(|refused| refused.error.unwrap_or_default())
+    }
 }

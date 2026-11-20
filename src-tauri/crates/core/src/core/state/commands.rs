@@ -216,7 +216,7 @@ impl AppState {
     }
 
     /// The read-only refusal of a file this build cannot rewrite (plan 6.4).
-    fn guard_file_writable(&self) -> Result<(), CommandResult> {
+    pub(super) fn guard_file_writable(&self) -> Result<(), CommandResult> {
         let read_only = self.with_file(|file| file.extras.read_only.is_some());
         if read_only {
             return Err(CommandResult::failure(format!(
