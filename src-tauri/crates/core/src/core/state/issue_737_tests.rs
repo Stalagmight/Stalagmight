@@ -4,11 +4,11 @@
 //! it between; the range preview predicts exactly what the gap-close
 //! removes.
 //!
-//! Ported onto the station-graph model. The warning, the closure dialog's
-//! guard, the adjustment-report and the Add / Merge cases of the 0.6.0 file
-//! test other packages' code (project warnings, the merge check, Add .stalx
-//! and Merge Projects); they are kept verbatim, parked, in
-//! `legacy_warning_and_dialog_tests` for those packages to port.
+//! Ported onto the station-graph model, with the closure dialog's guard and
+//! the Add / Merge cases of the 0.6.0 file. Its warning and adjustment-report
+//! cases are in `warnings_tests`. A tie onto a closed junction is the closure
+//! already there (one station), refused as a duplicate where 0.6.0 created a
+//! redundant second closure.
 //!
 //! All data is synthetic: projects built in memory, no fixture read or written.
 
@@ -647,447 +647,191 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
     run
 }
 
-/// The 0.6.0 cases of this file that test other packages' code, kept
-/// verbatim (never compiled: `sg_unported` is never set) for those packages
-/// to port: the project warning and its identity (warnings), the closure
-/// dialog's guard (`check_merge_connectivity`, the closure commands), the
-/// adjustment report's cached failures (warnings), and closures that arrive
-/// through Add .stalx and Merge Projects.
-#[cfg(sg_unported)]
-mod legacy_warning_and_dialog_tests {
-    use std::collections::HashSet;
+// ---- the closure dialog's guard -----------------------------------------------------
 
-    use super::command_shot::closure_removed_message;
-    use super::AppState;
-    use crate::core::{Command, WarningSeverity};
-    use crate::models::{
-        ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project, ShotData, ShotId,
-        StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-        CLOSURE_REMOVED_ACROSS_ONE_SHOT,
-    };
-
-    fn shot(azimuth: f64, length: f64) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            ..Default::default()
-        }
-    }
-
-    fn add(project: &mut Project, shots: Vec<ShotData>) -> LineId {
-        project
-            .add_line(LineData {
-                shots,
-                ..Default::default()
-            })
-            .id
-    }
-
-    fn st(line: LineId, index: u32) -> StationRef {
-        StationRef::new(line, index)
-    }
-
-    fn state_with(project: Project) -> AppState {
-        let state = AppState::new().unwrap();
-        state.set_project_for_tests(project);
-        state
-    }
-
-    fn project(state: &AppState) -> Project {
-        state.get_project_state().unwrap()
-    }
-
-    fn shot_id(state: &AppState, line: LineId, position: usize) -> ShotId {
-        project(state).get_line(line).unwrap().shots[position].id
-    }
-
-    /// Plant a closure directly, as a file written before the creation-time
-    /// refusal can carry it.
-    fn plant(project: &mut Project, a: StationRef, b: StationRef) -> u64 {
-        let (station_a, station_b) = (
-            project.key_for_ref(a).unwrap(),
-            project.key_for_ref(b).unwrap(),
-        );
-        let id = project
-            .loop_closures
-            .iter()
-            .map(|lc| lc.id + 1)
-            .max()
-            .unwrap_or(1)
-            .max(project.next_closure_id);
-        project.next_closure_id = id + 1;
-        project.loop_closures.push(LoopClosure {
-            id,
-            station_a,
-            station_b,
-            path_length: 10.0,
-            misclosure_distance: 0.0,
-            error_percentage: 0.0,
-            horizontal_misclosure: 0.0,
-            vertical_misclosure: 0.0,
-            strategy: ClosureStrategy::Batch,
-            is_aligned: false,
-        });
-        id
-    }
-
-    /// The issue's loop: A two shots east, B north/east/south, merged at their
-    /// starts, closed B:3-A:2.
-    fn issue_loop() -> (Project, LineId, LineId) {
-        let mut p = Project::new("737".to_string(), None);
-        let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
-        let b = add(
-            &mut p,
-            vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
-        );
-        p.merge_stations(st(a, 0), st(b, 0)).unwrap();
-        p.create_loop_closure(st(b, 3), st(a, 2), ClosureStrategy::Batch)
-            .unwrap();
-        (p, a, b)
-    }
-
-    /// A straight line of `n` shots with varied bearings (so a gap-close moves
-    /// something), and nothing else.
-    fn chain(n: usize) -> (Project, LineId) {
-        let mut p = Project::new("chain".to_string(), None);
-        let shots = (0..n)
-            .map(|i| shot(30.0 * i as f64, 4.0 + i as f64))
-            .collect();
-        let a = add(&mut p, shots);
-        (p, a)
-    }
-
-    fn closure_endpoints(p: &Project, id: u64) -> Option<(StationRef, StationRef)> {
-        let lc = p.loop_closures.iter().find(|lc| lc.id == id)?;
-        Some((p.resolve_key(&lc.station_a)?, p.resolve_key(&lc.station_b)?))
-    }
-
-    // ---- the warning ---------------------------------------------------------------
-
-    #[test]
-    fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
-        let (mut p, a, _) = issue_loop();
-        let id = plant(&mut p, st(a, 1), st(a, 2));
-        let state = state_with(p);
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        let ours: Vec<_> = warnings
-            .iter()
-            .filter(|w| w.code == CLOSURE_ACROSS_ONE_SHOT)
-            .collect();
-        assert_eq!(ours.len(), 1, "{warnings:?}");
-        let w = ours[0];
-        assert_eq!(w.closure_id, Some(id));
-        assert_eq!((w.line_id, w.shot_index), (a, 1));
-        assert_eq!(w.shot_id, shot_id(&state, a, 1));
-        assert_eq!(w.severity, WarningSeverity::Error);
-        assert!(!w.is_resolved);
-        assert!(!crate::models::warning_is_ignorable(
-            CLOSURE_ACROSS_ONE_SHOT
-        ));
-        assert_eq!(
-            w.message,
-            "Shot Line 1: 1 \u{2192} 2 has both ends joined by loop closure Line 1 / 1 to Line 1 / 2, \
-             which would squeeze the shot to zero length, so the Closures Computed View skips that \
-             closure. Remove the closure, or close the loop at two stations that are not the ends of \
-             a single shot."
-        );
-        // The DetailPanel pill splits the leading shot off by its name.
-        assert!(w.message.starts_with(&format!(
-            "Shot {} ",
-            project(&state).shot_label_at(a, 1).unwrap()
-        )));
-    }
-
-    #[test]
-    fn two_closures_across_the_same_shot_are_two_warnings_told_apart_by_closure_id() {
-        let (mut p, a, _) = issue_loop();
-        let c = add(&mut p, vec![shot(0.0, 5.0)]);
-        p.merge_stations(st(c, 0), st(a, 1)).unwrap();
-        let first = plant(&mut p, st(a, 1), st(a, 2));
-        let second = plant(&mut p, st(c, 0), st(a, 2));
-        let state = state_with(p);
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        let ids: HashSet<Option<u64>> = warnings
-            .iter()
-            .filter(|w| w.code == CLOSURE_ACROSS_ONE_SHOT)
-            .map(|w| {
-                assert_eq!((w.line_id, w.shot_index), (a, 1));
-                w.closure_id
-            })
-            .collect();
-        assert_eq!(ids, HashSet::from([Some(first), Some(second)]));
-        // Every other warning carries no closure id.
-        assert!(warnings
-            .iter()
-            .filter(|w| w.code != CLOSURE_ACROSS_ONE_SHOT)
-            .all(|w| w.closure_id.is_none()));
-    }
-
-    #[test]
-    fn removing_the_closure_clears_the_warning() {
-        let (mut p, a, _) = issue_loop();
-        let id = plant(&mut p, st(a, 1), st(a, 2));
-        let state = state_with(p);
-        let removed = state.execute(Command::RemoveLoopClosure { closure_id: id });
-        assert!(removed.success, "{:?}", removed.error);
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        assert!(warnings.iter().all(|w| w.code != CLOSURE_ACROSS_ONE_SHOT));
-        // Undo brings the closure and its warning back.
-        assert!(state.undo().success);
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        assert!(warnings.iter().any(|w| w.code == CLOSURE_ACROSS_ONE_SHOT));
-    }
-
-    // ---- the closure dialog's guard -------------------------------------------------
-
-    #[test]
-    fn the_connectivity_check_carries_the_backend_refusal() {
-        let (p, a, b) = issue_loop();
-        let state = state_with(p);
-        let across = state.check_merge_connectivity(st(a, 1), st(a, 2)).unwrap();
-        assert!(across.connected && !across.can_merge);
-        let refusal = across.closure_refusal.expect("a refusal for one shot");
-        let line = state.get_project_state().unwrap().line_label(a).unwrap();
-        assert!(refusal.starts_with(&format!(
-            "This closure would join the two ends of one shot ({line} / 1 to {line} / 2) and \
+#[test]
+fn the_connectivity_check_carries_the_backend_refusal() {
+    let (p, a, b) = issue_loop();
+    let state = state_with(p);
+    let slot = StationRef::new;
+    let across = state
+        .check_merge_connectivity(slot(a, 1), slot(a, 2))
+        .unwrap();
+    assert!(across.connected && !across.can_merge);
+    let refusal = across.closure_refusal.expect("a refusal for one shot");
+    assert!(
+        refusal.starts_with(
+            "This closure would join the two ends of one shot (Line 1 / 1 to Line 1 / 2) and \
              squeeze that shot to zero length."
-        )));
-        // The very words the create command answers with.
-        let created = state.execute(Command::CreateLoopClosure {
-            station_a: st(a, 1),
-            station_b: st(a, 2),
-            closure_strategy: ClosureStrategy::Batch,
-        });
-        assert!(!created.success);
-        assert_eq!(created.error.as_deref(), Some(refusal.as_str()));
+        ),
+        "{refusal}"
+    );
+    // The very words the create command answers with.
+    let created = state.execute(Command::CreateLoopClosure {
+        station_a: slot(a, 1),
+        station_b: slot(a, 2),
+        closure_strategy: crate::models::ClosureStrategy::Batch,
+    });
+    assert!(!created.success);
+    assert_eq!(created.error.as_deref(), Some(refusal.as_str()));
 
-        // A real loop: no refusal, and the key is absent on the wire.
-        let fine = state.check_merge_connectivity(st(a, 1), st(b, 2)).unwrap();
-        assert!(fine.closure_refusal.is_none());
-        let wire = serde_json::to_value(&fine).unwrap();
-        assert!(wire.get("closure_refusal").is_none(), "{wire}");
-        // Not connected: a merge is offered, and no closure refusal.
-        let mut other = project(&state);
-        let lone = add(&mut other, vec![shot(0.0, 3.0)]);
-        state.set_project_for_tests(other);
-        let merge = state
-            .check_merge_connectivity(st(a, 1), st(lone, 0))
-            .unwrap();
-        assert!(merge.can_merge && merge.closure_refusal.is_none());
-    }
+    // A real loop: no refusal, and the key is absent on the wire.
+    let fine = state
+        .check_merge_connectivity(slot(a, 1), slot(b, 2))
+        .unwrap();
+    assert!(fine.closure_refusal.is_none());
+    let wire = serde_json::to_value(&fine).unwrap();
+    assert!(wire.get("closure_refusal").is_none(), "{wire}");
+    // Not connected: a merge is offered, and no closure refusal.
+    let mut other = project(&state);
+    let lone = add(&mut other, "Lone", vec![shot(0.0, 3.0)]);
+    state.set_project_for_tests(other);
+    let merge = state
+        .check_merge_connectivity(slot(a, 1), slot(lone, 0))
+        .unwrap();
+    assert!(merge.can_merge && merge.closure_refusal.is_none());
+}
 
-    #[test]
-    fn a_redundant_tie_gets_no_refusal_and_is_created() {
-        // Only a closure across ONE shot is refused (#737). C:0 is merged onto B:3,
-        // which the loop's closure already ties to A:2, so a closure C:0-A:2 adds
-        // nothing - the dialog offers Create and the command creates it, as before.
-        let (mut p, a, b) = issue_loop();
-        let c = add(&mut p, vec![shot(0.0, 5.0)]);
-        p.merge_stations(st(c, 0), st(b, 3)).unwrap();
-        let state = state_with(p);
-        let check = state.check_merge_connectivity(st(c, 0), st(a, 2)).unwrap();
-        assert!(check.connected && !check.can_merge);
-        assert!(
-            check.closure_refusal.is_none(),
-            "{:?}",
-            check.closure_refusal
-        );
-        let created = state.execute(Command::CreateLoopClosure {
-            station_a: st(c, 0),
-            station_b: st(a, 2),
-            closure_strategy: ClosureStrategy::Batch,
-        });
-        assert!(created.success, "{:?}", created.error);
-        let after = project(&state);
-        assert_eq!(after.loop_closures.len(), 2);
-        // No warning, and the adjusted view solves cleanly.
-        let warnings = state.compute_project_warnings(&after, None);
-        assert!(warnings
-            .iter()
-            .all(|w| w.code != CLOSURE_ACROSS_ONE_SHOT && w.code != CLOSURE_ADJUSTMENT_FAILED));
-        state.get_adjusted_stations().unwrap();
-        let report = state.get_adjustment_report().unwrap();
-        assert!(
-            report.skipped_closures.is_empty() && report.failures.is_empty(),
-            "{report:?}"
-        );
-    }
+#[test]
+fn a_tie_onto_a_closed_junction_is_the_closure_already_there() {
+    // 0.6.0: C:0 merged onto B:3, which the loop's closure ties to A:2, so a
+    // closure C:0-A:2 added a redundant tie and was created. On the station
+    // graph C:0 IS B:3's station, so C:0-A:2 names the closure that already
+    // exists: the dialog's check refuses it as a duplicate (no #737 refusal),
+    // and so does the command.
+    let (mut p, a, b) = issue_loop();
+    let b3 = st(&p, b, 3);
+    let c = add_from(&mut p, "Line 3", b3, vec![shot(0.0, 5.0)]);
+    let state = state_with(p);
+    let slot = StationRef::new;
+    let duplicate = "A loop closure already exists between these stations.";
+    assert_eq!(
+        state
+            .check_merge_connectivity(slot(c, 0), slot(a, 2))
+            .unwrap_err(),
+        duplicate
+    );
+    let created = state.execute(Command::CreateLoopClosure {
+        station_a: slot(c, 0),
+        station_b: slot(a, 2),
+        closure_strategy: crate::models::ClosureStrategy::Batch,
+    });
+    assert!(!created.success);
+    assert_eq!(created.error.as_deref(), Some(duplicate));
+    let after = project(&state);
+    assert_eq!(after.closures.len(), 1);
+    // No warning, and the Computed View solves cleanly.
+    let warnings = state.compute_project_warnings(&after);
+    assert!(warnings
+        .iter()
+        .all(|w| w.code != crate::models::CLOSURE_ACROSS_ONE_SHOT
+            && w.code != crate::models::CLOSURE_ADJUSTMENT_FAILED));
+    state.get_adjusted_stations().unwrap();
+    let report = state.get_adjustment_report().unwrap();
+    assert!(
+        report.skipped_closures.is_empty() && report.failures.is_empty(),
+        "{report:?}"
+    );
+}
 
-    // ---- the adjustment report and the failure warning ------------------------------
+// ---- closures that arrive without create_loop_closure -------------------------------
 
-    #[test]
-    fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
-        let (mut p, a, _) = issue_loop();
-        let skipped_id = plant(&mut p, st(a, 1), st(a, 2));
-        // A second component that cannot be adjusted: two datum-anchored lines
-        // tied datum to datum by a closure, which creation allows.
-        let x = add(&mut p, vec![shot(90.0, 10.0)]);
-        let y = add(&mut p, vec![shot(0.0, 10.0)]);
-        p.set_zero_datum(st(x, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
-            .unwrap();
-        p.set_zero_datum(st(y, 0), GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap())
-            .unwrap();
-        p.create_loop_closure(st(x, 0), st(y, 0), ClosureStrategy::Batch)
-            .unwrap();
-        let state = state_with(p);
+/// A legacy `.stalx` holding the issue's loop plus a closure across the one
+/// shot A:1-A:2, as a build from before the refusal (or another tool) wrote
+/// it. Synthetic, in a temp dir; never a fixture.
+fn legacy_file_with_closure_across_one_shot(
+    dir: &std::path::Path,
+    name: &str,
+) -> std::path::PathBuf {
+    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
+    let mut p = Legacy::new(name.to_string(), None);
+    let mut add = |shots: Vec<ShotData>| {
+        p.add_line(old::LineData {
+            shots: shots.iter().map(frozen).collect(),
+            ..Default::default()
+        })
+        .id
+    };
+    let a = add(vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)]);
+    p.merge_stations(slot(a, 0), slot(b, 0)).unwrap();
+    p.create_loop_closure(slot(b, 3), slot(a, 2), old::ClosureStrategy::Batch)
+        .unwrap();
+    let id = p.next_closure_id.max(1);
+    p.next_closure_id = id + 1;
+    p.loop_closures.push(old::LoopClosure {
+        id,
+        station_a: p.key_for_ref(slot(a, 1)).unwrap(),
+        station_b: p.key_for_ref(slot(a, 2)).unwrap(),
+        path_length: 10.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: old::ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    let path = dir.join(format!("{name}.stalx"));
+    write_legacy_file(&path, &p);
+    path
+}
 
-        // Before any solve: the skipped closure is known, the failure is not.
-        let report = state.get_adjustment_report().unwrap();
-        assert_eq!(report.skipped_closures.len(), 1);
-        let skipped = &report.skipped_closures[0];
-        assert_eq!(skipped.closure_id, skipped_id);
-        assert_eq!((skipped.shot_line_id, skipped.shot_index), (a, 1));
-        assert!(report.failures.is_empty(), "no solve has run yet");
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        assert!(warnings.iter().all(|w| w.code != CLOSURE_ADJUSTMENT_FAILED));
+/// A version 2 `.stalx` of one free line at `path`.
+fn v2_file(path: &std::path::Path, name: &str, shots: Vec<ShotData>) {
+    use crate::persistence::stalx_v2::{self, Extras, Mode};
+    let mut p = Project::new(name, None);
+    add(&mut p, "Line 1", shots);
+    let bytes = stalx_v2::encode(&p, &Extras::default(), Mode::Normal).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
 
-        // The view solves; now the failure is reported, in plain words.
-        state.get_adjusted_stations().unwrap();
-        let report = state.get_adjustment_report().unwrap();
-        assert_eq!(report.failures.len(), 1, "{report:?}");
-        let failure = &report.failures[0];
-        let mut expected = vec![x, y];
-        expected.sort_unstable();
-        assert_eq!(failure.line_ids, expected);
-        assert!(
-            failure
-                .reason
-                .starts_with("loop closures tie two zero datums"),
-            "{}",
-            failure.reason
-        );
-        assert!(
-            !failure.reason.contains("constraint group"),
-            "raw text stays in the log"
-        );
+/// `p` carries exactly one closure across one shot, it is warned about, and
+/// the Computed View skips it rather than failing.
+fn assert_skipped_and_warned(p: Project) {
+    let skipped = p.closures_across_one_shot();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    let state = state_with(p);
+    let warnings = state.compute_project_warnings(&project(&state));
+    let ours: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.code == crate::models::CLOSURE_ACROSS_ONE_SHOT)
+        .collect();
+    assert_eq!(ours.len(), 1, "{warnings:?}");
+    assert_eq!(ours[0].closure_id, Some(skipped[0].closure_id));
+    state.get_adjusted_stations().unwrap();
+    let report = state.get_adjustment_report().unwrap();
+    assert_eq!(report.skipped_closures.len(), 1);
+    assert!(report.failures.is_empty(), "{report:?}");
+}
 
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        let failed: Vec<_> = warnings
-            .iter()
-            .filter(|w| w.code == CLOSURE_ADJUSTMENT_FAILED)
-            .collect();
-        assert_eq!(failed.len(), 1, "{warnings:?}");
-        let w = failed[0];
-        assert!(expected.contains(&w.line_id));
-        // Advisory: it lives only while the cached solve matches this version, so
-        // it must not gate like an error (the upload gate counts errors).
-        assert_eq!(w.severity, WarningSeverity::Warning);
-        assert!(crate::models::warning_is_ignorable(
-            CLOSURE_ADJUSTMENT_FAILED
-        ));
-        assert!(!w.is_resolved);
-        assert!(
-            w.message.starts_with(&format!(
-                "Shot {} is in a part of the survey (2 lines)",
-                project(&state)
-                    .shot_label_at(w.line_id, w.shot_index)
-                    .unwrap()
-            )),
-            "{}",
-            w.message
-        );
-        // An older project version never borrows the cached failure.
-        let mut older = project(&state);
-        older.touch();
-        let hash = state.current_adjusted_config_hash();
-        assert!(state.cached_adjustment_failures(&older, hash).is_empty());
-        // Nor does the current version under another config, while the current
-        // version under the current config does.
-        assert!(state
-            .cached_adjustment_failures(&project(&state), hash.wrapping_add(1))
-            .is_empty());
-        assert_eq!(
-            state
-                .cached_adjustment_failures(&project(&state), hash)
-                .len(),
-            1
-        );
+#[test]
+fn adding_a_project_file_with_a_closure_across_one_shot_warns_and_skips_it() {
+    // Add .stalx copies closures straight across, past the creation-time
+    // refusal: the solve skip and the warning cover them.
+    let dir = tempfile::tempdir().unwrap();
+    let source = legacy_file_with_closure_across_one_shot(dir.path(), "source");
+    let target = dir.path().join("target.stalx");
+    v2_file(&target, "target", vec![shot(45.0, 7.0)]);
+    let state = AppState::new().unwrap();
+    let opened = state.execute(Command::OpenProject { path: target });
+    assert!(opened.success, "open the target: {:?}", opened.error);
+    let added = state.execute(Command::add_project_file(source));
+    assert!(added.success, "{:?}", added.error);
+    assert_skipped_and_warned(project(&state));
+}
 
-        // Any edit drops the cached solve, and with it the failure.
-        let edit = state.execute(Command::RemoveLoopClosure {
-            closure_id: skipped_id,
-        });
-        assert!(edit.success);
-        let report = state.get_adjustment_report().unwrap();
-        assert!(report.skipped_closures.is_empty());
-        assert!(report.failures.is_empty(), "stale failure after an edit");
-    }
-
-    // ---- closures that arrive without create_loop_closure ----------------------------
-
-    /// A saved `.stalx` holding the issue's loop plus a closure across the one shot
-    /// A:1-A:2, written as a file from before the refusal (or another tool) would
-    /// be. Synthetic, in a temp dir; never a fixture.
-    fn file_with_closure_across_one_shot(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-        let (mut p, a, _) = issue_loop();
-        p.name = name.to_string();
-        plant(&mut p, st(a, 1), st(a, 2));
-        let path = dir.join(format!("{name}.stalx"));
-        let mut db = crate::persistence::Database::open(&path).unwrap();
-        db.save_project(&p).unwrap();
-        path
-    }
-
-    /// Assert `p` carries exactly one closure across one shot, that it is warned
-    /// about, and that the solve skips it rather than failing.
-    fn assert_skipped_and_warned(p: Project) {
-        let skipped = p.closures_across_one_shot();
-        assert_eq!(skipped.len(), 1, "{skipped:?}");
-        let state = state_with(p);
-        let warnings = state.compute_project_warnings(&project(&state), None);
-        let ours: Vec<_> = warnings
-            .iter()
-            .filter(|w| w.code == CLOSURE_ACROSS_ONE_SHOT)
-            .collect();
-        assert_eq!(ours.len(), 1, "{warnings:?}");
-        assert_eq!(ours[0].closure_id, Some(skipped[0].closure_id));
-        state.get_adjusted_stations().unwrap();
-        let report = state.get_adjustment_report().unwrap();
-        assert_eq!(report.skipped_closures.len(), 1);
-        assert!(report.failures.is_empty(), "{report:?}");
-    }
-
-    #[test]
-    fn adding_a_project_file_with_a_closure_across_one_shot_warns_and_skips_it() {
-        // Add .stalx copies closures straight across (`project_append`), past the
-        // creation-time refusal: the solve skip and the warning cover them.
-        let dir = tempfile::tempdir().unwrap();
-        let source = file_with_closure_across_one_shot(dir.path(), "source");
-        let mut target = Project::new("target".to_string(), None);
-        add(&mut target, vec![shot(45.0, 7.0)]);
-        let target_path = dir.path().join("target.stalx");
-        crate::persistence::Database::open(&target_path)
-            .unwrap()
-            .save_project(&target)
-            .unwrap();
-        let state = AppState::new().unwrap();
-        assert!(state.open_project(target_path).success, "open the target");
-        let added = state.execute(Command::add_project_file(source));
-        assert!(added.success, "{:?}", added.error);
-        assert_skipped_and_warned(project(&state));
-    }
-
-    #[test]
-    fn merging_project_files_with_a_closure_across_one_shot_warns_and_skips_it() {
-        // Merge Projects appends every source the same way.
-        let dir = tempfile::tempdir().unwrap();
-        let one = file_with_closure_across_one_shot(dir.path(), "one");
-        let mut other = Project::new("two".to_string(), None);
-        add(&mut other, vec![shot(10.0, 4.0)]);
-        let two = dir.path().join("two.stalx");
-        crate::persistence::Database::open(&two)
-            .unwrap()
-            .save_project(&other)
-            .unwrap();
-        let out = dir.path().join("merged.stalx");
-        let state = AppState::new().unwrap();
-        let merged = state.merge_projects(vec![one, two], out.clone(), "merged".to_string(), false);
-        assert!(merged.success, "{:?}", merged.error);
-        let merged = crate::persistence::Database::open_existing(&out)
-            .unwrap()
-            .load_project()
-            .unwrap();
-        assert_skipped_and_warned(merged);
-    }
+#[test]
+fn merging_project_files_with_a_closure_across_one_shot_warns_and_skips_it() {
+    // Merge Projects appends every source the same way.
+    let dir = tempfile::tempdir().unwrap();
+    let one = legacy_file_with_closure_across_one_shot(dir.path(), "one");
+    let two = dir.path().join("two.stalx");
+    v2_file(&two, "two", vec![shot(10.0, 4.0)]);
+    let out = dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let merged = state.merge_projects(&[one, two], out.clone(), "merged", false);
+    assert!(merged.success, "{:?}", merged.error);
+    let bytes = std::fs::read(&out).unwrap();
+    let decoded = crate::persistence::stalx_v2::decode(&bytes, &Default::default()).unwrap();
+    assert_skipped_and_warned(decoded.project);
 }
