@@ -17,8 +17,7 @@
 //! The merge test is the exception - its check sums the SOURCES' line counts,
 //! which nothing but real lines can supply.
 //!
-//! The create, import and merge cases are other packages' doors and are
-//! `#[ignore]`d until those packages land (their reasons say which).
+//! Every case runs, the create, import and merge doors included.
 
 use tempfile::TempDir;
 

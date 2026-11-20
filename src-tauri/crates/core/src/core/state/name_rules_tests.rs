@@ -6,10 +6,9 @@
 //! the Combine candidate tells the dialog which stations it renames.
 //!
 //! Lines are built with the model's own `create_line` (what Create Line
-//! does). The cases whose subject is another package's command (Split Line
-//! Here and Combine: C4; delete-and-split: C2; line renames and Sections:
-//! C3) are `#[ignore]`d on this branch until those commands are ported; their
-//! setup is the station graph's.
+//! does). Every case runs: the commands they drive (Split Line Here and
+//! Combine, delete-and-split, line renames and Sections) are all on the
+//! station graph, and so is their setup.
 //!
 //! Retired from 0.6.0: the half of `names_are_stored_and_compared_trimmed`
 //! that ran `Project::ensure_station_identities` over padded and repeated
