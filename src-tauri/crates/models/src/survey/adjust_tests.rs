@@ -444,3 +444,65 @@ fn shuffled_lines_and_repeated_solves_give_identical_bits() {
     }
     assert!(compared > 30);
 }
+
+/// Scale: a 26 000-station survey (a long ladder of loops plus 150 datum
+/// pieces, each with a GPS fix and a closure) solves in linear time (about
+/// 0.1 s in a debug build).
+#[test]
+fn a_large_survey_solves_in_linear_time() {
+    use super::test_helpers::{add, flat, gps};
+    use super::{StartAt, ZeroDatum};
+    let mut p = super::test_helpers::project();
+    let rail = |n: usize, az: f64| -> Vec<crate::ShotData> {
+        (0..n)
+            .map(|i| flat(az + (i % 7) as f64, 5.0 + (i % 5) as f64 * 0.1))
+            .collect()
+    };
+    let a = add(&mut p, StartAt::New, rail(10_000, 90.0));
+    let o = super::test_helpers::at(&p, a, 0);
+    let b = add(&mut p, StartAt::Station(o), rail(10_000, 91.0));
+    p.push_datum(ZeroDatum::new(o, gps(20.5, -87.4)));
+    for k in 1..=200 {
+        let (sa, sb) = (
+            super::test_helpers::at(&p, a, k * 50),
+            super::test_helpers::at(&p, b, k * 50),
+        );
+        p.push_closure(sa, None, sb, None, ClosureStrategy::Batch);
+    }
+    for k in 0..150 {
+        let l = add(&mut p, StartAt::New, rail(40, (k % 360) as f64));
+        let chain: Vec<crate::StationId> = p.line(l).unwrap().stations().collect();
+        let (s0, s9) = (chain[0], chain[39]);
+        let mut d = ZeroDatum::new(s0, gps(20.5 + k as f64 * 1e-4, -87.39));
+        d.via = Some(l);
+        p.push_datum(d);
+        let mut fix = ZeroDatum::new(s9, gps(20.5 + k as f64 * 1e-4, -87.388));
+        fix.accuracy_m = Some(5.0);
+        p.push_datum(fix);
+        p.push_closure(chain[20], None, s9, None, ClosureStrategy::Batch);
+    }
+    assert!(p.validate().is_empty());
+    let started = std::time::Instant::now();
+    let adjusted = p.adjusted_positions(&ClosureAdjustmentConfig::default());
+    let elapsed = started.elapsed();
+    assert!(adjusted.failures().is_empty());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "solve took {elapsed:?}"
+    );
+    let started = std::time::Instant::now();
+    let raw = p.raw_positions();
+    let metrics = p.closures_metrics(&raw);
+    let aligned = p.closure_alignment(&raw);
+    let frozen = p.frozen_shots(&aligned);
+    let field = p.distance_field(&raw, None, false);
+    let elapsed = started.elapsed();
+    assert_eq!(metrics.len(), 350);
+    // Batch closures are not rigid: nothing is frozen.
+    assert!(frozen.is_empty());
+    assert!(field.max_reachable() > 0.0);
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "derived views took {elapsed:?}"
+    );
+}

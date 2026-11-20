@@ -222,7 +222,7 @@ impl Project {
     }
 
     /// Visit every shot, lines in id order, shots in chain order.
-    pub(crate) fn for_each_shot_edge(&self, mut visit: impl FnMut(ShotEdge<'_>)) {
+    pub(crate) fn for_each_shot_edge<'a>(&'a self, mut visit: impl FnMut(ShotEdge<'a>)) {
         let topology = self.topology();
         for position in self.line_positions_by_id() {
             let line = &self.lines()[position];

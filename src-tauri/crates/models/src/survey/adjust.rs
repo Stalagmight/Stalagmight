@@ -44,7 +44,7 @@ use crate::{
 };
 
 use super::closures::{find, ClosureAcrossOneShot};
-use super::graph::StationPositions;
+use super::graph::{ShotEdge, StationPositions};
 use super::lsq::solve_reduced_laplacian;
 use super::{Anchor, Project, RawPositions, SlotPosition};
 
@@ -209,7 +209,9 @@ struct Fix {
 }
 
 /// What one component's solve needs.
-struct SolveInput {
+struct SolveInput<'a> {
+    /// The component's shots, lines in id order.
+    shots: Vec<ShotEdge<'a>>,
     /// Dense stations, ascending.
     stations: Vec<usize>,
     /// Dense end pairs of the closures the solve ties, list order.
@@ -320,7 +322,7 @@ impl Project {
         aligned: &[bool],
         skipped: &[ClosureAcrossOneShot],
         roles: &[Option<DatumRole>],
-    ) -> Vec<(SolveInput, Vec<LineId>, StationRef)> {
+    ) -> Vec<(SolveInput<'_>, Vec<LineId>, StationRef)> {
         let topology = self.topology();
         let components = topology.components();
         let anchors = raw.anchors();
@@ -384,125 +386,143 @@ impl Project {
             .collect();
         order.sort_by_key(|&s| (first_line[s], s));
 
+        // Bucket everything by solve component in one pass each, so the cost
+        // stays linear however many components are solved.
+        let mut index_of = vec![usize::MAX; components.len()];
+        for (k, &s) in order.iter().enumerate() {
+            index_of[s] = k;
+        }
+        let bucket = |station: StationId| -> Option<usize> {
+            let k = index_of[solve_of_station(station)?];
+            (k != usize::MAX).then_some(k)
+        };
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); order.len()];
+        for c in 0..components.len() {
+            let k = index_of[solve_of[c]];
+            if k != usize::MAX {
+                members[k].push(c);
+            }
+        }
+        let mut ties: Vec<Vec<(usize, usize)>> = vec![Vec::new(); order.len()];
+        let mut adjusted: Vec<Vec<usize>> = vec![Vec::new(); order.len()];
+        for (i, c) in self.closures.iter().enumerate() {
+            if skipped_mask[i] {
+                continue;
+            }
+            let (Some(a), Some(b)) = (topology.dense(c.a), topology.dense(c.b)) else {
+                continue;
+            };
+            let (Some(k), Some(kb)) = (bucket(c.a), bucket(c.b)) else {
+                continue;
+            };
+            if k != kb {
+                continue;
+            }
+            if Self::closure_ties_in_solve(c, aligned.get(i).copied().unwrap_or(false)) {
+                ties[k].push((a, b));
+            }
+            if Self::closure_is_eligible(c.strategy) {
+                adjusted[k].push(i);
+            }
+        }
         let frame = self
             .frame_datum()
             .and_then(|f| self.datums.get(f))
             .map(|d| d.gps);
-        order
+        let mut shots: Vec<Vec<ShotEdge<'_>>> = vec![Vec::new(); order.len()];
+        self.for_each_shot_edge(|edge| {
+            if let Some(k) = bucket(edge.from_station) {
+                shots[k].push(edge);
+            }
+        });
+        let mut fixes: Vec<Vec<Fix>> = vec![Vec::new(); order.len()];
+        if let Some(frame) = frame {
+            for (d, role) in self.datums.iter().zip(roles) {
+                if *role != Some(DatumRole::GpsFix) {
+                    continue;
+                }
+                let (Some(k), Some(station)) = (bucket(d.station), topology.dense(d.station))
+                else {
+                    continue;
+                };
+                let (east, north) = gps_to_local(&d.gps, &frame);
+                // A GPS that is no position is no observation (today).
+                if !east.is_finite() || !north.is_finite() {
+                    continue;
+                }
+                let accuracy = match d.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M) {
+                    a if a.is_finite() && a >= 0.0 => a,
+                    _ => DEFAULT_GPS_ACCURACY_M,
+                };
+                let weight = (accuracy >= HARD_FIX_ACCURACY_M).then(|| 1.0 / (accuracy * accuracy));
+                fixes[k].push(Fix {
+                    station,
+                    east,
+                    north,
+                    weight,
+                });
+            }
+        }
+
+        let mut out = Vec::with_capacity(order.len());
+        for (k, (((members, ties), (adjusted, fixes)), shots)) in members
             .into_iter()
-            .map(|s| {
-                let members: Vec<usize> = (0..components.len())
-                    .filter(|&c| solve_of[c] == s)
-                    .collect();
-                let mut stations: Vec<usize> = Vec::new();
-                let mut lines: Vec<LineId> = Vec::new();
-                for &c in &members {
-                    stations.extend(
-                        components[c]
-                            .stations
-                            .iter()
-                            .filter_map(|&st| topology.dense(st)),
-                    );
-                    lines.extend(components[c].lines.iter().copied());
-                }
-                stations.sort_unstable();
-                lines.sort_unstable();
-                lines.dedup();
-                let ties: Vec<(usize, usize)> = self
-                    .closures
-                    .iter()
-                    .enumerate()
-                    .filter(|&(i, c)| {
-                        !skipped_mask[i]
-                            && Self::closure_ties_in_solve(
-                                c,
-                                aligned.get(i).copied().unwrap_or(false),
-                            )
-                    })
-                    .filter_map(|(_, c)| {
-                        let (a, b) = (topology.dense(c.a)?, topology.dense(c.b)?);
-                        (solve_of_station(c.a) == Some(s) && solve_of_station(c.b) == Some(s))
-                            .then_some((a, b))
-                    })
-                    .collect();
-                // The anchor: the component whose placement datum is first in
-                // list order, else the (single) placement station.
-                let anchor_component = members
-                    .iter()
-                    .copied()
-                    .min_by_key(|&c| (anchors[c].datum().unwrap_or(usize::MAX), c))
-                    .unwrap_or(s);
-                let anchor_station = anchors[anchor_component].station();
-                let anchor_slot = match anchors[anchor_component] {
-                    Anchor::Datum { datum, .. } => {
-                        self.datums.get(datum).and_then(|d| self.datum_slot(d))
-                    }
-                    _ => topology.first_slot(anchor_station),
-                }
-                .or_else(|| topology.first_slot(anchor_station))
-                .unwrap_or(StationRef::new(0, 0));
-                let mut placement: Vec<(usize, usize)> = members
-                    .iter()
-                    .filter_map(|&c| {
-                        let d = anchors[c].datum()?;
-                        Some((d, topology.dense(self.datums[d].station)?))
-                    })
-                    .collect();
-                placement.sort_unstable();
-                let fixes: Vec<Fix> = match frame {
-                    None => Vec::new(),
-                    Some(frame) => self
-                        .datums
+            .zip(ties)
+            .zip(adjusted.into_iter().zip(fixes))
+            .zip(shots)
+            .enumerate()
+        {
+            let s = order[k];
+            let mut stations: Vec<usize> = Vec::new();
+            let mut lines: Vec<LineId> = Vec::new();
+            for &c in &members {
+                stations.extend(
+                    components[c]
+                        .stations
                         .iter()
-                        .zip(roles)
-                        .filter(|(d, role)| {
-                            **role == Some(DatumRole::GpsFix)
-                                && solve_of_station(d.station) == Some(s)
-                        })
-                        .filter_map(|(d, _)| {
-                            let station = topology.dense(d.station)?;
-                            let (east, north) = gps_to_local(&d.gps, &frame);
-                            if !east.is_finite() || !north.is_finite() {
-                                return None;
-                            }
-                            let accuracy = match d.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M) {
-                                a if a.is_finite() && a >= 0.0 => a,
-                                _ => DEFAULT_GPS_ACCURACY_M,
-                            };
-                            let weight = (accuracy >= HARD_FIX_ACCURACY_M)
-                                .then(|| 1.0 / (accuracy * accuracy));
-                            Some(Fix {
-                                station,
-                                east,
-                                north,
-                                weight,
-                            })
-                        })
-                        .collect(),
-                };
-                let adjusted: Vec<usize> = self
-                    .closures
-                    .iter()
-                    .enumerate()
-                    .filter(|&(i, c)| {
-                        !skipped_mask[i]
-                            && Self::closure_is_eligible(c.strategy)
-                            && solve_of_station(c.a) == Some(s)
-                            && solve_of_station(c.b) == Some(s)
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                let input = SolveInput {
-                    adjusted,
-                    stations,
-                    ties,
-                    placement: placement.into_iter().map(|(_, d)| d).collect(),
-                    fixes,
-                    anchor: topology.dense(anchor_station).unwrap_or(0),
-                };
-                (input, lines, anchor_slot)
-            })
-            .collect()
+                        .filter_map(|&st| topology.dense(st)),
+                );
+                lines.extend(components[c].lines.iter().copied());
+            }
+            stations.sort_unstable();
+            lines.sort_unstable();
+            lines.dedup();
+            // The anchor: the component whose placement datum is first in list
+            // order, else the (single) placement station.
+            let anchor_component = members
+                .iter()
+                .copied()
+                .min_by_key(|&c| (anchors[c].datum().unwrap_or(usize::MAX), c))
+                .unwrap_or(s);
+            let anchor_station = anchors[anchor_component].station();
+            let anchor_slot = match anchors[anchor_component] {
+                Anchor::Datum { datum, .. } => {
+                    self.datums.get(datum).and_then(|d| self.datum_slot(d))
+                }
+                _ => topology.first_slot(anchor_station),
+            }
+            .or_else(|| topology.first_slot(anchor_station))
+            .unwrap_or(StationRef::new(0, 0));
+            let mut placement: Vec<(usize, usize)> = members
+                .iter()
+                .filter_map(|&c| {
+                    let d = anchors[c].datum()?;
+                    Some((d, topology.dense(self.datums[d].station)?))
+                })
+                .collect();
+            placement.sort_unstable();
+            let input = SolveInput {
+                shots,
+                adjusted,
+                stations,
+                ties,
+                placement: placement.into_iter().map(|(_, d)| d).collect(),
+                fixes,
+                anchor: topology.dense(anchor_station).unwrap_or(0),
+            };
+            out.push((input, lines, anchor_slot));
+        }
+        out
     }
 
     /// Depth in the view: today's solve stamps every closure it adjusted as
@@ -580,7 +600,7 @@ impl Project {
     fn solve_component(
         &self,
         raw_xy: &[[f64; 2]],
-        input: &SolveInput,
+        input: &SolveInput<'_>,
         config: &ClosureAdjustmentConfig,
     ) -> Result<Vec<[f64; 2]>, AdjustError> {
         let m = input.stations.len();
@@ -639,9 +659,9 @@ impl Project {
         let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
         let mut shot_nbrs: Vec<Vec<usize>> = vec![Vec::new(); m];
         let mut degree_nbrs: Vec<Vec<usize>> = vec![Vec::new(); m];
-        self.for_each_shot_edge(|edge| {
+        for &edge in &input.shots {
             let (Some(li), Some(lj)) = (local(edge.from), local(edge.to)) else {
-                return;
+                continue;
             };
             shot_nbrs[li].push(lj);
             shot_nbrs[lj].push(li);
@@ -649,7 +669,7 @@ impl Project {
             degree_nbrs[lj].push(li);
             let (root_i, root_j) = (group[li], group[lj]);
             if root_i == root_j {
-                return;
+                continue;
             }
             let line = edge.line;
             let shot = &line.shots[edge.index];
@@ -719,7 +739,7 @@ impl Project {
                 accumulate(&mut adj[ii], jj, w_x, w_y);
                 accumulate(&mut adj[jj], ii, w_x, w_y);
             }
-        });
+        }
         for &(a, b) in &input.ties {
             if let (Some(la), Some(lb)) = (local(a), local(b)) {
                 degree_nbrs[la].push(lb);
