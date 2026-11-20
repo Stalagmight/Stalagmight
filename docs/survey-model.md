@@ -330,8 +330,8 @@ undo(&mut project, &entry.changes)?;           // Err: refused, project untouche
   that differ are diffed shot by shot), datums, placements, closures,
   Sections, import hashes, counters. `modified_at` and `file_path` are not
   recorded: the command layer stamps the edit time, and a step never
-  touches it. Cost on the 20,000-shot gate survey: a few milliseconds in a
-  debug build.
+  touches it. Cost on the 20,000-shot gate survey: about 2 ms in a release
+  build (undo and redo 0.01-0.4 ms), measured by the size gate.
 - **Preconditions.** A step refuses (`Refusal`, with what differs) and
   leaves the project untouched unless the live project is the recorded
   source state on everything the changeset touches: every recorded field
@@ -425,7 +425,7 @@ counted), and the elements each list gained and lost.
 | File | Covers |
 |---|---|
 | `changeset/changeset_tests.rs` | What a capture records per edit kind (cell edit, reverse of 1 to 40 shots with and without the L/R swap, split and combine as runs, deleted line, merge and detach, closures and datums, credits interned, `-0.0`), counters, session ids in the session and after a reload, refusals and their text, the list diff (random lists both ways, far-apart edits stay apart). |
-| `changeset/property_tests.rs` | 48 seeds x 70 random survey operations (every M1/M2 command plus the direct edits: names, comments, credits, Sections, settings, hashes, Add): undo all and redo all land on every state to the bit, in the session (session ids exact) and persisted; at every depth and both directions, a project changed behind the engine's back is refused and untouched; steps out of order refuse. |
+| `changeset/property_tests.rs` | 48 seeds x 70 random survey operations (every M1/M2 command plus the direct edits: names, comments, `external` ids, credits, Sections, settings, location, azimuth references, legacy hand moves, import hashes, Add): undo all and redo all land on every state to the bit, in the session (session ids exact) and persisted; at every depth and both directions, a project changed behind the engine's back is refused and untouched; steps out of order refuse. |
 | `changeset/entry_tests.rs` | Entries are canonical fixpoints; versions and unknown members refused; truncation at every byte and byte flips at every offset never panic (a flipped entry that decodes steps or refuses, never panics, never half-applies); garbage, depth bombs, oversized entries; the shape rules one by one; large hostile entries decode in linear time; non-finite numbers refused on write. |
 | persistence `history_size_gate_tests.rs` | The size gates on the v2 file (see `docs/undo-redo.md`). |
 | persistence `history_v2_property_tests.rs` | 32 seeds: identical v2 bytes at every depth; a history that rides the file's `history` member and undoes from the decoded project. |

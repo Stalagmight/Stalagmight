@@ -849,7 +849,7 @@ impl Walk {
 
     /// Credits, Sections, settings and import hashes (direct edits).
     fn direct_edit(&mut self, n: usize) -> (&'static str, bool) {
-        match self.rng.below(5) {
+        match self.rng.below(8) {
             0 => {
                 let Some(line) = self.line() else {
                     return ("skip", false);
@@ -902,8 +902,68 @@ impl Walk {
                 self.project.name = format!("Walk {n}");
                 ("settings", true)
             }
+            4 => {
+                // An azimuth reference: on a line (a geometry edit), or the
+                // project default with the location.
+                if self.rng.chance(0.5) {
+                    let Some(line) = self.line() else {
+                        return ("skip", false);
+                    };
+                    let reference = self.rng.chance(0.7).then(|| {
+                        crate::AzimuthReference::magnetic(
+                            self.rng.unit() * 10.0 - 5.0,
+                            crate::CorrectionSource::Manual,
+                        )
+                    });
+                    let ok = self
+                        .project
+                        .set_line_azimuth_reference(line, reference)
+                        .is_ok();
+                    ("azimuth reference", ok)
+                } else {
+                    self.project.settings.default_azimuth_reference = Some(
+                        crate::AzimuthReference::true_north(crate::CorrectionSource::FileDeclared),
+                    );
+                    self.project.location = Some(format!("Site {n}"));
+                    ("azimuth reference", true)
+                }
+            }
+            5 => {
+                // A legacy hand move (only migrated files carry them).
+                let Some(line) = self.line() else {
+                    return ("skip", false);
+                };
+                let chain = self
+                    .project
+                    .line_stations(line)
+                    .unwrap_or_default()
+                    .to_vec();
+                let Some(at) = self.rng.pick(&chain) else {
+                    return ("skip", false);
+                };
+                let hand = [self.rng.unit() - 0.5, self.awkward(0.25), -0.0];
+                if let Some(l) = self.project.line_mut(line) {
+                    l.hand_moves.insert(at, hand);
+                }
+                ("hand move", true)
+            }
+            6 => {
+                // An importer's station identity.
+                let Some(id) = self.station() else {
+                    return ("skip", false);
+                };
+                if let Some(s) = self.project.station_mut(id) {
+                    s.external = Some(format!("EXT{n}"));
+                }
+                ("external id", true)
+            }
             _ => {
                 self.project.imported_line_hashes.push(format!("hash-{n}"));
+                if self.rng.chance(0.5) {
+                    self.project
+                        .imported_file_hashes
+                        .insert(0, format!("file-{n}"));
+                }
                 ("import hash", true)
             }
         }

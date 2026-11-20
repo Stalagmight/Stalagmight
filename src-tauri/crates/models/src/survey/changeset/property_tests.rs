@@ -62,6 +62,10 @@ fn undo_all_and_redo_all_land_on_every_recorded_state_to_the_bit() {
         "rename station",
         "credit",
         "append",
+        "azimuth reference",
+        "hand move",
+        "external id",
+        "import hash",
     ] {
         assert!(
             ops.get(op).copied().unwrap_or(0) >= 3,
