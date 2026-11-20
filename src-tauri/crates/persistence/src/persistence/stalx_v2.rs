@@ -156,6 +156,7 @@ pub use summary::Summary;
 pub use types::{
     CountLimits, DecodeNote, DecodeOptions, Decoded, Extras, History, IgnoredWarning, Limit,
     LocalState, LocalSync, Mode, Preserved, PushOptions, RawJson, ReadOnly, SpeleoDbLink,
+    MAX_PROJECT_FILE_BYTES, MAX_V2_FILE_BYTES,
 };
 /// The format's date rule (0001-01-01 ..= 9999-12-31, F10), which the
 /// migration applies so a migrated model is what its file will hold.

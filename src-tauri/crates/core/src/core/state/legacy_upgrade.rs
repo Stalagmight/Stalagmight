@@ -43,8 +43,8 @@ use std::path::{Path, PathBuf};
 
 use crate::persistence::legacy_settle;
 use crate::persistence::stalx_v2::{
-    self, check_unchanged, write_atomic, DecodeOptions, Fingerprint, Format, Guard, Stage,
-    WriteError,
+    self, check_unchanged, write_atomic, Fingerprint, Format, Guard, Stage, WriteError,
+    MAX_PROJECT_FILE_BYTES,
 };
 
 use super::project_restore::sync_dir;
@@ -122,7 +122,7 @@ pub(super) fn upgrade(
     guard: Guard<'_>,
 ) -> Result<Fingerprint, UpgradeFailure> {
     // 1. What is there, checked against the guard before anything is written.
-    let current = match Fingerprint::read(original, DecodeOptions::default().max_file_bytes) {
+    let current = match Fingerprint::read(original, MAX_PROJECT_FILE_BYTES) {
         Ok(read) => Some(read),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {

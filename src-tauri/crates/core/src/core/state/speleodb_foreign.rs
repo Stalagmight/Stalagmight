@@ -36,7 +36,7 @@ use super::AppState;
 use crate::core::loading::SpeleoManagedFile;
 use crate::models::SpeleoLink;
 use crate::persistence::stalx_v2::{
-    self, write_atomic, DecodeOptions, Fingerprint, Format, Guard, Mode,
+    self, write_atomic, DecodeOptions, Fingerprint, Format, Guard, Mode, MAX_PROJECT_FILE_BYTES,
 };
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
@@ -210,7 +210,7 @@ fn read_for_strip(
     validation: &crate::models::config::ValidationConfig,
 ) -> Result<(Option<SpeleoLink>, Strip, Fingerprint), String> {
     let options = DecodeOptions::default();
-    let (bytes, fingerprint) = Fingerprint::read(path, options.max_file_bytes)
+    let (bytes, fingerprint) = Fingerprint::read(path, MAX_PROJECT_FILE_BYTES)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     match stalx_v2::sniff(&bytes) {
         Format::V2 => {

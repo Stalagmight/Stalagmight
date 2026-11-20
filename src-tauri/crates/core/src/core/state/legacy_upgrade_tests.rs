@@ -1222,3 +1222,37 @@ fn a_recents_rename_of_a_hot_original_keeps_its_survey() {
         forget_backups(&stem);
     }
 }
+
+/// A 0.6.0 file over the version 2 decoder's 256 MiB cap opens and upgrades,
+/// as it opened in 0.6.0 (review finding D-migration-upgrade-2): the read
+/// before the format sniff is capped at the frozen reader's 1 GiB, and only a
+/// version 2 file meets the decoder's own cap. The file's size is free pages
+/// a dropped table left behind, which a 0.6.0 file that was never vacuumed
+/// carries.
+#[test]
+fn a_legacy_file_over_the_version_2_cap_still_opens_and_upgrades() {
+    let _config = isolated_config();
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let stem = unique_stem("oversized");
+    let path = dir.path().join(format!("{stem}.stalx"));
+    write_legacy(&path, &mut Rng::new(7), "Legacy");
+    let pad = stalx_v2::MAX_V2_FILE_BYTES + 4 * 1024 * 1024;
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE pad(b); INSERT INTO pad VALUES (zeroblob({pad})); DROP TABLE pad;"
+        ))
+        .unwrap();
+    }
+    assert!(std::fs::metadata(&path).unwrap().len() > stalx_v2::MAX_V2_FILE_BYTES);
+    let state = AppState::new().unwrap();
+    let opened = state.execute(crate::core::Command::OpenProject { path: path.clone() });
+    assert!(opened.success, "the open: {:?}", opened.error);
+    let saved = state.save_project(None);
+    assert!(saved.success, "the upgrading save: {:?}", saved.error);
+    drop(state);
+    assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
+    assert!(open_fresh(&path).is_some(), "the upgraded file reopens");
+    forget_backups(&stem);
+}

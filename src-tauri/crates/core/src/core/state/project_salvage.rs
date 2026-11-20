@@ -34,8 +34,8 @@ use super::project_restore::name;
 use super::AppState;
 use crate::models::survey::Project;
 use crate::persistence::stalx_v2::{
-    self, decode_salvage, encode, write_atomic, DecodeOptions, Extras, Fingerprint, Format, Guard,
-    History, Mode, SalvageReport,
+    self, decode_salvage, encode, write_atomic, Extras, Fingerprint, Format, Guard, History, Mode,
+    SalvageReport, MAX_PROJECT_FILE_BYTES,
 };
 use crate::persistence::{recovery, RepairResult, SalvagedData};
 
@@ -57,7 +57,7 @@ impl AppState {
                 name(path)
             ));
         }
-        let (bytes, fingerprint) = Fingerprint::read(path, DecodeOptions::default().max_file_bytes)
+        let (bytes, fingerprint) = Fingerprint::read(path, MAX_PROJECT_FILE_BYTES)
             .map_err(|e| format!("Repair failed: {e}"))?;
         match stalx_v2::sniff(&bytes) {
             Format::V2 => repair_v2(path, &bytes, &fingerprint),

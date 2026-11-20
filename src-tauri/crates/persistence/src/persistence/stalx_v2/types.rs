@@ -378,6 +378,22 @@ impl fmt::Display for Limit {
     }
 }
 
+/// The version 2 decoder's default size cap ([`DecodeOptions::max_file_bytes`]).
+pub const MAX_V2_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The most bytes a project file is read into memory before its format is
+/// known: the larger of the version 2 decoder's cap and the frozen 0.6.0
+/// reader's (0.6.0 itself had no cap; the frozen reader allows 1 GiB). Each
+/// format's own cap still applies after the sniff, so a version 2 file over
+/// [`MAX_V2_FILE_BYTES`] is refused by the decoder, while a 0.6.0 file of the
+/// same size opens as it did in 0.6.0.
+pub const MAX_PROJECT_FILE_BYTES: u64 =
+    if stalagmight_legacy::DEFAULT_MAX_FILE_BYTES > MAX_V2_FILE_BYTES {
+        stalagmight_legacy::DEFAULT_MAX_FILE_BYTES
+    } else {
+        MAX_V2_FILE_BYTES
+    };
+
 /// Decode options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeOptions {
@@ -389,7 +405,7 @@ pub struct DecodeOptions {
 impl Default for DecodeOptions {
     fn default() -> Self {
         Self {
-            max_file_bytes: 256 * 1024 * 1024,
+            max_file_bytes: MAX_V2_FILE_BYTES,
             limits: CountLimits::default(),
         }
     }

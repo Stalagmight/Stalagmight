@@ -46,7 +46,10 @@ impl Fingerprint {
         let too_large = || {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("the file is over the {max_bytes}-byte limit"),
+                format!(
+                    "the file is larger than {} MiB, the most Stalagmight reads",
+                    max_bytes / (1024 * 1024)
+                ),
             )
         };
         if metadata.len() > max_bytes {

@@ -5,7 +5,7 @@ use crate::models::{GpsBounds, ProjectMetadata};
 use crate::persistence::migrate::legacy_header;
 use crate::persistence::stalx_v2::{
     self, decode, encode, probe_path, rename_project, sniff, write_atomic, DecodeOptions,
-    Fingerprint, Format, Guard, Header, History, Mode, Summary, WriteError,
+    Fingerprint, Format, Guard, Header, History, Mode, Summary, WriteError, MAX_PROJECT_FILE_BYTES,
 };
 
 use super::legacy_upgrade::{self, UpgradeError};
@@ -689,11 +689,10 @@ impl AppState {
 
     /// The closed file's half of [`Self::set_project_name_for_path`].
     fn rename_closed_project(&self, path: &Path, name: &str) -> CommandResult {
-        let (bytes, fingerprint) =
-            match Fingerprint::read(path, DecodeOptions::default().max_file_bytes) {
-                Ok(read) => read,
-                Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
-            };
+        let (bytes, fingerprint) = match Fingerprint::read(path, MAX_PROJECT_FILE_BYTES) {
+            Ok(read) => read,
+            Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
+        };
         match sniff(&bytes) {
             Format::V2 => {
                 let renamed = match rename_project(&bytes, name) {

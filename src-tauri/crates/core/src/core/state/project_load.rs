@@ -44,7 +44,7 @@ use crate::models::survey::changeset::EntryLimits;
 use crate::models::survey::Project;
 use crate::persistence::migrate::{LegacyError, MigrateError};
 use crate::persistence::stalx_v2::{
-    decode, sniff, DecodeError, DecodeOptions, Fingerprint, Format, History,
+    decode, sniff, DecodeError, DecodeOptions, Fingerprint, Format, History, MAX_PROJECT_FILE_BYTES,
 };
 use crate::speleodb::SpeleoDbError;
 
@@ -173,7 +173,7 @@ impl AppState {
     pub(crate) fn read_project_file(&self, path: &Path) -> Result<Opened, LoadError> {
         let options = DecodeOptions::default();
         let (bytes, fingerprint) =
-            Fingerprint::read(path, options.max_file_bytes).map_err(|e| match e.kind() {
+            Fingerprint::read(path, MAX_PROJECT_FILE_BYTES).map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => LoadError::not_found(&path_text(path)),
                 std::io::ErrorKind::PermissionDenied => {
                     LoadError::permission(e.to_string(), &path_text(path))
