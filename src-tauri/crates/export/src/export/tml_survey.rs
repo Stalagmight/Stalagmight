@@ -14,7 +14,8 @@
 //!   the station its datum stands on (station 0 without one).
 //! - **Edges oriented away from the entrance.** Lines are visited breadth first
 //!   from each component's root through their junctions (neighbours by line
-//!   id, then chain index); each line is walked once, outwards from the
+//!   id, then chain index; each station is expanded once, so the walk is
+//!   linear in the slots at any hub); each line is walked once, outwards from the
 //!   station it was reached at: its shots after that station forward, the
 //!   ones before it reversed (`"<line> (reversed)"`, or `"(pre-zero-datum)"`
 //!   on an entrance), exactly 0.6.0's blocks and row order.
