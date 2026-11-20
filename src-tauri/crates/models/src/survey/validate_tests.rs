@@ -785,3 +785,113 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
     }
     assert!(reported > 200, "most corruptions are reported: {reported}");
 }
+
+/// Review finding B-derived-solver-3: a valid file could hold finite but
+/// absurd numbers (a shot of 1e200 m), which the layout summed to infinity
+/// and the solver turned into NaN. A distance is now bounded by
+/// `MAX_MEASUREMENT_M` and a stored coordinate by `MAX_COORDINATE_M`; the
+/// bound itself is valid.
+#[test]
+fn distances_and_coordinates_past_their_bound_are_reported() {
+    use super::{MAX_COORDINATE_M, MAX_MEASUREMENT_M};
+    let (mut p, _) = three_line_junction();
+    p.line_mut(0).unwrap().shots[0].length = MAX_MEASUREMENT_M;
+    p.line_mut(0).unwrap().shots[2].depth_out = -MAX_MEASUREMENT_M;
+    p.placements[0].x = MAX_COORDINATE_M;
+    assert_eq!(p.validate(), Vec::new(), "the bound itself is valid");
+
+    p.line_mut(0).unwrap().shots[1].length = 1e200;
+    p.line_mut(1).unwrap().shots[0].down = Some(-1.000_001e6);
+    p.line_mut(0).unwrap().shots[2].azimuth_in = 1e200; // an angle: unbounded
+    p.line_mut(2).unwrap().hand_moves.insert(3, [0.0, 2e8, 0.0]);
+    p.placements[0].y = -1e300;
+    let violations = p.validate();
+    let out: Vec<(NumberField, f64)> = violations
+        .iter()
+        .filter_map(|v| match v {
+            Violation::OutOfBounds { field, bound, .. } => Some((field.clone(), *bound)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(out.len(), violations.len(), "only bounds: {violations:?}");
+    assert_eq!(
+        out,
+        vec![
+            (
+                NumberField::Shot {
+                    line: 0,
+                    index: 1,
+                    field: "length"
+                },
+                MAX_MEASUREMENT_M
+            ),
+            (
+                NumberField::Shot {
+                    line: 1,
+                    index: 0,
+                    field: "down"
+                },
+                MAX_MEASUREMENT_M
+            ),
+            (
+                NumberField::HandMove {
+                    line: 2,
+                    station: 3,
+                    axis: 1
+                },
+                MAX_COORDINATE_M
+            ),
+            (
+                NumberField::Placement {
+                    placement: 0,
+                    axis: 1
+                },
+                MAX_COORDINATE_M
+            ),
+        ]
+    );
+    let mut datum = ZeroDatum::new(0, gps(10.0, 10.0));
+    datum.correction = Some([0.0, 1e9]);
+    p.placements.clear();
+    p.datums.push(datum);
+    assert!(p.validate().iter().any(|v| matches!(
+        v,
+        Violation::OutOfBounds {
+            field: NumberField::DatumCorrection { datum: 0, axis: 1 },
+            ..
+        }
+    )));
+}
+
+/// Within the bounds every derived position is finite: the longest line of
+/// the longest shots, depths swinging between the two bounds, placed at the
+/// coordinate bound, with a closure the solver adjusts.
+#[test]
+fn every_derived_position_is_finite_within_the_bounds() {
+    use super::{MAX_COORDINATE_M, MAX_MEASUREMENT_M};
+    let mut p = project();
+    let shots = (0..2_000)
+        .map(|i| {
+            let (a, b) = if i % 2 == 0 { (-1.0, 1.0) } else { (1.0, -1.0) };
+            super::test_helpers::shot(
+                f64::from(i % 360),
+                MAX_MEASUREMENT_M,
+                a * MAX_MEASUREMENT_M,
+                b * MAX_MEASUREMENT_M,
+            )
+        })
+        .collect();
+    let l = add(&mut p, StartAt::New, shots);
+    let s0 = at(&p, l, 0);
+    p.set_placement(s0, MAX_COORDINATE_M, -MAX_COORDINATE_M)
+        .unwrap();
+    let end = at(&p, l, 2_000);
+    p.push_closure(s0, Some(l), end, Some(l), ClosureStrategy::Batch);
+    assert_eq!(p.validate(), Vec::new());
+    let raw = p.raw_positions();
+    assert!(raw.iter().all(|(_, c)| c.iter().all(|v| v.is_finite())));
+    let adjusted = p.adjusted_positions(&crate::config::ClosureAdjustmentConfig::default());
+    assert!(adjusted
+        .iter()
+        .all(|(_, c)| c.iter().all(|v| v.is_finite())));
+}

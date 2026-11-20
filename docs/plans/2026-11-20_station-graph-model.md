@@ -242,7 +242,7 @@ Notes:
 7. Closures: `a != b`. A closure's ends may be in different components only if both components hold a datum (today's rule). "Across one shot" is NOT an invariant: it is refused at creation (#737) and otherwise derived as a skip set (today's knot rule over closures in list order, transitive through other closures and snaps) plus the `CLOSURE_ACROSS_ONE_SHOT` warning, exactly as today (old files, Combine, promotions and Add can produce such closures).
 8. Station names: unique within each line, across all stations on that line (5.3).
 9. Stored counters are above every id in use (monotonic, never reused). `next_line_id` is derived on load (max + 1).
-10. Numbers finite.
+10. Numbers finite; distances and stored coordinates within their bounds (Deviation F14).
 
 `validate` returns typed violations. The writer runs it before every save and refuses to write an invalid model (the in-memory state is kept). Load refuses a file with any violation unless opened through salvage (6.6). Commands roll back if they would introduce one (as the integrity guard does today). `validate` may only become stricter together with a format feature (`requires`) and a migration.
 
@@ -749,6 +749,7 @@ The full format is `docs/file-format.md`.
 - **F11. Bounds the format needed and the model lacked:** at most 99,999 shots per line (session shot ids), alias ids below 2^31, station and Section counters at most 2^31. Resolved at integration: they are invariants (`validate`: `TooManyShots`, `AliasOutOfRange`, `CounterOutOfRange`; `MAX_SHOTS_PER_LINE` is the model's), the decoder and the encoder refuse through `validate` (`DecodeError::Invalid`, `EncodeError::Invalid`; `Limit::ShotsPerLine` and `EncodeError::OutOfRange` are gone), and salvage drops an out-of-range alias and lowers an out-of-range counter to its bound (`Repair::LoweredCounter`); a line over the cap stays refused.
 - **F12. `rename_project` is implemented here** (plan 6.5 Recents rename).
 - **F13. `probe` on a legacy file returns only `Format::Legacy`**; the legacy header (metadata) comes from the legacy reader.
+- **F14. Magnitude bounds (review finding B-derived-solver-3).** Invariant 10 required finite numbers only, so a file with a shot of 1e200 m was valid: the raw layout summed it to infinity, the Computed View was NaN with no reported failure, and the JSON wire sent `null` coordinates (the binary envelope NaN). `validate` now also bounds a distance (a shot's length, depths and passage dimensions) at `MAX_MEASUREMENT_M` = 1,000,000 m and a stored coordinate (placement, datum correction, hand move) at `MAX_COORDINATE_M` = 100,000,000 m (`Violation::OutOfBounds`); within them every derived position is finite (`every_derived_position_is_finite_within_the_bounds`). The decoder refuses past them like any invalid file and salvage does not guess (the file stays refused); the shot doors (create, update, create line, the shot-run batch) refuse in words first; the migration clamps a 0.6.0 reading to the bound with its sign and counts it in `numbers_sanitized` (0.6.0 laid it out at infinity), and drops a hand move or legacy anchor position past the coordinate bound as it dropped a non-finite one. Stricter than section 2's "only with a format feature" rule allows, because no version 2 file has been released.
 
 ## Deviations (stream G, migration)
 

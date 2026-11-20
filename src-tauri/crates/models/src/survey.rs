@@ -251,7 +251,9 @@ pub use types::{
     ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, ProjectSettings,
     Shot, Station, StationAlias, ZeroDatum, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS,
 };
-pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
+pub use validate::{
+    ClosureEnd, CounterKind, NumberField, Violation, MAX_COORDINATE_M, MAX_MEASUREMENT_M,
+};
 
 pub use append::{AppendSummary, ShotUuidRename};
 pub use changeset::{Changeset, HistoryEntry, Refusal};

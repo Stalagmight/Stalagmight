@@ -148,6 +148,48 @@ fn non_finite_literals_are_refused() {
     }
 }
 
+/// Review finding B-derived-solver-3: a finite but absurd distance (the
+/// documented example's first shot at 1e200 m) made a valid file whose raw
+/// layout summed to infinity and whose Computed View was NaN. Version 2
+/// bounds a distance at `MAX_MEASUREMENT_M`: past it the file is invalid
+/// (refused with the repair offer, which does not guess at it), at it the
+/// file opens and every derived position is finite.
+#[test]
+fn a_finite_but_absurd_distance_is_refused() {
+    let (p, extras) = super::format_v2_doc_tests::example();
+    let original = String::from_utf8(encode(&p, &extras, Mode::Normal).unwrap()).unwrap();
+    let uuid = "\"5f0c2a1e-0000-4000-8000-000000000001\",1,";
+    let row = format!("{uuid}12.5,90.0,90.0,");
+    assert!(original.contains(&row));
+    for length in [
+        "1e200",
+        "-1e200",
+        "1000000.000001",
+        "1.7976931348623157e308",
+    ] {
+        let text = original.replacen(&row, &format!("{uuid}{length},0.0,0.0,"), 1);
+        match open(&text) {
+            Err(DecodeError::Invalid { violations }) => assert!(
+                violations
+                    .iter()
+                    .any(|v| matches!(v, Violation::OutOfBounds { .. })),
+                "{length}: {violations:?}"
+            ),
+            other => panic!("{length}: {other:?}"),
+        }
+    }
+    let text = original.replacen(&row, &format!("{uuid}1000000.0,0.0,0.0,"), 1);
+    let decoded = open(&text).unwrap();
+    let raw = decoded.project.raw_positions();
+    assert!(raw.iter().all(|(_, c)| c.iter().all(|v| v.is_finite())));
+    let adjusted = decoded
+        .project
+        .adjusted_positions(&crate::models::config::ClosureAdjustmentConfig::default());
+    assert!(adjusted
+        .iter()
+        .all(|(_, c)| c.iter().all(|v| v.is_finite())));
+}
+
 #[test]
 fn duplicate_keys_are_refused() {
     let base = small_text(4);

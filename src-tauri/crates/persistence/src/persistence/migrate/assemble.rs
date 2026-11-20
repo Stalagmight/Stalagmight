@@ -8,7 +8,7 @@ use stalagmight_legacy::models::{self as old, ComponentHold};
 use stalagmight_legacy::{LegacySurvey, Slot};
 
 use crate::models::survey::{
-    ClosureId, ClosureStrategy, Line, LoopClosure, Placement, Project, ZeroDatum,
+    ClosureId, ClosureStrategy, Line, LoopClosure, Placement, Project, ZeroDatum, MAX_COORDINATE_M,
     MAX_SHOT_UUID_CHARS,
 };
 use crate::models::{LineId, StationId, MAX_LINE_ID, MAX_SECTION_ID};
@@ -107,7 +107,8 @@ pub(super) fn build(
     report.station_keys_dangling += hand.dangling;
     report.station_keys_duplicate += hand.duplicates;
     for (dense, (dx, dy, dz)) in hand.by_slot {
-        if !(dx.is_finite() && dy.is_finite() && dz.is_finite()) {
+        // Version 2 bounds a stored coordinate (B-derived-solver-3).
+        if ![dx, dy, dz].iter().all(|v| v.abs() <= MAX_COORDINATE_M) {
             report.numbers_sanitized += 1;
             continue;
         }
@@ -440,13 +441,14 @@ fn build_anchors(
     let topology = project.topology_arc();
     let placement_datums = project.placement_datums();
     // A legacy position that is not finite (a corrupt reading the old build
-    // drew as NaN) cannot anchor anything: the origin stands in.
+    // drew as NaN), or past the coordinate bound version 2 keeps
+    // (B-derived-solver-3), cannot anchor anything: the origin stands in.
     let legacy_xy = |dense: usize| {
         legacy
             .raw_positions
             .get(&slots.slot(dense))
             .map(|p| [p[0], p[1]])
-            .filter(|p| p[0].is_finite() && p[1].is_finite())
+            .filter(|p| p[0].abs() <= MAX_COORDINATE_M && p[1].abs() <= MAX_COORDINATE_M)
             .unwrap_or([0.0, 0.0])
     };
     let dense_of = |sr: old::StationRef| slots.dense(Slot::from(sr));
@@ -468,7 +470,7 @@ fn build_anchors(
             let dense = datum_slots[d];
             let correction = project
                 .correction_to_hold(d, legacy_xy(dense))
-                .filter(|c| c[0].is_finite() && c[1].is_finite());
+                .filter(|c| c[0].abs() <= MAX_COORDINATE_M && c[1].abs() <= MAX_COORDINATE_M);
             if correction.is_some() {
                 report.corrections_stored += 1;
             }

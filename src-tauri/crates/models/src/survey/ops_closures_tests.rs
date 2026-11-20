@@ -416,10 +416,10 @@ fn closure_order_decides_the_skip_set() {
         .closure;
     // A second closure from s0 to s3: Create refuses it (across one shot
     // once the first is joined), so it is planted as a file could hold it.
-    let mut second = first.clone();
+    let mut second = first;
     second.id = first.id + 1;
     second.b = s3;
-    p.closures.push(second.clone());
+    p.closures.push(second);
     p.counters.next_closure_id = second.id + 1;
     assert_valid(&p);
     let mut q = p.clone();
@@ -466,8 +466,16 @@ fn adjusted_depth_co_locates_the_ends_of_an_adjusted_closure() {
     let adjusted = p.adjusted_positions(&crate::config::ClosureAdjustmentConfig::default());
     assert_eq!(raw.z(a2), Some(4.0));
     assert_eq!(raw.z(b2), Some(6.0));
-    assert_eq!(adjusted.z(a2), Some(5.0), "the closure's ends share a depth");
+    assert_eq!(
+        adjusted.z(a2),
+        Some(5.0),
+        "the closure's ends share a depth"
+    );
     assert_eq!(adjusted.z(b2), Some(5.0));
     let a1 = at(&p, a, 1);
-    assert_eq!(adjusted.z(a1), raw.z(a1), "other stations keep the raw depth");
+    assert_eq!(
+        adjusted.z(a1),
+        raw.z(a1),
+        "other stations keep the raw depth"
+    );
 }

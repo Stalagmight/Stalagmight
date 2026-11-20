@@ -2,7 +2,7 @@
 
 use chrono::{TimeZone, Utc};
 
-use crate::models::survey::{LineMeta, Project};
+use crate::models::survey::{LineMeta, Project, Violation, MAX_MEASUREMENT_M};
 use crate::models::{ShotData, SurveyCredit};
 
 use super::summary::Summary;
@@ -96,19 +96,35 @@ fn every_finite_double_survives_bit_for_bit() {
         values.push(f64::from_bits(rng.next() % (1 << 52))); // subnormals
     }
     let mut p = Project::new_at("Floats", None, Utc.timestamp_opt(0, 0).single().unwrap());
+    // Every value goes, as it is, into a field no bound applies to (the
+    // angles and the temperature); the distances take the same values within
+    // `MAX_MEASUREMENT_M` (review finding B-derived-solver-3), the bound
+    // itself when one is past it.
+    let within = |v: f64| {
+        if v.abs() > MAX_MEASUREMENT_M {
+            MAX_MEASUREMENT_M.copysign(v)
+        } else {
+            v
+        }
+    };
     let shots: Vec<ShotData> = values
         .chunks(5)
         .enumerate()
-        .map(|(i, c)| ShotData {
-            uuid: Some(format!("f{i}")),
-            length: c[0],
-            azimuth_in: *c.get(1).unwrap_or(&0.0),
-            azimuth_out: *c.get(2).unwrap_or(&0.0),
-            depth_in: *c.get(3).unwrap_or(&0.0),
-            depth_out: *c.get(4).unwrap_or(&0.0),
-            left: c.get(2).copied(),
-            temperature: c.get(1).copied(),
-            ..ShotData::default()
+        .map(|(i, c)| {
+            let at = |k: usize| *c.get(k).unwrap_or(&0.0);
+            ShotData {
+                uuid: Some(format!("f{i}")),
+                length: within(at(0)),
+                azimuth_in: at(0),
+                azimuth_out: at(1),
+                depth_in: within(at(3)),
+                depth_out: within(at(4)),
+                pitch_in: Some(at(2)),
+                pitch_out: Some(at(3)),
+                left: Some(within(at(2))),
+                temperature: Some(at(4)),
+                ..ShotData::default()
+            }
         })
         .collect();
     let line = p
@@ -133,6 +149,8 @@ fn every_finite_double_survives_bit_for_bit() {
                     s.azimuth_out,
                     s.depth_in,
                     s.depth_out,
+                    s.pitch_in.unwrap_or(1.5),
+                    s.pitch_out.unwrap_or(1.5),
                     s.left.unwrap_or(1.5),
                     s.temperature.unwrap_or(1.5),
                 ]
@@ -220,6 +238,10 @@ fn the_summary_equals_the_recomputed_one() {
     }
 }
 
+/// A survey can no longer hold a length that overflows (version 2 bounds a
+/// shot at `MAX_MEASUREMENT_M`, review finding B-derived-solver-3): the
+/// encoder refuses it, and the summary of such an in-memory survey still
+/// leaves the length out rather than writing infinity.
 #[test]
 fn a_summary_length_that_overflows_is_left_out() {
     let mut p = Project::new_at("Huge", None, Utc.timestamp_opt(0, 0).single().unwrap());
@@ -239,8 +261,13 @@ fn a_summary_length_that_overflows_is_left_out() {
         .unwrap();
     let start = p.line(line).unwrap().start;
     p.set_placement(start, 0.0, 0.0).unwrap();
-    let bytes = assert_round_trip(&p, &Extras::default());
-    let summary = probe_bytes(&bytes).summary.unwrap();
+    let refused = encode(&p, &Extras::default(), Mode::Normal);
+    assert!(
+        matches!(&refused, Err(super::EncodeError::Invalid { violations })
+            if violations.iter().all(|v| matches!(v, Violation::OutOfBounds { .. }))),
+        "an overflowing length is refused: {refused:?}"
+    );
+    let summary = Summary::of(&p, None);
     assert_eq!(summary.length, None);
     assert_eq!(summary.shots, 3);
 }

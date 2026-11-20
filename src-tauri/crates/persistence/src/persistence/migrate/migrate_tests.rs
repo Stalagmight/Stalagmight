@@ -737,16 +737,22 @@ fn delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did() {
     let (legacy, out) = migrated(&p);
 
     // 0.6.0.
-    let mut old = legacy.project.clone();
+    let mut old = legacy.project;
     let (converted, old_b) = legacy_delete_shot_and_split(&mut old, main, 2);
-    assert_eq!(converted, 1, "0.6.0 turned the stranded loop closure into a merge");
+    assert_eq!(
+        converted, 1,
+        "0.6.0 turned the stranded loop closure into a merge"
+    );
     assert!(old.loop_closures.is_empty());
     let today: BTreeMap<(LineId, u32), [f64; 2]> = old
         .compute_station_coordinates()
         .into_iter()
         .map(|s| {
             let r = s.station_ref;
-            ((r.line_id, r.station_index), [s.coordinates.x, s.coordinates.y])
+            (
+                (r.line_id, r.station_index),
+                [s.coordinates.x, s.coordinates.y],
+            )
         })
         .collect();
 
@@ -761,9 +767,17 @@ fn delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did() {
     assert!(gap > 2.0, "a real misclosure: {gap}");
     let shot = new.line(main).unwrap().shots[2].id;
     // The delete dialog's preview says what Split would weld, from a dry run.
-    let weld = new.preview_delete_shot(main, shot).unwrap().split_weld.unwrap();
+    let weld = new
+        .preview_delete_shot(main, shot)
+        .unwrap()
+        .split_weld
+        .unwrap();
     assert_eq!(weld.promoted.len(), 1);
-    assert!((weld.max_move_m - gap).abs() < 1e-6, "{} vs {gap}", weld.max_move_m);
+    assert!(
+        (weld.max_move_m - gap).abs() < 1e-6,
+        "{} vs {gap}",
+        weld.max_move_m
+    );
     let edited = new
         .delete_shot_range(
             main,
@@ -779,7 +793,11 @@ fn delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did() {
     assert_eq!(edited.report.sweep.promoted.len(), 1);
     let new_b = edited.value.new_line.unwrap();
     let loop_end = station(&new, looped, 3);
-    assert_eq!(loop_end, station(&new, new_b, 2), "Loop's end is Main 5 now");
+    assert_eq!(
+        loop_end,
+        station(&new, new_b, 2),
+        "Loop's end is Main 5 now"
+    );
     let after = new.raw_positions();
     let mut moved_most = 0.0_f64;
     for slot in after.slots(&new) {
@@ -799,4 +817,31 @@ fn delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did() {
     }
     // The stranded piece moved by the whole misclosure, as in 0.6.0.
     assert!((moved_most - gap).abs() < 1e-6, "{moved_most} vs {gap}");
+}
+
+/// Review finding B-derived-solver-3: version 2 bounds a distance at
+/// `MAX_MEASUREMENT_M`. A 0.6.0 file with a finite but absurd shot (which
+/// 0.6.0 laid out at infinity, NaN across) still converts: the reading is
+/// clamped to the bound with its sign and counted as sanitized, the result is
+/// valid, and every position is finite.
+#[test]
+fn an_absurd_legacy_distance_is_clamped_to_the_bound() {
+    use crate::models::survey::MAX_MEASUREMENT_M;
+    let mut p = project();
+    let main = line(&mut p, "Main", &[(90.0, 10.0), (90.0, 10.0), (0.0, 10.0)]);
+    p.get_line_mut(main).unwrap().shots[1].length = 1e200;
+    p.get_line_mut(main).unwrap().shots[2].left = Some(-1e300);
+    let legacy = open(&p, &LegacyExtras::default());
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
+    let shots = &out.project.line(main).unwrap().shots;
+    assert_eq!(shots[1].length, MAX_MEASUREMENT_M);
+    assert_eq!(shots[2].left, Some(-MAX_MEASUREMENT_M));
+    assert_eq!(out.project.validate(), Vec::new());
+    assert!(
+        out.report.numbers_sanitized >= 2,
+        "{}",
+        out.report.summary()
+    );
+    let raw = out.project.raw_positions();
+    assert!(raw.iter().all(|(_, c)| c.iter().all(|v| v.is_finite())));
 }

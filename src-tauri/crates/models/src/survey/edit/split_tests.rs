@@ -172,7 +172,11 @@ fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
     assert_eq!(before.slot_count, 9);
     assert_eq!(before.junction_count, 1);
     let wire = before.to_project_stats();
-    assert_eq!(wire.station_count, p.stations.len(), "the file summary's count");
+    assert_eq!(
+        wire.station_count,
+        p.stations.len(),
+        "the file summary's count"
+    );
     assert_eq!(wire.junction_count, 1);
 
     ok(p.split_line(
@@ -182,6 +186,9 @@ fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
     ));
     let after = stats(&p).to_project_stats();
     assert_eq!(after.station_count, 8, "a split adds no station");
-    assert_eq!(after.junction_count, 2, "the halves share the split station");
+    assert_eq!(
+        after.junction_count, 2,
+        "the halves share the split station"
+    );
     assert_eq!(after.station_count, p.stations.len());
 }

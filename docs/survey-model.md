@@ -136,7 +136,12 @@ only between two datum-held pieces), station names on every line, counters
 above every id in use (aliases included) and the station and Section
 counters at most 2^31, finite numbers (shots, quality,
 azimuth corrections, hand moves, datums, placements, elevation, validation
-thresholds). Every `Violation` has a precise `Display` message. The `.stalx`
+thresholds), and distances and stored coordinates within their bounds:
+`MAX_MEASUREMENT_M` (1,000,000 m) for a shot's length, depths and passage
+dimensions, `MAX_COORDINATE_M` (100,000,000 m) for placements, datum
+corrections and hand moves, so every derived position is finite (review
+finding B-derived-solver-3; the shot doors refuse a distance past the bound
+in words, the migration clamps a 0.6.0 reading to it). Every `Violation` has a precise `Display` message. The `.stalx`
 v2 encoder and decoder refuse through it; no bound is checked twice.
 
 ## Solver v1 (`positions.rs`)

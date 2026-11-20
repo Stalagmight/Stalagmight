@@ -763,7 +763,7 @@ fn the_delete_preview_says_what_split_would_weld() {
     p.push_closure(tip, Some(looped), m3, Some(main), ClosureStrategy::Batch);
     assert_valid(&p);
     let preview = p.preview_delete_shot(main, shot_id(&p, main, 2)).unwrap();
-    let weld = preview.split_weld.expect("an interior shot has a split preview");
+    let weld = preview.split_weld.unwrap();
     assert_eq!(weld.promoted.len(), 1, "the closure becomes a junction");
     assert!((weld.max_move_m - 1.0).abs() < 1e-9, "{}", weld.max_move_m);
 
@@ -798,4 +798,49 @@ fn the_delete_preview_says_what_split_would_weld() {
     assert_eq!(weld.max_move_m, 0.0);
     let edge = q.preview_delete_shot(plain, shot_id(&q, plain, 0)).unwrap();
     assert!(edge.split_weld.is_none());
+}
+
+/// Review finding B-derived-solver-3: a distance past `MAX_MEASUREMENT_M` is
+/// refused at the door, in words, before anything changes (the file would
+/// refuse it too). The bound itself is accepted.
+#[test]
+fn a_distance_past_the_measurement_bound_is_refused_in_words() {
+    use crate::survey::MAX_MEASUREMENT_M;
+    let (mut p, l) = east3();
+    let before = p.clone();
+    let text = refused(p.update_shot(
+        l,
+        shot_id(&p, l, 1),
+        &ShotUpdates {
+            length: Some(2e6),
+            ..ShotUpdates::default()
+        },
+    ));
+    assert_eq!(
+        text,
+        "A shot's length of 2000000 m is beyond the 1000000 m a survey measurement may be"
+    );
+    let mut deep = flat_u(90.0, 5.0, "deep");
+    deep.depth_out = -1e300;
+    let text = refused(p.create_shot(l, deep, ShotPlace::After(shot_id(&p, l, 0))));
+    assert!(text.contains("depth out"), "{text}");
+    let mut wide = flat_u(90.0, 5.0, "wide");
+    wide.left = Some(1e7);
+    let text = refused(p.create_line(
+        crate::survey::test_helpers::meta("Wide"),
+        crate::survey::StartAt::New,
+        vec![wide],
+        None,
+    ));
+    assert!(text.contains("left"), "{text}");
+    assert_eq!(p.lines(), before.lines(), "nothing changed");
+    ok(p.update_shot(
+        l,
+        shot_id(&p, l, 1),
+        &ShotUpdates {
+            length: Some(MAX_MEASUREMENT_M),
+            ..ShotUpdates::default()
+        },
+    ));
+    assert_valid(&p);
 }

@@ -463,7 +463,12 @@ writes one:
 8. Station names are unique among the stations of each line.
 9. Counters are above every id in use, and the station and Section counters
    are at most 2^31 (at 2^31 the ids are used up).
-10. Every number is finite.
+10. Every number is finite, and the distances and stored coordinates are
+    within bounds that keep every derived position finite: a shot's length,
+    `depth_in`, `depth_out`, `left`, `right`, `up` and `down` at most
+    1,000,000 m in magnitude, and a placement's `x` and `y`, a datum's
+    `correction` and a hand move at most 100,000,000 m. Angles, temperatures
+    and thresholds are only required to be finite.
 
 ## 7. Unknown content
 

@@ -170,7 +170,10 @@ impl Credits {
 /// `to`. Non-finite readings are replaced exactly as the 0.6.0 save heal
 /// (`Shot::sanitize_non_finite`) would have before writing: a required
 /// reading becomes 0, an optional one is dropped. Returns whether anything
-/// was replaced.
+/// was replaced. A finite distance past [`survey::MAX_MEASUREMENT_M`] (the
+/// length, a depth, a passage dimension; version 2 refuses it, review finding
+/// B-derived-solver-3) is clamped to the bound, keeping its sign, and counts
+/// as replaced too: 0.6.0 laid such a shot out at infinity or NaN.
 pub(super) fn shot(
     source: &old::Shot,
     uuid: String,
@@ -205,6 +208,16 @@ pub(super) fn shot(
     let up = optional(source.up);
     let down = optional(source.down);
     let temperature = optional(source.temperature);
+    let mut bounded = |v: f64| {
+        if v.abs() > survey::MAX_MEASUREMENT_M {
+            sanitized = true;
+            survey::MAX_MEASUREMENT_M.copysign(v)
+        } else {
+            v
+        }
+    };
+    let (length, depth_in, depth_out) = (bounded(length), bounded(depth_in), bounded(depth_out));
+    let [left, right, up, down] = [left, right, up, down].map(|v| v.map(&mut bounded));
     let shot = survey::Shot {
         id: 0,
         uuid,

@@ -265,6 +265,9 @@ impl Project {
         if !data.all_finite() {
             return Err(EditError::refused("Shot has a non-finite (NaN/inf) value"));
         }
+        if let Some(refusal) = data.measurement_refusal() {
+            return Err(EditError::Refused(refusal));
+        }
         if let Some(refusal) = self.shot_insert_refusal(line) {
             return Err(EditError::Refused(refusal));
         }
@@ -393,6 +396,9 @@ impl Project {
             return Err(EditError::refused(
                 "Shot update has a non-finite (NaN/inf) value",
             ));
+        }
+        if let Some(refusal) = updates.measurement_refusal() {
+            return Err(EditError::Refused(refusal));
         }
         let index = self.shot_index(line, shot)?;
         if let Some(length) = updates.length {

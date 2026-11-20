@@ -266,6 +266,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::CounterNotAbove { .. }
         | Violation::CounterOutOfRange { .. }
         | Violation::NonFinite { .. }
+        | Violation::OutOfBounds { .. }
         | Violation::TooManyShots { .. } => 4,
     }
 }
@@ -585,6 +586,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             Violation::TooManyShots { .. } => {}
             // No JSON number is non-finite; nothing to repair.
             Violation::NonFinite { .. } => {}
+            // A distance or coordinate past its bound (B-derived-solver-3) is
+            // not guessed at: such a file stays refused.
+            Violation::OutOfBounds { .. } => {}
         }
     }
     apply_line_edits(p, edits);
