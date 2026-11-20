@@ -163,6 +163,12 @@ mod legacy_convert;
 mod legacy_crosscheck_tests;
 #[cfg(test)]
 #[expect(
+    clippy::float_cmp,
+    reason = "test module: an exact zero correction is what it checks"
+)]
+mod lsq_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
