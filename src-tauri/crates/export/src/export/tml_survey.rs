@@ -229,50 +229,70 @@ fn entrance_datums(project: &Project, topology: &Topology) -> HashMap<LineId, us
 /// `root`, then from one root per remaining connected piece (a line holding a
 /// placement datum first, else the first in list order). A line with no
 /// junction is in no piece and absent, an entrance of its own.
+///
+/// A line's children are the unvisited lines it shares a station with, in
+/// line-id order, each entered at the lowest chain index of the stations the
+/// two share. Linear in the slots (I-import-export-2): a station is expanded
+/// once, by the first line that reaches it, which visits every line through
+/// it; a later line through that station finds nothing new there, so it skips
+/// it. Building every ordered pair of lines at a station instead cost
+/// `k * (k - 1)` entries at a hub of `k` lines (gigabytes for a crafted file
+/// with tens of thousands of lines off one station).
 fn entry_stations(
     project: &Project,
     topology: &Topology,
     root: LineId,
     entrance_datums: &HashMap<LineId, usize>,
 ) -> HashMap<LineId, usize> {
-    // line -> (neighbour line, chain index on the neighbour, chain index here)
-    let mut adjacency: HashMap<LineId, Vec<(LineId, u32, u32)>> = HashMap::new();
+    // The lines through some junction: the ones a walk can reach or start.
+    let mut joined: HashSet<LineId> = HashSet::new();
     for &station in topology.stations() {
-        let slots = topology.slots_of(station);
-        for here in slots {
-            for there in slots.iter().filter(|there| there.line_id != here.line_id) {
-                adjacency.entry(here.line_id).or_default().push((
-                    there.line_id,
-                    there.station_index,
-                    here.station_index,
-                ));
-            }
+        if topology.is_junction(station) {
+            joined.extend(topology.slots_of(station).iter().map(|slot| slot.line_id));
         }
     }
-    for links in adjacency.values_mut() {
-        links.sort_unstable();
-        links.dedup();
-    }
-
+    let mut expanded: HashSet<StationId> = HashSet::new();
     let mut entries: HashMap<LineId, usize> = HashMap::new();
     let mut visited: HashSet<LineId> = HashSet::from([root]);
     let mut queue: VecDeque<LineId> = VecDeque::from([root]);
+    // Both cursors only move forward: a line once visited stays visited.
+    let lines: Vec<LineId> = project.lines().iter().map(|line| line.id).collect();
+    let (mut datum_cursor, mut cursor) = (0, 0);
     loop {
         while let Some(parent) = queue.pop_front() {
-            for &(child, index, _) in adjacency.get(&parent).into_iter().flatten() {
+            // (child, its chain index) for each station the two share.
+            let mut children: Vec<(LineId, u32)> = Vec::new();
+            for &station in topology.chain(parent).unwrap_or(&[]) {
+                if !expanded.insert(station) {
+                    continue;
+                }
+                children.extend(
+                    topology
+                        .slots_of(station)
+                        .iter()
+                        .filter(|slot| !visited.contains(&slot.line_id))
+                        .map(|slot| (slot.line_id, slot.station_index)),
+                );
+            }
+            children.sort_unstable();
+            for (child, index) in children {
                 if visited.insert(child) {
                     entries.insert(child, index as usize);
                     queue.push_back(child);
                 }
             }
         }
-        let candidate = |id: &LineId| !visited.contains(id) && adjacency.contains_key(id);
-        let lines = || project.lines().iter().map(|line| line.id);
-        let Some(next) = lines()
-            .filter(candidate)
-            .find(|id| entrance_datums.contains_key(id))
-            .or_else(|| lines().find(candidate))
-        else {
+        let candidate = |id: LineId| !visited.contains(&id) && joined.contains(&id);
+        while datum_cursor < lines.len()
+            && !(entrance_datums.contains_key(&lines[datum_cursor])
+                && candidate(lines[datum_cursor]))
+        {
+            datum_cursor += 1;
+        }
+        while cursor < lines.len() && !candidate(lines[cursor]) {
+            cursor += 1;
+        }
+        let Some(&next) = lines.get(datum_cursor).or_else(|| lines.get(cursor)) else {
             break;
         };
         visited.insert(next);
@@ -498,3 +518,12 @@ fn closure_rows(
 )]
 #[path = "tml_survey_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+#[path = "tml_survey_walk_tests.rs"]
+mod walk_tests;
