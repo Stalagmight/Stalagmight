@@ -44,7 +44,7 @@ Files:
 - **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
 - **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Why: the product decision, with the original kept restorable.
 - **A conversion that moved stations shows a one-time notice** with the count and the largest move (a torn legacy merge collapsed into one station, or an unexplained raw difference); Computed View differences are logged, not shown (C4, G4). Why: data never moves silently.
-- **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work (6.4, F7, C7, N13). Why: never rewrite what this build would lose.
+- **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). Why: never rewrite what this build would lose.
 - **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
 - **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned (12.2, 6.5, C11, N9). Why: ignores are survey content.
 - **Save a Copy onto the open file's own path is a normal save** (0.6.0 refused it) (C6). Why: the destination is the open file, so there is no copy to detach.
@@ -66,7 +66,7 @@ Exports, imports and readers:
 ### Open
 
 - **Rollout prerequisites** (below).
-- **Not built from the plan.** The read-only salvage open (6.6): an invalid file is refused with the repair offer (N12). Merge Projects still carries neither the sources' ignored warnings nor their import hashes, as in 0.6.0 (N7).
+- **Not built from the plan.** The read-only salvage open (6.6): an invalid file is refused with the repair offer (N12), or, when it requires a feature this build does not know, with the newer-version prompt (R3). Merge Projects still carries neither the sources' ignored warnings nor their import hashes, as in 0.6.0 (N7).
 - **Lint backlog.** About 300 warn-level clippy findings of pre-existing families (`result_large_err`, `float_cmp`, doc indentation, ...; no deny-level finding); they were not mass-fixed.
 - **Stale code comments.** A few still describe the SQLite-era undo (`persistence::undo_limits`, `core::command`, `models::disk_names`); persistence's 32 MiB `UNDO_BYTE_BUDGET_BYTES` only derives the history row cap (`MAX_PERSISTED_HISTORY_ROWS`), the app's budget is `core::undo`'s 4 MiB.
 - **Release runs.** The fuzz campaigns and the migration corpus modes on the final build (11.6).
@@ -942,3 +942,54 @@ as another survey, and Recovery refused the backup pair. Labels `H1`...
   file in a writable folder upgrades and keeps its permission bits. On
   write-protected media the upgrade is refused with `PERMISSION_DENIED` and
   changes nothing.
+
+## Deviations (review fixes: the file format)
+
+Changes to sections 6.1 to 6.6 that the format review findings led to
+(`C-file-format-*`, `B-derived-solver-2`, `H-frontend-wire-2`,
+`J-docs-tests-truth-8`). Labels `R`...
+
+- **R1. Tier 1 never exhausts the preserved cap** (6.4 tier 1, "never a
+  refusal"). An unknown key of a survey record is skipped, not held, so it
+  counts only against its own object (at most 10,100 members), never against
+  the 10,000 preserved-content cap, which bounds held content (tier 2,
+  `requires`). A newer writer that adds a key to every shot gives a file that
+  opens read-only at any size.
+- **R2. Unknown `local` keys are kept** (replaces 6.4 tier 3's "unknown keys
+  in `local` are dropped"). A newer build's per-machine and sync state
+  (`LocalState::preserved`, `LocalSync::preserved`) is written back after the
+  known keys by a save and by a local-only rewrite, so a display toggle on a
+  newer file no longer erases it; a detached copy and an upload carry none,
+  and a link to another project drops the kept sync keys. An unreadable value
+  of a known key is still dropped. The history half (an unloaded history is
+  copied verbatim) was d4d94b642.
+- **R3. A rule broken under an unknown feature is "newer", never "corrupt"**
+  (6.4, 6.6). A file that requires a feature this build does not know and
+  breaks an invariant without it is refused with `DecodeError::NewerFeatures`
+  and the newer-version prompt (`NEWER_SCHEMA`), not the repair offer: the
+  feature may relax the rule. Unknown survey keys alone (tier 1) keep the
+  corrupt route. No read-only view of such a file is built (the read-only
+  salvage open of 6.6 is still not built).
+- **R4. The solver rule** (section 3's "a future build that changes any
+  formula bumps it"). A different `solver` is surfaced only when it changes
+  what users see, and only the writer can know that: a writer whose formulas
+  would make an older reader show the survey differently also adds a
+  `requires` feature (R3's read-only banner). A bump alone is informative; a
+  save writes the saving build's solver. file-format.md section 3.
+- **R5. Closure ids are bounded** (2, F11). `MAX_CLOSURE_ID` (2^53 - 1, the
+  file's integers): validate reports a closure id at or past it and a counter
+  past it; the command layer's post-edit validate therefore refuses a closure
+  that would need another id, and salvage lowers the counter and drops such a
+  closure.
+- **R6. Section names are unique at load** (F3, file-format.md 5.7): validate
+  reports `DuplicateSectionName`; salvage renames the later one `name (n)`.
+- **R7. The header probe does not depend on member order** (6.1, F13):
+  `probe_path` stops at the first body member only when every header member
+  it reads came before it, else it reads the file to its end; Recents uses
+  `probe_path_listing`, which keeps the canonical-order read.
+- **R8. Local-only rewrites.** A `summary` that is not an object is left out
+  instead of failing the rewrite (6.5 mode 4, Recents rename); the rewrite
+  starts from the bytes the open or the last write kept (`FileState`'s
+  `saved_bytes`, used only while their fingerprint is the guard's), so a
+  display toggle reads the file once under the project lock, by the guard.
+  Toggles are not coalesced: each still rewrites the file with one fsync.
