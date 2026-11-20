@@ -5,6 +5,7 @@ import {
   lineWidthEm,
   wrapIntoLines,
   ShapeCache,
+  SHAPE_CACHE_CEILING,
   LABEL_KIND_LAYOUT,
   LINE_HEIGHT_EM,
   ASCENT_EM,
@@ -320,5 +321,34 @@ describe('ShapeCache', () => {
     cache.get(LABEL_KIND.LINE_NAME, 'a', atlas); // touch 'a' → now newest
     cache.get(LABEL_KIND.LINE_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
     expect(cache.get(LABEL_KIND.LINE_NAME, 'a', atlas)).toBe(a); // 'a' survived
+  });
+
+  it('fit sizes the cap to a build, so a second pass over more labels than the default cap all hits', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache(2);
+    const texts = ['a', 'b', 'c', 'd'];
+    // Without fit, walking four labels in order through a cap of two evicts each
+    // one before the next pass asks for it: every lookup misses.
+    const thrash = texts.map((t) => cache.get(LABEL_KIND.LINE_NAME, t, atlas));
+    expect(texts.every((t, i) => cache.get(LABEL_KIND.LINE_NAME, t, atlas) !== thrash[i])).toBe(true);
+    cache.fit(texts.length);
+    const built = texts.map((t) => cache.get(LABEL_KIND.LINE_NAME, t, atlas));
+    expect(cache.size).toBe(texts.length);
+    texts.forEach((t, i) => expect(cache.get(LABEL_KIND.LINE_NAME, t, atlas)).toBe(built[i]));
+    // A smaller build lowers the cap to the starting one and drops the oldest
+    // past it, so a large survey's labels do not outlive it.
+    cache.fit(1);
+    expect(cache.size).toBe(2);
+    expect(cache.get(LABEL_KIND.LINE_NAME, 'c', atlas)).toBe(built[2]);
+    expect(cache.get(LABEL_KIND.LINE_NAME, 'd', atlas)).toBe(built[3]);
+  });
+
+  it('fit stops at the ceiling and never drops below the starting cap', () => {
+    const cache = new ShapeCache();
+    const cap = () => (cache as unknown as { max: number }).max;
+    cache.fit(SHAPE_CACHE_CEILING * 3);
+    expect(cap()).toBe(SHAPE_CACHE_CEILING);
+    cache.fit(5);
+    expect(cap()).toBe(20000);
   });
 });

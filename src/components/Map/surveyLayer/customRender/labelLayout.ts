@@ -259,8 +259,13 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
   return { glyphCount: glyphs.length, glyphs };
 }
 
+/** The most labels {@link ShapeCache.fit} lets the cache hold, at about 1.9 KB
+ *  a label: a survey of some 90,000 shots. Past it a build re-shapes the labels
+ *  the cap cannot hold, as every build did before `fit`. */
+export const SHAPE_CACHE_CEILING = 100_000;
+
 /**
- * Bounded LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
+ * LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
  * camera-driven rebuilds so a pan / zoom-out re-scope only RE-PROJECTS + RE-COLLIDES
  * unchanged labels, never re-shapes them (shaping = wrap + per-glyph pen advance,
  * the dominant CPU cost of a build on a large survey). Safe to share a
@@ -271,12 +276,31 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
  */
 export class ShapeCache {
   private readonly entries = new Map<string, ShapedLabel>();
-  private readonly max: number;
+  private readonly floor: number;
+  private max: number;
 
-  /** @param max Cap on cached labels; the survey label charset is tiny so a few
-   *  thousand distinct `(kind, text)` pairs covers a large survey's viewport. */
+  /** @param max Cap on cached labels, and the least {@link fit} sets. */
   constructor(max = 20000) {
-    this.max = Math.max(1, max);
+    this.floor = Math.max(1, max);
+    this.max = this.floor;
+  }
+
+  /**
+   * Size the cap to `count` labels, the build about to shape, between the
+   * starting cap and {@link SHAPE_CACHE_CEILING}. A build walks its labels in
+   * the same order every time, so a cap below its label count evicts each entry
+   * just before the next build asks for it: every lookup misses and every label
+   * is re-shaped (a 20k-shot survey has ~21.7k labels against the default 20k).
+   * A smaller build (a zoomed-in view, another project) lowers the cap again and
+   * drops the oldest entries past it, so a large survey's labels do not outlive
+   * it.
+   */
+  fit(count: number): void {
+    this.max = Math.max(this.floor, Math.min(count, SHAPE_CACHE_CEILING));
+    for (const key of this.entries.keys()) {
+      if (this.entries.size <= this.max) break;
+      this.entries.delete(key);
+    }
   }
 
   /** Shaped label for `(kind, text)` - cached across builds, shaping on a miss. */

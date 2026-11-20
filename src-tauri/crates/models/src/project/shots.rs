@@ -20,15 +20,37 @@ use super::{
 pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
 
 impl Project {
-    /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
-    /// and merges, plus loop closures when `include_closures` is true. Pass
-    /// `false` to ask "are these connected by the *survey itself*" - used to tell
-    /// a true loop from a detached pair when deciding closure-vs-merge.
-    fn station_neighbors_excluding_shot(
+    /// The merge edges of the station graph, plus the loop closures when
+    /// `include_closures` is true, every endpoint resolved once: a connectivity
+    /// search reads its neighbours here instead of rescanning every merge at
+    /// each station it visits, which made one search O(stations x merges) - most
+    /// of a Delete Shot preview or an integrity check on a large survey.
+    /// Pass `false` to ask "are these connected by the *survey itself*" - used to
+    /// tell a true loop from a detached pair when deciding closure-vs-merge.
+    fn station_edges(&self, include_closures: bool) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut edges = self.build_station_merge_adjacency();
+        if include_closures {
+            for closure in &self.loop_closures {
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) {
+                    edges.entry(a).or_default().push(b);
+                    edges.entry(b).or_default().push(a);
+                }
+            }
+        }
+        edges
+    }
+
+    /// Stations adjacent to `station_ref`: along its line's shots, except the
+    /// shots `skipped` names (by line and index), and across `edges`
+    /// ([`Self::station_edges`]).
+    fn station_neighbors(
         &self,
+        edges: &HashMap<StationRef, Vec<StationRef>>,
         station_ref: StationRef,
-        excluded_shot: Option<(LineId, usize)>,
-        include_closures: bool,
+        skipped: impl Fn(LineId, usize) -> bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(line) = self.get_line(station_ref.line_id) else {
@@ -38,42 +60,30 @@ impl Project {
         if idx > line.shots.len() {
             return neighbors;
         }
-
-        // Adjacent stations via shots (skip the excluded shot)
-        if idx > 0 {
-            let shot_idx = idx - 1;
-            if excluded_shot != Some((station_ref.line_id, shot_idx)) {
-                neighbors.push(StationRef::new(station_ref.line_id, (idx - 1) as u32));
-            }
+        // Adjacent stations along the line, through the shots not skipped.
+        if idx > 0 && !skipped(station_ref.line_id, idx - 1) {
+            neighbors.push(StationRef::new(station_ref.line_id, (idx - 1) as u32));
         }
-        if idx < line.shots.len() {
-            let shot_idx = idx;
-            if excluded_shot != Some((station_ref.line_id, shot_idx)) {
-                neighbors.push(StationRef::new(station_ref.line_id, (idx + 1) as u32));
-            }
+        if idx < line.shots.len() && !skipped(station_ref.line_id, idx) {
+            neighbors.push(StationRef::new(station_ref.line_id, (idx + 1) as u32));
         }
-
-        // Merges (resolve stored keys to positional refs)
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
+        // Merges, and closures when the edges hold them.
+        if let Some(across) = edges.get(&station_ref) {
+            neighbors.extend(across.iter().copied());
         }
-
-        // Closures (all strategies)
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
-
         neighbors
+    }
+
+    /// [`Self::station_neighbors`] without the one shot `excluded_shot`.
+    fn station_neighbors_excluding_shot(
+        &self,
+        edges: &HashMap<StationRef, Vec<StationRef>>,
+        station_ref: StationRef,
+        excluded_shot: Option<(LineId, usize)>,
+    ) -> Vec<StationRef> {
+        self.station_neighbors(edges, station_ref, |line, shot| {
+            excluded_shot == Some((line, shot))
+        })
     }
 
     pub(super) fn are_stations_connected_excluding_shot(
@@ -86,15 +96,14 @@ impl Project {
         if station_a == station_b {
             return true;
         }
+        let edges = self.station_edges(include_closures);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_a);
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in
-                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
-            {
+            for neighbor in self.station_neighbors_excluding_shot(&edges, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -117,13 +126,14 @@ impl Project {
         if zero_datum_set.contains(&station_ref) {
             return true;
         }
+        let edges = self.station_edges(true);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_ref);
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, true) {
+            for neighbor in self.station_neighbors_excluding_shot(&edges, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if zero_datum_set.contains(&neighbor) {
                         return true;
@@ -1127,46 +1137,15 @@ impl Project {
     /// positions `start_pos..=end_pos` in `line_id` (the gap-closed range).
     fn range_neighbors(
         &self,
+        edges: &HashMap<StationRef, Vec<StationRef>>,
         station_ref: StationRef,
         line_id: LineId,
         start_pos: usize,
         end_pos: usize,
-        include_closures: bool,
     ) -> Vec<StationRef> {
-        let mut neighbors = Vec::new();
-        let Some(line) = self.get_line(station_ref.line_id) else {
-            return neighbors;
-        };
-        let idx = station_ref.station_index as usize;
-        if idx > line.shots.len() {
-            return neighbors;
-        }
-        let in_range = |shot_idx: usize| {
-            station_ref.line_id == line_id && (start_pos..=end_pos).contains(&shot_idx)
-        };
-        if idx > 0 && !in_range(idx - 1) {
-            neighbors.push(StationRef::new(station_ref.line_id, (idx - 1) as u32));
-        }
-        if idx < line.shots.len() && !in_range(idx) {
-            neighbors.push(StationRef::new(station_ref.line_id, (idx + 1) as u32));
-        }
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
-        }
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
-        neighbors
+        self.station_neighbors(edges, station_ref, |line, shot| {
+            line == line_id && (start_pos..=end_pos).contains(&shot)
+        })
     }
 
     /// Are `a` and `b` connected WITHOUT using a shot in `line_id`'s range
@@ -1186,12 +1165,13 @@ impl Project {
         if a == b {
             return true;
         }
+        let edges = self.station_edges(include_closures);
         let mut visited = HashSet::new();
         visited.insert(a);
         let mut queue = VecDeque::new();
         queue.push_back(a);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, line_id, start_pos, end_pos, include_closures) {
+            for nb in self.range_neighbors(&edges, cur, line_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1226,12 +1206,13 @@ impl Project {
         if datum_set.contains(&station) {
             return true;
         }
+        let edges = self.station_edges(true);
         let mut visited = HashSet::new();
         visited.insert(station);
         let mut queue = VecDeque::new();
         queue.push_back(station);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, line_id, start_pos, end_pos, true) {
+            for nb in self.range_neighbors(&edges, cur, line_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1783,3 +1764,7 @@ impl Project {
         self.get_line(line_id)?.get_shot(shot_id)
     }
 }
+
+#[cfg(test)]
+#[path = "shots_graph_tests.rs"]
+mod graph_tests;

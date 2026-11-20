@@ -7,6 +7,7 @@ import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
+import { ShapeCache } from '../labelLayout';
 import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
 import { REVEAL_CEILING } from '../labelReveal';
 import { computeMercatorAnchor } from '../mercator';
@@ -461,6 +462,19 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(true);
     // Uniform flips, never a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
+  });
+
+  it('a build sizes the shape cache to its labels before shaping them', () => {
+    const fit = vi.spyOn(ShapeCache.prototype, 'fit');
+    const get = vi.spyOn(ShapeCache.prototype, 'get');
+    const { map } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    expect(get).toHaveBeenCalled();
+    expect(fit.mock.invocationCallOrder[0]).toBeLessThan(get.mock.invocationCallOrder[0]!);
+    // Room for every label the build shaped, so the next build hits them all.
+    const keys = new Set(get.mock.calls.map(([kind, text]) => `${kind}\0${text}`));
+    expect(fit.mock.calls[0]![0]).toBeGreaterThanOrEqual(keys.size);
   });
 
   it('a commentTint sync builds without error (palette-tint parity locked in labelTessellate)', () => {
