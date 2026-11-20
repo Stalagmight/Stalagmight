@@ -43,7 +43,8 @@ pub(crate) fn validate_plan_segments(
 /// Validate a plan's inputs before they reach the engine, and normalize its config.
 ///
 /// Shared by every command that computes a reach field. `AppState::gas_reach_field` validates
-/// nothing - it clones the project and delegates - and its contract says so explicitly: "the diver /
+/// nothing - it hands the inputs to the survey's gas engine (`gas_reach_field_wire`, which reads
+/// `gas_config.include_reference_legs` itself) - and its contract says so explicitly: "the diver /
 /// cylinders are assumed already validated and `gas_config` normalized **by the command**". So each
 /// entry point owes this, and a second one that skipped it would reintroduce exactly the holes this
 /// closes: a NaN/zero RMV or cylinder poisoning the field, and an unbounded way-point list walking
@@ -191,9 +192,9 @@ mod tests {
         // scootered SECOND row sailed through validation with that row silently inert - while the
         // `.plnx` load path folds the same tail conservatively. Reject the disagreement at the
         // door.
-        assert!(validate_plan_segments(&vec![span(); 2], 1).is_ok());
+        assert!(validate_plan_segments(&[span(); 2], 1).is_ok());
 
-        let err = validate_plan_segments(&vec![span(); 2], 0).unwrap_err();
+        let err = validate_plan_segments(&[span(); 2], 0).unwrap_err();
         assert!(err.contains("More plan segments than route spans"), "{err}");
     }
 }
