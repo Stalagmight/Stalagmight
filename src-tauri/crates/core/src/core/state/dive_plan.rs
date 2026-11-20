@@ -14,14 +14,15 @@
 //! 1. **Its station, by id.** A station keeps its id through a reverse, an insert or a
 //!    delete elsewhere, a split (Split Line Here makes the split station a junction) and a
 //!    combine, and a merge keeps a retired id as an alias of the survivor. While that
-//!    station exists the pin is on it, shown on the slot of the line the anchor names (the
-//!    line that holds its shots now, else the recorded line), else on the station's first
-//!    slot. This is exact: no parity, no position, no length guard.
-//! 2. **Its neighbours**, when the station is gone (its shots were deleted) or the anchor
-//!    has no id (0.6.0 wrote it): 0.6.0's rule on the line that holds the shots now. Both
-//!    present: the end of `a` that faces `b`. One present: the saved side of it, flipped
-//!    when the shot's record was reversed since. A terminal pin whose shot was split
-//!    reports stale (`terminal_shot_length_bits`).
+//!    station exists and the anchor's own shots vouch for it (it is an end of one of them,
+//!    or on a line that holds one: `Resolver::vouches`), the pin is on it, shown on the
+//!    line that holds its shots now. This is exact: no parity, no position, no length guard.
+//! 2. **Its neighbours**, when the station is gone (its shots were deleted), its shots no
+//!    longer vouch for it (a detach, or its line left a junction), or the anchor has no id
+//!    (0.6.0 wrote it): 0.6.0's rule on the line that holds the shots now. Both present:
+//!    the end of `a` that faces `b`. One present: the saved side of it, flipped when the
+//!    shot's record was reversed since. A terminal pin whose shot was split reports stale
+//!    (`terminal_shot_length_bits`).
 //! 3. **A pre-#24 key** (`StoredAnchor::Legacy`): `LineStart(line)` is `line.start`,
 //!    `AfterShot(uuid)` is that shot's `to` (shot uuids are project-unique, so the shot is
 //!    found in whichever line holds it now), `Index(i)` is the slot.
@@ -392,12 +393,49 @@ impl<'p> Resolver<'p> {
             .as_deref()
             .and_then(|u| self.locate(anchor.line_id, u));
         let line = self.anchor_line(anchor, a, b);
-        // (1) The station itself, while it exists.
-        if let Some(station) = anchor.station.and_then(|id| self.live_station(id)) {
-            return self.slot_of(station, &[line, Some(anchor.line_id)]);
+        // (1) The station itself, while it exists and the anchor's shots vouch for it.
+        if let Some(station) = anchor
+            .station
+            .and_then(|id| self.live_station(id))
+            .filter(|s| self.vouches(anchor, *s, [a, b]))
+        {
+            return self.slot_of(station, &[line, a.map(|l| l.line), b.map(|l| l.line)]);
         }
         // (2) Its neighbours.
         self.place_by_neighbours(anchor, line?, a, b)
+    }
+
+    /// Whether the anchor's own shots vouch for `station`: it is an end of one of them, or on
+    /// a line that holds one (a shot-less line's pin: on its recorded line).
+    ///
+    /// A Station ID is unique in one project's lineage, not across lineages: two machines
+    /// editing copies of one project mint the same next id for different stations, and an
+    /// anchor made on one copy (a discarded local edit, then a pull of the other's revision)
+    /// would otherwise land on an unrelated station. Shot uuids are global, so a station the
+    /// anchor's shots touch is the one it was made on. What this gives up is a pin whose shots
+    /// no longer touch or hold its station: a line detached from a junction, a line that left
+    /// one by a delete, a deleted line at a junction. Those place by the neighbours, as 0.6.0
+    /// placed them.
+    fn vouches(
+        &self,
+        anchor: &PlanAnchor,
+        station: StationId,
+        shots: [Option<ShotLocation>; 2],
+    ) -> bool {
+        let topology = self.project.topology();
+        if anchor.a.is_none() && anchor.b.is_none() {
+            return topology.slot_on(station, anchor.line_id).is_some();
+        }
+        shots.into_iter().flatten().any(|loc| {
+            topology.slot_on(station, loc.line).is_some()
+                || self.project.line(loc.line).is_some_and(|line| {
+                    line.shot_from(loc.index) == Some(station)
+                        || line
+                            .shots
+                            .get(loc.index)
+                            .is_some_and(|shot| shot.to == station)
+                })
+        })
     }
 
     /// 0.6.0's placement by the neighbouring shots on `line_id` (module docs, rule 2).

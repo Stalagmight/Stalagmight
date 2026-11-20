@@ -954,40 +954,72 @@ fn junction_fixture() -> (Project, LineId, LineId, StationId) {
     (project, main, branch, junction)
 }
 
-/// A pin names a station, and the station stays when a line is detached from it (the
-/// detached line gets a new, co-located station): the pin stays on the station, now shown
-/// on the line that still passes it. 0.6.0 (one station per line) kept it on the detached
-/// line's copy.
+/// Detaching a line from a junction gives that line's slot a new, co-located station. The
+/// pin's shots are on the detached line and no longer touch the junction, so they place it
+/// on the detached line's new station, as 0.6.0 did.
 #[test]
-fn a_pin_on_a_junction_stays_on_it_when_a_line_is_detached() {
-    let (mut project, main, branch, junction) = junction_fixture();
+fn a_pin_on_a_junction_stays_on_its_line_when_the_line_is_detached() {
+    let (mut project, _main, branch, junction) = junction_fixture();
     let pinned = anchor(&project, slot(branch, 0));
     let at = xy(&project, slot(branch, 0));
     project.detach_line(junction, branch).unwrap();
     assert_ne!(station_at(&project, slot(branch, 0)), junction);
     let placed = place(&project, &pinned).unwrap();
-    assert_eq!(placed, slot(main, 2));
+    assert_eq!(placed, slot(branch, 0));
     assert!(near(xy(&project, placed), at));
 }
 
 /// Deleting the shot into a junction takes the line off the junction (the other lines keep
-/// it): the pin stays on the junction, shown on the branch. 0.6.0 slid it to the previous
-/// station of the line the shot was deleted from.
+/// it). The pin's surviving shot no longer touches the junction, so it places by its
+/// neighbours, on the station that shot starts at now, as 0.6.0 did.
 #[test]
-fn a_pin_on_a_junction_stays_on_it_when_its_line_leaves_it() {
-    let (mut project, main, branch, junction) = junction_fixture();
+fn a_pin_on_a_junction_follows_its_line_when_the_line_leaves_it() {
+    let (mut project, main, _branch, junction) = junction_fixture();
     let pinned = anchor(&project, slot(main, 2));
-    let at = xy(&project, slot(main, 2));
     let into = shot_id(&project, main, 1);
     project.delete_shot(main, into).unwrap();
+    assert!(project.stations.contains_key(&junction));
     assert!(project
         .line_stations(main)
         .unwrap()
         .iter()
         .all(|s| *s != junction));
-    let placed = place(&project, &pinned).unwrap();
-    assert_eq!(placed, slot(branch, 0));
-    assert!(near(xy(&project, placed), at), "nothing moved");
+    assert_eq!(place(&project, &pinned), Some(slot(main, 1)));
+}
+
+/// A Station ID is unique in one project's lineage only: a copy edited elsewhere mints the
+/// same next id for another station. An id the anchor's own shots do not touch or hold is
+/// not trusted: the pin places by its neighbours, and an anchor whose shots this project
+/// never had does not place at all.
+#[test]
+fn a_station_id_its_shots_do_not_vouch_for_is_not_trusted() {
+    let (mut project, main, branch, _junction) = junction_fixture();
+    let elsewhere = station_at(&project, slot(branch, 2));
+    let forged = |a: &StoredAnchor| {
+        StoredAnchor::Pair(PlanAnchor {
+            station: Some(elsewhere),
+            ..pair(a).clone()
+        })
+    };
+    let end = forged(&anchor(&project, slot(main, 4)));
+    let mid = forged(&anchor(&project, slot(main, 1)));
+    assert_eq!(place(&project, &end), Some(slot(main, 4)));
+    assert_eq!(place(&project, &mid), Some(slot(main, 1)));
+
+    // An anchor made on another project, whose line and station ids exist here too.
+    let (other, other_line) = one_line(4);
+    let foreign = anchor(&other, slot(other_line, 2));
+    assert!(project.line(pair(&foreign).line_id).is_some());
+    assert!(project
+        .stations
+        .contains_key(&pair(&foreign).station.unwrap()));
+    assert_eq!(place(&project, &foreign), None);
+
+    // A shot-less line's pin is vouched for by its recorded line.
+    let lone = free_line(&mut project, Vec::new());
+    let lone_pin = anchor(&project, slot(lone, 0));
+    assert_eq!(place(&project, &lone_pin), Some(slot(lone, 0)));
+    assert_eq!(place(&project, &forged(&lone_pin)), Some(slot(lone, 0)));
 }
 
 /// Two lines K (2 shots) and O (3 shots) joined so that `kept_end` of K meets `other_end`

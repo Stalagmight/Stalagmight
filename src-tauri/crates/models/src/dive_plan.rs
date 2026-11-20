@@ -103,9 +103,11 @@ pub struct PlanAnchor {
     /// project keeps none. A station id needs no parity at all: a station
     /// keeps its id through a reverse, an insert or delete elsewhere, a
     /// split and a combine, and a merge keeps a retired id as an alias of
-    /// the survivor. `core::state::dive_plan` reads it first and falls back
-    /// to the neighbours only when that station is gone. Omitted when `None`,
-    /// so a 0.6.0 row writes back byte for byte and a 0.6.0 build ignores it.
+    /// the survivor. `core::state::dive_plan` reads it first, trusting it
+    /// while the anchor's own shots still touch or hold that station (ids are
+    /// unique in one project's lineage only), and falls back to the
+    /// neighbours otherwise. Omitted when `None`, so a 0.6.0 row writes back
+    /// byte for byte and a 0.6.0 build ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub station: Option<crate::StationId>,
 }
