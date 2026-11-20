@@ -1,9 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
-use crate::models::{Project, ProjectMetadata};
-use crate::persistence::Database;
+use crate::models::{GpsBounds, ProjectMetadata};
+use crate::persistence::migrate::legacy_header;
+use crate::persistence::stalx_v2::{
+    self, decode, encode, probe_path, rename_project, sniff, write_atomic, DecodeOptions,
+    Fingerprint, Format, Guard, Header, History, Mode, Summary, WriteError,
+};
 
+use super::open_file::{FileOrigin, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+use super::project_io::{generator, same_file, UpgradeBackup};
 use super::AppState;
 
 impl AppState {
@@ -32,12 +38,14 @@ impl AppState {
 
     /// Get recent projects list.
     ///
-    /// Hot path on every navigation to the global view. Uses SQL aggregates
-    /// to compute metadata without deserializing the full project - the
-    /// previous implementation called `db.load_project()` for every entry,
-    /// which on a 75k-shot project parsed every shot row only to throw it
-    /// all away. That caused a multi-second freeze every time the user hit
-    /// "back" with a large project in the recent list.
+    /// Hot path on every navigation to the global view, so it never decodes
+    /// a survey body: a version 2 file is read through its header
+    /// (`stalx_v2::probe_path`: the `summary` cache, `project` and `speleodb`
+    /// from the first bytes, plan 6.1/10.4), a legacy SQLite file through
+    /// [`legacy_header`] (aggregate queries on a read-only connection, F13).
+    /// Only a version 2 file without a usable header (a third-party writer
+    /// that left out `summary`) is decoded in full. An entry whose header
+    /// cannot be read is skipped, as before.
     pub fn get_recent_projects(&self) -> Vec<ProjectMetadata> {
         let recent = match self.recent_projects.lock() {
             Ok(r) => r.clone(),
@@ -46,21 +54,15 @@ impl AppState {
 
         recent
             .iter()
-            .filter_map(|path| {
-                // open_for_metadata skips PRAGMA quick_check and migrations -
-                // both are unnecessary when we're only reading aggregate
-                // columns and the user hasn't asked to open the project.
-                let db = Database::open_for_metadata(path).ok()?;
-                match db.load_metadata(path.clone()) {
-                    Ok(m) => Some(m),
-                    Err(e) => {
-                        tracing::debug!(
-                            path = ?path,
-                            error = %e,
-                            "Failed to read recent project metadata; skipping"
-                        );
-                        None
-                    }
+            .filter_map(|path| match recent_metadata(path) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::debug!(
+                        path = ?path,
+                        error = %e,
+                        "Failed to read recent project metadata; skipping"
+                    );
+                    None
                 }
             })
             .collect()
@@ -269,7 +271,7 @@ impl AppState {
             if deleting_the_symlink_itself {
                 candidate == path.as_path()
             } else {
-                super::project_io::same_file(candidate, &path)
+                same_file(candidate, &path)
             }
         };
 
@@ -570,68 +572,277 @@ impl AppState {
     }
 
     /// Rename a project's display name on disk by path, without requiring it to
-    /// be the open project. Used by the recent-projects metadata panel: a
-    /// targeted DB update, plus keeping the open project's in-memory name in
-    /// sync if it happens to be the same file.
+    /// be the open project (the recent-projects metadata panel).
+    ///
+    /// - A CLOSED version 2 file is rewritten with `project.name` and
+    ///   `summary.name` replaced and every other member copied verbatim
+    ///   (`stalx_v2::rename_project`, plan 6.5), guarded against a change
+    ///   between the read and the rename. A file that requires a feature this
+    ///   build does not know, or a newer format, is refused untouched.
+    /// - A CLOSED legacy SQLite file is upgraded first, exactly as its first
+    ///   save would (the conversion, the original copied into the backups
+    ///   folder with its sidecars moved beside it), and written as version 2
+    ///   with the new name (plan 6.5, R2 H4).
+    /// - The OPEN project (any spelling of its path) is renamed in memory and,
+    ///   when its file is a version 2 file this session read or wrote, on disk
+    ///   at once the same way, so the rename is durable without saving the
+    ///   session's other unsaved edits (0.6.0 wrote the name into the open
+    ///   database). A legacy or never-saved open project keeps the name in
+    ///   memory for its first save. Gated like every survey-content edit
+    ///   (#191): the name is pushed to SpeleoDB. No undo entry, as before.
     pub fn set_project_name_for_path(&self, path: PathBuf, name: String) -> CommandResult {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return CommandResult::failure("Project name cannot be empty".to_string());
         }
-
-        let db = match Database::open_existing(&path) {
-            Ok(db) => db,
-            Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
+        let opened = self
+            .open_file_path()
+            .is_some_and(|open| same_file(&open, &path));
+        let result = if opened {
+            self.rename_open_project(&path, trimmed)
+        } else {
+            self.rename_closed_project(&path, trimmed)
         };
+        if result.success {
+            tracing::info!(path = ?path, open = opened, "Renamed project");
+        }
+        result
+    }
 
-        // Read-only edit gate (#191, D-B6): this renames a `.stalx` BY PATH -
-        // usually NOT the open AppState project
-        // - so the derived `edit_enabled()` gate (which describes the *open*
-        // project) can only speak for it when the path IS the currently open
-        // project. Compute the open-project identity FIRST, BEFORE the disk write,
-        // and gate only on a match so `guard_mutation` aborts a rename of the
-        // read-only open project before ANY mutation. The project name is remote
-        // content (it is pushed to SpeleoDB), so a rename of a locked remote
-        // project is a real edit. A *closed* remote file is not gated here
-        // (deferred to the issue that owns closed-file remote state).
-        let is_open_project = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
+    /// The open project's half of [`Self::set_project_name_for_path`].
+    fn rename_open_project(&self, path: &Path, name: &str) -> CommandResult {
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        // Read-only edit gate (#191, D-B6): the open project's name is remote
+        // content, so a rename of a locked remote project is a real edit. A
+        // closed remote file is not gated (deferred to the issue that owns
+        // closed-file remote state).
+        if let Err(f) = self.guard_mutation("Rename project") {
+            return f;
+        }
+        {
+            let mut proj = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(project) = proj.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
             };
-            guard
-                .as_ref()
-                .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
-        };
-        if is_open_project {
-            if let Err(f) = self.guard_mutation("Rename project") {
-                return f;
+            let Some(open_path) = project
+                .file_path
+                .clone()
+                .filter(|open| same_file(open, path))
+            else {
+                // Closed (or switched) since the check: nothing of ours to rename.
+                return CommandResult::failure(
+                    "The project changed while renaming it; try again".to_string(),
+                );
+            };
+            if project.name == name {
+                return CommandResult::success();
             }
-        }
-
-        if let Err(e) = db.save_project_name(trimmed) {
-            return CommandResult::failure(format!("Failed to rename project: {e}"));
-        }
-
-        // Keep the open project's in-memory state consistent if it's the same file.
-        if is_open_project {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            if let Some(open) = guard.as_mut() {
-                if open.file_path.as_deref() == Some(path.as_path()) {
-                    open.name = trimmed.to_string();
+            let mut file = self
+                .file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if file.extras.read_only.is_some() {
+                return CommandResult::failure(format!(
+                    "{READ_ONLY_FILE_CODE}: this project was made with a newer Stalagmight; \
+                     it is open read-only and cannot be renamed"
+                ));
+            }
+            match (file.origin, file.fingerprint.clone()) {
+                (FileOrigin::V2, Some(expected)) => {
+                    let original = match super::open_file::read_unchanged(&open_path, &expected) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            return CommandResult::failure(format!("Failed to rename project: {e}"))
+                        }
+                    };
+                    let renamed = match rename_project(&original, name) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            return CommandResult::failure(format!("Failed to rename project: {e}"))
+                        }
+                    };
+                    match write_atomic(&open_path, &renamed, Guard::Expect(&expected)) {
+                        Ok(fingerprint) => file.fingerprint = Some(fingerprint),
+                        Err(e) => return rename_write_failure(&e),
+                    }
                 }
+                // A legacy file is upgraded by its first save, and a project
+                // never saved has nothing on disk: the name rides that save.
+                _ => file.dirty = true,
             }
-            // Dirty-bit flip (#191, D-B16): the gated open project was mutated.
-            // Set-only; no-op for local-only (no speleo_link).
-            self.mark_remote_forward_edit();
+            name.clone_into(&mut project.name);
+            drop(file);
+            self.bump_revision();
         }
-
-        tracing::info!(path = ?path, "Renamed project");
+        // Dirty-bit flip (#191, D-B16): the gated open project was mutated.
+        // Set-only; no-op for local-only (no SpeleoDB link).
+        self.mark_remote_forward_edit();
         CommandResult::success()
     }
+
+    /// The closed file's half of [`Self::set_project_name_for_path`].
+    fn rename_closed_project(&self, path: &Path, name: &str) -> CommandResult {
+        let (bytes, fingerprint) =
+            match Fingerprint::read(path, DecodeOptions::default().max_file_bytes) {
+                Ok(read) => read,
+                Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
+            };
+        match sniff(&bytes) {
+            Format::V2 => {
+                let renamed = match rename_project(&bytes, name) {
+                    Ok(renamed) => renamed,
+                    Err(e) => {
+                        return CommandResult::failure(format!("Failed to rename project: {e}"))
+                    }
+                };
+                match write_atomic(path, &renamed, Guard::Expect(&fingerprint)) {
+                    Ok(_) => CommandResult::success(),
+                    Err(e) => rename_write_failure(&e),
+                }
+            }
+            Format::Legacy => {
+                drop(bytes);
+                self.upgrade_and_rename(path, name)
+            }
+            Format::Unknown => CommandResult::failure(
+                "Failed to open project: this is not a Stalagmight project file".to_string(),
+            ),
+        }
+    }
+
+    /// Upgrade a closed legacy file to version 2 the way its first save would
+    /// (plan 7.2.10: the original copied into the backups folder and its
+    /// sidecars moved there before the rename), with `name` as its name.
+    fn upgrade_and_rename(&self, path: &Path, name: &str) -> CommandResult {
+        let opened = match self.read_project_file(path) {
+            Ok(opened) => opened,
+            Err(e) => {
+                return CommandResult::failure(format!("Failed to open project: {}", e.message))
+            }
+        };
+        let Some(expected) = opened.file.fingerprint.clone() else {
+            return CommandResult::failure("Failed to open project: nothing was read".to_string());
+        };
+        let mut project = opened.project;
+        name.clone_into(&mut project.name);
+        let mut extras = opened.file.extras;
+        extras.generator = generator();
+        // The legacy history is dropped by the conversion (plan 7.2.8).
+        extras.history = History::default();
+        let bytes = match encode(&project, &extras, Mode::Normal) {
+            Ok(bytes) => bytes,
+            Err(e) => return CommandResult::failure(format!("Failed to rename project: {e}")),
+        };
+        let backup = match UpgradeBackup::take(path) {
+            Ok(backup) => backup,
+            Err(e) => {
+                return CommandResult::failure(format!(
+                    "Failed to rename project: the original could not be backed up before the \
+                     upgrade ({e})"
+                ))
+            }
+        };
+        match write_atomic(path, &bytes, Guard::Expect(&expected)) {
+            Ok(_) => {
+                tracing::info!(
+                    path = ?path,
+                    purpose = "rename a closed legacy project",
+                    "Upgraded a legacy project to version 2 to rename it"
+                );
+                CommandResult::success()
+            }
+            Err(e) => {
+                backup.put_back();
+                rename_write_failure(&e)
+            }
+        }
+    }
+}
+
+/// A rename's write failed; the file is unchanged.
+fn rename_write_failure(e: &WriteError) -> CommandResult {
+    match e {
+        WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
+            CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
+        }
+        WriteError::Io { .. } => CommandResult::failure(format!("Failed to rename project: {e}")),
+    }
+}
+
+/// The Recents entry of the file at `path`, from its header (see
+/// [`AppState::get_recent_projects`]).
+fn recent_metadata(path: &Path) -> Result<ProjectMetadata, String> {
+    let header = probe_path(path).map_err(|e| e.to_string())?;
+    let header = match header.format {
+        Format::V2 => header,
+        Format::Legacy => legacy_header(path).map_err(|e| e.to_string())?,
+        Format::Unknown => return Err("not a Stalagmight project file".to_string()),
+    };
+    let Header {
+        summary,
+        project,
+        speleodb,
+        ..
+    } = header;
+    let (summary, project, speleodb) = match (summary, project) {
+        (Some(summary), Some(project)) => (summary, project, speleodb),
+        // A version 2 file without a usable header: decode it (rare; a
+        // third-party writer may leave the cache out).
+        _ => {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            let decoded = decode(&bytes, &DecodeOptions::default()).map_err(|e| e.to_string())?;
+            let link = decoded.extras.speleodb.clone();
+            let p = &decoded.project;
+            (
+                Summary::of(p, link.as_ref()),
+                stalx_v2::ProjectInfo {
+                    name: p.name.clone(),
+                    location: p.location.clone(),
+                    created: Some(p.created_at),
+                    modified: Some(p.modified_at),
+                },
+                link,
+            )
+        }
+    };
+    let modified_at = project
+        .modified
+        .or(project.created)
+        .or_else(|| {
+            std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(chrono::DateTime::<chrono::Utc>::from)
+        })
+        .ok_or_else(|| "the file records no modification time".to_string())?;
+    let speleodb_project_id = speleodb
+        .map(|link| link.project_id)
+        .or_else(|| summary.speleodb.clone());
+    Ok(ProjectMetadata {
+        name: project.name,
+        location: project.location,
+        file_path: path.to_path_buf(),
+        modified_at,
+        line_count: usize::try_from(summary.lines).unwrap_or(usize::MAX),
+        total_length: summary.length.unwrap_or(0.0),
+        station_count: usize::try_from(summary.stations).unwrap_or(usize::MAX),
+        gps_center: summary
+            .center
+            .map(|[longitude, latitude]| (longitude, latitude)),
+        gps_bounds: summary.bounds.map(|[west, south, east, north]| GpsBounds {
+            north,
+            south,
+            east,
+            west,
+        }),
+        is_remote: speleodb_project_id.is_some(),
+        speleodb_project_id,
+    })
 }
 
 /// Delete a single file by handing it to the OS's native delete.
