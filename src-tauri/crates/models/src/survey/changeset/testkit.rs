@@ -1193,7 +1193,10 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
         p.imported_file_hashes.push("extra".to_string());
         return Some("the import hashes");
     }
-    if !changes.project.is_empty() {
+    // The name is not a precondition (`apply::prepare`): only the other
+    // project fields can make a step refuse.
+    let checked = &changes.project;
+    if checked.location.is_some() || checked.created.is_some() || checked.settings.is_some() {
         p.name.push('!');
         p.settings.surface_elevation = Some(-1.0);
         p.location = Some("elsewhere".to_string());

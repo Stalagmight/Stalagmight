@@ -68,12 +68,11 @@ fn to<T>(pair: &(T, T), direction: Direction) -> &T {
 fn prepare(project: &Project, changes: &Changeset, direction: Direction) -> Result<Plan, Refusal> {
     use super::bits::Same;
     let p = &changes.project;
-    if p.name
-        .as_ref()
-        .is_some_and(|n| *from(n, direction) != project.name)
-    {
-        return Err(Refusal::ProjectField("name"));
-    }
+    // The project name is not a precondition: the open project can be
+    // renamed outside the history (Recent Projects, the SpeleoDB name fold),
+    // and a step then sets the recorded name, as 0.6.0's snapshot undo did,
+    // instead of refusing every older entry for good (review findings
+    // F-command-parity-1, E-undo-pipeline-2). Nothing else depends on it.
     if p.location
         .as_ref()
         .is_some_and(|l| *from(l, direction) != project.location)

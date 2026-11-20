@@ -814,3 +814,53 @@ fn a_display_toggle_keeps_a_history_this_build_did_not_load() {
         }
     }
 }
+
+/// Renaming the open project outside the history (Recent Projects, the
+/// SpeleoDB name fold) never wedges undo: an earlier Project Settings rename
+/// and every older entry still undo, and redo, as 0.6.0's snapshot undo did
+/// (review findings F-command-parity-1, E-undo-pipeline-2). Undoing the
+/// Settings rename sets the name it recorded.
+#[test]
+fn an_out_of_band_rename_of_the_open_project_does_not_wedge_undo() {
+    let _config = crate::test_helpers::isolated_config();
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("rename.stalx");
+    write_v2(&path, &survey("Cave A"), &Extras::default());
+    let state = open(&path);
+    assert!(set_length(&state, 6.0).success);
+    let validation = state.get_config().validation;
+    assert!(
+        state
+            .update_project_settings("Cave B".to_string(), validation)
+            .success
+    );
+    assert!(
+        state
+            .set_project_name_for_path(path.clone(), "Cave C".to_string())
+            .success
+    );
+
+    let undone = state.undo();
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(project_name(&state), "Cave A");
+    let undone = state.undo();
+    assert!(
+        undone.success,
+        "the older entry is reachable: {:?}",
+        undone.error
+    );
+    assert!(state.redo().success);
+    assert!(state.redo().success);
+    assert_eq!(project_name(&state), "Cave B");
+}
+
+fn project_name(state: &AppState) -> String {
+    state
+        .project
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap()
+}
