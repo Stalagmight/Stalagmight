@@ -478,7 +478,7 @@ impl AppState {
 )]
 mod tests {
     use super::*;
-    use crate::core::state::speleodb_v2_fixtures::{
+    use crate::core::state::stalx_v2_fixtures::{
         display_at, empty_survey, extras_for, link_at, name_at, relink, seed_linked, seed_unlinked,
         set_display, write_file,
     };
@@ -611,7 +611,7 @@ mod tests {
                     "count" => {
                         write_file(
                             &source,
-                            &crate::core::state::speleodb_v2_fixtures::line_survey("X"),
+                            &crate::core::state::stalx_v2_fixtures::line_survey("X"),
                             &extras_for(None),
                         );
                         limits.limits.shots = 1;

@@ -346,12 +346,6 @@ mod speleodb_nonblocking_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_upload_limit_tests;
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "test fixtures: a refused build is a broken test setup"
-)]
-mod speleodb_v2_fixtures;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
@@ -359,6 +353,12 @@ mod speleodb_v2_fixtures;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_line_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test fixtures: a refused build is a broken test setup"
+)]
+mod stalx_v2_fixtures;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,

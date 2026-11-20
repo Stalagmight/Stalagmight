@@ -364,7 +364,7 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "synthetic cache durability tests")]
 mod tests {
     use super::*;
-    use crate::core::state::speleodb_v2_fixtures::{
+    use crate::core::state::stalx_v2_fixtures::{
         extras_for, fixture_link, history_counts, line_survey, link_at, name_at, seed_linked,
         seed_with_history, write_file,
     };
@@ -394,7 +394,7 @@ mod tests {
         let result = state.replace_cache_for_session(
             prepared,
             &dest,
-            crate::core::state::speleodb_v2_fixtures::FIXTURE_ID,
+            crate::core::state::stalx_v2_fixtures::FIXTURE_ID,
             LocalEditsPolicy::Discard,
             state.speleodb_session_generation(),
         );

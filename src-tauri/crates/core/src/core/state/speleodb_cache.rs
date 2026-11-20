@@ -269,7 +269,7 @@ impl AppState {
 )]
 mod tests {
     use super::*;
-    use crate::core::state::speleodb_v2_fixtures::{
+    use crate::core::state::stalx_v2_fixtures::{
         display_at, fixture_link, history_counts, link_at, name_at, seed_linked, seed_with_history,
         set_display, FIXTURE_ID,
     };
@@ -431,7 +431,7 @@ mod tests {
         for path in [&kept, &dropped] {
             let link = link_at(path).expect("linked");
             assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
-            let sync = crate::core::state::speleodb_v2_fixtures::decoded(path)
+            let sync = crate::core::state::stalx_v2_fixtures::decoded(path)
                 .extras
                 .local
                 .speleodb;

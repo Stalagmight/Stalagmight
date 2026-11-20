@@ -745,9 +745,11 @@ impl AppState {
             // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
-                let _project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
-                    .map_err(local_dto)?;
+                let project = self.speleodb_push_project_guard(generation)?;
+                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
+                    l.base_commit_sha = tip.clone()
+                })
+                .map_err(local_dto)?;
             }
             // Forward-compatible only (unreachable while push-start is unpersisted):
             // the prior push landed and no edit followed, so adopt the tip and clear
@@ -760,8 +762,8 @@ impl AppState {
                 let landed = PushOutcome::Confirmed {
                     undo_history_omitted: false,
                 };
-                let _project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link(|l| {
+                let project = self.speleodb_push_project_guard(generation)?;
+                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
                     l.last_edit_at = None;
@@ -958,8 +960,8 @@ impl AppState {
                     server_kind.as_deref(),
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
-                let _project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link(|l| {
+                let project = self.speleodb_push_project_guard(generation)?;
+                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
                     // over a dirty copy fences straight to Diverged, then walks the
                     // whole history to the service-account creation root and calls
@@ -993,7 +995,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                self.speleodb_clear_undo_after_push(undo_cutoff);
+                self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                 Ok(landed)
             }
             Err(e) => {
@@ -1016,8 +1018,8 @@ impl AppState {
                         project_id,
                         server_kind.as_deref(),
                     );
-                    let _project = self.speleodb_push_project_guard(generation)?;
-                    self.speleodb_mutate_link(|l| {
+                    let project = self.speleodb_push_project_guard(generation)?;
+                    self.speleodb_mutate_link_locked(project.as_ref(), |l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
                             Some(&push_start),
@@ -1027,7 +1029,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    self.speleodb_clear_undo_after_push(undo_cutoff);
+                    self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -1148,8 +1150,12 @@ impl AppState {
     ///
     /// Best-effort because the push has already landed. Poisoned guards are recovered;
     /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
+    ///
+    /// Runs under the push's `project` guard (`open` is the project in it), so it
+    /// serializes with every session boundary.
     pub(super) fn speleodb_clear_undo_after_push(
         &self,
+        open: Option<&crate::models::survey::Project>,
         undo_cutoff: chrono::DateTime<chrono::Utc>,
     ) {
         let (dropped, remaining) = {
@@ -1179,7 +1185,7 @@ impl AppState {
         // ONE local-only save writes the cut history and the cleared chain metadata
         // together. If it fails the disk keeps both as they were (the old rows still
         // fall under the old watermark), and the next save writes them together.
-        match self.persist_local_state() {
+        match self.persist_local_state_locked(open) {
             Ok(()) => tracing::info!(
                 dropped,
                 remaining,

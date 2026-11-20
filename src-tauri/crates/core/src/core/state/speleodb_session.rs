@@ -261,7 +261,7 @@ impl AppState {
         project_id: &str,
         acquired_here: bool,
     ) -> Result<(), SpeleoDbError> {
-        let _proj_guard = self
+        let proj_guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -286,7 +286,8 @@ impl AppState {
         // this session without the gate being open.
         self.speleodb_bind_edit_claim(project_id, &open.endpoint, acquired_here, acquired_here)?;
         if entry_generation.is_some() {
-            let _ = self.speleodb_mutate_link(|l| {
+            // C11: under the held `project` guard (the local-only save re-took it).
+            let _ = self.speleodb_mutate_link_locked(proj_guard.as_ref(), |l| {
                 l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
             });
         }
