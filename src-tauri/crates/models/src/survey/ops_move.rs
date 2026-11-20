@@ -30,7 +30,7 @@ use crate::{average_azimuth_of, normalize_azimuth, LineId, StationId};
 
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::ops_merge::find;
-use super::{EditContext, Project};
+use super::{ClosureStrategy, EditContext, Project};
 
 /// An offset smaller than this on every axis is no move (today's guard).
 const NO_MOVE_M: f64 = 1e-9;
@@ -362,7 +362,7 @@ impl Project {
         let positions = self.raw_positions();
         let mut parent: Vec<usize> = (0..topology.stations().len()).collect();
         for closure in &self.closures {
-            if !self.closure_is_aligned(&positions, closure) {
+            if !may_align(closure) || !self.closure_is_aligned(&positions, closure) {
                 continue;
             }
             if let (Some(a), Some(b)) = (topology.dense(closure.a), topology.dense(closure.b)) {
@@ -382,7 +382,7 @@ impl Project {
         let positions = self.raw_positions();
         let mut parent: Vec<usize> = (0..topology.components().len()).collect();
         for closure in &self.closures {
-            if !self.closure_is_aligned(&positions, closure) {
+            if !may_align(closure) || !self.closure_is_aligned(&positions, closure) {
                 continue;
             }
             if let (Some(a), Some(b)) = (
@@ -397,6 +397,16 @@ impl Project {
         }
         (0..parent.len()).map(|c| find(&mut parent, c)).collect()
     }
+}
+
+/// Whether a closure can be aligned at all (a `Tie`, or a `Move` snap):
+/// every other strategy is never a rigid tie, so its alignment is not
+/// measured (the measurement is what costs).
+fn may_align(closure: &super::LoopClosure) -> bool {
+    matches!(
+        closure.strategy,
+        ClosureStrategy::Tie | ClosureStrategy::Move
+    )
 }
 
 /// A shot's new `(length, measured azimuth, pitch)` for horizontal vector

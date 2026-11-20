@@ -79,7 +79,8 @@ fn random_source(rng: &mut Rng, tag: usize) -> Project {
     let mut s = project();
     let prefix = format!("src{tag}");
     let mut next = 0;
-    for _ in 0..1 + rng.below(3) {
+    let lines = 1 + rng.below(3);
+    for _ in 0..lines {
         add_free_line(&mut s, rng, &prefix, &mut next);
     }
     let stations = s.topology().stations().to_vec();
@@ -89,7 +90,8 @@ fn random_source(rng: &mut Rng, tag: usize) -> Project {
         let _ = s.add_line(meta("branch"), StartAt::Station(from), data);
     }
     if rng.below(2) == 0 {
-        if let Some(station) = rng.pick(&s.topology().stations().to_vec()) {
+        let stations = s.topology().stations().to_vec();
+        if let Some(station) = rng.pick(&stations) {
             let gps = gps_at(rng.range(-3000.0, 3000.0), rng.range(-3000.0, 3000.0));
             let _ = s.set_datum(station, None, gps, None);
         }

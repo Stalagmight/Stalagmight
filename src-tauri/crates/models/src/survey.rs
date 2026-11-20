@@ -103,12 +103,14 @@ mod append_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod ops_closures_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
@@ -116,14 +118,15 @@ mod ops_datums_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod ops_detach_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
 )]
 mod ops_merge_tests;
 #[cfg(test)]
@@ -142,6 +145,7 @@ mod ops_property_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
