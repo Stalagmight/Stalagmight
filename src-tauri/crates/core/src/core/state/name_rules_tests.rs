@@ -594,7 +594,10 @@ fn a_split_given_a_taken_name_by_a_direct_caller_is_refused_and_renames_nothing(
 }
 
 /// Put `side`'s start on `main`'s last station (`main_end`) and merge them,
-/// so the two lines touch there and can be combined.
+/// so the two lines touch there and can be combined. The merge moves
+/// `side` onto `main` (`station_a`'s piece moves), so the junction keeps
+/// Main's name and Side's own names are made unique around it; merged the
+/// other way, the junction would take Side's `0` and letter Main's.
 fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: LineId) {
     let position = |line: LineId, index: u32| {
         let p = project(state);
@@ -612,8 +615,8 @@ fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: Lin
         },
     }));
     ok(state.execute(Command::MergeStations {
-        station_a: StationRef::new(main, main_end),
-        station_b: StationRef::new(side, 0),
+        station_a: StationRef::new(side, 0),
+        station_b: StationRef::new(main, main_end),
     }));
 }
 
