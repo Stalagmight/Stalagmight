@@ -132,10 +132,14 @@ pub struct LegacySurvey {
     /// with the solver's own error text.
     pub adjustment_failures: Vec<AdjustmentFailure>,
     /// What the app's `get_adjustment_report` would say: closures skipped
-    /// because they span one shot, failed components, far GPS fixes.
+    /// because they span one shot, failed components (none when
+    /// [`crate::OpenOptions::with_adjusted`] is off), far GPS fixes.
     pub adjustment_report: AdjustmentReport,
-    /// Every connected component and the station the 0.6.0 solver held for
-    /// it (placement datum, else held gauge, else default gauge).
+    /// Every connected component (lines joined by merges and closures: the
+    /// least-squares component) and the station the 0.6.0 solver held for it
+    /// (placement datum, else held gauge, else default gauge). For any other
+    /// set of lines, e.g. a merge-only piece, ask
+    /// `project.anchor_for_lines(..)`.
     pub component_anchors: Vec<ComponentAnchor>,
     /// Per-file state outside the model.
     pub extras: LegacyExtras,

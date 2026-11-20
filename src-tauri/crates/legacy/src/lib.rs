@@ -59,7 +59,10 @@
 //!   ([`LoadReport::validation_stored`] says which).
 //! - The open is the hardened `open_existing_untrusted` (as `stalx-reader`),
 //!   not the app's trusted one; both run the same checks and migrations.
+//! - The SpeleoDB link is reported as stored: a NULL undo mode stays `None`
+//!   (the app materialized its default into the file on open).
 //! - Undo history is counted, never loaded.
+//! - A panic in the frozen code propagates, as it did in the app.
 //!
 //! # Writing (tests only)
 //!
