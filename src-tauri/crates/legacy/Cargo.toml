@@ -1,0 +1,37 @@
+[package]
+name = "stalagmight-legacy"
+version = "0.0.0"
+description = "Frozen copy of the pre-station-graph Stalagmight model, SQLite reader and load pipeline: opens every old SQLite .stalx exactly as the 0.6.0 app did, for migration and as a test oracle."
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# The workspace anti-slop policy applies here too. The frozen copy under
+# src/models and src/persistence carries a few crate-level `expect`s for lints
+# the live crates satisfy only through their test modules (see src/lib.rs).
+[lints]
+workspace = true
+
+[features]
+# Test-only: `write_v18`, the 0.6.0 app's own SQLite save path, so property
+# tests can produce "what an old build wrote". Off in production builds.
+writer = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "rc"] }
+# `float_roundtrip`, as in the live models/persistence crates: the frozen code
+# parses saved JSON (display settings, undo rows) and must read floats exactly.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v5"] }
+rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
+anyhow = { workspace = true }
+flate2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Turns `writer` on for this crate's own tests (a self dev-dependency only
+# adds the feature; production builds never see it).
+stalagmight-legacy = { path = ".", features = ["writer"] }
