@@ -1359,6 +1359,158 @@ fn untrack_import_alone_is_undoable() {
     assert_one_exact_entry(&state, &before);
 }
 
+/// A large tree-shaped import (each line hanging off the one before it, the
+/// shape the Ariane and Compass converters produce, plus a loop closure per
+/// ten lines) lands as one entry and stays linear: the funnel builds every
+/// line, settles the anchors and judges the closures once.
+#[test]
+fn a_large_tree_shaped_import_is_one_entry() {
+    const LINES: u32 = 1500;
+    let lines: Vec<ImportLineConfig> = (0..LINES)
+        .map(|i| {
+            let placement = if i == 0 {
+                ImportPlacement::Origin
+            } else {
+                ImportPlacement::FromImporting {
+                    import_station: 0,
+                    target_line_index: i - 1,
+                    target_station_index: 2,
+                }
+            };
+            config(
+                i,
+                &format!("L{i}"),
+                (0..4)
+                    .map(|k| shot(f64::from((i * 37 + k * 90) % 360), 5.0))
+                    .collect(),
+                placement,
+            )
+        })
+        .collect();
+    let closures: Vec<ImportClosure> = (1..LINES)
+        .step_by(10)
+        .map(|i| ImportClosure {
+            from_line_index: i,
+            from_station_index: 4,
+            to_line_index: i - 1,
+            to_station_index: 4,
+        })
+        .collect();
+    let requested = closures.len() as u32;
+    let state = new_state();
+    let started = std::time::Instant::now();
+    let r = state.execute_import_lines(
+        lines,
+        closures,
+        Some("big".to_string()),
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    let elapsed = started.elapsed();
+    assert!(r.success, "{:?}", r.error);
+    let receipt = r.import_receipt.unwrap();
+    assert_eq!(receipt.lines_imported, LINES);
+    assert_eq!(receipt.closures_requested, requested);
+    assert_eq!(receipt.closures_created, requested);
+    assert_eq!(state.get_undo_stack().len(), 1);
+    let p = project(&state);
+    assert_eq!(p.placements.len(), 1, "one piece");
+    assert_eq!(p.stations.len() as u32, 1 + LINES * 4);
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "the import took {elapsed:?}"
+    );
+}
+
+// ============================================================================
+// The read-only gate
+// ============================================================================
+
+/// Every import door is an edit: on a SpeleoDB project opened without its
+/// write lock each one refuses with the EDIT_DISABLED code and changes
+/// nothing (#191).
+#[test]
+fn every_import_door_is_gated_on_a_read_only_remote_project() {
+    let (state, line) = state_with_existing(vec![test_shot_data(5.0)]);
+    state.set_speleo_link_for_tests(Some(&crate::models::SpeleoLink {
+        endpoint: "http://speleodb.invalid/".to_string(),
+        project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        project_name: "Remote Cave".to_string(),
+        base_commit_sha: Some("abc123".to_string()),
+        has_unpushed_edits: false,
+        last_edit_at: None,
+        last_verify_at: None,
+        undo_mode: None,
+    }));
+    let before = project(&state);
+    let disabled = |label: &str, r: &CommandResult| {
+        assert!(!r.success, "{label} must be refused");
+        assert!(
+            r.error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(crate::core::EDIT_DISABLED_CODE)),
+            "{label}: {:?}",
+            r.error
+        );
+    };
+    disabled(
+        "execute_import_lines",
+        &import(
+            &state,
+            vec![config(
+                0,
+                "Imp",
+                vec![test_shot_data(3.0)],
+                ImportPlacement::Origin,
+            )],
+        ),
+    );
+    disabled(
+        "execute_tml_import_sections",
+        &state.execute_tml_import_sections(
+            vec![config(
+                0,
+                "Imp",
+                vec![test_shot_data(3.0)],
+                ImportPlacement::Origin,
+            )],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(10.0),
+        ),
+    );
+    disabled(
+        "execute_create_and_merge",
+        &state.execute_create_and_merge(
+            Some("Imp".to_string()),
+            None,
+            None,
+            "#00ff00".to_string(),
+            None,
+            vec![test_shot_data(3.0)],
+            0,
+            StationRef::new(line, 1),
+            ClosureStrategy::Batch,
+        ),
+    );
+    disabled(
+        "track_imported_file",
+        &state.track_imported_file("hash".to_string()),
+    );
+    disabled(
+        "untrack_import",
+        &state.execute(Command::UntrackImport {
+            file_hashes: vec!["hash".to_string()],
+            line_hashes: Vec::new(),
+        }),
+    );
+    assert_eq!(canonical(&project(&state)), canonical(&before));
+}
+
 // ============================================================================
 // Persistence and the deferred first save
 // ============================================================================
