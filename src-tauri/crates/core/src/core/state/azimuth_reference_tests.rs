@@ -315,7 +315,9 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
         "the true-north line must be written unchanged: {azimuths:?}"
     );
     assert_eq!(
-        project.line(magnetic).unwrap().shots[0].azimuth_in.to_bits(),
+        project.line(magnetic).unwrap().shots[0]
+            .azimuth_in
+            .to_bits(),
         30.0_f64.to_bits(),
         "export must not write the correction back into the project"
     );

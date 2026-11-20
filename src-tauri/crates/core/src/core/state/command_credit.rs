@@ -11,7 +11,9 @@ use std::sync::Arc;
 use super::commands::{Applied, Record};
 use crate::core::Command;
 use crate::models::survey::Project;
-use crate::models::{CreditEdit, CreditTargets, LineId, ShotId, SurveyCredit, LINE_GONE, SHOT_GONE};
+use crate::models::{
+    CreditEdit, CreditTargets, LineId, ShotId, SurveyCredit, LINE_GONE, SHOT_GONE,
+};
 
 /// The most shots one explicit-target edit may name. A whole line is
 /// bounded by the per-line shot cap instead.

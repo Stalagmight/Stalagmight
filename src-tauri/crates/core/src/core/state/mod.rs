@@ -207,7 +207,6 @@ mod legacy_disk_vectors_dump_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod line_commands_tests;

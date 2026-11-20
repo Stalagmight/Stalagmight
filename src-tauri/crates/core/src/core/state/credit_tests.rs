@@ -71,10 +71,6 @@ fn create_line(state: &AppState, surveyor: Option<String>, shots: Vec<ShotData>)
     r.line_id.unwrap()
 }
 
-fn named(text: &str) -> Option<String> {
-    Some(text.to_string())
-}
-
 fn project(state: &AppState) -> Project {
     state.get_project_state().unwrap()
 }
@@ -187,7 +183,11 @@ fn a_line_wide_edit_is_one_undo_step_and_round_trips() {
 #[test]
 fn a_line_wide_edit_stores_one_shared_credit() {
     let state = state_with_project();
-    let sid = create_line(&state, named("Ann"), vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(
+        &state,
+        Some("Ann".to_string()),
+        vec![shot(1.0), shot(2.0), shot(3.0)],
+    );
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Line { line_id: sid },
         edit: CreditEdit {
@@ -283,7 +283,11 @@ fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
 #[test]
 fn explicit_targets_touch_only_those_shots() {
     let state = state_with_project();
-    let sid = create_line(&state, named("Old"), vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(
+        &state,
+        Some("Old".to_string()),
+        vec![shot(1.0), shot(2.0), shot(3.0)],
+    );
     let ids = shot_ids(&state, sid);
     let r = edit_shots(
         &state,
@@ -347,7 +351,7 @@ fn an_oversized_selection_is_refused() {
 #[test]
 fn an_edit_that_changes_nothing_pushes_no_undo_step() {
     let state = state_with_project();
-    let sid = create_line(&state, named("Ann"), vec![shot(1.0)]);
+    let sid = create_line(&state, Some("Ann".to_string()), vec![shot(1.0)]);
     let steps = undo_len(&state);
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Line { line_id: sid },
@@ -447,7 +451,10 @@ fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
 
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
-    assert_eq!(project(&state).line(sid).unwrap().name.as_deref(), Some("S"));
+    assert_eq!(
+        project(&state).line(sid).unwrap().name.as_deref(),
+        Some("S")
+    );
 
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), after);
@@ -460,7 +467,7 @@ fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
 #[test]
 fn a_legacy_date_edit_sets_every_shot() {
     let state = state_with_project();
-    let sid = create_line(&state, named("A"), vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, Some("A".to_string()), vec![shot(1.0), shot(2.0)]);
     assert!(
         state
             .execute(Command::UpdateLineMetadata {
@@ -544,7 +551,11 @@ fn a_new_shot_inherits_its_neighbours_credit() {
 #[test]
 fn a_split_gives_both_pieces_the_shots_credit() {
     let state = state_with_project();
-    let sid = create_line(&state, named("Split Person"), vec![shot(4.0), shot(4.0)]);
+    let sid = create_line(
+        &state,
+        Some("Split Person".to_string()),
+        vec![shot(4.0), shot(4.0)],
+    );
     let ids = shot_ids(&state, sid);
     let r = run_model(&state, |p| {
         p.split_shot_at_distance(sid, ids[0], 1.5, None)
@@ -656,7 +667,11 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
     let path = temp.path().join("credit.stalx");
     let (sid, before, after) = {
         let state = state_with_project();
-        let sid = create_line(&state, named("nh / ds"), vec![shot(1.0), shot(2.0)]);
+        let sid = create_line(
+            &state,
+            Some("nh / ds".to_string()),
+            vec![shot(1.0), shot(2.0)],
+        );
         let before = credits(&state, sid);
         let ids = shot_ids(&state, sid);
         assert!(
@@ -734,7 +749,7 @@ fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
             },
         );
         assert!(r.success, "{:?}", r.error);
-        let mut touched = r.line_ids.clone();
+        let mut touched = r.line_ids;
         touched.sort_unstable();
         assert_eq!(touched, lines, "every line the selection names");
         let text = newest_entry_text(&state);
@@ -768,7 +783,7 @@ fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
 #[test]
 fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     let state = state_with_project();
-    let sid = create_line(&state, named("nh / ds"), Vec::new());
+    let sid = create_line(&state, Some("nh / ds".to_string()), Vec::new());
     let legacy = |state: &AppState| {
         let p = project(state);
         let line = p.line(sid).unwrap();

@@ -15,7 +15,9 @@ use super::commands::{Applied, Record};
 use crate::core::Command;
 use crate::models::project::station_naming::name_characters_refusal;
 use crate::models::survey::Project;
-use crate::models::{is_section_color, LineId, Section, SectionId, LINE_GONE, MAX_SECTION_NAME_CHARS};
+use crate::models::{
+    is_section_color, LineId, Section, SectionId, LINE_GONE, MAX_SECTION_NAME_CHARS,
+};
 
 /// Every id in `line_ids` names a line of `project`, deduplicated in order;
 /// otherwise the refusal.

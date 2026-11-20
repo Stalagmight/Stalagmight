@@ -20,8 +20,8 @@ use super::AppState;
 use crate::core::{Command, CommandResult, ReversedLine};
 use crate::models::survey::{ClosureStrategy, Project, RangeDeleteMode, ShotPlace};
 use crate::models::{
-    Coordinates, CreditEdit, CreditTargets, GpsCoordinates, LineId, LineUpdates, Person,
-    ShotData, StationId, StationRef, SurveyCredit, SurveyDirection,
+    Coordinates, CreditEdit, CreditTargets, GpsCoordinates, LineId, LineUpdates, Person, ShotData,
+    StationId, StationRef, SurveyCredit, SurveyDirection,
 };
 
 /// 0.6.0's `test_shot_data`.
@@ -374,7 +374,10 @@ fn create_line_reports_validation_warnings_with_the_shots_labels() {
         .collect();
     assert_eq!(codes.len(), 1, "{codes:?}");
     assert_eq!(codes[0].0, "LENGTH_BELOW_DEPTH_CHANGE");
-    assert!(codes[0].1.starts_with("Shot Main: 1 \u{2192} 2 "), "{codes:?}");
+    assert!(
+        codes[0].1.starts_with("Shot Main: 1 \u{2192} 2 "),
+        "{codes:?}"
+    );
 }
 
 #[test]
@@ -619,7 +622,10 @@ fn a_rename_is_refused_in_0_6_0_words_and_changes_nothing() {
     let empty = state.execute(rename(Some("  ".to_string())));
     assert_eq!(empty.error.as_deref(), Some("A line name cannot be empty"));
     let cleared = state.execute(rename(None));
-    assert_eq!(cleared.error.as_deref(), Some("A line name cannot be empty"));
+    assert_eq!(
+        cleared.error.as_deref(),
+        Some("A line name cannot be empty")
+    );
     assert_eq!(project(&state).line(a).unwrap().color, "#111111");
     assert_eq!(state.get_undo_stack().len(), steps);
 
@@ -637,15 +643,17 @@ fn a_rename_is_refused_in_0_6_0_words_and_changes_nothing() {
 fn a_metadata_edit_that_changes_nothing_records_nothing_and_keeps_redo() {
     let state = new_state();
     let a = create(&state, "A", vec![shot(1.0)]);
-    assert!(state
-        .execute(Command::UpdateLineMetadata {
-            line_id: a,
-            updates: LineUpdates {
-                color: Some("#222222".to_string()),
-                ..Default::default()
-            },
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::UpdateLineMetadata {
+                line_id: a,
+                updates: LineUpdates {
+                    color: Some("#222222".to_string()),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
     assert!(state.undo().success);
     let redo_before = state.get_redo_stack().len();
     let same = state.execute(Command::UpdateLineMetadata {
@@ -1214,25 +1222,22 @@ fn move_station_rejects_non_finite_offset() {
 #[test]
 #[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry; and C7's import funnel"]
 fn kb5_import_overlap_interpolation_integration() {
-    use crate::models::{ExistingShotUpdate, ImportLineConfig, ImportPlacement, ShotId, ShotUpdates};
-    use crate::parsers::dmp::{parse_dmp, DmpShotType};
+    use crate::models::{
+        ExistingShotUpdate, ImportLineConfig, ImportPlacement, ShotId, ShotUpdates,
+    };
+    use crate::parsers::dmp::{parse_dmp, DmpShot, DmpShotType};
 
     fn circular_mean_deg(a: f64, b: f64) -> f64 {
         let (a_r, b_r) = (a.to_radians(), b.to_radians());
-        let mean =
-            f64::atan2((a_r.sin() + b_r.sin()) / 2.0, (a_r.cos() + b_r.cos()) / 2.0).to_degrees();
+        let mean = f64::atan2(
+            f64::midpoint(a_r.sin(), b_r.sin()),
+            f64::midpoint(a_r.cos(), b_r.cos()),
+        )
+        .to_degrees();
         if mean < 0.0 {
             mean + 360.0
         } else {
             mean
-        }
-    }
-
-    fn avg_opt(a: Option<f64>, b: Option<f64>) -> Option<Option<f64>> {
-        match (a, b) {
-            (None, None) => None,
-            (Some(v), None) | (None, Some(v)) => Some(Some(v)),
-            (Some(a), Some(b)) => Some(Some((a + b) / 2.0)),
         }
     }
 
@@ -1242,15 +1247,21 @@ fn kb5_import_overlap_interpolation_integration() {
         imp: &ShotData,
         ext: &ShotData,
     ) -> ExistingShotUpdate {
+        // `ShotUpdates`' clearable fields: absent, or set to the mean.
+        let avg_opt = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (None, None) => None,
+            (Some(v), None) | (None, Some(v)) => Some(Some(v)),
+            (Some(a), Some(b)) => Some(Some(f64::midpoint(a, b))),
+        };
         ExistingShotUpdate {
             line_id,
             shot_id,
             updates: ShotUpdates {
                 azimuth_in: Some(circular_mean_deg(imp.azimuth_in, ext.azimuth_in)),
                 azimuth_out: Some(circular_mean_deg(imp.azimuth_out, ext.azimuth_out)),
-                length: Some((imp.length + ext.length) / 2.0),
-                depth_in: Some((imp.depth_in + ext.depth_in) / 2.0),
-                depth_out: Some((imp.depth_out + ext.depth_out) / 2.0),
+                length: Some(f64::midpoint(imp.length, ext.length)),
+                depth_in: Some(f64::midpoint(imp.depth_in, ext.depth_in)),
+                depth_out: Some(f64::midpoint(imp.depth_out, ext.depth_out)),
                 pitch_in: avg_opt(imp.pitch_in, ext.pitch_in),
                 pitch_out: avg_opt(imp.pitch_out, ext.pitch_out),
                 left: avg_opt(imp.left, ext.left),
@@ -1282,15 +1293,14 @@ fn kb5_import_overlap_interpolation_integration() {
         surveyors: None,
     };
 
-    let dmp_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
+    let dmp_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
     let dmp = parse_dmp(&dmp_path).unwrap();
     let standard = |index: usize| -> Vec<ShotData> {
         dmp.lines[index]
             .shots
             .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
-            .map(|s| s.to_shot_data())
+            .map(DmpShot::to_shot_data)
             .collect()
     };
     let shots_001 = standard(0);
@@ -1313,7 +1323,11 @@ fn kb5_import_overlap_interpolation_integration() {
         Vec::new(),
         super::VirtualShotMode::Auto,
     );
-    assert!(result_002.success, "import 002 failed: {:?}", result_002.error);
+    assert!(
+        result_002.success,
+        "import 002 failed: {:?}",
+        result_002.error
+    );
     let p = project(&state);
     let line_002_id = p.lines()[0].id;
     assert_eq!(p.lines()[0].shots.len(), 364);
@@ -1327,7 +1341,7 @@ fn kb5_import_overlap_interpolation_integration() {
         interp_update(line_002_id, shot_180_id, &shots_001[105], &shots_002[180]),
         interp_update(line_002_id, shot_181_id, &shots_001[106], &shots_002[181]),
     ];
-    let mut treated = shots_001.clone();
+    let mut treated = shots_001;
     treated.remove(106);
     treated.remove(105);
     assert_eq!(treated.len(), 105);
@@ -1347,7 +1361,11 @@ fn kb5_import_overlap_interpolation_integration() {
         existing_updates,
         super::VirtualShotMode::Auto,
     );
-    assert!(result_001.success, "import 001 failed: {:?}", result_001.error);
+    assert!(
+        result_001.success,
+        "import 001 failed: {:?}",
+        result_001.error
+    );
 
     // Step 3: read back.
     let p = project(&state);
@@ -1358,8 +1376,24 @@ fn kb5_import_overlap_interpolation_integration() {
     assert_eq!(sec_002.shots.len(), 364);
     let (actual_180, actual_181) = (&sec_002.shots[180], &sec_002.shots[181]);
     let eps = 0.01;
-    assert!((actual_180.length - 5.665).abs() < eps, "{}", actual_180.length);
-    assert!((actual_180.azimuth_in - 322.4).abs() < 0.5, "{}", actual_180.azimuth_in);
-    assert!((actual_181.length - 12.375).abs() < eps, "{}", actual_181.length);
-    assert!((actual_181.azimuth_in - 349.75).abs() < 0.5, "{}", actual_181.azimuth_in);
+    assert!(
+        (actual_180.length - 5.665).abs() < eps,
+        "{}",
+        actual_180.length
+    );
+    assert!(
+        (actual_180.azimuth_in - 322.4).abs() < 0.5,
+        "{}",
+        actual_180.azimuth_in
+    );
+    assert!(
+        (actual_181.length - 12.375).abs() < eps,
+        "{}",
+        actual_181.length
+    );
+    assert!(
+        (actual_181.azimuth_in - 349.75).abs() < 0.5,
+        "{}",
+        actual_181.azimuth_in
+    );
 }

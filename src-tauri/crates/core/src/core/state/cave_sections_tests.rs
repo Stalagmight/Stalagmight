@@ -98,7 +98,9 @@ fn project(state: &AppState) -> Project {
 }
 
 fn section_of(state: &AppState, line: LineId) -> Option<SectionId> {
-    project(state).line(line).unwrap().section_id
+    let p = project(state);
+    assert!(p.line(line).is_some(), "line {line} is gone");
+    p.line(line).and_then(|l| l.section_id)
 }
 
 fn section_named(state: &AppState, name: &str) -> Option<SectionId> {
@@ -332,9 +334,11 @@ fn delete_ungroups_and_undo_restores_the_section_in_place_with_its_lines() {
     assert_eq!(names(&state), ["First", "Last"]);
     let fresh = create_section(&state, "Fresh", &[]);
     assert!(fresh > last, "a deleted id is not handed out again");
-    assert!(!state
-        .execute(Command::DeleteCaveSection { section_id: doomed })
-        .success);
+    assert!(
+        !state
+            .execute(Command::DeleteCaveSection { section_id: doomed })
+            .success
+    );
 }
 
 #[test]

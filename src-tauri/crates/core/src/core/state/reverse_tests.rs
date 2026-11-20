@@ -18,8 +18,8 @@ use super::{AppState, VirtualShotMode};
 use crate::core::{Command, ReversedLine};
 use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{
-    Coordinates, GpsCoordinates, ImportLineConfig, ImportPlacement, LineId, LineUpdates,
-    ShotData, StationRef,
+    Coordinates, GpsCoordinates, ImportLineConfig, ImportPlacement, LineId, LineUpdates, ShotData,
+    StationRef,
 };
 
 /// One expected [`ReversedLine`] entry.
@@ -178,12 +178,14 @@ fn undo_restores_the_original_line_exactly() {
     let original = before.line(line_id).unwrap().clone();
     let coords_before = abs_coord_map(&before);
 
-    assert!(state
-        .execute(Command::ReverseLine {
-            line_id,
-            swap_left_right: true,
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::ReverseLine {
+                line_id,
+                swap_left_right: true,
+            })
+            .success
+    );
     assert!(state.undo().success, "reverse must be undoable");
 
     let restored_project = project(&state);
@@ -213,12 +215,14 @@ fn reverse_twice_is_the_identity() {
     let original = project(&state).line(line_id).unwrap().clone();
 
     for _ in 0..2 {
-        assert!(state
-            .execute(Command::ReverseLine {
-                line_id,
-                swap_left_right: true,
-            })
-            .success);
+        assert!(
+            state
+                .execute(Command::ReverseLine {
+                    line_id,
+                    swap_left_right: true,
+                })
+                .success
+        );
     }
 
     let p = project(&state);
@@ -485,7 +489,10 @@ fn reverse_reports_the_line_it_touched() {
     let (state, line_id) = state_with_line();
     let result = state.execute(reverse(line_id));
     assert_eq!(result.line_id, Some(line_id));
-    assert_eq!(result.reversed_lines, Some(vec![reversed_entry(line_id, 3)]));
+    assert_eq!(
+        result.reversed_lines,
+        Some(vec![reversed_entry(line_id, 3)])
+    );
 }
 
 /// The renumbering signal survives the shapes a reverse arrives in: batched
@@ -715,12 +722,14 @@ fn reversing_a_shotless_line_leaves_redo_and_the_dirty_bit_alone() {
 
     // The no-op, by both routes that skip the dialog's filter.
     assert!(state.execute(reverse(empty)).success);
-    assert!(state
-        .execute(Command::Batch {
-            commands: vec![reverse(empty)],
-            label: None,
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::Batch {
+                commands: vec![reverse(empty)],
+                label: None,
+            })
+            .success
+    );
 
     assert_eq!(
         state.get_redo_stack().len(),
@@ -743,11 +752,13 @@ fn the_placement_survives_a_reverse_and_a_save_and_reload() {
 
     assert!(state.execute(reverse(line_id)).success);
     assert_eq!(project(&state).placements, placements, "nothing re-keyed");
-    assert!(state
-        .execute(Command::SaveProject {
-            path: Some(path.clone()),
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+            })
+            .success
+    );
     let in_memory = abs_coord_map(&project(&state));
 
     let reopened = AppState::new().unwrap();
@@ -760,7 +771,11 @@ fn the_placement_survives_a_reverse_and_a_save_and_reload() {
         let reloaded = after[&slot];
         assert_eq!(
             (coords.x.to_bits(), coords.y.to_bits(), coords.z.to_bits()),
-            (reloaded.x.to_bits(), reloaded.y.to_bits(), reloaded.z.to_bits()),
+            (
+                reloaded.x.to_bits(),
+                reloaded.y.to_bits(),
+                reloaded.z.to_bits()
+            ),
             "{slot:?} moved on reopen"
         );
     }
@@ -856,7 +871,11 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     assert_eq!(line.shots[2].left, Some(1.0));
     assert_eq!(line.shots[2].right, Some(1.5));
     // The comment lands on the physical station that is now numbered 3.
-    let commented: Vec<_> = p.stations.values().filter(|s| s.comment.is_some()).collect();
+    let commented: Vec<_> = p
+        .stations
+        .values()
+        .filter(|s| s.comment.is_some())
+        .collect();
     assert_eq!(commented.len(), 1);
     assert_eq!(
         comment_at(&p, StationRef::new(line.id, 3)).as_deref(),
@@ -1108,7 +1127,11 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
 
     let p = project(&state);
     let line = p.lines()[0].id;
-    let commented: Vec<_> = p.stations.values().filter(|s| s.comment.is_some()).collect();
+    let commented: Vec<_> = p
+        .stations
+        .values()
+        .filter(|s| s.comment.is_some())
+        .collect();
     assert_eq!(commented.len(), 1, "the out-of-range comment is dropped");
     assert_eq!(
         comment_at(&p, StationRef::new(line, 1)).as_deref(),
