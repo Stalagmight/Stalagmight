@@ -30,7 +30,7 @@ pub mod validation;
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod app_contract_tests;
 
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,

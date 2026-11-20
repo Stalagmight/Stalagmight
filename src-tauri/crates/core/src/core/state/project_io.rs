@@ -318,6 +318,15 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
         let open_path = project.file_path.clone();
+        // An explicit destination always lands on a `.stalx` (0.6.0: Save As
+        // to `cave` writes `cave.stalx`).
+        let path = path.map(|p| {
+            if p.extension().is_none_or(|ext| ext != "stalx") {
+                p.with_extension("stalx")
+            } else {
+                p
+            }
+        });
         let Some(target) = path.clone().or_else(|| open_path.clone()) else {
             return CommandResult::failure("The project has no file to save to".to_string());
         };
@@ -340,6 +349,48 @@ impl AppState {
                 "{READ_ONLY_FILE_CODE}: this project was made with a newer Stalagmight; \
                  it is open read-only and cannot be saved"
             ));
+        }
+        // The first implicit save of a project never written (a deferred new
+        // project's reserved path): a file that appeared there meanwhile is
+        // not ours, so the save moves to the next free name, as 0.6.0 did,
+        // instead of offering to overwrite a stranger's file.
+        let target = if path.is_none() && file.origin == FileOrigin::New {
+            let free = Self::next_available_project_path(&target);
+            if free != target {
+                tracing::warn!(
+                    requested_path = ?target,
+                    selected_path = ?free,
+                    purpose = "avoid overwriting existing project on first implicit save",
+                    "Implicit first save path already exists; using auto-renamed path"
+                );
+            }
+            free
+        } else {
+            target
+        };
+        // The destination folder has to be there: say so instead of relaying
+        // the write's raw "No such file or directory" (#429).
+        if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let reachable = match parent.try_exists() {
+                Ok(present) => present,
+                // A permission error means the folder IS there; the write's
+                // own failure classifies that denial.
+                Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+            };
+            if !reachable {
+                tracing::warn!(
+                    path = ?target,
+                    parent = ?parent,
+                    purpose = "persist edits safely",
+                    "Save refused: the destination folder is not reachable"
+                );
+                return CommandResult::failure(format!(
+                    "{}: Cannot save to {}: the folder no longer exists or the drive is not \
+                     connected",
+                    crate::core::loading::PATH_NOT_FOUND_CODE,
+                    target.display()
+                ));
+            }
         }
         let detached = file.extras.speleodb.is_some() && path.is_some() && !to_open_file;
         let mut extras = file.extras.clone();
