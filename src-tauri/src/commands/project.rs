@@ -489,8 +489,8 @@ pub fn cancel_loading(state: State<AppState>) {
 
 /// Create a persisted project with full progress reporting.
 ///
-/// This creates a new project database file immediately, emitting progress events
-/// during creation phases (CreatingDatabase, InitializingProject, SavingSettings).
+/// This creates a new project file immediately, emitting progress events
+/// during creation phases (CreatingFile, InitializingProject, SavingSettings).
 ///
 /// Unlike `create_project`, this command supports assigning a canonical save path
 /// during project creation and can optionally defer the initial disk write.

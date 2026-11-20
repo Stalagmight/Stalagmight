@@ -272,7 +272,7 @@ impl AppState {
             self.clear_active_load(&cancel_token);
             Err(e)
         };
-        progress.start_phase(LoadingPhase::CreatingDatabase);
+        progress.start_phase(LoadingPhase::CreatingFile);
         let mut path = if let Some(path) = save_path {
             if path.extension().is_none_or(|ext| ext != "stalx") {
                 path.with_extension("stalx")
@@ -308,7 +308,7 @@ impl AppState {
         if progress.is_cancelled() {
             return fail(LoadError::cancelled());
         }
-        progress.complete_phase(LoadingPhase::CreatingDatabase);
+        progress.complete_phase(LoadingPhase::CreatingFile);
         progress.start_phase(LoadingPhase::InitializingProject);
         let mut project = Project::new(name.clone(), project_location);
         project.settings.validation = self.get_config().validation;

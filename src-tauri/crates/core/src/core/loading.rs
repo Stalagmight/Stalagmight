@@ -519,7 +519,7 @@ fn parse_hidden_sections(stored: Option<&String>) -> Vec<SectionId> {
 #[ts(rename_all = "snake_case")]
 pub enum LoadingPhase {
     // Project opening phases (8 total)
-    OpeningDatabase,
+    OpeningFile,
     LoadingProjectData,
     LoadingLines,
     ComputingStations,
@@ -528,7 +528,7 @@ pub enum LoadingPhase {
     LoadingSettings,
     Finalizing,
     // Project creation phases (3 total)
-    CreatingDatabase,
+    CreatingFile,
     InitializingProject,
     SavingSettings,
     // Export phases (4 total)
@@ -547,7 +547,7 @@ impl LoadingPhase {
     /// Human-readable label for the phase.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::OpeningDatabase => "Opening database...",
+            Self::OpeningFile => "Opening the project file...",
             Self::LoadingProjectData => "Loading survey data...",
             Self::LoadingLines => "Loading lines...",
             Self::ComputingStations => "Calculating station positions...",
@@ -555,7 +555,7 @@ impl LoadingPhase {
             Self::ValidatingData => "Validating data...",
             Self::LoadingSettings => "Loading display settings...",
             Self::Finalizing => "Finalizing...",
-            Self::CreatingDatabase => "Creating database...",
+            Self::CreatingFile => "Creating the project file...",
             Self::InitializingProject => "Initializing project...",
             Self::SavingSettings => "Saving settings...",
             Self::ExportPreparing => "Preparing export...",
@@ -575,7 +575,7 @@ impl LoadingPhase {
     pub fn weight(&self) -> f32 {
         match self {
             // Open phases sum to 100
-            Self::OpeningDatabase => 5.0,
+            Self::OpeningFile => 5.0,
             Self::LoadingProjectData => 20.0,
             Self::LoadingLines => 15.0,
             Self::ComputingStations => 20.0,
@@ -584,7 +584,7 @@ impl LoadingPhase {
             Self::LoadingSettings => 5.0,
             Self::Finalizing => 10.0,
             // Create phases sum to 100
-            Self::CreatingDatabase => 40.0,
+            Self::CreatingFile => 40.0,
             Self::InitializingProject => 40.0,
             Self::SavingSettings => 20.0,
             // Export phases sum to 100
@@ -693,7 +693,7 @@ impl ProgressEmitter {
     /// Create a new emitter for project open operations (8 phases summing to 100%).
     pub fn new_for_open(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
-            (LoadingPhase::OpeningDatabase, 5.0),
+            (LoadingPhase::OpeningFile, 5.0),
             (LoadingPhase::LoadingProjectData, 20.0),
             (LoadingPhase::LoadingLines, 15.0),
             (LoadingPhase::ComputingStations, 20.0),
@@ -712,7 +712,7 @@ impl ProgressEmitter {
     /// Create a new emitter for project create operations (3 phases summing to 100%).
     pub fn new_for_create(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
-            (LoadingPhase::CreatingDatabase, 40.0),
+            (LoadingPhase::CreatingFile, 40.0),
             (LoadingPhase::InitializingProject, 40.0),
             (LoadingPhase::SavingSettings, 20.0),
         ];
@@ -1257,21 +1257,34 @@ mod tests {
 
     #[test]
     fn test_loading_phase_labels() {
-        assert_eq!(LoadingPhase::OpeningDatabase.label(), "Opening database...");
+        assert_eq!(
+            LoadingPhase::OpeningFile.label(),
+            "Opening the project file..."
+        );
         assert_eq!(
             LoadingPhase::ComputingStations.label(),
             "Calculating station positions..."
         );
         assert_eq!(
-            LoadingPhase::CreatingDatabase.label(),
-            "Creating database..."
+            LoadingPhase::CreatingFile.label(),
+            "Creating the project file..."
         );
+    }
+
+    /// The open and create phases name the project file, not the SQLite
+    /// database of 0.6.0 (`opening_database` / `creating_database`): the
+    /// frontend keys its phase labels by these wire names.
+    #[test]
+    fn the_file_phases_are_named_for_the_file_on_the_wire() {
+        let wire = |phase: LoadingPhase| serde_json::to_value(phase).unwrap();
+        assert_eq!(wire(LoadingPhase::OpeningFile), "opening_file");
+        assert_eq!(wire(LoadingPhase::CreatingFile), "creating_file");
     }
 
     #[test]
     fn test_loading_phase_weights_sum_to_100_for_open() {
         let open_phases = [
-            LoadingPhase::OpeningDatabase,
+            LoadingPhase::OpeningFile,
             LoadingPhase::LoadingProjectData,
             LoadingPhase::LoadingLines,
             LoadingPhase::ComputingStations,
@@ -1290,7 +1303,7 @@ mod tests {
     #[test]
     fn test_loading_phase_weights_sum_to_100_for_create() {
         let create_phases = [
-            LoadingPhase::CreatingDatabase,
+            LoadingPhase::CreatingFile,
             LoadingPhase::InitializingProject,
             LoadingPhase::SavingSettings,
         ];

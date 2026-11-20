@@ -931,7 +931,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         isLoading: true,
         projectName,
         projectPath,
-        phase: 'opening_database',
+        phase: 'opening_file',
         lastEventTime: Date.now(),
       },
       autosaveFailure: null, // A new project's autosave state starts clean

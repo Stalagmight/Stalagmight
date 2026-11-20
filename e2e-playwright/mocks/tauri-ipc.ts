@@ -1615,7 +1615,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Phase 1: opening the project file
             emitEvent('loading-progress', {
               loadingId,
-              phase: 'opening_database',
+              phase: 'opening_file',
               phaseIndex: 0,
               phaseCount: 8,
               current: null,
