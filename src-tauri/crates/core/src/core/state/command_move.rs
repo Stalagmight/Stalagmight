@@ -1,61 +1,168 @@
-use super::AppState;
-use crate::core::CommandResult;
-use crate::models::{normalize_azimuth, Coordinates, LineId, StationRef};
+//! The move family: Move Line / Move Segment (translate a free piece's
+//! `Placement`) and Move Station (rewrite the shots incident to one station),
+//! plan 4.4, on the model's `move_line` / `move_segment` / `move_station`.
+//!
+//! Refusals keep 0.6.0's words: a non-finite offset, a missing line or slot,
+//! a piece (rigid group) that holds a zero datum, a zero datum station, a
+//! rewrite that would leave a shot without length. A move by nothing (every
+//! axis within 1e-9 m) changes nothing, so the pipeline records no entry.
+//!
+//! A batch that moves several slots of ONE station (the map's co-located
+//! drag: a junction is shown on each of its lines) moves that station once
+//! (plan 9.1, [`StationMoves`]).
 
-impl AppState {
-    pub(super) fn move_line(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
-        // "Adjust Position" on a line moves the WHOLE rigid group it belongs to
-        // (its merge partners and aligned-closure-connected lines), not just this
-        // one line. A merged line is rigidly bound to its partner: moving it
-        // alone would shove its merged station off the partner's, and the
-        // post-command geometry reconcile would then either snap it back (silently
-        // discarding the move when this isn't the group's min-id anchor) or drag the
-        // partner along. Moving the rigid group as one body keeps every merge aligned,
-        // so the move sticks. For a standalone line the rigid group is just itself,
-        // so this is identical to the previous single-line move. Delegating to
-        // `move_segment` also upgrades the datum guard from "this line holds a
-        // datum" to "the group holds a datum" (a partner's datum now blocks too).
-        self.move_segment(line_id, offset)
-    }
+use super::commands::{Applied, Record};
+use crate::core::Command;
+use crate::models::survey::changeset::PreviewRow;
+use crate::models::survey::{OpError, Project};
+use crate::models::{Coordinates, StationId, StationRef};
 
-    pub(super) fn move_segment(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
-        let _ = (&line_id, &offset);
-        crate::core::stub::not_ported("command_move::move_segment")
-    }
-
-    pub(super) fn move_station(
-        &self,
-        station_ref: StationRef,
-        offset: Coordinates,
-    ) -> CommandResult {
-        let _ = (&station_ref, &offset);
-        crate::core::stub::not_ported("command_move::move_station")
-    }
-}
+/// 0.6.0's Move Station refusal of a NaN or infinite offset (its Move
+/// Segment refusal, the model's [`OpError::NonFiniteOffset`], is worded
+/// differently).
+const STATION_OFFSET_NOT_FINITE: &str = "Move offset has a non-finite (NaN/inf) value";
 
 /// The execute pipeline's mutation for the move family (`commands.rs`
 /// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
 /// validates, captures and records around it; `record` is the entry being
-/// recorded (worded before the edit), for rows only the result can say.
+/// recorded (worded before the edit). A move on its own records 0.6.0's
+/// preview rows (the offset, and the line or the number of lines moved); in
+/// a batch the batch's own rows stand.
 pub(super) fn apply(
-    project: &mut crate::models::survey::Project,
-    record: &mut super::commands::Record,
-    cmd: &crate::core::Command,
-) -> Result<super::commands::Applied, String> {
-    let _ = (&mut *project, &mut *record);
+    project: &mut Project,
+    record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    let alone = record.kind == crate::core::command_kind(cmd);
     match cmd {
-        crate::core::Command::MoveLine { .. } => {
-            Err(super::commands::not_ported("execute::move_line"))
+        Command::MoveLine { line_id, offset } => {
+            let line = project
+                .line(*line_id)
+                .map(|_| project.line_label_of(*line_id));
+            project
+                .move_line(*line_id, xyz(offset))
+                .map_err(|e| e.to_string())?;
+            if alone {
+                let mut rows: Vec<PreviewRow> =
+                    line.map(|name| row("Line", name)).into_iter().collect();
+                rows.push(row("Offset", offset.display_offset()));
+                record.preview.rows = rows;
+            }
+            Ok(Applied::default())
         }
-        crate::core::Command::MoveSegment { .. } => {
-            Err(super::commands::not_ported("execute::move_segment"))
+        Command::MoveSegment { line_id, offset } => {
+            let moved = project
+                .move_segment(*line_id, xyz(offset))
+                .map_err(|e| e.to_string())?;
+            if alone {
+                record.preview.rows = vec![
+                    row("Offset", offset.display_offset()),
+                    row("Affected lines", moved.value.lines.len().to_string()),
+                ];
+            }
+            Ok(Applied::default())
         }
-        crate::core::Command::MoveStation { .. } => {
-            Err(super::commands::not_ported("execute::move_station"))
+        Command::MoveStation {
+            station_ref,
+            offset,
+        } => {
+            move_station(project, *station_ref, offset)?;
+            if alone {
+                record.preview.rows = vec![row("Offset", offset.display_offset())];
+            }
+            Ok(Applied::default())
         }
         _ => Err(format!(
             "{} is not a move command",
             crate::core::command_kind(cmd)
         )),
+    }
+}
+
+/// Move the station at `slot` by `offset`, with 0.6.0's refusals in its
+/// order: the offset, the line, the slot, then the model's (a datum on the
+/// station, a shot left without length).
+fn move_station(
+    project: &mut Project,
+    slot: StationRef,
+    offset: &Coordinates,
+) -> Result<(), String> {
+    if !offset.is_finite() {
+        return Err(STATION_OFFSET_NOT_FINITE.to_string());
+    }
+    let station = moved_station(project, slot)?;
+    project
+        .move_station(station, xyz(offset))
+        .map_err(|e| match e {
+            OpError::NonFiniteOffset => STATION_OFFSET_NOT_FINITE.to_string(),
+            other => other.to_string(),
+        })?;
+    Ok(())
+}
+
+/// The station a Move Station addresses, or 0.6.0's refusal.
+fn moved_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
+    if project.line(slot.line_id).is_none() {
+        return Err("Line not found".to_string());
+    }
+    project
+        .station_at(slot)
+        .ok_or_else(|| "Invalid station index".to_string())
+}
+
+/// One preview row, `field: -> new`, as 0.6.0's move previews wrote it.
+fn row(field: &str, new: String) -> PreviewRow {
+    PreviewRow {
+        field: field.to_string(),
+        old: String::new(),
+        new,
+    }
+}
+
+fn xyz(offset: &Coordinates) -> [f64; 3] {
+    [offset.x, offset.y, offset.z]
+}
+
+/// The run of consecutive Move Station sub-commands of one batch, so that
+/// a batch moving several slots of ONE station by the same offset moves it
+/// once (plan 9.1).
+///
+/// The map's station, shot and snap drags send one Move Station per
+/// co-located slot: every slot of a junction (one station on each of its
+/// lines) and the ends of aligned closures. In 0.6.0 each slot was a station
+/// of its own; on the station graph a junction's slots are one station, and
+/// moving it once per slot would carry it by a multiple of the offset. A
+/// repeat is the same station with the same offset (bit for bit) within one
+/// unbroken run of Move Station sub-commands; any other sub-command ends the
+/// run (it may change which station a slot addresses). Slots of different
+/// stations (an aligned closure's two ends) all move, as before.
+#[derive(Debug, Default)]
+pub(super) struct StationMoves {
+    run: Vec<(StationId, [u64; 3])>,
+}
+
+impl StationMoves {
+    /// Whether `cmd` repeats a station move this run already made (the
+    /// batch skips it); otherwise notes it, or ends the run for any other
+    /// command. A slot that does not resolve is not a repeat: its own apply
+    /// refuses it.
+    pub(super) fn repeats(&mut self, project: &Project, cmd: &Command) -> bool {
+        let Command::MoveStation {
+            station_ref,
+            offset,
+        } = cmd
+        else {
+            self.run.clear();
+            return false;
+        };
+        let Some(station) = project.station_at(*station_ref) else {
+            return false;
+        };
+        let key = (station, xyz(offset).map(f64::to_bits));
+        if self.run.contains(&key) {
+            return true;
+        }
+        self.run.push(key);
+        false
     }
 }
