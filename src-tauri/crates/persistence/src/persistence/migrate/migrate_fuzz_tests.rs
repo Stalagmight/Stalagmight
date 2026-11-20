@@ -1902,3 +1902,119 @@ fn migration_fuzz_explain() {
         }
     }
 }
+
+// ----- farm seeds (wave B's draw), plan Deviations G10 -------------------
+
+/// 0.6.0 united every merge before its across-one-shot check (D11); a
+/// demoted same-line or cycle-closing merge spanning one shot is a `Tie` the
+/// migrated solve skips (and reports). Where that union made 0.6.0 fail the
+/// component with two placement datums in one constraint group (farm seeds
+/// 34000999, 34013608), the failure is `TieNoLongerFails`; where 0.6.0
+/// solved the merge's two stations as one point and the migrated solve holds
+/// them apart (a GPS fix or the loop pulls them: 34003170 by 1.9 m, 34007292
+/// by 694 m, 34011271 by 1.3 km), `MergeTieSkipped`. Both are detected from
+/// the demoted merges and the migrated solve's skips. Without the classes
+/// all five seeds report unexplained Computed View slots.
+#[test]
+fn merges_united_before_the_across_one_shot_check_are_declared() {
+    for (seed, class) in [
+        (34_000_999, ExpectedClass::TieNoLongerFails),
+        (34_013_608, ExpectedClass::TieNoLongerFails),
+        (34_003_170, ExpectedClass::MergeTieSkipped),
+        (34_007_292, ExpectedClass::MergeTieSkipped),
+        (34_011_271, ExpectedClass::MergeTieSkipped),
+    ] {
+        let classes = pinned_seed(seed, C24_DRAW);
+        assert!(classes.contains_key(&class), "seed {seed}: {classes:?}");
+    }
+}
+
+/// Farm seeds whose wire projection the comparison misread:
+/// - 34000253: 0.6.0 failed a component for a demoted merge (D11) whose
+///   migrated solve moves nothing beyond the tolerance, so no slot is in a
+///   class; the verification's own failure comparison explains it;
+/// - 34003575: a range delete lists the closure its sweep removes once the
+///   sweep's promotion joins its ends (W6, N2 #738);
+/// - 34008560: a gap-close brings an unaligned `Move` closure's ends within
+///   1 cm, so the derived alignment (plan 3.6) ties it and the delete removes
+///   it across one shot, where 0.6.0 judged it by its flag from the open;
+/// - 34004586, 34014759: deleting a line's end shot at a junction, a closure
+///   the line kept there that another closure doubles from the junction's
+///   replacement member leaves with the line, as 0.6.0 dropped it.
+#[test]
+fn farm_seeds_project_to_todays_payloads() {
+    for seed in [34_000_253, 34_003_575, 34_008_560, 34_004_586, 34_014_759] {
+        let Some(hostile) = hostile_case(seed, C24_DRAW) else {
+            panic!("seed {seed} builds");
+        };
+        let Ok(Ok((legacy, migrated))) = open_and_migrate(&hostile.bytes) else {
+            panic!("seed {seed} migrates");
+        };
+        let tally = wire_compare(format!("seed {seed}"), seed, &legacy, &migrated);
+        assert!(tally.unexplained.is_empty(), "{:?}", tally.unexplained);
+    }
+}
+
+/// Farm seeds 34008291 and 34014759: a line's end shot at a junction is
+/// deleted while two closures tie the junction to the same far slot, one via
+/// the line and one via the junction's replacement member (the remaining
+/// slot with the lowest line id and index). 0.6.0 dropped the line's closure
+/// (`closure_rewire_skipped`) and its command's sweep then judged the other
+/// closures in list order; the station graph kept it and promoted it first,
+/// which in 34014759 put two lines 18.8 m from where 0.6.0 put them. Both
+/// deletes run here, 0.6.0's with its command epilogue's sweep, and every
+/// slot must sit where 0.6.0 puts it.
+#[test]
+fn a_doubled_closure_leaves_with_the_slot_as_today() {
+    for (seed, line, last) in [(34_008_291, 0, false), (34_014_759, 1, true)] {
+        let Some(hostile) = hostile_case(seed, C24_DRAW) else {
+            panic!("seed {seed} builds");
+        };
+        let Ok(Ok((legacy, migrated))) = open_and_migrate(&hostile.bytes) else {
+            panic!("seed {seed} migrates");
+        };
+        let (mut old, mut new) = (legacy.project, migrated.project);
+        let Some(shot) = old.get_line(line).and_then(|l| {
+            if last {
+                l.shots.last()
+            } else {
+                l.shots.first()
+            }
+            .map(|s| s.id)
+        }) else {
+            panic!("seed {seed}: line {line} has a shot");
+        };
+        if let Err(e) = old.remove_shot_with_rewire_reporting(line, shot) {
+            panic!("seed {seed}: 0.6.0's delete: {e}");
+        }
+        old.convert_orphan_closures_to_merges();
+        if let Err(e) = new.delete_shot(line, shot) {
+            panic!("seed {seed}: the station graph's delete: {e}");
+        }
+        let today: BTreeMap<crate::models::StationRef, [f64; 2]> = old
+            .compute_station_coordinates()
+            .into_iter()
+            .map(|s| {
+                let slot = crate::models::StationRef::new(
+                    s.station_ref.line_id,
+                    s.station_ref.station_index,
+                );
+                (slot, [s.coordinates.x, s.coordinates.y])
+            })
+            .collect();
+        let slots = new.raw_positions().slots(&new);
+        assert_eq!(slots.len(), today.len(), "seed {seed}: slot count");
+        for slot in slots {
+            let Some([x, y]) = today.get(&slot.slot).copied() else {
+                panic!("seed {seed}: {:?} is not a slot today", slot.slot);
+            };
+            assert!(
+                (slot.x - x).hypot(slot.y - y) <= 1e-6,
+                "seed {seed}: {:?} at ({}, {}), today ({x}, {y})",
+                slot.slot,
+                slot.x,
+                slot.y
+            );
+        }
+    }
+}

@@ -845,6 +845,26 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
             "a Computed View difference blamed on a demoted merge, without one".to_string(),
         );
     }
+    if a.expected.contains_key(&ExpectedClass::MergeTieSkipped) {
+        // A `Tie` the legacy file did not have as a closure is a demoted merge.
+        let legacy_ids: BTreeSet<u64> = legacy.project.loop_closures.iter().map(|c| c.id).collect();
+        let p = &migrated.project;
+        let skips_a_merge = p
+            .adjusted_positions(&ClosureAdjustmentConfig::default())
+            .skipped()
+            .iter()
+            .any(|s| {
+                !legacy_ids.contains(&s.closure_id)
+                    && p.closures
+                        .iter()
+                        .any(|c| c.id == s.closure_id && c.strategy == ClosureStrategy::Tie)
+            });
+        if !skips_a_merge {
+            return Err(
+                "a Computed View difference blamed on a skipped merge, without one".to_string(),
+            );
+        }
+    }
     legacy_precision_classes_hold(legacy, a)?;
 
     // Deterministic.

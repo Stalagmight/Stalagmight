@@ -275,7 +275,7 @@ impl<'a> Case<'a> {
         if moved {
             if self.positions_may_move(adjusted) {
                 self.tally.note(if adjusted {
-                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision)"
+                    "computed view: slot moved by a migration class (TieSolved / TieNoLongerFails / MergeTieSkipped / LegacyWeightsDegenerate / LegacyRewriteFailed / LegacySolvePrecision)"
                 } else {
                     "raw: slot moved by a migration class (torn merge collapsed)"
                 });
@@ -954,12 +954,13 @@ impl<'a> Case<'a> {
             for (first, last) in [(0, n / 2), (1, n - 2), (n / 2, n - 1)] {
                 let (a, b) = (shots[first], shots[last]);
                 let old = self.lp.preview_delete_shot_range(line, a, b).map(json);
-                let new = self
-                    .p
-                    .preview_delete_shot_range(line, a, b)
-                    .map(|preview| json(self.p.delete_range_impact(&preview)));
+                let new = self.p.preview_delete_shot_range(line, a, b).map(|preview| {
+                    let swept: BTreeSet<u64> =
+                        preview.swept_closures.iter().map(|c| c.id).collect();
+                    (json(self.p.delete_range_impact(&preview)), swept)
+                });
                 match (old, new) {
-                    (Ok(old), Ok(new)) => self.range_impact(line, &old, &new),
+                    (Ok(old), Ok((new, swept))) => self.range_impact(line, &old, &new, &swept),
                     (Err(_), Err(_)) => {}
                     (old, new) => self.fail(format!(
                         "range {line}/{a}..{b}: {:?} -> {:?}",
@@ -971,7 +972,17 @@ impl<'a> Case<'a> {
         }
     }
 
-    fn range_impact(&mut self, line: u32, old: &Value, new: &Value) {
+    /// Whether closure `id` is a `Move` closure the survey before the edit
+    /// does not hold aligned (so it did not tie in the solve then).
+    fn unaligned_move_before(&self, id: u64) -> bool {
+        let raw = self.p.raw_positions();
+        self.p.closures.iter().any(|c| {
+            c.id == id && c.strategy == ClosureStrategy::Move && !self.p.closure_is_aligned(&raw, c)
+        })
+    }
+
+    /// `swept`: the closures the port's preview says its sweep removes.
+    fn range_impact(&mut self, line: u32, old: &Value, new: &Value, swept: &BTreeSet<u64>) {
         for key in ["line_id", "start_pos", "end_pos", "kind"] {
             if old[key] != new[key] {
                 return self.fail(format!(
@@ -1031,21 +1042,45 @@ impl<'a> Case<'a> {
                 .filter_map(|c| c["closure_id"].as_u64())
                 .collect()
         };
-        if ids(&old["removed_closures"]) != ids(&new["removed_closures"]) {
-            scoped(
-                self,
-                "removed_closures",
-                "range delete: a closure on a junction stays",
-            );
+        let (old_removed, new_removed) =
+            (ids(&old["removed_closures"]), ids(&new["removed_closures"]));
+        if old_removed != new_removed {
+            if old_removed.is_subset(&new_removed)
+                && new_removed
+                    .difference(&old_removed)
+                    .all(|id| swept.contains(id))
+            {
+                self.tally.note(
+                    "range delete: the closures the sweep removes are listed (W6, N2 #738; today's range preview left the sweep out)",
+                );
+            } else {
+                scoped(
+                    self,
+                    "removed_closures",
+                    "range delete: a closure on a junction stays",
+                );
+            }
         }
-        if ids(&old["closures_removed_across_one_shot"])
-            != ids(&new["closures_removed_across_one_shot"])
-        {
-            scoped(
-                self,
-                "closures_removed_across_one_shot",
-                "range delete: across-one-shot removals over a junction / demoted merge",
-            );
+        let (old_across, new_across) = (
+            ids(&old["closures_removed_across_one_shot"]),
+            ids(&new["closures_removed_across_one_shot"]),
+        );
+        if old_across != new_across {
+            if old_across.is_subset(&new_across)
+                && new_across
+                    .difference(&old_across)
+                    .all(|&id| self.unaligned_move_before(id))
+            {
+                self.tally.note(
+                    "range delete: a Move closure the gap-close brings within 1 cm is removed across one shot (alignment derived, plan 3.6; today judged by its flag from the open)",
+                );
+            } else {
+                scoped(
+                    self,
+                    "closures_removed_across_one_shot",
+                    "range delete: across-one-shot removals over a junction / demoted merge",
+                );
+            }
         }
         for key in ["removed_datums", "removed_comments"] {
             let (mut o, n): (BTreeSet<StationRef>, BTreeSet<StationRef>) = (
@@ -1241,8 +1276,15 @@ impl<'a> Case<'a> {
             }
         }
         let failures = |v: &Value| v["failures"].as_array().map_or(0, Vec::len);
+        // The verification compared the components each solve failed and
+        // explained every difference (a D11 failure can move nothing beyond
+        // the tolerance, so it leaves no slot in a class).
+        let failures_explained = matches!(
+            &self.migrated.report.verification.adjusted,
+            super::AdjustedCheck::Compared(a) if a.failure_mismatches.is_empty()
+        );
         if failures(&old) != failures(&new) {
-            if self.positions_may_move(true) {
+            if self.positions_may_move(true) || failures_explained {
                 self.tally.note(
                     "adjustment report: failures differ by a Computed View class (D10 / D11)",
                 );
