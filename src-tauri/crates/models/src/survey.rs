@@ -9,8 +9,8 @@
 //! ([`Project::raw_positions`]).
 //!
 //! Layout:
-//! - [`types`](self) - the entities ([`Station`], [`Line`], [`Shot`],
-//!   [`ZeroDatum`], [`Placement`], [`LoopClosure`], ...).
+//! - `types` - the entities ([`Station`], [`Line`], [`Shot`], [`ZeroDatum`],
+//!   [`Placement`], [`LoopClosure`], ...).
 //! - `topology` - the derived slot / chain / component index ([`Topology`]),
 //!   cached on the project and dropped by every `&mut` access to the lines.
 //! - `build` - the low-level construction API (not command-level).

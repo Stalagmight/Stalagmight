@@ -46,6 +46,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [inclination.md](inclination.md) | Stored pitch is +down; where each importer normalises, and what the v12 migration has to discard. |
 | [configuration.md](configuration.md) | `config.toml` reference - file locations, every section, logging. Ground truth is the `Config` struct. |
 | [ipc-typegen.md](ipc-typegen.md) | How the TypeScript IPC types are generated from Rust with `ts-rs`, and what must never be hand-edited. |
+| [survey-model.md](survey-model.md) | The station-graph survey model (`models::survey`, in progress): entities, topology and slots, invariants, solver v1 raw positions, the post-edit anchor algorithm, construction API. |
 
 ## Subsystems
 
