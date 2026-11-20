@@ -199,8 +199,10 @@ impl AppState {
     /// with the same reason; the split itself meets the same two gates in
     /// `guard_mutation` and `run_recorded`.
     fn split_refusal(&self) -> Result<(), String> {
-        self.guard_mutation("Split line")
-            .and_then(|()| self.guard_file_writable())
+        if let Err(refused) = self.guard_mutation("Split line") {
+            return Err(refused.error.unwrap_or_default());
+        }
+        self.guard_file_writable()
             .map_err(|refused| refused.error.unwrap_or_default())
     }
 }

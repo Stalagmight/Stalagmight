@@ -55,8 +55,7 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::survey::{ClosureStrategy, Project, ZeroDatum};
 use crate::models::{
-    GpsCoordinates, LineId, SplitAt, SplitLineOptions, SplitSide, StationRef, FEATURE_ID_STRIDE,
-    MAX_LINE_ID,
+    GpsCoordinates, LineId, SplitAt, SplitLineOptions, SplitSide, FEATURE_ID_STRIDE, MAX_LINE_ID,
 };
 
 fn options() -> SplitLineOptions {
@@ -1104,9 +1103,7 @@ fn the_preview_refuses_exactly_what_the_split_refuses() {
     let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
     std::fs::write(&opened.path, patched.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
-    let r = state.execute(Command::OpenProject {
-        path: opened.path.clone(),
-    });
+    let r = state.execute(Command::OpenProject { path: opened.path });
     assert!(r.success, "{:?}", r.error);
     let reason = assert_refused(&state, main, at, &options(), "read-only file");
     assert!(reason.starts_with(super::READ_ONLY_FILE_CODE), "{reason}");
@@ -1324,7 +1321,7 @@ fn the_label_names_the_line_by_its_name_before_the_cut() {
         state.get_redo_stack()[0].description,
         "Split line \"Main\" at 2"
     );
-    let at: StationRef = slot(main, 2);
+    let at = slot(main, 2);
     assert_eq!(
         project(state).topology().station_at(at),
         Some(st(&p, main, 2))

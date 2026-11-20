@@ -320,9 +320,7 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
     std::fs::write(&opened.path, patched.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
-    let r = state.execute(Command::OpenProject {
-        path: opened.path.clone(),
-    });
+    let r = state.execute(Command::OpenProject { path: opened.path });
     assert!(r.success, "{:?}", r.error);
     let reason = assert_refused(&state, k, o, options(), "read-only file");
     assert!(reason.starts_with(super::READ_ONLY_FILE_CODE), "{reason}");

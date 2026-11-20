@@ -294,7 +294,7 @@ pub(super) fn assert_same(
             );
             continue;
         }
-        panic!("{what}: the survey differs at\n  got:  {g}\n  want: {w}");
+        assert_eq!(g, w, "{what}: the survey differs");
     }
     assert_eq!(got.1, want.1, "{what}: session shot ids");
 }
