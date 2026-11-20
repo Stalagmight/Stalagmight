@@ -971,6 +971,11 @@ pub(crate) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
     referenced_shots(cmd, &mut shots);
     let mut uuids: HashMap<LineId, HashMap<ShotId, &str>> = HashMap::new();
     let mut seen: HashSet<&str> = HashSet::new();
+    // A shot ref is a 36-character uuid, so the list is bounded far below
+    // `max_refs`: as many as a preview lists (the digest's
+    // `MAX_LISTED_SHOTS`). Every uuid of a 2,000-cell paste or a 1,000-shot
+    // credit edit would cost more than the plan 8.1 size gate allows (C16).
+    let max = max.min(crate::models::survey::changeset::MAX_LISTED_SHOTS);
     for (line_id, shot_id) in shots {
         let of_line = uuids.entry(line_id).or_insert_with(|| {
             project.line(line_id).map_or_else(HashMap::new, |line| {

@@ -277,7 +277,7 @@ mod multi_datum_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod name_rules_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod open_undo_bugs_tests;
 #[cfg(test)]
 #[expect(
@@ -467,7 +467,7 @@ mod topology_commands_tests;
 mod topology_kit;
 #[cfg(test)]
 mod undo_after_reopen_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod undo_size_gate_tests;
 #[cfg(test)]
 mod undo_pipeline_tests;
