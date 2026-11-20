@@ -391,3 +391,33 @@ fn single_byte_corruption_never_panics() {
         }
     }
 }
+
+/// Unknown keys in records count against the preserved-content cap, so an
+/// object with very many of them is refused quickly instead of scanned
+/// quadratically.
+#[test]
+fn a_flood_of_unknown_keys_is_refused() {
+    let base = small_text(11);
+    let flood = (0..20_000).fold(String::new(), |mut s, i| {
+        let _ = write!(s, "\"zz{i}\":0,");
+        s
+    });
+    for (from, to) in [
+        (",\"start\":", format!(",{flood}\"start\":")),
+        ("{\"station\":", format!("{{{flood}\"station\":")),
+    ] {
+        let text = base.replacen(from, &to, 1);
+        if text == base {
+            continue;
+        }
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            open(&text).unwrap_err(),
+            DecodeError::TooComplex {
+                limit: Limit::Preserved,
+                ..
+            }
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+}

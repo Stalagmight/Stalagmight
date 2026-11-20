@@ -188,7 +188,7 @@ pub fn write_atomic(
         .map_err(io(Stage::CreateTemp, &temp))?;
     #[cfg(unix)]
     inherit_mode(&file, dest);
-    let staged = fill(file, bytes).and_then(|()| check_guard(dest, guard));
+    let staged = fill(file, bytes, &temp).and_then(|()| check_guard(dest, guard));
     if let Err(error) = staged {
         let _ = std::fs::remove_file(&temp);
         return Err(error);
@@ -206,20 +206,19 @@ pub fn write_atomic(
     Ok(Fingerprint::of(bytes, modified))
 }
 
-fn fill(mut file: File, bytes: &[u8]) -> Result<(), WriteError> {
-    let temp = PathBuf::new();
+fn fill(mut file: File, bytes: &[u8], temp: &Path) -> Result<(), WriteError> {
     failpoint(Stage::WriteTemp)
         .and_then(|()| file.write_all(bytes))
         .map_err(|error| WriteError::Io {
             stage: Stage::WriteTemp,
-            path: temp.clone(),
+            path: temp.to_path_buf(),
             error,
         })?;
     failpoint(Stage::SyncTemp)
         .and_then(|()| file.sync_all())
         .map_err(|error| WriteError::Io {
             stage: Stage::SyncTemp,
-            path: temp,
+            path: temp.to_path_buf(),
             error,
         })
     // `file` is closed here, before the rename (Windows).

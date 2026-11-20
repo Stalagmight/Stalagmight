@@ -144,12 +144,15 @@ impl<'a, 'w> Fields<'a, 'w> {
         self.pairs.into_iter().flatten().collect()
     }
 
-    /// Note every member not taken as unknown structural content (tier 1).
-    pub(super) fn unknown_to(self, ctx: &mut Ctx<'_>) {
+    /// Note every member not taken as unknown structural content (tier 1),
+    /// counted against the preserved-content cap.
+    pub(super) fn unknown_to(self, ctx: &mut Ctx<'_>) -> Result<(), DecodeError> {
         let at = self.at.clone();
         for (key, _) in self.rest() {
+            ctx.count_typed(Limit::Preserved, 1)?;
             ctx.unknown(|_| format!("{at} key {key:?}"));
         }
+        Ok(())
     }
 }
 
@@ -304,7 +307,7 @@ pub(super) fn read_counters(
         closure: fields.big("closure")?,
         section: fields.opt("section")?,
     };
-    fields.unknown_to(ctx);
+    fields.unknown_to(ctx)?;
     Ok(counters)
 }
 
@@ -519,7 +522,7 @@ pub(super) fn read_section(
         name: f.req("name")?,
         color: f.req("color")?,
     };
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     Ok(section)
 }
 
@@ -542,7 +545,7 @@ pub(super) fn read_datum(
         entrance: f.opt("entrance")?,
         correction: f.opt("correction")?,
     };
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     Ok(datum)
 }
 
@@ -558,7 +561,7 @@ pub(super) fn read_placement(
         x: f.req("x")?,
         y: f.req("y")?,
     };
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     Ok(placement)
 }
 
@@ -585,7 +588,7 @@ pub(super) fn read_closure(
             ClosureStrategy::Batch
         }),
     };
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     Ok(LoopClosure {
         id,
         a,
@@ -609,7 +612,7 @@ pub(super) fn read_ignore(
         at: f.req_time("at")?,
         comment: f.opt("comment")?,
     };
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     Ok(warning)
 }
 
@@ -621,7 +624,7 @@ pub(super) fn read_imports(
     let mut f = Fields::of(raw, "the imports member", whole)?;
     let files: Vec<String> = f.opt("files")?.unwrap_or_default();
     let lines: Vec<String> = f.opt("lines")?.unwrap_or_default();
-    f.unknown_to(ctx);
+    f.unknown_to(ctx)?;
     ctx.count_typed(Limit::ImportHashes, files.len() + lines.len())?;
     Ok((files, lines))
 }

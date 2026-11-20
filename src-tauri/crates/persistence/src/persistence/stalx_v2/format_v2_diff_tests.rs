@@ -203,7 +203,7 @@ fn edits() -> Vec<(&'static str, Edit)> {
             p.placements[0].x += 10.0;
         }),
         ("rename the project", |p, _| {
-            p.name = "Renamed system".to_string()
+            p.name = "Renamed system".to_string();
         }),
     ]
 }

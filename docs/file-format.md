@@ -625,7 +625,8 @@ writes `-0.0`, which Python reads as the float `-0.0`.
 Stalagmight refuses, before allocating for them, files over 256 MiB and files
 holding more than 2,100,000 stations or aliases or hand moves or datums,
 100,000 lines, placements or Sections, 2,000,000 shots, ignored warnings,
-import hashes or credited people, 50,000 closures or 10,000 unknown members.
+import hashes or credited people, 50,000 closures or 10,000 unknown keys and
+members.
 Preserved unknown content nested deeper than 128 levels is refused. A history
 of more than 65,536 entries is dropped (not refused). Servers should apply
 caps that fit their own deadlines.

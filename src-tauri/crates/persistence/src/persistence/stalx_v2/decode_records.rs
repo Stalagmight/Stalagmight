@@ -237,6 +237,9 @@ fn skip_unknown<'de, A: MapAccess<'de>>(
     if others.iter().any(|k| k == key) {
         return Err(ctx.duplicate(key));
     }
+    // Unknown keys count against the preserved-content cap, which also
+    // bounds the duplicate scan above.
+    ctx.count(Limit::Preserved, 1)?;
     others.push(key.to_string());
     ctx.unknown_key(key);
     map.next_value::<IgnoredAny>()?;

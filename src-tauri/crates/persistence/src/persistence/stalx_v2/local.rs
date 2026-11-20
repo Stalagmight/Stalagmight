@@ -27,7 +27,7 @@ pub fn rewrite_local(original: &[u8], extras: &Extras) -> Result<Vec<u8>, Encode
     write_header(&mut out, &top, |key, raw, out| {
         if key == "summary" {
             let id = extras.speleodb.as_ref().map(|l| l.project_id.as_str());
-            replace_keys(out, raw, &[("speleodb", id)])
+            replace_keys(out, raw, Some(&SUMMARY_KEYS), &[("speleodb", id)])
         } else {
             out.extend_from_slice(raw.get().as_bytes());
             Ok(())
@@ -60,7 +60,8 @@ pub fn rename_project(original: &[u8], name: &str) -> Result<Vec<u8>, EncodeErro
     }
     let mut out = Vec::with_capacity(original.len() + 256);
     write_header(&mut out, &top, |key, raw, out| match key {
-        "summary" | "project" => replace_keys(out, raw, &[("name", Some(name))]),
+        "summary" => replace_keys(out, raw, Some(&SUMMARY_KEYS), &[("name", Some(name))]),
+        "project" => replace_keys(out, raw, None, &[("name", Some(name))]),
         _ => {
             out.extend_from_slice(raw.get().as_bytes());
             Ok(())
@@ -223,25 +224,25 @@ fn write_body(out: &mut Vec<u8>, top: &[Member<'_>]) {
 }
 
 /// The object `raw` with some keys' values replaced (`None` removes the key),
-/// every other member verbatim, in the canonical order of the summary when
-/// it is one, else in file order. A key missing from the original is added
-/// at its canonical place (summary) or the end.
+/// every other member verbatim: with `order`, its keys first in that order
+/// and the others after in file order; else in file order. A key missing
+/// from the original is added at its place in `order`, else at the end.
 fn replace_keys(
     out: &mut Vec<u8>,
     raw: &RawValue,
+    order: Option<&[&str]>,
     replace: &[(&str, Option<&str>)],
 ) -> Result<(), EncodeError> {
     let pairs = members(raw.get(), MAX_SMALL_MEMBERS).map_err(|e| {
         EncodeError::Original(e.into_decode("a header member", raw.get(), raw.get()))
     })?;
-    let is_summary = pairs.iter().any(|(k, _)| k == "shots");
     let mut ordered: Vec<(&str, Option<&RawValue>)> = Vec::new();
-    if is_summary {
-        for key in SUMMARY_KEYS {
+    if let Some(order) = order {
+        for &key in order {
             ordered.push((key, pairs.iter().find(|(k, _)| k == key).map(|(_, v)| *v)));
         }
         for (key, value) in &pairs {
-            if !SUMMARY_KEYS.contains(&key.as_ref()) {
+            if !order.contains(&key.as_ref()) {
                 ordered.push((key.as_ref(), Some(*value)));
             }
         }
