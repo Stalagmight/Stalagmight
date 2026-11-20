@@ -8,7 +8,7 @@
  * rules (`fill_line_station_names`: End, Mid and Prepend), seeds a line with
  * no names at all from the station indexes, and makes every name unique in its
  * line (`settle_line_station_names`). This is a port of those rules from
- * `src-tauri/crates/models/src/project/station_naming.rs`, so the wizard shows
+ * `src-tauri/crates/models/src/station_naming.rs`, so the wizard shows
  * exactly the name the import gives; keep the two in step.
  */
 import type { EditableShot } from '../components/common/editableShot';
