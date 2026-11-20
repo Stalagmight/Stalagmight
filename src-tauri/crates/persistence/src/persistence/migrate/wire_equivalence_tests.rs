@@ -63,9 +63,9 @@ fn slot_of(value: &Value) -> StationRef {
 
 /// Declared difference classes (counted) and unexplained ones (failures).
 #[derive(Debug, Default)]
-struct Tally {
-    classes: BTreeMap<&'static str, usize>,
-    unexplained: Vec<String>,
+pub(super) struct Tally {
+    pub(super) classes: BTreeMap<&'static str, usize>,
+    pub(super) unexplained: Vec<String>,
     cases: usize,
 }
 
@@ -473,7 +473,12 @@ impl<'a> Case<'a> {
                 "surveyor",
                 "date",
             ] {
-                if o.get(key) != n.get(key) {
+                if key == "date" && self.migrated.report.dates_clamped > 0 {
+                    if o.get(key) != n.get(key) {
+                        self.tally
+                            .note("line: a date outside 0001-9999 clamped (F10) by the migration");
+                    }
+                } else if o.get(key) != n.get(key) {
                     self.fail(format!(
                         "line {id}.{key}: {:?} -> {:?}",
                         o.get(key),
@@ -490,11 +495,25 @@ impl<'a> Case<'a> {
             if o["shots"] != n["shots"] {
                 if self.migrated.report.numbers_sanitized > 0
                     || self.migrated.report.shot_uuids_minted > 0
+                    || self.migrated.report.dates_clamped > 0
                 {
-                    self.tally
-                        .note("line: shots sanitized or uuids minted by the migration");
+                    self.tally.note(
+                        "line: shots sanitized, uuids minted or dates clamped (F10) by the migration",
+                    );
                 } else {
-                    self.fail(format!("line {id}: shots differ"));
+                    let first = o["shots"]
+                        .as_array()
+                        .zip(n["shots"].as_array())
+                        .and_then(|(a, b)| {
+                            a.iter().zip(b).enumerate().find_map(|(i, (x, y))| {
+                                let keys = x.as_object()?.keys();
+                                keys.filter(|k| x.get(*k) != y.get(*k))
+                                    .map(|k| format!("shot {i}.{k}: {:?} -> {:?}", x[k], y.get(k)))
+                                    .next()
+                            })
+                        })
+                        .unwrap_or_default();
+                    self.fail(format!("line {id}: shots differ ({first})"));
                 }
             }
         }
@@ -1362,7 +1381,12 @@ fn old_connectivity(
 }
 
 /// Compare everything for one legacy file.
-fn compare(what: String, seed: u64, legacy: &LegacySurvey, migrated: &Migrated) -> Tally {
+pub(super) fn compare(
+    what: String,
+    seed: u64,
+    legacy: &LegacySurvey,
+    migrated: &Migrated,
+) -> Tally {
     let mut case = Case::new(what, legacy, migrated);
     let lp = &legacy.project;
     let p = &migrated.project;

@@ -64,6 +64,9 @@ pub struct MigrationReport {
     /// Non-finite numbers (shot readings, line quality, hand moves) replaced
     /// or dropped, as the 0.6.0 save heal did.
     pub numbers_sanitized: usize,
+    /// Credit and line dates outside 0001-9999 clamped into it, as the file
+    /// holds them (format rule F10), so the migrated model is the saved one.
+    pub dates_clamped: usize,
 
     // Closures (plan 7.2.4).
     pub closures_kept: usize,
@@ -317,6 +320,7 @@ impl MigrationReport {
         put("station_keys_duplicate", self.station_keys_duplicate);
         put("shot_uuids_minted", self.shot_uuids_minted);
         put("numbers_sanitized", self.numbers_sanitized);
+        put("dates_clamped", self.dates_clamped);
         put("closures_kept", self.closures_kept);
         put("aligned_closures_to_tie", self.aligned_closures_to_tie);
         put("closures_dropped_dangling", self.closures_dropped_dangling);

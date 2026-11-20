@@ -15,6 +15,8 @@ use stalagmight_legacy::models as old;
 use crate::models as live;
 use crate::models::survey;
 
+use super::super::stalx_v2::normalized_date;
+
 pub(super) fn gps(g: &old::GpsCoordinates) -> live::GpsCoordinates {
     live::GpsCoordinates {
         latitude: g.latitude,
@@ -157,7 +159,7 @@ impl Credits {
             Arc::new(live::SurveyCredit {
                 surveyors: source.surveyors.iter().map(person).collect(),
                 explorers: source.explorers.iter().map(person).collect(),
-                date: source.date,
+                date: source.date.map(normalized_date),
             })
         });
         Some(Arc::clone(shared))

@@ -73,6 +73,14 @@ mod migrate_fixture_tests;
 
 #[cfg(test)]
 #[expect(
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: a failing seed prints its replay line, a sweep its coverage counts"
+)]
+mod migrate_fuzz_tests;
+
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
