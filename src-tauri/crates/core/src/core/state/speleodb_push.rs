@@ -136,6 +136,7 @@ fn write_push_snapshot(dir: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFi
     use std::io::Write as _;
     let io =
         |e: std::io::Error| SpeleoDbError::Io(format!("could not stage the push snapshot: {e}"));
+    std::fs::create_dir_all(dir).map_err(io)?;
     let mut file = tempfile::Builder::new()
         .prefix(".speleodb-push-")
         .suffix(".stalx")

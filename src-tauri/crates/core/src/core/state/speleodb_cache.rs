@@ -158,10 +158,16 @@ impl AppState {
         if is_open {
             return self.with_file(|file| file.display_settings().clone());
         }
-        match read_cache_file(dest) {
-            CacheFile::Read { display, .. } => display,
-            CacheFile::Absent | CacheFile::Unreadable => BTreeMap::new(),
-        }
+        file_display(dest)
+    }
+}
+
+/// The view toggles the cache file at `dest` holds; none when it is absent or
+/// unreadable (a first open's defaults).
+pub(super) fn file_display(dest: &Path) -> BTreeMap<String, String> {
+    match read_cache_file(dest) {
+        CacheFile::Read { display, .. } => display,
+        CacheFile::Absent | CacheFile::Unreadable => BTreeMap::new(),
     }
 }
 

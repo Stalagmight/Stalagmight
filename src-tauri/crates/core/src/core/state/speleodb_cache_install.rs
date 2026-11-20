@@ -318,6 +318,11 @@ impl AppState {
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(project_id, dest)?;
         }
+        // The view toggles of the copy on disk, read before any lock is taken: a
+        // legacy copy is read through the migration, which must not run under the
+        // `project` guard. Another install cannot land in between: it would move
+        // the session generation, which the commit below checks.
+        let on_disk_display = super::speleodb_cache::file_display(dest);
         let _lock_ops = self.speleodb_lock_ops_guard();
         let mut project = self
             .project
@@ -347,7 +352,12 @@ impl AppState {
                 });
             }
         }
-        let display = self.outgoing_display(project.as_ref(), dest);
+        // The open copy's toggles in memory are the authority for its own file.
+        let display = if replaces_open {
+            self.with_file(|file| file.display_settings().clone())
+        } else {
+            on_disk_display
+        };
         let bytes = prepared.cache_bytes(display)?;
         super::speleodb_reload::install_cache_bytes(dest, &bytes)?;
         if replaces_open {
