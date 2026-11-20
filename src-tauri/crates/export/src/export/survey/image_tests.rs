@@ -139,9 +139,13 @@ fn the_rendering_follows_the_positions_it_is_given() {
     let adjusted =
         project.adjusted_positions(&crate::models::config::ClosureAdjustmentConfig::default());
     let measured = generate_svg_string(&project, &options).unwrap();
-    let solved =
-        super::generate_svg_string_with_positions(&project, &options, &adjusted, &project.raw_positions())
-            .unwrap();
+    let solved = super::generate_svg_string_with_positions(
+        &project,
+        &options,
+        &adjusted,
+        &project.raw_positions(),
+    )
+    .unwrap();
     assert_ne!(
         measured, solved,
         "the Batch loop is solved in the Computed View"

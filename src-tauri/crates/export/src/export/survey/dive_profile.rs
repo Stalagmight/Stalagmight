@@ -1,4 +1,4 @@
-//! The dive profile of a station-graph plan: the legacy renderer
+//! The dive profile of a station-graph plan: the renderer
 //! (`super::super::dive_profile`) on the plan's wire form. The route has no
 //! merge hops (plan D18), so a junction is one profile point, not a
 //! zero-length pair.

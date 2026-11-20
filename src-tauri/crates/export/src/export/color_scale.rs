@@ -389,7 +389,10 @@ mod tests {
         );
         assert_eq!((h.min, h.max), (0.0, 20.0));
         assert_eq!(h.counts.len(), 8);
-        assert_eq!(h.counts.iter().sum::<u32>() as usize, project.stations.len());
+        assert_eq!(
+            h.counts.iter().sum::<u32>() as usize,
+            project.stations.len()
+        );
     }
 
     #[test]

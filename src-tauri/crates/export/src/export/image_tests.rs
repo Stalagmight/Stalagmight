@@ -10,7 +10,9 @@
 
 use super::*;
 use crate::export::survey::test_helpers::{meta, At, Survey};
-use crate::export::survey::{export_image, generate_svg_string, generate_svg_string_with_positions};
+use crate::export::survey::{
+    export_image, generate_svg_string, generate_svg_string_with_positions,
+};
 use crate::models::survey::{ClosureStrategy, Project, StationPositions};
 use crate::models::{GpsCoordinates, ShotData, ShotKind, StationId};
 use tempfile::NamedTempFile;
@@ -709,7 +711,9 @@ fn ref_chain_through_free_stations_counts_as_one_tie() {
     // would have ignored the chain (neither hop touches two real
     // segments); the new tie semantics should give each segment
     // branching factor = 1.
-    let project = chain_survey("Chain", ("Left", 10.0), ("Right", 10.0)).0.build();
+    let project = chain_survey("Chain", ("Left", 10.0), ("Right", 10.0))
+        .0
+        .build();
 
     // threshold = 1 → both segments are thick (branching = 1 ≥ 1).
     let svg = generate_svg_string(&project, &branching(1)).unwrap();
@@ -1121,18 +1125,18 @@ fn sanitize_hex_color_rejects_non_hex() {
     assert_eq!(sanitize_hex_color("#gggggg"), "#000000"); // non-hex digits
 }
 
-/// Positions that differ from a survey's measured layout: `shifted`
-/// stations moved by `by`.
+/// Positions that differ from a survey's measured layout: the `moved`
+/// stations shifted by `by`.
 struct Shifted<'a> {
     base: &'a crate::models::survey::RawPositions,
-    shifted: Vec<StationId>,
+    moved: Vec<StationId>,
     by: [f64; 2],
 }
 
 impl StationPositions for Shifted<'_> {
     fn station_xy(&self, station: StationId) -> Option<[f64; 2]> {
         let [x, y] = self.base.xy(station)?;
-        Some(if self.shifted.contains(&station) {
+        Some(if self.moved.contains(&station) {
             [x + self.by[0], y + self.by[1]]
         } else {
             [x, y]
@@ -1163,7 +1167,7 @@ fn generate_svg_string_with_positions_uses_supplied_coordinates() {
     let raw = project.raw_positions();
     let moved = Shifted {
         base: &raw,
-        shifted: vec![last],
+        moved: vec![last],
         by: [25.0, -25.0],
     };
     let shifted = generate_svg_string_with_positions(&project, &opts, &moved, &raw).unwrap();

@@ -3,13 +3,12 @@
 //! TML/TMLU, the map image (SVG/PNG/PDF), its Levels histogram and the dive
 //! profile.
 //!
-//! They live beside the legacy exporters (the parent module, on
-//! `models::project`) and share their writers: the CSV escaping and number
-//! formats, the JSON records, the Ariane row writer and every pass after the
-//! rows are built (GPS stamping, the geometry repair, the SpeleoDB
-//! hardening), and the whole image renderer. Only the step that reads the
-//! model is new. The core switch flips its callers to these functions and
-//! deletes the legacy ones.
+//! They are the only exporters: the 0.6.0 ones on `models::project` were
+//! deleted with the core switch. The writers they feed are the parent
+//! module's: the CSV escaping and number formats, the JSON records, the
+//! Ariane row writer and every pass after the rows are built (GPS stamping,
+//! the geometry repair, the SpeleoDB hardening), and the whole image
+//! renderer, which draws a model-neutral sketch (`image_sketch.rs`).
 //!
 //! What the station graph changes in the files (declared, plan 12.2):
 //! - **CSV / JSON:** `from` / `to` are station names and `from_id` / `to_id`

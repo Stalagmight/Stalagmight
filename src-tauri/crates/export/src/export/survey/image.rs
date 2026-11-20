@@ -1,6 +1,6 @@
 //! The map image (SVG / PNG / PDF) and its Levels histogram on the
-//! station-graph model: the legacy renderer (`super::super::image`) fed a
-//! sketch read off the station graph.
+//! station-graph model: the renderer (`super::super::image`) fed a sketch
+//! read off the station graph.
 //!
 //! - One wire station per drawn slot, with the shared Station ID and name, so
 //!   a junction's slots label as one point. The comment sits on the
@@ -222,7 +222,9 @@ impl Measure for GraphMeasure<'_> {
     }
 
     fn distance_field(&self, include_reference: bool) -> (HashMap<StationRef, Option<f64>>, f64) {
-        let field = self.project.distance_field(self.raw, None, include_reference);
+        let field = self
+            .project
+            .distance_field(self.raw, None, include_reference);
         let mut by_slot = HashMap::new();
         for line in self.project.lines() {
             for (index, station) in line.stations().enumerate() {

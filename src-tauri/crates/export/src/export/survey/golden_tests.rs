@@ -235,8 +235,7 @@ fn export_scenario(stalx: &Path, out: &Path) {
             include_reference_legs,
             ..Default::default()
         };
-        let svg =
-            generate_svg_string_with_positions(&project, &options, &adjusted, &raw).unwrap();
+        let svg = generate_svg_string_with_positions(&project, &options, &adjusted, &raw).unwrap();
         std::fs::write(dir.join(file), book.mask(&svg)).unwrap();
     }
 }
