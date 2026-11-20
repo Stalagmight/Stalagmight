@@ -472,7 +472,8 @@ The rules:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. Station names are unique among the stations of each line.
+8. Station names are unique among the stations of each line, and Section
+   names are unique in the project (compared exactly).
 9. Counters are above every id in use; the station and Section counters
    are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
    the ids are used up, and Stalagmight refuses an edit that needs another).

@@ -112,6 +112,11 @@ pub enum Repair {
         id: StationId,
         name: String,
     },
+    /// A Section named like an earlier one got the first free `name (n)`.
+    RenamedSection {
+        id: SectionId,
+        name: String,
+    },
     RaisedCounter {
         counter: CounterKind,
         to: u64,
@@ -176,6 +181,7 @@ impl fmt::Display for Repair {
                 write!(f, "placed the piece of station {station} at the origin")
             }
             Self::RenamedStation { id, name } => write!(f, "station {id} is now named {name:?}"),
+            Self::RenamedSection { id, name } => write!(f, "Section {id} is now named {name:?}"),
             Self::RaisedCounter { counter, to } | Self::LoweredCounter { counter, to } => {
                 write!(f, "the next {counter} id is now {to}")
             }
@@ -264,6 +270,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::ClosureSelfLoop { .. }
         | Violation::ClosureAcrossUnplacedPieces { .. } => 3,
         Violation::DuplicateStationName { .. }
+        | Violation::DuplicateSectionName { .. }
         | Violation::CounterNotAbove { .. }
         | Violation::CounterOutOfRange { .. }
         | Violation::NonFinite { .. }
@@ -588,6 +595,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     repairs.push(Repair::RenamedStation { id: *second, name });
                 }
             }
+            Violation::DuplicateSectionName { name, second, .. } => {
+                rename_section(p, *second, name, repairs);
+            }
             Violation::CounterNotAbove { counter, .. } => raise_counter(p, *counter, repairs),
             Violation::CounterOutOfRange { counter, .. } => lower_counter(p, *counter, repairs),
             // Splitting a line is not a repair: such a file stays refused.
@@ -773,6 +783,20 @@ fn restore_chain_station(
         from: id,
         to,
     });
+}
+
+/// Give Section `id` (named `name`, like an earlier one) the first free
+/// `name (n)`, the suffix Add .stalx gives a colliding name.
+fn rename_section(p: &mut Project, id: SectionId, name: &str, repairs: &mut Vec<Repair>) {
+    let taken: BTreeSet<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
+    let fresh = (2u64..)
+        .map(|n| format!("{name} ({n})"))
+        .find(|candidate| !taken.contains(candidate.as_str()));
+    let (Some(fresh), Some(section)) = (fresh, p.sections.iter_mut().find(|s| s.id == id)) else {
+        return;
+    };
+    section.name.clone_from(&fresh);
+    repairs.push(Repair::RenamedSection { id, name: fresh });
 }
 
 fn lower_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair>) {

@@ -132,7 +132,8 @@ line, empty, overlong or repeated shot uuids), references (line starts,
 shot targets, datum / placement / closure stations, `via` hints, hand-move
 keys, Sections), simple chains, orphan stations, the forest (the shot that
 closes a cycle), one anchor per component, closures (`a != b`; across pieces
-only between two datum-held pieces), station names on every line, counters
+only between two datum-held pieces), station names on every line, Section
+names in the project, counters
 above every id in use (aliases included), the station and Section
 counters at most 2^31 and closure ids and the closure counter within
 `MAX_CLOSURE_ID` (2^53 - 1, the file's integers), finite numbers (shots, quality,

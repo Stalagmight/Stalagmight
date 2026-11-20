@@ -305,3 +305,39 @@ fn the_closure_counter_is_range_checked() {
     assert!(salvaged.closures.is_empty(), "{report:?}");
     assert!(encode(&salvaged, &Extras::default(), Mode::Normal).is_ok());
 }
+
+/// Section names are unique within a project (`docs/file-format.md` 5.7),
+/// and a file is held to it at load: two Sections of one name are an
+/// invariant violation, and salvage renames the later one as Add .stalx
+/// would (review finding C-file-format-12). Injection: without the
+/// `DuplicateSectionName` check the file opens and re-saves as it is.
+#[test]
+fn section_names_are_unique_at_load() {
+    use crate::models::survey::Violation;
+    let (p, extras) = example();
+    let text = text_of(&encode(&p, &extras, Mode::Normal).unwrap()).to_string();
+    let twice = text
+        .replacen("\"section\":1}", "\"section\":2}", 1)
+        .replacen(
+            "{\"id\":0,\"name\":\"Upstream\",\"color\":\"#4ecdc4\"}\n",
+            "{\"id\":0,\"name\":\"Upstream\",\"color\":\"#4ecdc4\"},\n\
+             {\"id\":1,\"name\":\"Upstream\",\"color\":\"#abc\"}\n",
+            1,
+        );
+    assert_eq!(twice.matches("\"Upstream\"").count(), 2);
+    match decode(twice.as_bytes(), &DecodeOptions::default()) {
+        Err(super::DecodeError::Invalid { violations }) => assert_eq!(
+            violations,
+            vec![Violation::DuplicateSectionName {
+                name: "Upstream".to_string(),
+                first: 0,
+                second: 1,
+            }]
+        ),
+        other => panic!("two Sections of one name opened: {other:?}"),
+    }
+    let (salvaged, report) = super::decode_salvage(twice.as_bytes());
+    let salvaged = salvaged.unwrap();
+    let names: Vec<&str> = salvaged.sections.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Upstream", "Upstream (2)"], "{report:?}");
+}

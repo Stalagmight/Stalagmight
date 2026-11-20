@@ -276,6 +276,15 @@ pub enum Violation {
         first: StationId,
         second: StationId,
     },
+    /// Two Sections share a name (`first` is the earlier in panel order).
+    /// Names are project-unique (`docs/file-format.md` 5.7); the Section
+    /// commands and Add / Merge keep them so, and a file is held to it at
+    /// load (review finding C-file-format-12).
+    DuplicateSectionName {
+        name: String,
+        first: SectionId,
+        second: SectionId,
+    },
     // 9. counters
     CounterNotAbove {
         counter: CounterKind,
@@ -453,6 +462,11 @@ impl fmt::Display for Violation {
                 f,
                 "stations {first} and {second} on line {line} are both named {name:?}"
             ),
+            Self::DuplicateSectionName {
+                name,
+                first,
+                second,
+            } => write!(f, "Sections {first} and {second} are both named {name:?}"),
             Self::CounterNotAbove {
                 counter,
                 next,
@@ -865,6 +879,19 @@ impl Project {
                     None => {
                         seen.insert(name, station);
                     }
+                }
+            }
+        }
+        let mut sections: HashMap<&str, SectionId> = HashMap::with_capacity(self.sections.len());
+        for section in &self.sections {
+            match sections.get(section.name.as_str()) {
+                Some(&first) => out.push(Violation::DuplicateSectionName {
+                    name: section.name.clone(),
+                    first,
+                    second: section.id,
+                }),
+                None => {
+                    sections.insert(section.name.as_str(), section.id);
                 }
             }
         }
