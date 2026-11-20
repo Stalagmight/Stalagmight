@@ -20,8 +20,7 @@ fn committed(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../src/types/ipc")
         .join(format!("{name}.ts"));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 /// `T`'s file as `pnpm gen:ipc-types` writes it: every import specifier
@@ -85,5 +84,8 @@ fn the_wire_project_state_is_todays_project_state() {
 fn the_wire_types_export_to_the_legacy_file_names() {
     assert_eq!(ProjectWire::EXPORT_TO, Some("bindings/Project.ts"));
     assert_eq!(LineWire::EXPORT_TO, Some("bindings/Line.ts"));
-    assert_eq!(ProjectStateWire::EXPORT_TO, Some("bindings/ProjectState.ts"));
+    assert_eq!(
+        ProjectStateWire::EXPORT_TO,
+        Some("bindings/ProjectState.ts")
+    );
 }

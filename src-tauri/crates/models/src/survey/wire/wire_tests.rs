@@ -30,10 +30,7 @@ fn slot(line: u32, index: u32) -> StationRef {
 }
 
 fn station_at(stations: &[crate::Station], at: StationRef) -> &crate::Station {
-    stations
-        .iter()
-        .find(|s| s.station_ref == at)
-        .unwrap()
+    stations.iter().find(|s| s.station_ref == at).unwrap()
 }
 
 /// The three-line junction with a comment on the junction s1 and a datum on
@@ -219,7 +216,9 @@ fn closure_references_follow_todays_rule_with_a_station_as_the_merge_group() {
         (closure.station_a, closure.station_b),
         (slot(l1, 2), slot(l2, 1))
     );
-    let metrics = p.closure_metrics_via((b, Some(l1)), (s3, Some(l2))).unwrap();
+    let metrics = p
+        .closure_metrics_via((b, Some(l1)), (s3, Some(l2)))
+        .unwrap();
     assert_eq!(closure.misclosure_distance, metrics.misclosure_distance);
     assert_eq!(closure.path_length, metrics.path_length);
     assert!(!closure.is_aligned);
@@ -257,7 +256,10 @@ fn a_tie_is_an_aligned_batch_closure_on_the_wire() {
     let y = at(&p, l1, 2);
     p.push_closure(x, None, y, None, ClosureStrategy::Tie);
     let wire = p.project_wire();
-    assert_eq!(wire.loop_closures[0].strategy, crate::ClosureStrategy::Batch);
+    assert_eq!(
+        wire.loop_closures[0].strategy,
+        crate::ClosureStrategy::Batch
+    );
     assert!(wire.loop_closures[0].is_aligned);
 }
 
@@ -298,7 +300,10 @@ fn the_computed_view_list_has_the_same_slots_and_relations() {
         assert_eq!(r.station_ref, a.station_ref);
         assert_eq!(r.merged_with, a.merged_with);
         assert_eq!(r.closures().len(), a.closures().len());
-        assert_eq!([a.coordinates.x, a.coordinates.y, a.coordinates.z], [s.x, s.y, s.z]);
+        assert_eq!(
+            [a.coordinates.x, a.coordinates.y, a.coordinates.z],
+            [s.x, s.y, s.z]
+        );
     }
 }
 
@@ -312,7 +317,10 @@ fn slots_resolve_at_the_command_boundary_and_refuse_out_of_range() {
         p.resolve_slot(slot(l0, 4)),
         Err(OpError::UnknownSlot(_))
     ));
-    assert!(matches!(p.resolve_slot(slot(99, 0)), Err(OpError::UnknownSlot(_))));
+    assert!(matches!(
+        p.resolve_slot(slot(99, 0)),
+        Err(OpError::UnknownSlot(_))
+    ));
     assert!(p.resolve_slot_pair(slot(l0, 0), slot(l0, 9)).is_err());
 }
 
@@ -348,7 +356,10 @@ fn line_relationships_count_what_the_delete_takes() {
     let x = at(&p, l0, 2);
     p.push_closure(b, Some(l1), s3, Some(l2), ClosureStrategy::Batch);
     p.push_closure(x, Some(l0), b, Some(l1), ClosureStrategy::Batch);
-    p.line_mut(l1).unwrap().hand_moves.insert(b, [0.0, 0.0, 0.5]);
+    p.line_mut(l1)
+        .unwrap()
+        .hand_moves
+        .insert(b, [0.0, 0.0, 0.5]);
     let rel = p.line_relationships(l1);
     assert_eq!(rel.merges.len(), 1, "L1's start is a junction with L0");
     assert_eq!(rel.closures.len(), 2, "both closures end at b, only on L1");
@@ -363,7 +374,10 @@ fn line_relationships_count_what_the_delete_takes() {
 fn the_envelope_input_carries_hand_moves_and_comments_per_slot() {
     let (mut p, [l0, l1, _]) = placed_junction();
     let b = at(&p, l1, 2);
-    p.line_mut(l1).unwrap().hand_moves.insert(b, [0.25, -0.5, 0.75]);
+    p.line_mut(l1)
+        .unwrap()
+        .hand_moves
+        .insert(b, [0.25, -0.5, 0.75]);
     let input = p.load_envelope_input(false);
     assert_eq!(input.station_offsets, [(slot(l1, 2), (0.25, -0.5, 0.75))]);
     let commented: Vec<StationRef> = input
@@ -386,4 +400,76 @@ fn an_empty_project_projects_to_an_empty_payload() {
     assert_eq!(state.project.next_line_id, 0);
     assert_eq!(state.project.next_closure_id, 1);
     assert_eq!(state.stats.station_count, 0);
+}
+
+/// Scale: a 3,000-line, 75,000-shot survey (a junction at every line start,
+/// closures and fixes sprinkled in). Prints the wall time of the payload and
+/// its JSON; run with `--release --ignored --nocapture`.
+#[test]
+#[ignore = "timing; run by hand"]
+fn the_projection_scales_to_a_large_survey() {
+    use std::time::Instant;
+    let mut p = project();
+    let first = add(
+        &mut p,
+        StartAt::New,
+        (0..25).map(|i| flat(f64::from(i % 360), 3.0)).collect(),
+    );
+    let s0 = at(&p, first, 0);
+    p.set_placement(s0, 0.0, 0.0).unwrap();
+    let mut lines = vec![first];
+    let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = |below: usize| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) as usize % below
+    };
+    for n in 1..3_000_u32 {
+        let host = lines[next(lines.len())];
+        let from = at(&p, host, next(26));
+        let line = add(
+            &mut p,
+            StartAt::Station(from),
+            (0..25)
+                .map(|i| flat(f64::from((n * 17 + i) % 360), 2.5))
+                .collect(),
+        );
+        lines.push(line);
+    }
+    for n in 0..200_usize {
+        let (a, b) = (lines[n * 11 % 3_000], lines[n * 29 % 3_000]);
+        let (sa, sb) = (at(&p, a, 25), at(&p, b, 20));
+        if sa != sb {
+            p.push_closure(sa, Some(a), sb, Some(b), ClosureStrategy::Batch);
+        }
+    }
+    let started = Instant::now();
+    let raw = p.raw_positions();
+    let t_raw = started.elapsed();
+    let state = p.project_state_wire_with(&raw, false);
+    let t_state = started.elapsed();
+    let bytes = serde_json::to_vec(&state).unwrap();
+    let t_json = started.elapsed();
+    let input = p.load_envelope_input(false);
+    let t_envelope = started.elapsed().saturating_sub(t_json);
+    assert_eq!(state.stations.len(), 3_000 * 26);
+    assert_eq!(input.state.stations.len(), 3_000 * 26);
+    let merged: usize = state.stations.iter().map(|s| s.merged_with.len()).sum();
+    let closures: usize = state.stations.iter().map(|s| s.closures().len()).sum();
+    let shots_json = serde_json::to_vec(&state.project.lines).unwrap().len();
+    let report = format!(
+        "merged {merged} closures {closures} lines json {shots_json} slots {} raw {:?} state {:?} json {:?} ({} MB) envelope input {:?}",
+        state.stations.len(),
+        t_raw,
+        t_state.saturating_sub(t_raw),
+        t_json.saturating_sub(t_state),
+        bytes.len() / 1_000_000,
+        t_envelope
+    );
+    std::fs::write(
+        std::env::temp_dir().join("stalagmight-wire-scale.txt"),
+        report.as_bytes(),
+    )
+    .unwrap();
 }

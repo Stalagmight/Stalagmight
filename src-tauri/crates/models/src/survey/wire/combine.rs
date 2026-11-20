@@ -88,7 +88,10 @@ impl<'p> Before<'p> {
         if let Some(before) = self.closure(closure.id) {
             let pair = self.project.closure_pair(before)?;
             let aligned = self.was_aligned(before.id);
-            let snap = matches!(before.strategy, ClosureStrategy::Move | ClosureStrategy::Tie);
+            let snap = matches!(
+                before.strategy,
+                ClosureStrategy::Move | ClosureStrategy::Tie
+            );
             let kind = match torn {
                 Some(_) if aligned => CombineRemovedKind::SnappedClosure,
                 Some(_) => CombineRemovedKind::FormerSnappedClosure,
@@ -105,7 +108,11 @@ impl<'p> Before<'p> {
         Some((tie.slot, tie.other_slot, kind))
     }
 
-    fn removed(&self, removed: &RemovedClosure, report: &CombineReport) -> Option<CombineRemovedClosure> {
+    fn removed(
+        &self,
+        removed: &RemovedClosure,
+        report: &CombineReport,
+    ) -> Option<CombineRemovedClosure> {
         let named = match removed.torn_tie.and_then(|i| report.torn_ties.get(i)) {
             Some(tie) if self.closure(removed.closure.id).is_none() => {
                 let kind = match tie.kind {
@@ -129,7 +136,9 @@ impl<'p> Before<'p> {
         replaced: &ReplacedClosure,
         report: &CombineReport,
     ) -> Option<CombineReplacedClosure> {
-        let gone = self.closure(replaced.dropped.id).unwrap_or(&replaced.dropped);
+        let gone = self
+            .closure(replaced.dropped.id)
+            .unwrap_or(&replaced.dropped);
         let pair = self.project.closure_pair(gone)?;
         let aligned = self.was_aligned(gone.id);
         let kind = if aligned {
@@ -150,7 +159,11 @@ impl<'p> Before<'p> {
         })
     }
 
-    fn joined_move(&self, joined: &JoinedMove, report: &CombineReport) -> Option<CombineJoinedMove> {
+    fn joined_move(
+        &self,
+        joined: &JoinedMove,
+        report: &CombineReport,
+    ) -> Option<CombineJoinedMove> {
         let topology = self.project.topology();
         let station = report
             .moving_line

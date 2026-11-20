@@ -58,4 +58,3 @@ mod wire_tests;
 pub use envelope::LoadEnvelopeInput;
 pub use project::{LineWire, ProjectStateWire, ProjectWire};
 pub use refs::{wire_strategy, SlotTarget};
-

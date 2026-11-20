@@ -75,7 +75,11 @@ impl Project {
             start_pos: preview.start as u32,
             end_pos: preview.end as u32,
             kind: preview.kind,
-            removed_stations: preview.removed_slots.iter().map(|(slot, _)| *slot).collect(),
+            removed_stations: preview
+                .removed_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect(),
             removed_merges,
             removed_closures: self.closure_pairs(
                 preview
@@ -143,10 +147,8 @@ impl Project {
             })?;
         let mut result = self.connectivity_wire(&check);
         if result.preview.is_some() {
-            result.preview = self.closure_metrics_via(
-                (station_a, Some(a.line_id)),
-                (station_b, Some(b.line_id)),
-            );
+            result.preview = self
+                .closure_metrics_via((station_a, Some(a.line_id)), (station_b, Some(b.line_id)));
         }
         Ok(result)
     }
@@ -183,7 +185,11 @@ impl Project {
 
     /// The closure dialog's figures for two picked slots (each end's depth
     /// on its slot's line), or why there are none.
-    pub fn closure_preview_at(&self, a: StationRef, b: StationRef) -> Result<ClosurePreview, OpError> {
+    pub fn closure_preview_at(
+        &self,
+        a: StationRef,
+        b: StationRef,
+    ) -> Result<ClosurePreview, OpError> {
         let (sa, sb) = self.resolve_slot_pair(a, b)?;
         self.closure_metrics_via((sa.station, Some(sa.line)), (sb.station, Some(sb.line)))
             .ok_or(OpError::UnknownSlot(a))
@@ -241,11 +247,7 @@ impl Project {
                 .iter()
                 .any(|p| only_here(p.station) && (p.x != 0.0 || p.y != 0.0)),
             station_offset_count: self.line(line).map_or(0, |l| l.hand_moves.len()),
-            zero_datum_count: self
-                .datums
-                .iter()
-                .filter(|d| only_here(d.station))
-                .count(),
+            zero_datum_count: self.datums.iter().filter(|d| only_here(d.station)).count(),
         }
     }
 
@@ -312,7 +314,10 @@ impl Project {
             .collect()
     }
 
-    fn closure_pairs<'c>(&self, closures: impl IntoIterator<Item = &'c LoopClosure>) -> Vec<ClosurePair> {
+    fn closure_pairs<'c>(
+        &self,
+        closures: impl IntoIterator<Item = &'c LoopClosure>,
+    ) -> Vec<ClosurePair> {
         closures
             .into_iter()
             .filter_map(|closure| self.closure_pair(closure))

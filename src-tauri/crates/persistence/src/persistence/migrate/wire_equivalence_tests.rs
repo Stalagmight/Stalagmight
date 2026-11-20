@@ -129,17 +129,17 @@ impl<'a> Case<'a> {
             }
             s
         }
-        for closure in p.closures.iter().filter(|c| c.strategy == ClosureStrategy::Tie) {
+        for closure in p
+            .closures
+            .iter()
+            .filter(|c| c.strategy == ClosureStrategy::Tie)
+        {
             let (ra, rb) = (root(&parent, closure.a), root(&parent, closure.b));
             if ra != rb {
                 parent.insert(ra.max(rb), ra.min(rb));
             }
         }
-        let tie_group = p
-            .stations
-            .keys()
-            .map(|&s| (s, root(&parent, s)))
-            .collect();
+        let tie_group = p.stations.keys().map(|&s| (s, root(&parent, s))).collect();
         let old_ids: BTreeSet<u64> = legacy.project.loop_closures.iter().map(|c| c.id).collect();
         Self {
             what,
@@ -192,7 +192,7 @@ impl<'a> Case<'a> {
         if adjusted {
             match &v.adjusted {
                 super::AdjustedCheck::Compared(check) => !check.expected.is_empty(),
-                _ => true,
+                super::AdjustedCheck::NoLegacyPositions => true,
             }
         } else {
             !v.expected.is_empty() || self.migrated.report.merges_collapsed_torn > 0
@@ -238,34 +238,53 @@ impl<'a> Case<'a> {
         }
         let junction = self.junction(slot);
         for (key, class) in [
-            ("id", "identity: a junction shares the survivor's Station ID"),
+            (
+                "id",
+                "identity: a junction shares the survivor's Station ID",
+            ),
             ("name", "identity: a junction shares the survivor's name"),
-            ("comment", "identity: a junction shares one (joined) comment"),
+            (
+                "comment",
+                "identity: a junction shares one (joined) comment",
+            ),
         ] {
             if o.get(key) != n.get(key) {
-                if key == "comment" && o.get(key) == Some(&Value::String(String::new())) && n.get(key).is_none() {
+                if key == "comment"
+                    && o.get(key) == Some(&Value::String(String::new()))
+                    && n.get(key).is_none()
+                {
                     self.empty_comments.insert(slot);
-                    self.tally.note("identity: an empty legacy comment is no comment");
+                    self.tally
+                        .note("identity: an empty legacy comment is no comment");
                 } else if junction {
                     self.tally.note(class);
                 } else if key == "name" && self.migrated.report.stations_renamed > 0 {
-                    self.tally
-                        .note("identity: a name letter-suffixed by the migration (unique per line)");
+                    self.tally.note(
+                        "identity: a name letter-suffixed by the migration (unique per line)",
+                    );
                 } else {
-                    self.fail(format!("{view} {slot}: {key} {:?} -> {:?}", o.get(key), n.get(key)));
+                    self.fail(format!(
+                        "{view} {slot}: {key} {:?} -> {:?}",
+                        o.get(key),
+                        n.get(key)
+                    ));
                 }
             }
         }
         self.merged_with(slot, o, n);
         self.closures_with(slot, o, n);
-        if o["is_zero_datum"] != n["is_zero_datum"] || o["gps_coordinates"] != n["gps_coordinates"] {
+        if o["is_zero_datum"] != n["is_zero_datum"] || o["gps_coordinates"] != n["gps_coordinates"]
+        {
             if junction && n["is_zero_datum"] == Value::Bool(true) {
                 self.tally
                     .note("datum: every slot of a datum station shows the datum its dialog edits");
             } else {
                 self.fail(format!(
                     "{view} {slot}: datum {} {} -> {} {}",
-                    o["is_zero_datum"], o["gps_coordinates"], n["is_zero_datum"], n["gps_coordinates"]
+                    o["is_zero_datum"],
+                    o["gps_coordinates"],
+                    n["is_zero_datum"],
+                    n["gps_coordinates"]
                 ));
             }
         }
@@ -284,10 +303,13 @@ impl<'a> Case<'a> {
         let gone: Vec<StationRef> = old.difference(&new).copied().collect();
         let added: Vec<StationRef> = new.difference(&old).copied().collect();
         if added.is_empty() && gone.iter().all(|&g| self.tied(slot, g)) {
-            self.tally
-                .note("merged_with: a demoted (cycle / same-line) merge is a Tie closure, not a junction");
+            self.tally.note(
+                "merged_with: a demoted (cycle / same-line) merge is a Tie closure, not a junction",
+            );
         } else {
-            self.fail(format!("{slot}: merged_with lost {gone:?}, gained {added:?}"));
+            self.fail(format!(
+                "{slot}: merged_with lost {gone:?}, gained {added:?}"
+            ));
         }
     }
 
@@ -329,11 +351,18 @@ impl<'a> Case<'a> {
     // --- the IPC Project ----------------------------------------------
 
     fn project(&mut self, old: &Value, new: &Value) {
-        let mut old_keys: BTreeSet<&String> = old.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        let mut old_keys: BTreeSet<&String> = old
+            .as_object()
+            .map(|o| o.keys().collect())
+            .unwrap_or_default();
         if old_keys.remove(&"line_offsets".to_string()) {
-            self.tally.note("project: line_offsets dropped from the wire");
+            self.tally
+                .note("project: line_offsets dropped from the wire");
         }
-        let new_keys: BTreeSet<&String> = new.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        let new_keys: BTreeSet<&String> = new
+            .as_object()
+            .map(|o| o.keys().collect())
+            .unwrap_or_default();
         if old_keys != new_keys {
             return self.fail(format!("project keys {old_keys:?} -> {new_keys:?}"));
         }
@@ -395,7 +424,11 @@ impl<'a> Case<'a> {
                 "date",
             ] {
                 if o.get(key) != n.get(key) {
-                    self.fail(format!("line {id}.{key}: {:?} -> {:?}", o.get(key), n.get(key)));
+                    self.fail(format!(
+                        "line {id}.{key}: {:?} -> {:?}",
+                        o.get(key),
+                        n.get(key)
+                    ));
                 }
             }
             for key in ["reverse_parity", "gauge_shot_uuid", "gauge_neighbour_uuid"] {
@@ -405,9 +438,11 @@ impl<'a> Case<'a> {
                 }
             }
             if o["shots"] != n["shots"] {
-                if self.migrated.report.numbers_sanitized > 0 || self.migrated.report.shot_uuids_minted > 0
+                if self.migrated.report.numbers_sanitized > 0
+                    || self.migrated.report.shot_uuids_minted > 0
                 {
-                    self.tally.note("line: shots sanitized or uuids minted by the migration");
+                    self.tally
+                        .note("line: shots sanitized or uuids minted by the migration");
                 } else {
                     self.fail(format!("line {id}: shots differ"));
                 }
@@ -470,7 +505,8 @@ impl<'a> Case<'a> {
         for group in &old_groups {
             let inside: Vec<&BTreeSet<StationRef>> =
                 new_groups.iter().filter(|g| g.is_subset(group)).collect();
-            let covered: BTreeSet<StationRef> = inside.iter().flat_map(|g| g.iter().copied()).collect();
+            let covered: BTreeSet<StationRef> =
+                inside.iter().flat_map(|g| g.iter().copied()).collect();
             let first = *group.iter().next().unwrap_or(&StationRef::new(0, 0));
             let tied = group.iter().all(|&s| self.tied(first, s));
             if (covered.len() == group.len() || tied) && self.demotions() {
@@ -489,7 +525,8 @@ impl<'a> Case<'a> {
         if old.len() != new.len() {
             let r = &self.migrated.report;
             if r.datums_dropped_dangling + r.datums_dropped_invalid > 0 {
-                self.tally.note("zero_datums: a dangling / invalid datum dropped by the migration");
+                self.tally
+                    .note("zero_datums: a dangling / invalid datum dropped by the migration");
             } else {
                 self.fail(format!("datum count {} -> {}", old.len(), new.len()));
             }
@@ -499,19 +536,25 @@ impl<'a> Case<'a> {
             if o["station_ref"] != n["station_ref"] {
                 let (a, b) = (slot_of(&o["station_ref"]), slot_of(&n["station_ref"]));
                 if self.station(a) == self.station(b) {
-                    self.tally.note("zero_datums: shown on another slot of its junction");
+                    self.tally
+                        .note("zero_datums: shown on another slot of its junction");
                 } else {
                     self.fail(format!("datum {i}: slot {a} -> {b}"));
                 }
             }
             for key in ["gps", "accuracy_m", "is_entrance"] {
                 if o.get(key) != n.get(key) {
-                    self.fail(format!("datum {i}.{key}: {:?} -> {:?}", o.get(key), n.get(key)));
+                    self.fail(format!(
+                        "datum {i}.{key}: {:?} -> {:?}",
+                        o.get(key),
+                        n.get(key)
+                    ));
                 }
             }
             if o["role"] != n["role"] {
                 if self.migrated.report.datum_roles_changed > 0 {
-                    self.tally.note("zero_datums: role changed by the migration (reported)");
+                    self.tally
+                        .note("zero_datums: role changed by the migration (reported)");
                 } else {
                     self.fail(format!("datum {i}.role {} -> {}", o["role"], n["role"]));
                 }
@@ -550,7 +593,8 @@ impl<'a> Case<'a> {
                     + r.closure_ids_reminted
                     > 0
                 {
-                    self.tally.note("loop_closures: dropped or reminted by the migration (reported)");
+                    self.tally
+                        .note("loop_closures: dropped or reminted by the migration (reported)");
                 } else {
                     self.fail(format!("closure {id} missing"));
                 }
@@ -560,7 +604,8 @@ impl<'a> Case<'a> {
                 if o[end] != n[end] {
                     let (a, b) = (slot_of(&o[end]), slot_of(&n[end]));
                     if self.station(a) == self.station(b) {
-                        self.tally.note("loop_closures: end shown on another slot of its junction");
+                        self.tally
+                            .note("loop_closures: end shown on another slot of its junction");
                     } else {
                         self.fail(format!("closure {id}.{end}: {a} -> {b}"));
                     }
@@ -571,7 +616,8 @@ impl<'a> Case<'a> {
                     .note("loop_closures: a legacy aligned closure (now Tie) is shown as Batch");
             }
             if o["is_aligned"] != n["is_aligned"] {
-                self.tally.note("loop_closures: is_aligned recomputed (Tie always, Move re-measured)");
+                self.tally
+                    .note("loop_closures: is_aligned recomputed (Tie always, Move re-measured)");
             }
             let metrics_same = [
                 "path_length",
@@ -583,9 +629,14 @@ impl<'a> Case<'a> {
             .iter()
             .all(|k| close(&o[*k], &n[*k], METRIC_TOL));
             if !metrics_same {
-                if close(&o["misclosure_distance"], &n["misclosure_distance"], METRIC_TOL) {
-                    self.tally
-                        .note("loop_closures: path_length recomputed along shots only (error % with it)");
+                if close(
+                    &o["misclosure_distance"],
+                    &n["misclosure_distance"],
+                    METRIC_TOL,
+                ) {
+                    self.tally.note(
+                        "loop_closures: path_length recomputed along shots only (error % with it)",
+                    );
                 } else {
                     self.tally
                         .note("loop_closures: metrics recomputed from the current layout (stored at creation before)");
@@ -705,14 +756,16 @@ impl<'a> Case<'a> {
                 .filter_map(|c| c["closure_id"].as_u64())
                 .collect()
         };
-        let (old_removed, new_removed) = (ids(&old["removed_closures"]), ids(&new["removed_closures"]));
+        let (old_removed, new_removed) =
+            (ids(&old["removed_closures"]), ids(&new["removed_closures"]));
         if old_removed != new_removed {
             if junction {
                 self.tally
                     .note("delete: a closure on a junction stays (today it left with the member)");
             } else if old_removed.is_subset(&new_removed) {
-                self.tally
-                    .note("delete: the closures the delete leaves across one shot are listed (#737)");
+                self.tally.note(
+                    "delete: the closures the delete leaves across one shot are listed (#737)",
+                );
             } else {
                 self.fail(format!(
                     "delete {line}/{shot}: removed closures {old_removed:?} -> {new_removed:?}"
@@ -799,13 +852,19 @@ impl<'a> Case<'a> {
     fn range_impact(&mut self, line: u32, old: &Value, new: &Value) {
         for key in ["line_id", "start_pos", "end_pos", "kind"] {
             if old[key] != new[key] {
-                return self.fail(format!("range on {line}: {key} {} -> {}", old[key], new[key]));
+                return self.fail(format!(
+                    "range on {line}: {key} {} -> {}",
+                    old[key], new[key]
+                ));
             }
         }
         let slots = |v: &Value| -> Vec<StationRef> {
             v.as_array().into_iter().flatten().map(slot_of).collect()
         };
-        let (old_removed, new_removed) = (slots(&old["removed_stations"]), slots(&new["removed_stations"]));
+        let (old_removed, new_removed) = (
+            slots(&old["removed_stations"]),
+            slots(&new["removed_stations"]),
+        );
         let junction = old_removed
             .iter()
             .chain(&new_removed)
@@ -834,17 +893,25 @@ impl<'a> Case<'a> {
             }
             return self.fail(format!(
                 "range on {line}: shift_blocked {} {} -> {} {}",
-                old["shift_blocked"], old["shift_blocked_reasons"], new["shift_blocked"], new["shift_blocked_reasons"]
+                old["shift_blocked"],
+                old["shift_blocked_reasons"],
+                new["shift_blocked"],
+                new["shift_blocked_reasons"]
             ));
         }
         if old_removed != new_removed {
-            return self.fail(format!("range on {line}: removed stations {old_removed:?} -> {new_removed:?}"));
+            return self.fail(format!(
+                "range on {line}: removed stations {old_removed:?} -> {new_removed:?}"
+            ));
         }
         let scoped = |case: &mut Self, what: &str, class: &'static str| {
             if junction || tied {
                 case.tally.note(class);
             } else {
-                case.fail(format!("range on {line}: {what} {} -> {}", old[what], new[what]));
+                case.fail(format!(
+                    "range on {line}: {what} {} -> {}",
+                    old[what], new[what]
+                ));
             }
         };
         let ids = |v: &Value| -> BTreeSet<u64> {
@@ -855,9 +922,15 @@ impl<'a> Case<'a> {
                 .collect()
         };
         if ids(&old["removed_closures"]) != ids(&new["removed_closures"]) {
-            scoped(self, "removed_closures", "range delete: a closure on a junction stays");
+            scoped(
+                self,
+                "removed_closures",
+                "range delete: a closure on a junction stays",
+            );
         }
-        if ids(&old["closures_removed_across_one_shot"]) != ids(&new["closures_removed_across_one_shot"]) {
+        if ids(&old["closures_removed_across_one_shot"])
+            != ids(&new["closures_removed_across_one_shot"])
+        {
             scoped(
                 self,
                 "closures_removed_across_one_shot",
@@ -873,15 +946,21 @@ impl<'a> Case<'a> {
                 let before = o.len();
                 o.retain(|s| !self.empty_comments.contains(s));
                 if o.len() != before {
-                    self.tally.note("range delete: an empty legacy comment is not listed");
+                    self.tally
+                        .note("range delete: an empty legacy comment is not listed");
                 }
             }
             let at_junction = o.symmetric_difference(&n).all(|&s| self.junction(s));
             if o != n {
                 if at_junction {
-                    self.tally.note("range delete: a junction keeps its datum and comment");
+                    self.tally
+                        .note("range delete: a junction keeps its datum and comment");
                 } else {
-                    scoped(self, key, "range delete: datum / comment over a demoted merge");
+                    scoped(
+                        self,
+                        key,
+                        "range delete: datum / comment over a demoted merge",
+                    );
                 }
             }
         }
@@ -893,11 +972,21 @@ impl<'a> Case<'a> {
                 .count()
         };
         if count(&old["removed_merges"]) != count(&new["removed_merges"]) {
-            scoped(self, "removed_merges", "range delete: removed merges are the slots leaving their junctions");
+            scoped(
+                self,
+                "removed_merges",
+                "range delete: removed merges are the slots leaving their junctions",
+            );
         }
-        if count(&old["replacement_merges"]) + old["replacement_closure_updates"].as_array().map_or(0, Vec::len) > 0 {
-            self.tally
-                .note("range delete: replacement merges / rewired closures no longer happen (declared)");
+        if count(&old["replacement_merges"])
+            + old["replacement_closure_updates"]
+                .as_array()
+                .map_or(0, Vec::len)
+            > 0
+        {
+            self.tally.note(
+                "range delete: replacement merges / rewired closures no longer happen (declared)",
+            );
         }
         if count(&old["closure_to_merge"]) != count(&new["closure_to_merge"]) {
             self.tally.note(
@@ -932,23 +1021,36 @@ impl<'a> Case<'a> {
                             )
                         })
                         .flatten();
-                    self.datum_shift(a, b, old_shift.map(json), new.datum_shift.as_ref().map(json));
+                    self.datum_shift(
+                        a,
+                        b,
+                        old_shift.map(json),
+                        new.datum_shift.as_ref().map(json),
+                    );
                     if connected != new.connected {
                         if self.demotions() {
-                            self.tally
-                                .note("connectivity: a demoted merge is a closure (still connected)");
+                            self.tally.note(
+                                "connectivity: a demoted merge is a closure (still connected)",
+                            );
                         } else {
-                            self.fail(format!("connectivity {a}-{b}: {connected} -> {}", new.connected));
+                            self.fail(format!(
+                                "connectivity {a}-{b}: {connected} -> {}",
+                                new.connected
+                            ));
                         }
                     }
                     if let (Some(o), Some(n)) = (preview, new.preview) {
-                        if !close(&json(o.misclosure_distance), &json(n.misclosure_distance), METRIC_TOL)
-                            && !self.positions_may_move(false)
+                        if !close(
+                            &json(o.misclosure_distance),
+                            &json(n.misclosure_distance),
+                            METRIC_TOL,
+                        ) && !self.positions_may_move(false)
                         {
                             self.fail(format!("closure preview {a}-{b}: misclosure"));
                         }
                         if !close(&json(o.path_length), &json(n.path_length), METRIC_TOL) {
-                            self.tally.note("closure preview: path_length along shots only");
+                            self.tally
+                                .note("closure preview: path_length along shots only");
                         }
                     }
                 }
@@ -970,7 +1072,13 @@ impl<'a> Case<'a> {
         }
     }
 
-    fn datum_shift(&mut self, a: StationRef, b: StationRef, old: Option<Value>, new: Option<Value>) {
+    fn datum_shift(
+        &mut self,
+        a: StationRef,
+        b: StationRef,
+        old: Option<Value>,
+        new: Option<Value>,
+    ) {
         match (old, new) {
             (None, None) => {}
             (Some(o), Some(n)) => {
@@ -988,8 +1096,9 @@ impl<'a> Case<'a> {
             }
             (old, new) => {
                 if self.demotions() || self.junction(a) || self.junction(b) {
-                    self.tally
-                        .note("merge datum shift: piece membership over a junction / demoted merge");
+                    self.tally.note(
+                        "merge datum shift: piece membership over a junction / demoted merge",
+                    );
                 } else {
                     self.fail(format!("datum shift {a}-{b}: {old:?} -> {new:?}"));
                 }
@@ -1024,18 +1133,26 @@ impl<'a> Case<'a> {
         let failures = |v: &Value| v["failures"].as_array().map_or(0, Vec::len);
         if failures(&old) != failures(&new) {
             if self.positions_may_move(true) {
-                self.tally
-                    .note("adjustment report: failures differ by a Computed View class (D10 / D11)");
+                self.tally.note(
+                    "adjustment report: failures differ by a Computed View class (D10 / D11)",
+                );
             } else {
-                self.fail(format!("failures {} -> {}", old["failures"], new["failures"]));
+                self.fail(format!(
+                    "failures {} -> {}",
+                    old["failures"], new["failures"]
+                ));
             }
         }
         let far = |v: &Value| v["far_gps_fixes"].as_array().map_or(0, Vec::len);
         if far(&old) != far(&new) {
             if self.demotions() || self.positions_may_move(false) {
-                self.tally.note("adjustment report: far GPS fixes over a demoted merge");
+                self.tally
+                    .note("adjustment report: far GPS fixes over a demoted merge");
             } else {
-                self.fail(format!("far fixes {} -> {}", old["far_gps_fixes"], new["far_gps_fixes"]));
+                self.fail(format!(
+                    "far fixes {} -> {}",
+                    old["far_gps_fixes"], new["far_gps_fixes"]
+                ));
             }
         }
     }
@@ -1066,19 +1183,34 @@ impl<'a> Case<'a> {
     }
 
     fn combine_candidate(&mut self, a: u32, b: u32, old: &Value, new: &Value) {
-        let old_keys: BTreeSet<&String> = old.as_object().map(|o| o.keys().collect()).unwrap_or_default();
-        let new_keys: BTreeSet<&String> = new.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        let old_keys: BTreeSet<&String> = old
+            .as_object()
+            .map(|o| o.keys().collect())
+            .unwrap_or_default();
+        let new_keys: BTreeSet<&String> = new
+            .as_object()
+            .map(|o| o.keys().collect())
+            .unwrap_or_default();
         if old_keys != new_keys {
-            return self.fail(format!("combine {a}+{b}: keys {old_keys:?} -> {new_keys:?}"));
+            return self.fail(format!(
+                "combine {a}+{b}: keys {old_keys:?} -> {new_keys:?}"
+            ));
         }
-        for key in ["line_a", "line_b", "end_a", "end_b", "reverses", "shot_count_a", "shot_count_b"] {
+        for key in [
+            "line_a",
+            "line_b",
+            "end_a",
+            "end_b",
+            "reverses",
+            "shot_count_a",
+            "shot_count_b",
+        ] {
             if old[key] != new[key] {
                 self.tally.note("combine (M1 semantics): join ends differ");
             }
         }
         if old["join_kind"] != new["join_kind"] {
-            self.tally
-                .note("combine (M1 semantics): join kind differs");
+            self.tally.note("combine (M1 semantics): join kind differs");
         }
         for key in ["station_a", "station_b"] {
             if old[key] != new[key] {
@@ -1086,19 +1218,23 @@ impl<'a> Case<'a> {
             }
         }
         if old["blocked_reason"].is_null() != new["blocked_reason"].is_null() {
-            self.tally.note("combine (M1 semantics): blocked verdict differs");
+            self.tally
+                .note("combine (M1 semantics): blocked verdict differs");
         }
         for plan in ["plan_keeping_a", "plan_keeping_b"] {
             let (o, n) = (&old[plan], &new[plan]);
             if o["moving_line"] != n["moving_line"] {
-                self.tally.note("combine (M1 semantics): plan moving line differs (S3, S10)");
+                self.tally
+                    .note("combine (M1 semantics): plan moving line differs (S3, S10)");
             }
             if !close(&o["shift_m"], &n["shift_m"], METRIC_TOL) {
-                self.tally.note("combine (M1 semantics): plan shift differs");
+                self.tally
+                    .note("combine (M1 semantics): plan shift differs");
             }
             let count = |v: &Value| v.as_array().map_or(0, Vec::len);
             if count(&o["torn_ties"]) != count(&n["torn_ties"]) {
-                self.tally.note("combine (M1 semantics): plan torn ties differ (S1, S2, S5)");
+                self.tally
+                    .note("combine (M1 semantics): plan torn ties differ (S1, S2, S5)");
             }
         }
     }
@@ -1180,7 +1316,11 @@ fn compare_bytes(what: String, seed: u64, bytes: &[u8]) -> Tally {
 fn seeds(first: u64, count: u64) -> Tally {
     let mut tally = Tally::default();
     for seed in first..first + count {
-        tally.absorb(compare_bytes(format!("seed {seed}"), seed, &random_case(seed).write()));
+        tally.absorb(compare_bytes(
+            format!("seed {seed}"),
+            seed,
+            &random_case(seed).write(),
+        ));
     }
     tally
 }
@@ -1196,7 +1336,11 @@ fn legacy_surveys_project_to_todays_payloads_up_to_the_declared_differences() {
         "project: line_offsets dropped from the wire",
         "station_merges: derived star pairs (first slot to each other slot)",
     ] {
-        assert!(tally.classes.contains_key(class), "never saw {class}: {:#?}", tally.classes);
+        assert!(
+            tally.classes.contains_key(class),
+            "never saw {class}: {:#?}",
+            tally.classes
+        );
     }
 }
 
@@ -1207,7 +1351,11 @@ fn the_tracked_fixtures_project_to_todays_payloads() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../e2e/fixtures")
             .join(name);
-        tally.absorb(compare_bytes(name.to_string(), 7, &std::fs::read(path).unwrap()));
+        tally.absorb(compare_bytes(
+            name.to_string(),
+            7,
+            &std::fs::read(path).unwrap(),
+        ));
     }
     tally.assert_clean();
 }
@@ -1227,4 +1375,3 @@ fn wire_equivalence_sweep() {
     }
     tally.assert_clean();
 }
-
