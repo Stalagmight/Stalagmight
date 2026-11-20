@@ -39,6 +39,11 @@ mod topology;
 mod types;
 mod validate;
 
+// Stream M1: line and shot operations (`edit.rs`); the orphan sweep is M2's
+// (`sweep.rs` is a minimal local copy until M2 lands).
+mod edit;
+mod sweep;
+
 #[cfg(test)]
 #[expect(
     clippy::panic,
@@ -93,6 +98,13 @@ pub use types::{
     Shot, Station, StationAlias, ZeroDatum, MAX_SHOT_UUID_CHARS,
 };
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
+
+pub use edit::{
+    CommentRule, CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
+    DeletedShot, EditError, EditReport, Edited, Fold, RangeDeleteMode, ShotPlace, SplitLinePreview,
+    SplitOptions, SplitShot,
+};
+pub use sweep::{Promotion, SweepReport};
 
 /// A survey project in the station-graph model (plan 1.2).
 ///
