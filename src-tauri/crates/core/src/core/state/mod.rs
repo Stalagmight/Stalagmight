@@ -475,6 +475,8 @@ mod undo_after_reopen_tests;
 #[cfg(sg_unported)]
 mod undo_size_gate_tests;
 #[cfg(test)]
+mod undo_pipeline_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,

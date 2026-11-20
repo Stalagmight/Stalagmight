@@ -172,12 +172,20 @@ impl AppState {
         }
     }
 
+    // The reads take the stack poison-tolerantly, as the steps do: a stack
+    // a panic poisoned still steps, so it must still say what it holds.
     pub fn can_undo(&self) -> bool {
-        self.undo_stack.lock().is_ok_and(|s| s.can_undo())
+        self.undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.undo_stack.lock().is_ok_and(|s| s.can_redo())
+        self.undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .can_redo()
     }
 
     /// The undo history, most recent first: the record-time labels and the
@@ -185,27 +193,21 @@ impl AppState {
     pub fn get_undo_stack(&self) -> Vec<UndoHistoryItem> {
         self.undo_stack
             .lock()
-            .map(|stack| {
-                stack
-                    .undo_entries()
-                    .enumerate()
-                    .map(|(i, e)| history_item(i, e.entry()))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .undo_entries()
+            .enumerate()
+            .map(|(i, e)| history_item(i, e.entry()))
+            .collect()
     }
 
     /// The redo history, next redo first.
     pub fn get_redo_stack(&self) -> Vec<UndoHistoryItem> {
         self.undo_stack
             .lock()
-            .map(|stack| {
-                stack
-                    .redo_entries()
-                    .enumerate()
-                    .map(|(i, e)| history_item(i, e.entry()))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .redo_entries()
+            .enumerate()
+            .map(|(i, e)| history_item(i, e.entry()))
+            .collect()
     }
 }
