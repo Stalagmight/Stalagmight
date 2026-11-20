@@ -589,6 +589,23 @@ What the built model does differently from the text above, and why. The module g
 - **D8. Depth summation order** (3.4 "sorted order") is `(line id, index)` over the slots of the tie group, which makes a junction's depth bit-identical to today's merge-group depth.
 - **D9. The letter-suffix rule is reused, not copied**, from `models::project::station_naming` (pure functions). That file must move under `survey/` or the crate root when C deletes `models::project`.
 
+## Deviations (stream M1, shots / lines / ranges / reverse / split / combine)
+
+Declared by the plan and implemented as written: Split Line Here makes a junction (no duplicated station, no comment or datum side, the hand move copied); junctions share one id, name and comment (merges, promotions and combines add aliases); a delete leaves a junction on its other lines with its comment and datums whatever their `via` (today a datum on the removed member was deleted); no replacement merges or closure re-anchoring (a closure on a junction stays). What follows from the station graph and the plan does not say:
+
+- **S1. Combine detaches the moving line's slot at a torn junction** (plan 5.4 step 2): the moving line gets a new station (new id, copied name); the old id stays on the fixed side's lines. Closure ends and ids differ from today's merge-to-closure; positions and misclosures match.
+- **S2. `TornTieReason::PassesTwice`.** A station both lines pass besides the join is reported with this new reason (step 6), where today a tie reaching a non-join station was reported as `Loop`. Wire mapping: `PassesTwice -> Loop`, `Moved -> JoinedStationMoves` (or `Loop`), an unaligned torn snap `-> FormerSnappedClosure`.
+- **S3. A gauge on a station both lines pass** is torn by step 6 and stays on the line that does not move, so no side "holds" it and the plain rule applies (the other line moves); today the kept line moved (`AdjustmentAnchor`). The Computed View does not move either way.
+- **S4. Hand move at the join: the fixed side's wins** (today's rule). The plan text says the kept line's; with it, branches at a fixed join station would move. When nothing moves, the kept line's wins.
+- **S5. Third lines at a torn junction** stay with the fixed side (the moving line takes the new station); today it depended on which pairwise merges existed.
+- **S6. A legacy merge loop at a hand-moved join** (migrated to a junction plus a `Tie`): the other line moves with the joined station and the `Tie` becomes `Batch`, where today it stayed and its merge at the join tore. Not representable otherwise (the line would hang by closures only); one ported test is `#[ignore]`d with this reason.
+- **S7. `depth_difference_m`** reads each join station's depth from the solver, which averages over a junction's lines and its snaps; today it read one member's readings.
+- **S8. Two datums on a merged join** (one station) are allowed (plan 5.7); on side-by-side join stations they are still refused, as today.
+- **S9. Payload trims.** `SplitOptions` has no `comment_side` / `datum_side`; `CombineCandidate` drops `repeated_shot_ids` (uuids are project-unique) and the always-`None` `merged` / `station_name_a` / `station_name_b`.
+- **S10 (integration). Combine's gauge rule reads the solve.** "Is the joined survey solved" and "which station is the gauge" are M3's `Project::solve_hold` (the least squares' own partition and held component). A component tied only by a `Tie` now counts as solved (D10), and with a datum in the component the gauge is the datum station, which no free side holds (today's `adjustment_anchor_of`). M1's copy (no `Tie`; the first `Placement` in list order, even beside a datum) is gone.
+- **S11 (integration). Combine's join and torn junctions use M2's mutation cores** (`merge_ids` with the dialog's comment pick, `detach_ids`). Two visible differences from M1's own fold: the survivor lists the retired station's own aliases before the retired station, and keeps the retired station's `external` id when it has none (E7). Every ported combine test passes unchanged.
+- **S12.** Frozen-shot refusals ("Cannot edit geometry of a frozen shot" and the delete and split variants) are not in the model operations: C checks `is_shot_frozen` before calling them.
+
 ## Deviations (stream M2, topology / closures / datums / move tools / Add)
 
 - **E1. The datum a slot has.** A station can hold several datums; Set and Remove on a slot act on the first datum on the station attached `via` the slot's line, else the first datum on the station (`datum_index_for`). Consequence (declared): Set on a junction slot whose line has no datum there edits the station's existing datum instead of adding a second one, where today each merge member could get its own (a fix beside a placement). A second datum on one station now only comes from a merge of two placed pieces or a migration.
@@ -598,12 +615,13 @@ What the built model does differently from the text above, and why. The module g
 - **E5. Add .stalx refuses on Station-ID exhaustion** (`base + source counter >= 2^31`) instead of renumbering every station as today's overflow path did; repeated line names are made unique (` (k)`) by the Add itself rather than by the normalisation that followed it (same result).
 - **E6. Detach station form off a junction is a no-op** (as today's `UnmergeStations`); `detach_line` and the pair form refuse with "Stations are not directly merged". Any two slots of one station are a valid pair (today a pair had to be a direct merge; the UI fell back to the whole-station unmerge otherwise).
 - **E7. A merge keeps the survivor's `external` id, else takes the retired station's** (plan 5.1 does not say).
-- **E8. Closure metrics, the across-one-shot knot rule, roles, GPS gaps and entrance defaults are stubbed in `survey/m3_stubs.rs`** until M3 lands (closure Z uses the station's depth without a slot's hand-move z).
+- **E8. Closure metrics, the across-one-shot knot rule, roles, GPS gaps and entrance defaults were stubbed in `survey/m3_stubs.rs`** until M3 landed. Resolved at integration: the stubs are deleted and the commands call M3's views. A created closure reports `closure_metrics_via` on its picked slots (slot depth on the `via` line, the figures its wire entry shows); the closure preview and the Merge check use `closure_metrics` (each station's first slot).
+- **E9 (integration). One copy of each derived set.** Rigid groups, anchored lines, co-located and immovable stations are M3's (`rigid.rs`, `TieGroups`; D15). M2's `rigid_group_*`, `rigidly_tied`, `colocated_stations` and its own `anchored_lines` / `immovable_stations` are gone; Move Segment and the Merge refusal read `rigid_groups` (`RigidGroups::tied`).
 
 ## Deviations (stream M3, derived views)
 
-- **D10. `Tie` gives its component something to solve**, like a legacy aligned `Batch` closure today (it is "eligible"). A migrated cycle-closing merge with no other closure is therefore solved, so a torn tie is pulled together in the Closures Computed View, where today that component was shown measured.
-- **D11. Every closure that ties in the solve, `Tie` included, goes through the across-one-shot check in list order.** Today merges were united before the check. A demoted same-line adjacent merge is skipped and reported (`CLOSURE_ACROSS_ONE_SHOT`) instead of failing its component; the "inconsistent line translation" failure cannot occur on the station graph.
+- **D10. `Tie` gives its component something to solve**, like a legacy aligned `Batch` closure today (it is "eligible"). A migrated cycle-closing merge with no other closure is therefore solved, so a torn tie is pulled together in the Closures Computed View, where today that component was shown measured. The migration verifies and reports this as `TieSolved` (G2).
+- **D11. Every closure that ties in the solve, `Tie` included, goes through the across-one-shot check in list order.** Today merges were united before the check. A demoted same-line adjacent merge (or a cycle-closing merge spanning one shot) is skipped and reported (`CLOSURE_ACROSS_ONE_SHOT`) instead of failing its component; the "inconsistent line translation" failure cannot occur on the station graph. The migration verifies and reports this as `TieNoLongerFails` (G2).
 - **D12. The Computed View keeps today's depth co-location of adjusted closure ends.** Today's solve stamps the closures it adjusted as aligned on its working copy, so the view's depth averages each such closure's two ends (over the tie group). Positions are horizontal only; depth follows that rule.
 - **D13. Solve numbering.** A solve component is the shot components joined by any closure (today's `get_connected_line_ids`). Unknowns are constraint groups numbered by lowest StationId, shots are assembled in line-id order, the warm start is the group's lowest member. Results match today within 1e-6 m (tested), not bit for bit.
 - **D14. `path_length` between two pieces.** A closure between two datum-held pieces has no shot path: `path_length` and `error_percentage` are 0 (today: the reachable line lengths).
@@ -612,3 +630,35 @@ What the built model does differently from the text above, and why. The module g
 - **D17. Graph builders** emit shots in line-id order and closures in id order (as D2), so reordering lines or closures changes no tie-break and no bit.
 - **D18. Gas engine.** The route has no merge hops (route indices shift; legs are station to station); the turn frontier lists each station once (its first slot on the wire); a route node has one depth (only legacy hand-move z on a junction differs); a drop override on another slot of the default drop's junction is a no-op.
 - **D19. The ruler's wire `path_stations`** are the two ends of each traversed shot on that shot's line (consecutive repeats removed).
+
+## Deviations (stream F, `.stalx` v2 format)
+
+The full format is `docs/file-format.md`.
+
+- **F1. No `counters.line`.** Plan 6.2 shows one; plan 1.2 derives the next line id (`max + 1`).
+- **F2. `conventions` adds `gps: "wgs84-deg"` and `temperature: "degC"`**, for third-party readers.
+- **F3. `sections` keep list (panel) order**, not ascending id: the model's `Vec` is panel order, and SQLite stored a `position` column.
+- **F4. `undo_mode` is in `speleodb` (shared), not `local`**: it rides pushes deliberately today (`speleo_link.rs`).
+- **F5. The sniff tolerates JSON whitespace between the prefix tokens** (a pretty-printed file is accepted); the canonical form is the exact prefix, and the tokens may not be escaped.
+- **F6. Unknown top-level members are written after `imports` and before `history`**; `history` and `end` stay last.
+- **F7. Unknown enum values are tier 1:** the file opens read-only with a fail-closed fallback (kind `reference`, strategy `batch`).
+- **F8. The read-only reason lives in `Extras.read_only`**, so every encode mode refuses while it is set; `Decoded::read_only()` is an accessor.
+- **F9. History container contract.** Each list is a stack (its last element is the next step). The format reads only an entry's `"t"`, for the watermark cut (today's SQLite rules); stream U defines the rest.
+- **F10. Dates are clamped into 0001-9999**, like times.
+- **F11. Bounds the format needed and the model lacked:** at most 99,999 shots per line (session shot ids), alias ids below 2^31, station and Section counters at most 2^31. Resolved at integration: they are invariants (`validate`: `TooManyShots`, `AliasOutOfRange`, `CounterOutOfRange`; `MAX_SHOTS_PER_LINE` is the model's), the decoder and the encoder refuse through `validate` (`DecodeError::Invalid`, `EncodeError::Invalid`; `Limit::ShotsPerLine` and `EncodeError::OutOfRange` are gone), and salvage drops an out-of-range alias and lowers an out-of-range counter to its bound (`Repair::LoweredCounter`); a line over the cap stays refused.
+- **F12. `rename_project` is implemented here** (plan 6.5 Recents rename).
+- **F13. `probe` on a legacy file returns only `Format::Legacy`**; the legacy header (metadata) comes from the legacy reader.
+
+## Deviations (stream G, migration)
+
+- **G1. Self-merges and repeated merges are dropped**, not made `Tie`s (7.2.1 says `Tie`): a `Tie` needs two stations (invariant 7). Counted (`merges_dropped_self`, `merges_dropped_redundant`).
+- **G2. The Closures Computed View is verified, with two declared expected-difference classes** (7.2.7). The migrated view is solved with the least-squares config the legacy open used (`migrate` takes it) and compared per slot with 0.6.0's (1e-6 m plus the slot's raw dust bound; depth 1e-9 m); the components each solve falls back on must match. Two differences are expected and reported per class with their slot count and maximum displacement, never hidden:
+  - `TieSolved` (D10): 0.6.0 showed a component measured, without a failure, because nothing in it was eligible; a migrated `Tie` (a cycle-closing or same-line merge, or a legacy aligned closure of a non-eligible strategy such as `ProportionalByLength`) is eligible, so the view now solves it and pulls the torn tie together.
+  - `TieNoLongerFails` (D11): 0.6.0 failed a component ("inconsistent line translation", shown measured) because it united merges before the across-one-shot check; the demoted merge (same-line, or a cycle-closing merge spanning one shot) is a `Tie` the new solve ties as one point or skips and reports, and the component is adjusted by its other closures and GPS fixes. The legacy failure is explained, not a fallback mismatch.
+
+  Measured on the generator (3000 seeds, every one clean): `TieSolved` in 285 seeds (3136 slots, at most 47.99 m), `TieNoLongerFails` in 34 seeds (913 slots, at most 2292.8 m: the legacy view showed those components raw while the synthetic GPS fixes, placed far away, now pull them). The tracked fixtures have neither (`naharon.stalx` within 9.1e-10 m, `fractal_plant_iter3.stalx` exact). The corpus runner prints both views' classes with their maxima. Stream P decides whether the conversion notice (7.2.10) mentions Computed View changes; today it counts raw moves only (`Verification::moved`).
+- **G3. Comment join order** ("member order", 7.2.1) is the survivor first, then the other members by label rank.
+- **G4. `TornMergeCollapsed` is a real move.** A torn merge across two datum-less pieces cannot be kept as a `Tie` (invariant 7), so it is collapsed and its pieces move by up to the gap; counted per merge (`merges_collapsed_torn`, `..._max_m`) and in `moved()`. Recommendation for stream P: show the 7.2.10 notice whenever `verification.moved().slots > 0`, not only for unexplained mismatches.
+- **G5. Cascade replay, phase 2,** reads closure `is_aligned` after the legacy load re-measured it (0.6.0 used the file's flags). It only orders merges in pieces merges alone cannot reach, which needs dangling references.
+- **G6. `migrate_path` computes the legacy Computed View** (about twice the open time) for G2; `OpenOptions::with_adjusted = false` skips it, and the comparison then reports `NoLegacyPositions`.
+- **G7. Publishing.** `stalagmight-persistence` depends on the unpublished `stalagmight-legacy` (path only); `cargo publish` of persistence (for stalx-reader) fails until legacy is published or the dependency is gated.

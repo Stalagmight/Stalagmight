@@ -19,7 +19,22 @@
 //! - `anchors` - the post-edit anchor algorithm and the frame-change routine
 //!   ([`AnchorSnapshot`], [`EditContext`]).
 //! - `naming` - station-name uniqueness and shot-uuid checks.
-//! - `gas` - the Plan-mode gas engine on the station graph ([`GasReach`]).
+//!
+//! Commands (each one protocol: snapshot, mutate, settle, sweep, validate,
+//! roll back on refusal):
+//! - `edit` - line and shot operations, Combine Lines ([`EditError`],
+//!   [`Edited`]).
+//! - `ops`, `ops_*` - merge, detach, closures, datums, move tools
+//!   ([`OpError`], [`OpOutcome`]); `sweep` - the orphan-closure sweep;
+//!   `append` - Add .stalx.
+//!
+//! Derived views:
+//! - `closures` - alignment, the across-one-shot skip set, tie groups;
+//!   `metrics` - closure metrics; `adjust`, `lsq` - the Closures Computed
+//!   View ([`AdjustedPositions`], [`SolveHold`]); `roles` - datum roles,
+//!   entrances, GPS gaps; `rigid` - rigid groups, anchored lines, immovable
+//!   stations, merge pairs; `frozen`; `stats`; `graph` - distances and the
+//!   ruler; `gas` - the Plan-mode gas engine ([`GasReach`]).
 //!
 //! The legacy model ([`crate::project`]) is untouched and independent.
 
@@ -32,36 +47,37 @@ use serde::{Deserialize, Serialize};
 
 use crate::{LineId, Section, StationId};
 
-mod adjust;
+// The model (plan 1-4).
 mod anchors;
 mod build;
-mod closures;
-mod frozen;
-mod gas;
-mod graph;
-mod lsq;
-mod metrics;
 mod naming;
 mod positions;
-mod rigid;
-mod roles;
-mod stats;
 mod topology;
 mod types;
 mod validate;
 
-// Stream M2: topology, closures, datums, move tools, Add (plan 4-5).
+// Commands (plan 4-5).
 mod append;
+mod edit;
 mod ops;
 mod ops_closures;
 mod ops_datums;
 mod ops_detach;
 mod ops_merge;
 mod ops_move;
-// Stream M1: line and shot operations (`edit.rs`); the orphan sweep is M2's
-// (`sweep.rs` is a minimal local copy until M2 lands).
-mod edit;
 mod sweep;
+
+// Derived views (plan 3).
+mod adjust;
+mod closures;
+mod frozen;
+mod gas;
+mod graph;
+mod lsq;
+mod metrics;
+mod rigid;
+mod roles;
+mod stats;
 
 #[cfg(test)]
 #[expect(
@@ -139,7 +155,6 @@ mod positions_tests;
 )]
 mod validate_tests;
 
-// Stream M2 tests.
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -225,21 +240,21 @@ pub use types::{
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
 
 pub use append::{AppendSummary, ShotUuidRename};
+pub use edit::{
+    CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
+    TornTie, TornTieKind, TornTieReason,
+};
+pub use edit::{
+    CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange, DeletedShot,
+    EditError, EditReport, Edited, RangeDeleteMode, ShotPlace, SplitLinePreview, SplitOptions,
+    SplitShot,
+};
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;
 pub use ops_datums::{DatumChange, DatumSet};
 pub use ops_detach::DetachReport;
 pub use ops_merge::{MergeCheck, MergeDatumShift, MergeReport};
 pub use ops_move::{SegmentMoved, StationMoved};
-pub use edit::{
-    CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
-    TornTie, TornTieKind, TornTieReason,
-};
-pub use edit::{
-    CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
-    DeletedShot, EditError, EditReport, Edited, RangeDeleteMode, ShotPlace, SplitLinePreview,
-    SplitOptions, SplitShot,
-};
 pub use sweep::{Promotion, SweepReport};
 
 /// A survey project in the station-graph model (plan 1.2).
