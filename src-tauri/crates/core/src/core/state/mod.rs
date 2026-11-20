@@ -248,6 +248,8 @@ mod merge_projects_tests;
 mod meta_moves_tests;
 #[cfg(test)]
 mod metamorphic_undo_tests;
+#[cfg(test)]
+mod misc_state_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,
