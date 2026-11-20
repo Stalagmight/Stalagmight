@@ -540,11 +540,14 @@ fn test_save_project_no_path_specified() {
 }
 
 /// A project created with its first save deferred (#92) whose reserved path
-/// was taken meanwhile never replaces that file.
+/// was taken meanwhile never replaces that file: the implicit first save
+/// picks the next free name, as 0.6.0 did
+/// (`test_save_project_implicit_first_save_autorename_when_target_exists`).
 #[test]
 fn a_deferred_first_save_never_replaces_a_file_that_appeared_at_its_path() {
     let dir = TempDir::new().unwrap();
     let existing = dir.path().join("existing.stalx");
+    let autorenamed = dir.path().join("existing_1.stalx");
     std::fs::write(&existing, b"ORIGINAL").unwrap();
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -555,14 +558,18 @@ fn a_deferred_first_save_never_replaces_a_file_that_appeared_at_its_path() {
 
     let result = state.save_project(None);
 
-    assert_eq!(std::fs::read(&existing).unwrap(), b"ORIGINAL");
     assert!(
-        result
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with(super::EXTERNALLY_MODIFIED_CODE)),
-        "{result:?}"
+        result.success,
+        "unexpected save failure: {:?}",
+        result.error
     );
+    // Existing file must remain untouched.
+    assert_eq!(std::fs::read(&existing).unwrap(), b"ORIGINAL");
+    // The save picks an available suffixed filename, and the session follows.
+    assert!(autorenamed.exists());
+    assert_eq!(result.saved_path.as_deref(), autorenamed.to_str());
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.file_path.as_ref(), Some(&autorenamed));
 }
 
 /// The save writes through `<file>.stalx.tmp` and leaves nothing beside the

@@ -142,6 +142,11 @@ pub(crate) fn unresolve_warning_impl(
     warning_code: String,
 ) -> Result<(), String> {
     let shot_uuid = state.shot_uuid_for(line_id, shot_id);
+    // No project open: nothing to un-ignore (0.6.0 refused here too, for want
+    // of a database); the project is cloned only on this rare miss.
+    if shot_uuid.is_none() && state.get_project_state().is_none() {
+        return Err("No project open".to_string());
+    }
     tracing::info!(
         line_id = line_id,
         shot_id = shot_id,

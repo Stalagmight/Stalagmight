@@ -1,35 +1,32 @@
 //! Comprehensive integration tests for Stalagmight
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
-// Parked by the station-graph switch (C0): written against the 0.6.0 model,
-// the SQLite database handle and the old undo engine; ported by a work
-// package of the C0 breakdown.
-#![cfg(sg_unported)]
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp
-)]
+//! The survey is the station-graph model (`models::survey`): stations are
+//! entities, a merge is one shared station, positions are derived, and a
+//! project is saved as a `.stalx` version 2 file.
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 
-use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
-use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
-use stalagmight_lib::models::{
-    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, Line, LineData, LineUpdates,
-    LoopClosure, Project, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
+use stalagmight_lib::core::{AppState, Command, CommandResult, UndoEntry, UndoStack, Validator};
+use stalagmight_lib::models::survey::changeset::{
+    capture, EntryLimits, HistoryEntry, HistoryRefs, RecordedPreview,
 };
-use stalagmight_lib::persistence::Database;
-use std::collections::{HashMap, HashSet};
+use stalagmight_lib::models::survey::{self, LineMeta, Project, StartAt};
+use stalagmight_lib::models::{
+    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineId, LineUpdates, ProjectMetadata,
+    Shot, ShotData, ShotKind, ShotUpdates, StationId, StationRef,
+};
+use stalagmight_lib::persistence::stalx_v2::{self, DecodeOptions, Extras, Mode};
+use std::collections::HashSet;
 use std::path::Path;
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 // ============================================================================
 // Helper functions
 // ============================================================================
 
 fn create_test_project() -> Project {
-    Project::new("Test Cave".to_string(), Some("Test Location".to_string()))
+    Project::new("Test Cave", Some("Test Location".to_string()))
 }
 
 fn create_shot_data(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
@@ -44,16 +41,154 @@ fn create_shot_data(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) ->
     }
 }
 
-fn create_line_with_shots(name: &str, shots: Vec<ShotData>) -> LineData {
-    LineData {
+fn line_meta(name: &str) -> LineMeta {
+    LineMeta {
         name: Some(name.to_string()),
-        surveyor: Some("Test Surveyor".to_string()),
+        color: "#4ecdc4".to_string(),
+        ..LineMeta::default()
+    }
+}
+
+/// Add a free line (a new piece) laid out from its start at local `(x, y)`.
+fn add_line_at(project: &mut Project, name: &str, shots: Vec<ShotData>, x: f64, y: f64) -> LineId {
+    let id = project
+        .add_line(line_meta(name), StartAt::New, shots)
+        .unwrap();
+    let start = project.line(id).unwrap().start;
+    project.set_placement(start, x, y).unwrap();
+    id
+}
+
+/// Add a free line laid out from its start at the local origin (where 0.6.0
+/// put a line nothing placed).
+fn add_line(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
+    add_line_at(project, name, shots, 0.0, 0.0)
+}
+
+/// The station at `index` along `line`.
+fn station_of(project: &Project, line: LineId, index: u32) -> StationId {
+    project.station_at(StationRef::new(line, index)).unwrap()
+}
+
+/// The measured (Raw Data View) position of a slot.
+fn slot_xyz(project: &Project, line: LineId, index: u32) -> [f64; 3] {
+    project
+        .raw_positions()
+        .slot(project, StationRef::new(line, index))
+        .unwrap()
+}
+
+fn gps(latitude: f64, longitude: f64, depth_reference: f64) -> GpsCoordinates {
+    GpsCoordinates {
+        latitude,
+        longitude,
+        depth_reference,
+    }
+}
+
+/// Set a datum on a slot through the model's command (anchor rules included).
+fn set_datum(project: &mut Project, line: LineId, index: u32, at: GpsCoordinates) {
+    project
+        .set_datum_at(StationRef::new(line, index), at, None)
+        .unwrap();
+}
+
+fn assert_valid(project: &Project) {
+    let violations = project.validate();
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+/// Encode as a `.stalx` version 2 file body and decode it back.
+fn round_trip(project: &Project) -> Project {
+    let bytes = stalx_v2::encode(project, &Extras::default(), Mode::Normal).unwrap();
+    stalx_v2::decode(&bytes, &DecodeOptions::default())
+        .unwrap()
+        .project
+}
+
+fn write_v2(project: &Project, path: &Path) {
+    let bytes = stalx_v2::encode(project, &Extras::default(), Mode::Normal).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn read_v2(path: &Path) -> Project {
+    let bytes = std::fs::read(path).unwrap();
+    stalx_v2::decode(&bytes, &DecodeOptions::default())
+        .unwrap()
+        .project
+}
+
+fn assert_success(result: &CommandResult) {
+    assert!(result.success, "expected success, got {:?}", result.error);
+}
+
+/// An app with a new, unsaved project open.
+fn app() -> AppState {
+    let state = AppState::new().unwrap();
+    assert_success(&state.execute(Command::CreateProject {
+        name: "Test Cave".to_string(),
+        location: None,
+    }));
+    state
+}
+
+fn create_line_cmd(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
+    let result = state.execute(Command::CreateLine {
+        name: Some(name.to_string()),
+        surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        quality: 1.0,
         shots,
+        cave_section_id: None,
+    });
+    assert_success(&result);
+    result.line_id.unwrap()
+}
+
+/// What the Recents card shows for `project` written as a file: the header
+/// (`summary`) the open path writes, read back by the recent-projects list.
+fn recent_card(project: &Project) -> ProjectMetadata {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("card.stalx");
+    write_v2(project, &path);
+    let state = AppState::new().unwrap();
+    assert_success(&state.execute(Command::OpenProject { path: path.clone() }));
+    let cards = state.get_recent_projects();
+    cards
+        .into_iter()
+        .find(|card| card.file_path == path)
+        .expect("the opened file is listed")
+}
+
+/// An undo entry for a real edit (`before` -> `after`), as the core records it.
+fn entry_for(kind: &str, before: &Project, after: &Project) -> HistoryEntry {
+    HistoryEntry {
+        timestamp: chrono::Utc::now(),
+        kind: kind.to_string(),
+        label: format!("Test {kind}"),
+        refs: HistoryRefs::default(),
+        preview: RecordedPreview::default(),
+        changes: capture(before, after),
     }
+}
+
+/// `n` undo entries, each adding one line to the survey before it.
+fn line_entries(n: usize) -> Vec<HistoryEntry> {
+    let mut project = create_test_project();
+    (0..n)
+        .map(|i| {
+            let before = project.clone();
+            add_line_at(
+                &mut project,
+                &format!("Line {i}"),
+                vec![create_shot_data(0.0, 1.0, 5.0, 5.0)],
+                f64::from(u32::try_from(i).unwrap()) * 10.0,
+                0.0,
+            );
+            entry_for("create_line", &before, &project)
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -68,30 +203,35 @@ fn test_station_coordinates_computed_correctly() {
     // Create shots: North 10m, then East 10m
     let shot_a = create_shot_data(0.0, 10.0, 5.0, 5.0);
     let shot_b = create_shot_data(90.0, 10.0, 5.0, 6.0);
-    project.add_line(create_line_with_shots(
+    let main = add_line(
+        &mut project,
         "Main",
         vec![
             shot_a,         // North 10m (horizontal)
             shot_b.clone(), // East 10m (slope)
         ],
-    ));
+    );
 
-    let stations = project.compute_station_coordinates();
-
-    assert_eq!(stations.len(), 3); // 2 shots = 3 stations
+    let slots = project.raw_positions().slots(&project);
+    assert_eq!(slots.len(), 3); // 2 shots = 3 stations
 
     // Station 0: origin
-    assert!((stations[0].coordinates.x - 0.0).abs() < 0.001);
-    assert!((stations[0].coordinates.y - 0.0).abs() < 0.001);
+    let s0 = slot_xyz(&project, main, 0);
+    assert!((s0[0] - 0.0).abs() < 0.001);
+    assert!((s0[1] - 0.0).abs() < 0.001);
 
     // Station 1: after north 10m (x=0, y=10)
-    assert!((stations[1].coordinates.x - 0.0).abs() < 0.001);
-    assert!((stations[1].coordinates.y - 10.0).abs() < 0.001);
+    let s1 = slot_xyz(&project, main, 1);
+    assert!((s1[0] - 0.0).abs() < 0.001);
+    assert!((s1[1] - 10.0).abs() < 0.001);
 
     // Station 2: after east 10m slope (x=horizontal, y=10)
-    let expected_x = shot_b.horizontal_length();
-    assert!((stations[2].coordinates.x - expected_x).abs() < 0.001);
-    assert!((stations[2].coordinates.y - 10.0).abs() < 0.001);
+    let s2 = slot_xyz(&project, main, 2);
+    let expected_x = Shot::new(0, shot_b).horizontal_length();
+    assert!((s2[0] - expected_x).abs() < 0.001);
+    assert!((s2[1] - 10.0).abs() < 0.001);
+    // Depth is the measured depth reading.
+    assert!((s2[2] - 6.0).abs() < 0.001);
 }
 
 /// Test 5: Zero datum propagation - verify GPS coords propagate
@@ -99,25 +239,34 @@ fn test_station_coordinates_computed_correctly() {
 fn test_zero_datum_propagation() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let main = project
+        .add_line(
+            line_meta("Main"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        )
+        .unwrap();
 
-    // Set zero datum at station 0
-    let gps = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 5.0,
-    };
-    project.set_zero_datum(StationRef::new(0, 0), gps).unwrap();
+    // Set zero datum at station 0 (it holds the piece: no placement needed)
+    set_datum(&mut project, main, 0, gps(45.0, -122.0, 5.0));
+    assert_valid(&project);
 
-    let stations = project.compute_station_coordinates();
+    let state = project.project_state_wire(false);
+    let station0 = state
+        .stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(main, 0))
+        .unwrap();
 
     // Station 0 should be at origin (the zero datum point)
-    assert!(stations[0].is_zero_datum);
-    assert!((stations[0].coordinates.x - 0.0).abs() < 0.001);
-    assert!((stations[0].coordinates.y - 0.0).abs() < 0.001);
+    assert!(station0.is_zero_datum);
+    assert!((station0.coordinates.x - 0.0).abs() < 0.001);
+    assert!((station0.coordinates.y - 0.0).abs() < 0.001);
+    let at = station0.gps_coordinates.expect("the datum's GPS");
+    assert_eq!(
+        (at.latitude, at.longitude, at.depth_reference),
+        (45.0, -122.0, 5.0)
+    );
 }
 
 /// Test 23: Station ID stability - verify station refs maintain format
@@ -125,19 +274,27 @@ fn test_zero_datum_propagation() {
 fn test_station_id_stability() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
-
-    let stations = project.compute_station_coordinates();
+        20.0,
+        0.0,
+    );
+    assert_eq!((a, b), (0, 1));
 
     // Station refs should be line_id:station_index format
-    let refs: Vec<_> = stations.iter().map(|s| s.station_ref).collect();
+    let refs: Vec<_> = project
+        .raw_positions()
+        .slots(&project)
+        .iter()
+        .map(|s| s.slot)
+        .collect();
 
     // Line 0 has 2 stations: 0:0, 0:1
     assert!(refs.contains(&StationRef::new(0, 0)));
@@ -146,6 +303,17 @@ fn test_station_id_stability() {
     // Line 1 has 2 stations: 1:0, 1:1
     assert!(refs.contains(&StationRef::new(1, 0)));
     assert!(refs.contains(&StationRef::new(1, 1)));
+
+    // Each station has its own Station ID, and it survives a save and reload.
+    let ids: HashSet<StationId> = refs
+        .iter()
+        .map(|slot| project.station_at(*slot).unwrap())
+        .collect();
+    assert_eq!(ids.len(), 4);
+    let reloaded = round_trip(&project);
+    for slot in &refs {
+        assert_eq!(reloaded.station_at(*slot), project.station_at(*slot));
+    }
 }
 
 /// Test 24: 3D distance calculation - verify Euclidean distance
@@ -195,77 +363,95 @@ fn test_station_merge_repositioning() {
     let mut project = create_test_project();
 
     // Line A goes north (with zero datum to anchor it)
-    project.add_line(create_line_with_shots(
-        "Line A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-
-    // Set zero datum on line A to anchor it
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 5.0,
-            },
+    let a = project
+        .add_line(
+            line_meta("Line A"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
         )
         .unwrap();
+    set_datum(&mut project, a, 0, gps(45.0, -122.0, 5.0));
 
-    // Line B goes east (starts at origin, will move)
-    project.add_line(create_line_with_shots(
+    // Line B goes east (a free piece somewhere else, will move)
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        50.0,
+        -30.0,
+    );
 
     // Merge station 0:1 (end of A at y=10) with station 1:0 (start of B)
     // Since A has zero datum, B will move to align
-    let result = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
-    assert!(result.is_ok());
+    let result = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
+    assert!(result.is_ok(), "{result:?}");
+    assert_valid(&project);
 
-    let stations = project.compute_station_coordinates();
-
-    // Find stations from line B
-    let line_b_start = stations
-        .iter()
-        .find(|s| s.station_ref.line_id == 1 && s.station_ref.station_index == 0)
-        .unwrap();
+    // One shared station now.
+    assert_eq!(station_of(&project, a, 1), station_of(&project, b, 0));
 
     // Line B's start should now be at end of line A (y=10 relative to zero datum at origin)
-    // After zero datum adjustment, A's end is at y=10, and B starts there
+    let line_b_start = slot_xyz(&project, b, 0);
     assert!(
-        (line_b_start.coordinates.y - 10.0).abs() < 0.001,
+        (line_b_start[1] - 10.0).abs() < 0.001,
         "Line B start Y should be 10, got {}",
-        line_b_start.coordinates.y
+        line_b_start[1]
     );
+    assert!(line_b_start[0].abs() < 0.001);
+    // Line A did not move.
+    assert!(slot_xyz(&project, a, 0)[0].abs() < 0.001);
+    assert!(slot_xyz(&project, a, 0)[1].abs() < 0.001);
 }
 
-/// Test 6: Unmerge restores position (positions stay after unmerge in current impl)
+/// Test 6: Unmerge keeps position: a detach moves nothing
 #[test]
 fn test_unmerge_keeps_position() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     // Merge then unmerge
     project
-        .merge_stations(StationRef::new(0, 1), StationRef::new(1, 0))
+        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
         .unwrap();
 
-    let merged = project.are_stations_merged(StationRef::new(0, 1), StationRef::new(1, 0));
+    let merged = station_of(&project, a, 1) == station_of(&project, b, 0);
     assert!(merged);
+    let before: Vec<[f64; 3]> = [(a, 0), (a, 1), (b, 0), (b, 1)]
+        .iter()
+        .map(|&(line, index)| slot_xyz(&project, line, index))
+        .collect();
 
-    project.unmerge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
+    project
+        .unmerge_station_pair(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    assert_valid(&project);
 
-    let still_merged = project.are_stations_merged(StationRef::new(0, 1), StationRef::new(1, 0));
+    let still_merged = station_of(&project, a, 1) == station_of(&project, b, 0);
     assert!(!still_merged);
+    let after: Vec<[f64; 3]> = [(a, 0), (a, 1), (b, 0), (b, 1)]
+        .iter()
+        .map(|&(line, index)| slot_xyz(&project, line, index))
+        .collect();
+    for (was, now) in before.iter().zip(&after) {
+        for axis in 0..3 {
+            assert!(
+                (was[axis] - now[axis]).abs() < 1e-9,
+                "a detach must not move anything: {was:?} -> {now:?}"
+            );
+        }
+    }
 }
 
 /// Test 40: Duplicate merge rejection - verify already merged stations error
@@ -273,23 +459,27 @@ fn test_unmerge_keeps_position() {
 fn test_duplicate_merge_rejection() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     // First merge succeeds
-    let result1 = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
+    let result1 = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result1.is_ok());
 
-    // Second merge fails
-    let result2 = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
+    // Second merge fails: the two slots are one station now
+    let result2 = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result2.is_err());
-    assert!(result2.unwrap_err().contains("already merged"));
+    assert!(result2.unwrap_err().to_string().contains("already merged"));
 }
 
 /// Test 43: Delete line with merges - verify merges cleaned up
@@ -297,27 +487,34 @@ fn test_duplicate_merge_rejection() {
 fn test_delete_line_cleanup() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     project
-        .merge_stations(StationRef::new(0, 1), StationRef::new(1, 0))
+        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
         .unwrap();
 
-    assert_eq!(project.station_merges.len(), 1);
+    assert_eq!(project.project_wire().station_merges.len(), 1);
 
     // Remove line B
-    project.remove_line(1);
+    project.delete_line(b).unwrap();
+    assert_valid(&project);
 
-    // Note: Current implementation doesn't auto-clean merges on line delete
-    // This test documents the current behavior
-    assert_eq!(project.lines.len(), 1);
+    // The merge went with the line: A's end is an ordinary station again,
+    // and nothing references line B.
+    assert_eq!(project.lines().len(), 1);
+    assert!(project.project_wire().station_merges.is_empty());
+    assert!(!project.topology().is_junction(station_of(&project, a, 1)));
 }
 
 /// Test 48: Multiple zero datums - two datums in disconnected lines
@@ -325,34 +522,32 @@ fn test_delete_line_cleanup() {
 fn test_multiple_zero_datums_disconnected() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     // Set zero datum on line A
-    let gps_a = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 5.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a)
-        .unwrap();
+    set_datum(&mut project, a, 0, gps(45.0, -122.0, 5.0));
 
     // Set zero datum on line B (disconnected, should succeed)
-    let gps_b = GpsCoordinates {
-        latitude: 46.0,
-        longitude: -123.0,
-        depth_reference: 10.0,
-    };
-    let result = project.set_zero_datum(StationRef::new(1, 0), gps_b);
+    let result = project.set_datum_at(StationRef::new(b, 0), gps(46.0, -123.0, 10.0), None);
     assert!(result.is_ok());
-    assert_eq!(project.zero_datums.len(), 2);
+    assert_eq!(project.datums.len(), 2);
+    assert_valid(&project);
+    // Each holds its own piece.
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
+    );
 }
 
 /// Test: Merge nonexistent station fails
@@ -360,17 +555,24 @@ fn test_multiple_zero_datums_disconnected() {
 fn test_merge_nonexistent_station_fails() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    );
 
     // Try to merge with non-existent station
-    let result = project.merge_stations(
-        StationRef::new(0, 0),
-        StationRef::new(99, 0), // doesn't exist
-    );
+    assert!(project.station_at(StationRef::new(99, 0)).is_none());
+    let result = project.merge_stations(station_of(&project, a, 0), 9_999);
     assert!(result.is_err());
+    // And through the command, which resolves the slot first
+    let state = app();
+    create_line_cmd(&state, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(0, 0),
+        station_b: StationRef::new(99, 0), // doesn't exist
+    });
+    assert!(!result.success);
 }
 
 // ============================================================================
@@ -383,36 +585,41 @@ fn test_loop_detection_simple() {
     let mut project = create_test_project();
 
     // Create a loop: Line A (north), Line B (east), merge to form loop
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "Line A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(0.0, 10.0, 5.0, 5.0),
         ],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![
             create_shot_data(90.0, 10.0, 5.0, 5.0),
             create_shot_data(90.0, 10.0, 5.0, 5.0),
         ],
-    ));
+        40.0,
+        0.0,
+    );
 
     // First merge end of A to start of B (connects them)
     project
-        .merge_stations(StationRef::new(0, 2), StationRef::new(1, 0))
+        .merge_stations(station_of(&project, a, 2), station_of(&project, b, 0))
         .unwrap();
 
     // Create loop closure between start of A and end of B (already connected)
-    let result = project.create_loop_closure(
-        StationRef::new(0, 0),
-        StationRef::new(1, 2),
-        ClosureStrategy::Batch,
+    let result = project.create_closure_at(
+        StationRef::new(a, 0),
+        StationRef::new(b, 2),
+        survey::ClosureStrategy::Batch,
     );
 
     // This should succeed and create a loop closure
-    assert!(result.is_ok());
-    assert_eq!(project.loop_closures.len(), 1);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(project.closures.len(), 1);
+    assert_valid(&project);
 }
 
 /// Test 26: Loop closure error - verify error % calculation
@@ -421,37 +628,48 @@ fn test_loop_closure_error_calculation() {
     let mut project = create_test_project();
 
     // Create lines that form almost-closed loop
-    project.add_line(create_line_with_shots(
+    let a = add_line(
+        &mut project,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)], // North 10m
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)], // East 10m
-    ));
+        40.0,
+        0.0,
+    );
 
     // Connect them in a way that creates a loop
     project
         .merge_stations(
-            StationRef::new(0, 1), // End of A
-            StationRef::new(1, 0), // Start of B
+            station_of(&project, a, 1), // End of A
+            station_of(&project, b, 0), // Start of B
         )
         .unwrap();
 
     // Now try to close the loop by creating a loop closure (stations are already connected)
-    let result = project.create_loop_closure(
-        StationRef::new(0, 0), // Start of A
-        StationRef::new(1, 1), // End of B
-        ClosureStrategy::Batch,
+    let result = project.create_closure_at(
+        StationRef::new(a, 0), // Start of A
+        StationRef::new(b, 1), // End of B
+        survey::ClosureStrategy::Batch,
     );
 
-    assert!(result.is_ok());
-
-    if !project.loop_closures.is_empty() {
-        let closure = &project.loop_closures[0];
-        // Error percentage should be calculated
-        assert!(closure.path_length > 0.0);
-    }
+    let created = result.unwrap().value;
+    // The metrics are derived from the measured layout: the path runs along
+    // the two shots (20 m) and the ends lie sqrt(200) m apart.
+    let metrics = created.metrics.expect("the closure's figures");
+    assert!((metrics.path_length - 20.0).abs() < 1e-9);
+    assert!((metrics.misclosure_distance - 200f64.sqrt()).abs() < 1e-9);
+    assert!(
+        (metrics.error_percentage - 100.0 * 200f64.sqrt() / 20.0).abs() < 1e-9,
+        "{metrics:?}"
+    );
+    // And the wire's closure carries the same figures.
+    let wire = project.project_wire();
+    assert_eq!(wire.loop_closures.len(), 1);
+    assert!((wire.loop_closures[0].path_length - 20.0).abs() < 1e-9);
 }
 
 // ============================================================================
@@ -463,28 +681,27 @@ fn test_loop_closure_error_calculation() {
 fn test_undo_redo_chain() {
     let mut stack = UndoStack::new();
 
-    // Simulate: create line, add shot, delete
-    stack.push(Command::CreateLine {
-        name: Some("Test".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: vec![],
-        cave_section_id: None,
-    });
-    stack.push(Command::CreateShot {
-        line_id: 0,
-        shot: create_shot_data(0.0, 10.0, 5.0, 5.0),
-        after_shot_id: None,
-        before_shot_id: None,
-    });
+    // Simulate: create line, add shot
+    let mut project = create_test_project();
+    let empty = project.clone();
+    let line = add_line(&mut project, "Test", Vec::new());
+    let with_line = project.clone();
+    project
+        .append_shot(line, create_shot_data(0.0, 10.0, 5.0, 5.0))
+        .unwrap();
+    stack
+        .record(entry_for("create_line", &empty, &with_line))
+        .unwrap();
+    stack
+        .record(entry_for("create_shot", &with_line, &project))
+        .unwrap();
 
     assert!(stack.can_undo());
     assert!(!stack.can_redo());
 
     // Undo one
     let entry = stack.pop_undo().unwrap();
+    assert_eq!(entry.entry().kind, "create_shot");
     stack.push_redo(entry);
 
     assert!(stack.can_undo());
@@ -492,10 +709,31 @@ fn test_undo_redo_chain() {
 
     // Undo second
     let entry2 = stack.pop_undo().unwrap();
+    assert_eq!(entry2.entry().kind, "create_line");
     stack.push_redo(entry2);
 
     assert!(!stack.can_undo());
     assert!(stack.can_redo());
+
+    // The same chain on the open project: every step lands where it started.
+    let state = app();
+    let line = create_line_cmd(&state, "Test", Vec::new());
+    assert_success(&state.execute(Command::CreateShot {
+        line_id: line,
+        shot: create_shot_data(0.0, 10.0, 5.0, 5.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    }));
+    let full = state.get_project_state().unwrap();
+    assert_success(&state.undo());
+    assert_success(&state.undo());
+    assert!(state.get_project_state().unwrap().lines().is_empty());
+    assert!(!state.can_undo() && state.can_redo());
+    assert_success(&state.redo());
+    assert_success(&state.redo());
+    let redone = state.get_project_state().unwrap();
+    assert_eq!(redone.lines(), full.lines());
+    assert_eq!(redone.stations, full.stations);
 }
 
 /// Test 17: Undo stack limit - 110 operations, verify only last 100
@@ -503,37 +741,28 @@ fn test_undo_redo_chain() {
 fn test_undo_stack_limit() {
     let mut stack = UndoStack::new_with_limit(100);
 
-    // Push 110 commands
-    for i in 0..110 {
-        stack.push(Command::CreateLine {
-            name: Some(format!("Line {i}")),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![],
-            cave_section_id: None,
-        });
+    // Push 110 entries
+    for entry in line_entries(110) {
+        stack.record(entry).unwrap();
     }
 
-    // Should only have 100
+    // Should only have 100: the newest ones
     assert_eq!(stack.len(), 100);
+    assert_eq!(stack.peek_undo().unwrap().entry().label, "Test create_line");
+    let oldest = stack.undo_entries().next().unwrap();
+    // The oldest kept entry adds "Line 10": entries 0..9 were dropped.
+    let digest = oldest.entry().changes.digest();
+    let digest_text = format!("{digest:?}");
+    assert!(digest_text.contains("Line 10"), "{digest_text}");
 }
 
 /// Test 18: Undo clears redo - action, undo, new action, verify redo cleared
 #[test]
 fn test_undo_clears_redo_stack() {
     let mut stack = UndoStack::new();
+    let mut entries = line_entries(2).into_iter();
 
-    stack.push(Command::CreateLine {
-        name: Some("Test".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: vec![],
-        cave_section_id: None,
-    });
+    stack.record(entries.next().unwrap()).unwrap();
 
     // Undo
     let entry = stack.pop_undo().unwrap();
@@ -541,156 +770,223 @@ fn test_undo_clears_redo_stack() {
     assert!(stack.can_redo());
 
     // New action should clear redo
-    stack.push(Command::CreateLine {
-        name: Some("New".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: vec![],
-        cave_section_id: None,
-    });
+    stack.record(entries.next().unwrap()).unwrap();
     assert!(!stack.can_redo());
+
+    // The same rule on the open project.
+    let state = app();
+    create_line_cmd(&state, "Test", vec![create_shot_data(0.0, 1.0, 5.0, 5.0)]);
+    assert_success(&state.undo());
+    assert!(state.can_redo());
+    create_line_cmd(&state, "New", vec![create_shot_data(0.0, 1.0, 5.0, 5.0)]);
+    assert!(!state.can_redo());
+    assert!(state.get_redo_stack().is_empty());
 }
 
-/// Test 35: Batch command atomic (unit test - verifies entry structure)
+/// Test 35: An undo entry round-trips through its persisted text
 #[test]
 fn test_batch_command_structure() {
-    let entry = UndoEntry {
-        command_bytes: None,
-        command: Command::CreateLine {
-            name: Some("Test".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![],
-            cave_section_id: None,
-        },
-        undo_data: UndoData::ProjectSnapshotPair {
-            before: "{}".to_string(),
-            after: "{}".to_string(),
-        },
-        timestamp: None,
-    };
+    let mut project = create_test_project();
+    let before = project.clone();
+    add_line(
+        &mut project,
+        "Test",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    );
+    let entry = UndoEntry::new(entry_for("create_line", &before, &project)).unwrap();
 
     // Verify entry can be serialized
-    let (cmd_json, data_json) = UndoStack::serialize_entry(&entry).unwrap();
-    assert!(!cmd_json.is_empty());
-    assert!(!data_json.is_empty());
+    let text = entry.raw().as_str();
+    assert!(!text.is_empty());
+    assert!(text.contains("\"k\":\"create_line\""));
 
     // And deserialized
-    let restored = UndoStack::deserialize_entry(&cmd_json, &data_json).unwrap();
-    assert!(matches!(restored.command, Command::CreateLine { .. }));
+    let restored = UndoEntry::decode(entry.raw(), &EntryLimits::default()).unwrap();
+    assert_eq!(restored.entry().kind, "create_line");
+    assert_eq!(restored.entry().label, entry.entry().label);
+    assert_eq!(restored.raw(), entry.raw());
+
+    // The decoded entry undoes and redoes exactly.
+    let mut stepped = project.clone();
+    survey::changeset::undo(&mut stepped, &restored.entry().changes).unwrap();
+    assert_eq!(stepped.lines(), before.lines());
+    assert_eq!(stepped.stations, before.stations);
+    survey::changeset::redo(&mut stepped, &restored.entry().changes).unwrap();
+    assert_eq!(stepped.lines().len(), 1);
+    assert_eq!(
+        stepped.lines()[0].shots[0].uuid,
+        project.lines()[0].shots[0].uuid
+    );
+    assert_eq!(stepped.stations, project.stations);
 }
 
-/// Test 41: Undo persistence - serialize and deserialize entries
+/// Test 41: Undo persistence - the stacks round-trip through the file's history
 #[test]
 fn test_undo_persistence() {
     let mut stack = UndoStack::new();
+    for entry in line_entries(1) {
+        stack.record(entry).unwrap();
+    }
 
-    stack.push_with_data(
-        Command::CreateLine {
-            name: Some("Test".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![],
-            cave_section_id: None,
-        },
-        UndoData::InverseCommand(Command::DeleteLine { line_id: 0 }),
-    );
+    // Get the history the save persists
+    let history = stack.persisted();
+    assert_eq!(history.undo.len(), 1);
+    assert!(history.redo.is_empty());
 
-    // Get the serialized rows to persist
-    let rows = stack.rows_to_persist(PersistStack::Undo, Some(10));
-    assert_eq!(rows.len(), 1);
-
-    // Load into new stack (the untimestamped loader takes the pair, not the triple)
-    let serialized: Vec<(String, String)> = rows
-        .into_iter()
-        .map(|(command_json, undo_data_json, _)| (command_json, undo_data_json))
-        .collect();
+    // Load into new stack
     let mut new_stack = UndoStack::new();
-    new_stack.load_from_persisted(serialized);
+    new_stack
+        .load_persisted(&history, &EntryLimits::default())
+        .unwrap();
     assert_eq!(new_stack.len(), 1);
+    assert_eq!(new_stack.persisted(), history);
+
+    // Through a real save and reopen: the history comes back and undoes.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("undo.stalx");
+    let state = app();
+    create_line_cmd(&state, "Test", vec![create_shot_data(0.0, 1.0, 5.0, 5.0)]);
+    assert_success(&state.execute(Command::SaveProject {
+        path: Some(path.clone()),
+    }));
+    let reopened = AppState::new().unwrap();
+    assert_success(&reopened.execute(Command::OpenProject { path }));
+    assert_eq!(reopened.get_undo_stack().len(), 1);
+    assert_success(&reopened.undo());
+    assert!(reopened.get_project_state().unwrap().lines().is_empty());
 }
 
-/// Test 45: Undo zero datum - set datum, undo, verify removal
+/// Test 45: Undo zero datum - set datum, undo, verify removal; an undone
+/// removal puts the datum back at its list position (#413, finding 17)
 #[test]
 fn test_undo_zero_datum() {
-    // This tests the data structure for undo datum
-    let mut offsets = HashMap::new();
-    offsets.insert(0, Some((10.0, 20.0)));
-    let undo_data = UndoData::ZeroDatumInfo {
-        station_ref: StationRef::new(0, 0),
-        previous_gps: None,
-        // The index the datum sat at in `Project::zero_datums`, so undo of a
-        // removal puts it back THERE instead of appending (#413, finding 17).
-        position: Some(1),
-        previous_accuracy_m: Some(2.5),
-        previous_offsets: offsets,
-        previous_entrance: None,
+    let state = app();
+    let a = create_line_cmd(&state, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let b = create_line_cmd(&state, "B", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
+    let set = |line: LineId, at: GpsCoordinates| {
+        assert_success(&state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(line, 0),
+            coordinates: at,
+            accuracy_m: Some(2.5),
+            entrance: None,
+        }));
     };
 
-    // Verify serialization
-    let json = serde_json::to_string(&undo_data).unwrap();
-    let restored: UndoData = serde_json::from_str(&json).unwrap();
+    // Set, then undo: the datum is gone.
+    set(a, gps(45.0, -122.0, 0.0));
+    assert_eq!(state.get_project_state().unwrap().datums.len(), 1);
+    assert_success(&state.undo());
+    assert!(state.get_project_state().unwrap().datums.is_empty());
 
-    match restored {
-        UndoData::ZeroDatumInfo {
-            station_ref,
-            previous_gps,
-            position,
-            previous_accuracy_m,
-            previous_offsets,
-            ..
-        } => {
-            assert_eq!(station_ref, StationRef::new(0, 0));
-            assert!(previous_gps.is_none());
-            assert_eq!(position, Some(1));
-            assert_eq!(previous_accuracy_m, Some(2.5));
-            assert_eq!(previous_offsets.get(&0), Some(&Some((10.0, 20.0))));
-        }
-        _ => panic!("Wrong undo data type"),
-    }
+    // Two datums; remove the first, undo: it is back FIRST, as it was.
+    set(a, gps(45.0, -122.0, 0.0));
+    set(b, gps(46.0, -123.0, 0.0));
+    let with_both = state.get_project_state().unwrap();
+    assert_success(&state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(a, 0),
+    }));
+    assert_eq!(state.get_project_state().unwrap().datums.len(), 1);
+    assert_success(&state.undo());
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.datums, with_both.datums);
+    assert_eq!(restored.datums[0].station, station_of(&restored, a, 0));
+    assert_eq!(restored.datums[0].accuracy_m, Some(2.5));
+    assert_eq!(restored.placements, with_both.placements);
 }
 
-/// Test 50: Comprehensive undo - multiple operation types
+/// Test 50: Comprehensive undo - every kind of edit undoes, also after a
+/// save and reopen (its persisted entry)
 #[test]
 fn test_comprehensive_undo_types() {
-    // Test all UndoData variants can be serialized
-    let variants = vec![
-        UndoData::None,
-        UndoData::InverseCommand(Command::DeleteLine { line_id: 0 }),
-        UndoData::PreviousValues {
-            line_id: 0,
-            shot_id: Some(0),
-            shot_uuid: None,
-            values_json: "{}".to_string(),
-            previous_offsets: HashMap::new(),
+    let state = app();
+    let empty = state.get_project_state().unwrap();
+    let a = create_line_cmd(
+        &state,
+        "A",
+        vec![
+            create_shot_data(0.0, 10.0, 5.0, 5.0),
+            create_shot_data(90.0, 10.0, 5.0, 5.0),
+        ],
+    );
+    let b = create_line_cmd(&state, "B", vec![create_shot_data(180.0, 7.0, 5.0, 6.0)]);
+    let shot = state.get_project_state().unwrap().line(a).unwrap().shots[0].id;
+    let commands = vec![
+        Command::UpdateShot {
+            line_id: a,
+            shot_id: shot,
+            updates: ShotUpdates {
+                length: Some(12.0),
+                comment: Some(Some("recalc".to_string())),
+                ..Default::default()
+            },
         },
-        UndoData::ZeroDatumInfo {
-            station_ref: StationRef::new(0, 0),
-            previous_gps: Some(GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 5.0,
-            }),
-            position: None,
-            previous_accuracy_m: None,
-            previous_offsets: HashMap::new(),
-            previous_entrance: None,
+        Command::UpdateLineMetadata {
+            line_id: b,
+            updates: LineUpdates {
+                name: Some(Some("B renamed".to_string())),
+                color: Some("#ff0000".to_string()),
+                ..Default::default()
+            },
         },
-        UndoData::ProjectSnapshotPair {
-            before: "{}".to_string(),
-            after: "{}".to_string(),
+        Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: gps(45.0, -122.0, 5.0),
+            accuracy_m: None,
+            entrance: None,
+        },
+        Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(b, 0),
+        },
+        Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: ClosureStrategy::Batch,
+        },
+        Command::SetShotKind {
+            line_id: b,
+            shot_id: state.get_project_state().unwrap().line(b).unwrap().shots[0].id,
+            kind: ShotKind::Jump,
         },
     ];
+    let mut states = vec![state.get_project_state().unwrap()];
+    for command in commands {
+        let result = state.execute(command.clone());
+        assert_success(&result);
+        states.push(state.get_project_state().unwrap());
+    }
+    let kinds: Vec<String> = state
+        .get_undo_stack()
+        .iter()
+        .map(|item| item.command_type.clone())
+        .collect();
+    assert_eq!(kinds.len(), 8, "{kinds:?}");
 
-    for variant in variants {
-        let json = serde_json::to_string(&variant).unwrap();
-        let _: UndoData = serde_json::from_str(&json).unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("kinds.stalx");
+    assert_success(&state.execute(Command::SaveProject {
+        path: Some(path.clone()),
+    }));
+
+    // In the session and through the persisted entries alike, each undo
+    // lands exactly on the state before its edit.
+    let reopened = AppState::new().unwrap();
+    assert_success(&reopened.execute(Command::OpenProject { path }));
+    for app_state in [&state, &reopened] {
+        for expected in states.iter().rev().skip(1) {
+            assert_success(&app_state.undo());
+            let now = app_state.get_project_state().unwrap();
+            assert_eq!(now.lines(), expected.lines());
+            assert_eq!(now.stations, expected.stations);
+            assert_eq!(now.datums, expected.datums);
+            assert_eq!(now.closures, expected.closures);
+        }
+        assert_success(&app_state.undo());
+        assert_success(&app_state.undo());
+        assert!(!app_state.can_undo());
+        let now = app_state.get_project_state().unwrap();
+        assert!(now.lines().is_empty());
+        assert_eq!(now.stations, empty.stations);
     }
 }
 
@@ -703,35 +999,44 @@ fn test_comprehensive_undo_types() {
 fn test_shot_deletion() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let main = add_line(
+        &mut project,
         "Main",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(0.0, 10.0, 5.0, 6.0),
             create_shot_data(0.0, 10.0, 6.0, 7.0),
         ],
-    ));
+    );
 
-    let line = project.get_line(0).unwrap();
+    let line = project.line(main).unwrap();
     assert_eq!(line.shots.len(), 3);
+    let kept = [line.shots[0].uuid.clone(), line.shots[2].uuid.clone()];
 
     // Remove middle shot
     let shot_id = line.shots[1].id;
-    project.remove_shot(0, shot_id);
+    project.delete_shot(main, shot_id).unwrap();
+    assert_valid(&project);
 
-    let line = project.get_line(0).unwrap();
+    let line = project.line(main).unwrap();
     assert_eq!(line.shots.len(), 2);
+    assert_eq!(
+        [line.shots[0].uuid.clone(), line.shots[1].uuid.clone()],
+        kept
+    );
+    // The chain closed the gap: one station fewer.
+    assert_eq!(line.station_count(), 3);
 }
 
 /// Test 19: Line metadata update - verify all fields persist
 #[test]
 fn test_line_metadata_update() {
-    let mut project = create_test_project();
-
-    project.add_line(create_line_with_shots(
+    let state = app();
+    let line_id = create_line_cmd(
+        &state,
         "Original",
         vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
-    ));
+    );
 
     let updates = LineUpdates {
         name: Some(Some("Updated Name".to_string())),
@@ -743,13 +1048,25 @@ fn test_line_metadata_update() {
         quality: Some(1.2),
     };
 
-    project.update_line(0, &updates);
+    assert_success(&state.execute(Command::UpdateLineMetadata { line_id, updates }));
 
-    let line = project.get_line(0).unwrap();
-    assert_eq!(line.name, Some("Updated Name".to_string()));
-    assert_eq!(line.surveyor_names(), Some("New Surveyor".to_string()));
-    assert_eq!(line.color, "#ff0000");
-    assert_eq!(line.quality, 1.2);
+    let check = |project: &Project| {
+        let line = project.line(line_id).unwrap();
+        assert_eq!(line.name, Some("Updated Name".to_string()));
+        let credit = line.shots[0].credit.as_ref().expect("the shot's credit");
+        assert_eq!(credit.surveyor_names().as_deref(), Some("New Surveyor"));
+        assert_eq!(line.color, "#ff0000");
+        assert_eq!(line.quality, 1.2);
+    };
+    check(&state.get_project_state().unwrap());
+
+    // ...and they persist.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.stalx");
+    assert_success(&state.execute(Command::SaveProject {
+        path: Some(path.clone()),
+    }));
+    check(&read_v2(&path));
 }
 
 /// Test 20: Line color auto-assign (verify unique colors)
@@ -760,19 +1077,27 @@ fn test_line_colors_unique() {
     let colors = ["#4ecdc4", "#ff6b6b", "#ffd93d", "#6bcb77"];
 
     for (i, color) in colors.iter().enumerate() {
-        project.add_line(LineData {
-            name: Some(format!("Line {i}")),
-            surveyor: None,
-            date: None,
-            color: (*color).to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![],
-        });
+        let id = project
+            .add_line(
+                LineMeta {
+                    name: Some(format!("Line {i}")),
+                    color: (*color).to_string(),
+                    ..LineMeta::default()
+                },
+                StartAt::New,
+                Vec::new(),
+            )
+            .unwrap();
+        let start = project.line(id).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
     }
+    assert_valid(&project);
 
-    let line_colors: HashSet<_> = project.lines.iter().map(|s| &s.color).collect();
+    let line_colors: HashSet<_> = project.lines().iter().map(|s| &s.color).collect();
     assert_eq!(line_colors.len(), 4); // All unique
+    let reloaded = round_trip(&project);
+    let reloaded_colors: Vec<_> = reloaded.lines().iter().map(|s| s.color.clone()).collect();
+    assert_eq!(reloaded_colors, colors);
 }
 
 /// Test 47: Line date parsing (verify date storage)
@@ -780,24 +1105,32 @@ fn test_line_colors_unique() {
 fn test_line_date_storage() {
     use chrono::NaiveDate;
 
-    let mut project = create_test_project();
-
+    let state = app();
     let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
 
-    project.add_line(LineData {
+    let result = state.execute(Command::CreateLine {
         name: Some("Dated Line".to_string()),
         surveyor: None,
         date: Some(date),
         color: "#4ecdc4".to_string(),
         direction: None,
-        quality: 1.0,
         // The legacy date is a template for the shots, so it needs one.
         shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+        cave_section_id: None,
     });
+    assert_success(&result);
 
-    let line = project.get_line(0).unwrap();
-    assert_eq!(line.first_survey_date(), Some(date));
-    assert_eq!(line.shots[0].credit().date, Some(date));
+    let project = state.get_project_state().unwrap();
+    let line = project.line(result.line_id.unwrap()).unwrap();
+    assert_eq!(
+        line.shots[0].credit.as_ref().and_then(|c| c.date),
+        Some(date)
+    );
+    let raw = project.raw_positions();
+    assert_eq!(
+        project.survey_stats(&raw, false).first_survey_date,
+        Some(date)
+    );
 }
 
 // ============================================================================
@@ -809,30 +1142,63 @@ fn test_line_date_storage() {
 fn test_project_stats() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    add_line(
+        &mut project,
         "Line A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 6.0),
             create_shot_data(0.0, 15.0, 6.0, 8.0),
         ],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    add_line_at(
+        &mut project,
         "Line B",
         vec![create_shot_data(90.0, 20.0, 10.0, 12.0)],
-    ));
+        100.0,
+        0.0,
+    );
 
-    let stats = project.stats();
+    let raw = project.raw_positions();
+    let stats = project.survey_stats(&raw, false);
 
     assert_eq!(stats.line_count, 2);
     assert_eq!(stats.shot_count, 3);
     assert!((stats.total_length - 45.0).abs() < 0.001); // 10 + 15 + 20
     assert_eq!(stats.station_count, 5); // 3 + 2 stations
+    assert_eq!(stats.slot_count, 5);
+    // The wire keeps the slot count.
+    assert_eq!(stats.to_project_stats().station_count, 5);
 
-    // Depth is the absolute station range the caller fills in (#481):
+    // Depth is the absolute station range (#481):
     // Line A stations 5, 6, 8; Line B stations 10, 12.
-    let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
-    assert!((min_depth - 5.0).abs() < 0.001);
-    assert!((max_depth - 12.0).abs() < 0.001);
+    assert!((stats.min_depth - 5.0).abs() < 0.001);
+    assert!((stats.max_depth - 12.0).abs() < 0.001);
+}
+
+/// A junction is one station: the station count counts it once, the slot
+/// count (what the wire's station count has always meant) once per line.
+#[test]
+fn test_project_stats_count_a_junction_once() {
+    let mut project = create_test_project();
+    let a = add_line(
+        &mut project,
+        "Line A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+    );
+    let junction = station_of(&project, a, 1);
+    project
+        .add_line(
+            line_meta("Line B"),
+            StartAt::Station(junction),
+            vec![create_shot_data(90.0, 20.0, 6.0, 12.0)],
+        )
+        .unwrap();
+    assert_valid(&project);
+    let raw = project.raw_positions();
+    let stats = project.survey_stats(&raw, false);
+    assert_eq!(stats.station_count, 3);
+    assert_eq!(stats.slot_count, 4);
+    assert_eq!(stats.to_project_stats().station_count, 4);
 }
 
 /// Test 32: Penetration distance - linear survey
@@ -841,56 +1207,51 @@ fn test_penetration_distance() {
     let mut project = create_test_project();
 
     // Create a straight line north: 10m + 10m + 10m = 30m
-    project.add_line(create_line_with_shots(
-        "Main",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-        ],
-    ));
-
-    // Set zero datum at start
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 5.0,
-            },
+    let main = project
+        .add_line(
+            line_meta("Main"),
+            StartAt::New,
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+            ],
         )
         .unwrap();
 
-    let stations = project.compute_station_coordinates();
-    let penetration = project.calculate_penetration(&stations);
+    // Set zero datum at start
+    set_datum(&mut project, main, 0, gps(45.0, -122.0, 5.0));
+    assert_valid(&project);
 
     // Penetration should be 30m (straight line distance)
-    assert!((penetration - 30.0).abs() < 0.001);
+    let penetration = project.penetration(false);
+    assert!((penetration - 30.0).abs() < 0.001, "{penetration}");
 }
 
 // ============================================================================
 // Move Operations Tests (2 tests)
 // ============================================================================
 
-/// Test 33: Move line offset - verify offsets updated
+/// Test 33: A placement says where a free piece sits
 #[test]
 fn test_move_line_offset() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    // The line's piece sits with its start at (10, 20)
+    let main = add_line_at(
+        &mut project,
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-
-    // Manually set line offset
-    project.line_offsets.insert(0, (10.0, 20.0));
-
-    let stations = project.compute_station_coordinates();
+        10.0,
+        20.0,
+    );
 
     // First station should be at offset position
-    assert!((stations[0].coordinates.x - 10.0).abs() < 0.001);
-    assert!((stations[0].coordinates.y - 20.0).abs() < 0.001);
+    let first = slot_xyz(&project, main, 0);
+    assert!((first[0] - 10.0).abs() < 0.001);
+    assert!((first[1] - 20.0).abs() < 0.001);
+    let second = slot_xyz(&project, main, 1);
+    assert!((second[1] - 30.0).abs() < 0.001);
 }
 
 /// Test 34: Move station connectivity - shot lengths unchanged
@@ -898,19 +1259,24 @@ fn test_move_line_offset() {
 fn test_move_preserves_shot_data() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
+    let main = add_line(
+        &mut project,
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    );
 
-    let original_length = project.get_line(0).unwrap().shots[0].length;
+    let original = project.line(main).unwrap().shots.clone();
+    let before = slot_xyz(&project, main, 1);
 
-    // Apply offset
-    project.line_offsets.insert(0, (100.0, 100.0));
+    // Move the line
+    project.move_line(main, [100.0, 100.0, 0.0]).unwrap();
+    assert_valid(&project);
 
-    // Shot data should be unchanged
-    let new_length = project.get_line(0).unwrap().shots[0].length;
-    assert!((original_length - new_length).abs() < 0.001);
+    // Shot data should be unchanged; the line moved as a whole
+    assert_eq!(project.line(main).unwrap().shots, original);
+    let after = slot_xyz(&project, main, 1);
+    assert!((after[0] - (before[0] + 100.0)).abs() < 0.001);
+    assert!((after[1] - (before[1] + 100.0)).abs() < 0.001);
 }
 
 // ============================================================================
@@ -1231,38 +1597,52 @@ fn test_config_normalize_hit_area_ge_visual_size() {
 fn test_reference_shot_flag() {
     let mut project = create_test_project();
 
-    let mut shot_data = create_shot_data(0.0, 10.0, 5.0, 5.0);
-    shot_data.kind = ShotKind::Jump;
+    let mut jump = create_shot_data(0.0, 10.0, 5.0, 5.0);
+    jump.kind = ShotKind::Jump;
+    let mut reference = create_shot_data(0.0, 10.0, 5.0, 5.0);
+    reference.kind = ShotKind::Reference;
 
-    project.add_line(create_line_with_shots("Main", vec![shot_data]));
+    let main = add_line(&mut project, "Main", vec![jump, reference]);
 
-    let shot = &project.get_line(0).unwrap().shots[0];
-    assert_eq!(shot.kind, ShotKind::Jump);
+    let shots = &project.line(main).unwrap().shots;
+    assert_eq!(shots[0].kind, ShotKind::Jump);
+    assert_eq!(shots[1].kind, ShotKind::Reference);
+    let reloaded = round_trip(&project);
+    let shots = &reloaded.line(main).unwrap().shots;
+    assert_eq!(shots[0].kind, ShotKind::Jump);
+    assert_eq!(shots[1].kind, ShotKind::Reference);
 }
 
-/// Test 21: Shot LRUD persistence - verify all 4 values
+/// Test 21: Shot LRUD persistence - verify all 4 values, through a save
 #[test]
 fn test_shot_lrud_persistence() {
-    let shot = Shot::new(
-        0,
-        ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 5.0,
-            length: 10.0,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            left: Some(1.0),
-            right: Some(2.0),
-            up: Some(3.0),
-            down: Some(4.0),
-            ..Default::default()
-        },
-    );
+    let data = ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 5.0,
+        length: 10.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        left: Some(1.0),
+        right: Some(2.0),
+        up: Some(3.0),
+        down: Some(4.0),
+        ..Default::default()
+    };
+    let shot = Shot::new(0, data.clone());
 
     assert_eq!(shot.left, Some(1.0));
     assert_eq!(shot.right, Some(2.0));
     assert_eq!(shot.up, Some(3.0));
     assert_eq!(shot.down, Some(4.0));
+
+    let mut project = create_test_project();
+    let main = add_line(&mut project, "Main", vec![data]);
+    let reloaded = round_trip(&project);
+    let shot = &reloaded.line(main).unwrap().shots[0];
+    assert_eq!(
+        (shot.left, shot.right, shot.up, shot.down),
+        (Some(1.0), Some(2.0), Some(3.0), Some(4.0))
+    );
 }
 
 /// Test 22: Shot comment special chars - quotes, newlines, unicode
@@ -1270,18 +1650,16 @@ fn test_shot_lrud_persistence() {
 fn test_shot_comment_special_chars() {
     let comment = "Test \"quotes\" and\nnewlines and émoji 🎉";
 
-    let shot = Shot::new(
-        0,
-        ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 5.0,
-            length: 10.0,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            comment: Some(comment.to_string()),
-            ..Default::default()
-        },
-    );
+    let data = ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 5.0,
+        length: 10.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        comment: Some(comment.to_string()),
+        ..Default::default()
+    };
+    let shot = Shot::new(0, data.clone());
 
     assert_eq!(shot.comment, Some(comment.to_string()));
 
@@ -1289,43 +1667,66 @@ fn test_shot_comment_special_chars() {
     let json = serde_json::to_string(&shot).unwrap();
     let restored: Shot = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.comment, Some(comment.to_string()));
+
+    // ...and the `.stalx` file does too.
+    let mut project = create_test_project();
+    let main = add_line(&mut project, "Main", vec![data]);
+    let reloaded = round_trip(&project);
+    assert_eq!(
+        reloaded.line(main).unwrap().shots[0].comment.as_deref(),
+        Some(comment)
+    );
 }
 
-/// Test 29: New project creates file (with database)
+/// Test 29: New project creates file
 #[test]
 fn test_new_project_creates_file() {
-    let file = NamedTempFile::new().unwrap();
-    let path = file.path().with_extension("stalx");
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("new.stalx");
 
     let project = create_test_project();
 
-    // Create database and save
-    let mut db = Database::open(&path).unwrap();
-    db.save_project(&project).unwrap();
+    // Write it as a version 2 file
+    let bytes = stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap();
+    stalx_v2::write_atomic(&path, &bytes, stalx_v2::Guard::Absent).unwrap();
 
     assert!(path.exists());
-
-    // Clean up
-    std::fs::remove_file(&path).ok();
+    assert!(std::fs::read(&path)
+        .unwrap()
+        .starts_with(br#"{"format":"stalx""#));
 }
 
 /// Test 37: Empty project save/load
 #[test]
 fn test_empty_project_save_load() {
-    let file = NamedTempFile::new().unwrap();
-    let path = file.path().with_extension("stalx");
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty.stalx");
 
-    let project = Project::new("Empty".to_string(), None);
-    assert!(project.lines.is_empty());
+    let project = Project::new("Empty", None);
+    assert!(project.lines().is_empty());
 
-    let mut db = Database::open(&path).unwrap();
-    db.save_project(&project).unwrap();
+    write_v2(&project, &path);
 
-    let loaded = db.load_project().unwrap();
+    let loaded = read_v2(&path);
     assert_eq!(loaded.name, "Empty");
-    assert!(loaded.lines.is_empty());
+    assert!(loaded.lines().is_empty());
+    assert_eq!(loaded.created_at, project.created_at);
 
-    std::fs::remove_file(&path).ok();
+    // And through the app's own create, save and open.
+    let state = AppState::new().unwrap();
+    assert_success(&state.execute(Command::CreateProject {
+        name: "Empty".to_string(),
+        location: None,
+    }));
+    let saved = dir.path().join("saved.stalx");
+    assert_success(&state.execute(Command::SaveProject {
+        path: Some(saved.clone()),
+    }));
+    let reopened = AppState::new().unwrap();
+    assert_success(&reopened.execute(Command::OpenProject { path: saved }));
+    let project = reopened.get_project_state().unwrap();
+    assert_eq!(project.name, "Empty");
+    assert!(project.lines().is_empty());
 }
 
 /// Test 38: Large survey performance (simplified - tests data structure)
@@ -1338,11 +1739,14 @@ fn test_large_survey_data_structure() {
         .map(|i| create_shot_data(f64::from(i) % 360.0, 1.0, 5.0, 5.0 + (f64::from(i) * 0.01)))
         .collect();
 
-    project.add_line(create_line_with_shots("Large", shots));
+    add_line(&mut project, "Large", shots);
+    assert_valid(&project);
 
-    let stats = project.stats();
+    let raw = project.raw_positions();
+    let stats = project.survey_stats(&raw, false);
     assert_eq!(stats.shot_count, 1000);
     assert!((stats.total_length - 1000.0).abs() < 0.001);
+    assert_eq!(round_trip(&project).lines()[0].shots.len(), 1000);
 }
 
 /// Test 46: Shot order preserved
@@ -1357,30 +1761,36 @@ fn test_shot_order_preserved() {
         create_shot_data(270.0, 4.0, 5.0, 5.0),
     ];
 
-    project.add_line(create_line_with_shots("Ordered", shots));
+    let ordered = add_line(&mut project, "Ordered", shots);
 
-    let line = project.get_line(0).unwrap();
-    assert_eq!(line.shots.len(), 4);
-    assert!((line.shots[0].length - 1.0).abs() < 0.001);
-    assert!((line.shots[1].length - 2.0).abs() < 0.001);
-    assert!((line.shots[2].length - 3.0).abs() < 0.001);
-    assert!((line.shots[3].length - 4.0).abs() < 0.001);
+    for project in [project.clone(), round_trip(&project)] {
+        let line = project.line(ordered).unwrap();
+        assert_eq!(line.shots.len(), 4);
+        assert!((line.shots[0].length - 1.0).abs() < 0.001);
+        assert!((line.shots[1].length - 2.0).abs() < 0.001);
+        assert!((line.shots[2].length - 3.0).abs() < 0.001);
+        assert!((line.shots[3].length - 4.0).abs() < 0.001);
+    }
 }
 
 /// Test: Project JSON serialization round-trip
 #[test]
 fn test_project_json_roundtrip() {
     let mut project = create_test_project();
-    project.add_line(create_line_with_shots(
+    add_line(
+        &mut project,
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    );
 
     let json = serde_json::to_string(&project).unwrap();
-    let restored: Project = serde_json::from_str(&json).unwrap();
+    let mut restored: Project = serde_json::from_str(&json).unwrap();
+    restored.assign_session_shot_ids();
 
     assert_eq!(restored.name, project.name);
-    assert_eq!(restored.lines.len(), 1);
+    assert_eq!(restored.lines().len(), 1);
+    assert_valid(&restored);
+    assert_eq!(restored, project);
 }
 
 // ============================================================================
@@ -1392,76 +1802,63 @@ fn test_project_json_roundtrip() {
 fn test_zero_datum_removal() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-
-    // Set and then remove zero datum
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 5.0,
-            },
+    let main = project
+        .add_line(
+            line_meta("Main"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
         )
         .unwrap();
 
-    assert_eq!(project.zero_datums.len(), 1);
+    // Set and then remove zero datum
+    set_datum(&mut project, main, 0, gps(45.0, -122.0, 5.0));
+    assert_eq!(project.datums.len(), 1);
+    let before = [slot_xyz(&project, main, 0), slot_xyz(&project, main, 1)];
 
-    project.remove_zero_datum(StationRef::new(0, 0));
-    assert_eq!(project.zero_datums.len(), 0);
+    project
+        .remove_datum_at(StationRef::new(main, 0))
+        .unwrap()
+        .expect("the slot had a datum");
+    assert_eq!(project.datums.len(), 0);
+    assert_valid(&project);
+
+    // The piece stays where it was (it is placed there now).
+    let after = [slot_xyz(&project, main, 0), slot_xyz(&project, main, 1)];
+    for (was, now) in before.iter().zip(&after) {
+        for axis in 0..3 {
+            assert!((was[axis] - now[axis]).abs() < 1e-9, "{was:?} -> {now:?}");
+        }
+    }
 }
 
-/// Test: Connected stations reject multiple zero datums
+/// Test: A second datum in a held piece becomes a GPS fix
 #[test]
 fn test_connected_zero_datum_becomes_gps_fix() {
     let mut project = create_test_project();
 
-    project.add_line(create_line_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let main = project
+        .add_line(
+            line_meta("Main"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        )
+        .unwrap();
 
     // Set zero datum at station 0
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 5.0,
-            },
-        )
-        .unwrap();
+    set_datum(&mut project, main, 0, gps(45.0, -122.0, 5.0));
 
-    let before = project
-        .compute_station_raw_coords(StationRef::new(0, 1))
-        .unwrap();
+    let before = slot_xyz(&project, main, 1);
 
     // A second datum in the same piece is accepted as a GPS fix (#741)...
-    project
-        .set_zero_datum(
-            StationRef::new(0, 1),
-            GpsCoordinates {
-                latitude: 45.0001,
-                longitude: -122.0,
-                depth_reference: 10.0,
-            },
-        )
-        .unwrap();
+    set_datum(&mut project, main, 1, gps(45.0001, -122.0, 10.0));
     assert_eq!(
         project.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
     );
 
     // ...and does not move the Raw Data View.
-    let after = project
-        .compute_station_raw_coords(StationRef::new(0, 1))
-        .unwrap();
-    assert!((before.x - after.x).abs() < 1e-9 && (before.y - after.y).abs() < 1e-9);
+    let after = slot_xyz(&project, main, 1);
+    assert!((before[0] - after[0]).abs() < 1e-9 && (before[1] - after[1]).abs() < 1e-9);
 }
 
 // ============================================================================
@@ -1478,13 +1875,28 @@ fn test_shot_id_generation() {
         .map(|_| create_shot_data(0.0, 1.0, 5.0, 5.0))
         .collect();
 
-    project.add_line(create_line_with_shots("Large", shots));
+    let large = add_line(&mut project, "Large", shots);
 
-    let line = project.get_line(0).unwrap();
+    let line = project.line(large).unwrap();
 
-    // Verify all shots have unique IDs
+    // Verify all shots have unique IDs, uuids and end stations
     let ids: HashSet<_> = line.shots.iter().map(|s| s.id).collect();
     assert_eq!(ids.len(), 1000);
+    let uuids: HashSet<_> = line.shots.iter().map(|s| s.uuid.clone()).collect();
+    assert_eq!(uuids.len(), 1000);
+    let stations: HashSet<_> = line.stations().collect();
+    assert_eq!(stations.len(), 1001);
+    // A reload gives every shot its session id back the same way.
+    let reloaded = round_trip(&project);
+    let reloaded_ids: Vec<_> = reloaded
+        .line(large)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    let original_ids: Vec<_> = line.shots.iter().map(|s| s.id).collect();
+    assert_eq!(reloaded_ids, original_ids);
 }
 
 // ============================================================================
@@ -1573,17 +1985,18 @@ fn test_line_stats() {
     ];
     shots[1].kind = ShotKind::Reference;
 
-    project.add_line(create_line_with_shots("Test", shots));
+    add_line(&mut project, "Test", shots);
 
-    let line = project.get_line(0).unwrap();
-    let stats = line.stats();
+    let raw = project.raw_positions();
+    let stats = project.survey_stats(&raw, false);
 
     assert_eq!(stats.shot_count, 2);
     // A Reference repeats passage already surveyed, so its length is left out
     // of the total (#689) while it still counts as a shot.
     assert!((stats.total_length - 10.0).abs() < 0.001);
-    assert_eq!(stats.reference_shot_count, 1);
-    assert_eq!(stats.jump_shot_count, 0);
+    // The Recents card says the same.
+    let card = recent_card(&project);
+    assert!((card.total_length - 10.0).abs() < 0.001);
 }
 
 /// A jump counts separately from a reference, and unlike a reference its length
@@ -1598,33 +2011,50 @@ fn test_line_stats_splits_jumps_from_references() {
     ];
     shots[1].kind = ShotKind::Jump;
 
-    project.add_line(create_line_with_shots("Test", shots));
+    add_line(&mut project, "Test", shots);
 
-    let stats = project.get_line(0).unwrap().stats();
+    let raw = project.raw_positions();
+    let stats = project.survey_stats(&raw, false);
 
     assert_eq!(stats.total_length, 25.0, "a jump's length counts");
-    assert_eq!(stats.jump_shot_count, 1);
-    assert_eq!(stats.reference_shot_count, 0);
+    assert_eq!(stats.shot_count, 2);
+    let card = recent_card(&project);
+    assert_eq!(card.total_length, 25.0);
 }
 
 // ============================================================================
 // DMP Parser Tests (already exist, but add one more)
 // ============================================================================
 
-/// Test 1: DMP round-trip (structure test)
+/// Test 1: DMP round-trip (structure test): the import line the DMP wizard
+/// sends over IPC round-trips through JSON
 #[test]
 fn test_dmp_section_data_roundtrip() {
-    // Test that LineData can round-trip through JSON
-    let line_data = create_line_with_shots(
-        "Test Line",
-        vec![
+    let line = stalagmight_lib::models::ImportLineConfig {
+        cave_section: None,
+        reverse: false,
+        line_index: 0,
+        name: Some("Test Line".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
             create_shot_data(45.0, 10.0, 5.0, 6.0),
             create_shot_data(90.0, 15.0, 6.0, 8.0),
         ],
-    );
+        station_comments: Vec::new(),
+        station_names: Vec::new(),
+        placement: stalagmight_lib::models::ImportPlacement::Origin,
+        azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
+    };
 
-    let json = serde_json::to_string(&line_data).unwrap();
-    let restored: LineData = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&line).unwrap();
+    let restored: stalagmight_lib::models::ImportLineConfig = serde_json::from_str(&json).unwrap();
 
     assert_eq!(restored.name, Some("Test Line".to_string()));
     assert_eq!(restored.shots.len(), 2);
@@ -1637,29 +2067,36 @@ fn test_dmp_section_data_roundtrip() {
 /// Test 39: Invalid station reference handling
 #[test]
 fn test_invalid_station_reference() {
-    let project = create_test_project();
+    let mut project = create_test_project();
 
     // Check non-existent station
-    let exists = project.station_exists(StationRef::new(999, 0));
-    assert!(!exists);
+    assert!(project.station_at(StationRef::new(999, 0)).is_none());
+    let main = add_line(
+        &mut project,
+        "Main",
+        vec![create_shot_data(0.0, 1.0, 5.0, 5.0)],
+    );
+    assert!(project.station_at(StationRef::new(main, 2)).is_none());
+    assert!(project.station_of_slot(StationRef::new(main, 2)).is_err());
 }
 
 /// Test 36: Recent projects (structure test)
 #[test]
 fn test_project_metadata() {
-    let mut project = Project::new("Test Cave".to_string(), Some("Location".to_string()));
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
+    let mut project = Project::new("Test Cave", Some("Location".to_string()));
 
-    project.add_line(create_line_with_shots(
+    add_line(
+        &mut project,
         "Main",
         vec![create_shot_data(0.0, 50.0, 5.0, 10.0)],
-    ));
+    );
 
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
 
     assert_eq!(metadata.name, "Test Cave");
     assert_eq!(metadata.location, Some("Location".to_string()));
     assert_eq!(metadata.line_count, 1);
+    assert_eq!(metadata.station_count, 2);
     assert!((metadata.total_length - 50.0).abs() < 0.001);
 }
 
@@ -1797,126 +2234,139 @@ fn test_negative_lrud_errors() {
 // Persistence Tests (5 tests)
 // ----------------------------------------------------------------------------
 
-/// Coverage Test 6: Save/load with station merges
+/// Coverage Test 6: Save/load with station merges (a junction)
 #[test]
 fn test_save_load_with_station_merges() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let mut project = Project::new("Test", None);
+    let a = add_line(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project,
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     // Add a merge
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(0, 1).into(),
-        station_b: StationRef::new(1, 0).into(),
-        merged_at: Utc::now(),
-    });
+    project
+        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
+        .unwrap();
 
-    let mut db = Database::in_memory().unwrap();
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
+    let loaded = round_trip(&project);
 
-    assert_eq!(loaded.station_merges.len(), 1);
-    assert!(loaded.key_is_ref(&loaded.station_merges[0].station_a, StationRef::new(0, 1)));
-    assert!(loaded.key_is_ref(&loaded.station_merges[0].station_b, StationRef::new(1, 0)));
+    assert_eq!(station_of(&loaded, a, 1), station_of(&loaded, b, 0));
+    let merges = loaded.project_wire().station_merges;
+    assert_eq!(merges.len(), 1);
+    let ends = [merges[0].station_a, merges[0].station_b];
+    assert!(ends.contains(&StationRef::new(a, 1)));
+    assert!(ends.contains(&StationRef::new(b, 0)));
+    assert_eq!(loaded, project);
 }
 
 /// Coverage Test 7: Save/load with zero datums
 #[test]
 fn test_save_load_with_zero_datums() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.123,
-                longitude: -122.456,
-                depth_reference: 5.0,
-            },
+    let mut project = Project::new("Test", None);
+    let a = project
+        .add_line(
+            line_meta("A"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
         )
         .unwrap();
 
-    let mut db = Database::in_memory().unwrap();
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
+    set_datum(&mut project, a, 0, gps(45.123, -122.456, 5.0));
 
-    assert_eq!(loaded.zero_datums.len(), 1);
-    assert!((loaded.zero_datums[0].gps.latitude - 45.123).abs() < 0.0001);
-    assert!((loaded.zero_datums[0].gps.longitude - (-122.456)).abs() < 0.0001);
-    assert!((loaded.zero_datums[0].gps.depth_reference - 5.0).abs() < 0.0001);
+    let loaded = round_trip(&project);
+
+    assert_eq!(loaded.datums.len(), 1);
+    // Bit for bit, not within a tolerance.
+    let at = loaded.datums[0].gps;
+    assert_eq!(
+        (at.latitude, at.longitude, at.depth_reference),
+        (45.123, -122.456, 5.0)
+    );
+    assert_eq!(loaded.datums[0].station, station_of(&loaded, a, 0));
+    assert_eq!(loaded.datums, project.datums);
 }
 
-/// Coverage Test 8: Save/load with line offsets
+/// Coverage Test 8: Save/load with a placement (what a line offset was)
 #[test]
 fn test_save_load_with_line_offsets() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let mut project = Project::new("Test", None);
+    let a = add_line_at(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.line_offsets.insert(0, (15.5, -20.3));
+        15.5,
+        -20.3,
+    );
 
-    let mut db = Database::in_memory().unwrap();
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
+    let loaded = round_trip(&project);
 
-    let offset = loaded.line_offsets.get(&0).unwrap();
-    assert!((offset.0 - 15.5).abs() < 0.0001);
-    assert!((offset.1 - (-20.3)).abs() < 0.0001);
+    assert_eq!(loaded.placements, project.placements);
+    let start = slot_xyz(&loaded, a, 0);
+    assert_eq!((start[0], start[1]), (15.5, -20.3));
 }
 
 /// Coverage Test 9: Save/load with loop closures
 #[test]
 fn test_save_load_with_loop_closures() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let mut project = Project::new("Test", None);
+    let a = add_line(
+        &mut project,
         "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+        vec![
+            create_shot_data(0.0, 10.0, 5.0, 5.0),
+            create_shot_data(90.0, 10.0, 5.0, 5.0),
+            create_shot_data(200.0, 13.0, 5.0, 6.5),
+        ],
+    );
 
-    project.loop_closures.push(LoopClosure {
-        id: 1,
-        station_a: StationRef::new(0, 0).into(),
-        station_b: StationRef::new(0, 1).into(),
-        path_length: 100.0,
-        misclosure_distance: 2.5,
-        error_percentage: 2.5,
-        horizontal_misclosure: 2.0,
-        vertical_misclosure: 1.5,
-        strategy: ClosureStrategy::default(),
-        is_aligned: false,
-    });
+    project
+        .create_closure_at(
+            StationRef::new(a, 0),
+            StationRef::new(a, 3),
+            survey::ClosureStrategy::default(),
+        )
+        .unwrap();
 
-    let mut db = Database::in_memory().unwrap();
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
+    let loaded = round_trip(&project);
 
-    assert_eq!(loaded.loop_closures.len(), 1);
-    assert!((loaded.loop_closures[0].path_length - 100.0).abs() < 0.0001);
-    assert!((loaded.loop_closures[0].error_percentage - 2.5).abs() < 0.0001);
-    assert!((loaded.loop_closures[0].horizontal_misclosure - 2.0).abs() < 0.0001);
-    assert!((loaded.loop_closures[0].vertical_misclosure - 1.5).abs() < 0.0001);
+    assert_eq!(loaded.closures, project.closures);
+    // The figures are derived, so a reload gives exactly the same ones.
+    let before = project.project_wire().loop_closures;
+    let after = loaded.project_wire().loop_closures;
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].path_length, before[0].path_length);
+    assert!((after[0].path_length - 33.0).abs() < 1e-9);
+    assert_eq!(after[0].error_percentage, before[0].error_percentage);
+    assert_eq!(
+        after[0].horizontal_misclosure,
+        before[0].horizontal_misclosure
+    );
+    assert_eq!(after[0].vertical_misclosure, before[0].vertical_misclosure);
+    assert!((after[0].vertical_misclosure.abs() - 1.5).abs() < 1e-9);
 }
 
 /// Coverage Test 10: Open nonexistent file fails
 #[test]
 fn test_open_nonexistent_file_fails() {
-    let result = Database::open_existing(Path::new("/nonexistent/path/file.stalx"));
-    assert!(result.is_err());
-    match result {
-        Err(e) => assert!(e.to_string().contains("does not exist")),
-        Ok(_) => panic!("Expected error for nonexistent file"),
-    }
+    let state = AppState::new().unwrap();
+    let result = state.execute(Command::OpenProject {
+        path: Path::new("/nonexistent/path/file.stalx").to_path_buf(),
+    });
+    assert!(!result.success);
+    assert!(
+        result.error.as_deref().unwrap_or("").contains("not found"),
+        "{:?}",
+        result.error
+    );
+    assert!(state.get_project_state().is_none());
 }
 
 // ----------------------------------------------------------------------------
@@ -1953,107 +2403,113 @@ fn test_shot_depth_change_method() {
     assert!((shot2.depth_change() - (-8.0)).abs() < 0.001);
 }
 
-/// Coverage Test 12: Line insert_shot_after
+/// Coverage Test 12: Line insert shot after
 #[test]
 fn test_line_insert_shot_after() {
-    let mut line = Line::new(
-        0,
-        LineData {
-            name: Some("Test".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![
-                create_shot_data(0.0, 10.0, 5.0, 5.0),
-                create_shot_data(90.0, 10.0, 5.0, 5.0),
-            ],
-        },
+    let mut project = create_test_project();
+    let line = add_line(
+        &mut project,
+        "Test",
+        vec![
+            create_shot_data(0.0, 10.0, 5.0, 5.0),
+            create_shot_data(90.0, 10.0, 5.0, 5.0),
+        ],
     );
 
-    let first_shot_id = line.shots[0].id;
-    let new_shot = line.insert_shot_after_with_id(
-        first_shot_id,
+    let first_shot_id = project.line(line).unwrap().shots[0].id;
+    let new_shot = project.create_shot(
+        line,
         create_shot_data(45.0, 5.0, 5.0, 5.0),
-        None,
-        None,
+        survey::ShotPlace::After(first_shot_id),
     );
 
-    assert!(new_shot.is_some());
-    assert_eq!(line.shots.len(), 3);
+    assert!(new_shot.is_ok(), "{new_shot:?}");
+    assert_valid(&project);
+    let shots = &project.line(line).unwrap().shots;
+    assert_eq!(shots.len(), 3);
     // New shot should be in position 1 (after first shot)
-    assert!((line.shots[1].azimuth_in - 45.0).abs() < 0.001);
-    assert!((line.shots[1].length - 5.0).abs() < 0.001);
+    assert!((shots[1].azimuth_in - 45.0).abs() < 0.001);
+    assert!((shots[1].length - 5.0).abs() < 0.001);
 }
 
-/// Coverage Test 13: Line to_line_data
+/// Coverage Test 13: A line's data: the surveyor template goes onto the shots
 #[test]
 fn test_line_to_line_data() {
-    let line = Line::new(
-        0,
-        LineData {
-            name: Some("Original".to_string()),
-            surveyor: Some("John".to_string()),
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
-        },
-    );
+    let state = app();
+    let result = state.execute(Command::CreateLine {
+        name: Some("Original".to_string()),
+        surveyor: Some("John".to_string()),
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+        cave_section_id: None,
+    });
+    assert_success(&result);
+    let project = state.get_project_state().unwrap();
+    let line = project.line(result.line_id.unwrap()).unwrap();
 
-    let data = line.to_line_data();
-
-    assert_eq!(data.name, Some("Original".to_string()));
-    // The template went onto the shot; the data carries it there.
-    assert_eq!(data.surveyor, None);
+    assert_eq!(line.name, Some("Original".to_string()));
+    // The template went onto the shot; the line keeps no legacy copy.
+    assert_eq!(line.legacy_surveyor, None);
     assert_eq!(
-        data.shots[0].credit().surveyor_names().as_deref(),
+        line.shots[0]
+            .credit
+            .as_ref()
+            .and_then(|c| c.surveyor_names())
+            .as_deref(),
         Some("John")
     );
-    assert_eq!(data.color, "#ff0000");
-    assert_eq!(data.shots.len(), 1);
-    assert!((data.shots[0].length - 10.0).abs() < 0.001);
+    assert_eq!(line.color, "#ff0000");
+    assert_eq!(line.shots.len(), 1);
+    assert!((line.shots[0].length - 10.0).abs() < 0.001);
+    // The shot reads back as the measurement record it was made from.
+    let data = line.shots[0].to_shot_data();
+    assert!((data.length - 10.0).abs() < 0.001);
+    assert_eq!(data.uuid.as_deref(), Some(line.shots[0].uuid.as_str()));
 }
 
-/// Coverage Test 14: Project insert_shot_after
+/// Coverage Test 14: Project insert_shot_after (the command)
 #[test]
 fn test_project_insert_shot_after() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let state = app();
+    let line = create_line_cmd(
+        &state,
         "A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(90.0, 10.0, 5.0, 5.0),
         ],
-    ));
-
-    let first_shot_id = project.lines[0].shots[0].id;
-    let result = project.insert_shot_after(
-        0,
-        first_shot_id,
-        create_shot_data(45.0, 5.0, 5.0, 5.0),
-        None,
-        None,
     );
 
-    assert!(result.is_some());
-    assert_eq!(project.lines[0].shots.len(), 3);
+    let first_shot_id = state.get_project_state().unwrap().line(line).unwrap().shots[0].id;
+    let result = state.execute(Command::CreateShot {
+        line_id: line,
+        shot: create_shot_data(45.0, 5.0, 5.0, 5.0),
+        after_shot_id: Some(first_shot_id),
+        before_shot_id: None,
+    });
+
+    assert_success(&result);
+    assert!(result.shot_id.is_some());
+    let project = state.get_project_state().unwrap();
+    let shots = &project.line(line).unwrap().shots;
+    assert_eq!(shots.len(), 3);
     // Verify the new shot is in the middle
-    assert!((project.lines[0].shots[1].azimuth_in - 45.0).abs() < 0.001);
+    assert!((shots[1].azimuth_in - 45.0).abs() < 0.001);
 }
 
 /// Coverage Test 15: Project update_shot
 #[test]
 fn test_project_update_shot() {
-    let mut project = Project::new("Test".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let mut project = Project::new("Test", None);
+    let line = add_line(
+        &mut project,
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    );
 
-    let shot_id = project.lines[0].shots[0].id;
+    let shot_id = project.line(line).unwrap().shots[0].id;
     let updates = ShotUpdates {
         length: Some(20.0),
         comment: Some(Some("Updated comment".to_string())),
@@ -2061,13 +2517,16 @@ fn test_project_update_shot() {
         ..Default::default()
     };
 
-    let result = project.update_shot(0, shot_id, &updates);
-    assert!(result.is_some());
+    let result = project.update_shot(line, shot_id, &updates);
+    assert!(result.is_ok(), "{result:?}");
 
-    let shot = project.get_line(0).unwrap().get_shot(shot_id).unwrap();
+    let shot = &project.line(line).unwrap().shots[0];
+    assert_eq!(shot.id, shot_id);
     assert!((shot.length - 20.0).abs() < 0.001);
     assert_eq!(shot.comment, Some("Updated comment".to_string()));
     assert_eq!(shot.kind, ShotKind::Jump);
+    // The station after it moved with the new length.
+    assert!((slot_xyz(&project, line, 1)[1] - 20.0).abs() < 0.001);
 }
 
 // ============================================================================
@@ -2077,14 +2536,14 @@ fn test_project_update_shot() {
 /// Test GPS metadata with no zero datums returns None
 #[test]
 fn test_gps_metadata_no_datums() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_line(create_line_with_shots(
+    let mut project = Project::new("Test Cave", None);
+    add_line(
+        &mut project,
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    );
 
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
 
     assert!(metadata.gps_center.is_none());
     assert!(metadata.gps_bounds.is_none());
@@ -2093,21 +2552,18 @@ fn test_gps_metadata_no_datums() {
 /// Test GPS metadata with single zero datum
 #[test]
 fn test_gps_metadata_single_datum() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_line(create_line_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let mut project = Project::new("Test Cave", None);
+    let main = project
+        .add_line(
+            line_meta("Main"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        )
+        .unwrap();
 
-    let gps = GpsCoordinates {
-        latitude: 45.5,
-        longitude: -122.7,
-        depth_reference: 0.0,
-    };
-    project.set_zero_datum(StationRef::new(0, 0), gps).unwrap();
+    set_datum(&mut project, main, 0, gps(45.5, -122.7, 0.0));
 
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
 
     // Center should be from first (and only) datum (lng, lat order for MapLibre)
     let (lng, lat) = metadata.gps_center.unwrap();
@@ -2122,41 +2578,34 @@ fn test_gps_metadata_single_datum() {
     assert!((bounds.west - (-122.7)).abs() < 0.0001);
 }
 
+/// `n` disconnected lines, each one shot north, placed 50 m apart.
+fn disconnected_lines(project: &mut Project, n: u32) -> Vec<LineId> {
+    (0..n)
+        .map(|i| {
+            add_line_at(
+                project,
+                &format!("Line {i}"),
+                vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+                f64::from(i) * 50.0,
+                0.0,
+            )
+        })
+        .collect()
+}
+
 /// Test GPS metadata with multiple zero datums
 #[test]
 fn test_gps_metadata_multiple_datums() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
+    let mut project = Project::new("Test Cave", None);
 
     // Create two disconnected lines
-    project.add_line(create_line_with_shots(
-        "Line A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
-        "Line B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let lines = disconnected_lines(&mut project, 2);
 
     // Set zero datums on different lines (allowed because disconnected)
-    let gps_a = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 0.0,
-    };
-    let gps_b = GpsCoordinates {
-        latitude: 46.0,
-        longitude: -123.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a)
-        .unwrap();
-    project
-        .set_zero_datum(StationRef::new(1, 0), gps_b)
-        .unwrap();
+    set_datum(&mut project, lines[0], 0, gps(45.0, -122.0, 0.0));
+    set_datum(&mut project, lines[1], 0, gps(46.0, -123.0, 0.0));
 
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
 
     // Center should be from first datum (lng, lat order for MapLibre)
     let (lng, lat) = metadata.gps_center.unwrap();
@@ -2175,50 +2624,17 @@ fn test_gps_metadata_multiple_datums() {
 /// Test GPS bounds calculation handles dateline crossing
 #[test]
 fn test_gps_metadata_dateline_crossing() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
+    let mut project = Project::new("Test Cave", None);
 
     // Create three disconnected lines
-    project.add_line(create_line_with_shots(
-        "Line A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
-        "Line B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
-        "Line C",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let lines = disconnected_lines(&mut project, 3);
 
     // Set zero datums spanning the dateline (179 and -179 are close together)
-    let gps_a = GpsCoordinates {
-        latitude: 50.0,
-        longitude: 179.0,
-        depth_reference: 0.0,
-    };
-    let gps_b = GpsCoordinates {
-        latitude: 50.0,
-        longitude: -179.0,
-        depth_reference: 0.0,
-    };
-    let gps_c = GpsCoordinates {
-        latitude: 50.0,
-        longitude: 178.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a)
-        .unwrap();
-    project
-        .set_zero_datum(StationRef::new(1, 0), gps_b)
-        .unwrap();
-    project
-        .set_zero_datum(StationRef::new(2, 0), gps_c)
-        .unwrap();
+    set_datum(&mut project, lines[0], 0, gps(50.0, 179.0, 0.0));
+    set_datum(&mut project, lines[1], 0, gps(50.0, -179.0, 0.0));
+    set_datum(&mut project, lines[2], 0, gps(50.0, 178.0, 0.0));
 
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
 
     let bounds = metadata.gps_bounds.unwrap();
 
@@ -2232,44 +2648,22 @@ fn test_gps_metadata_dateline_crossing() {
 /// Test GPS metadata center is stable across updates to other datums
 #[test]
 fn test_gps_metadata_center_stability() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
+    let mut project = Project::new("Test Cave", None);
 
     // Create two disconnected lines
-    project.add_line(create_line_with_shots(
-        "Line A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
-        "Line B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let lines = disconnected_lines(&mut project, 2);
 
-    let gps_a = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a)
-        .unwrap();
+    set_datum(&mut project, lines[0], 0, gps(45.0, -122.0, 0.0));
 
     // Get initial center
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
     let (initial_lat, initial_lng) = metadata.gps_center.unwrap();
 
     // Add another zero datum
-    let gps_b = GpsCoordinates {
-        latitude: 46.0,
-        longitude: -123.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(1, 0), gps_b)
-        .unwrap();
+    set_datum(&mut project, lines[1], 0, gps(46.0, -123.0, 0.0));
 
     // Center should still be from first datum
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
     let (final_lat, final_lng) = metadata.gps_center.unwrap();
 
     assert!((initial_lat - final_lat).abs() < 0.0001);
@@ -2279,52 +2673,22 @@ fn test_gps_metadata_center_stability() {
 /// Test that updating the first datum preserves center position (in-place update)
 #[test]
 fn test_gps_metadata_update_preserves_order() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
+    let mut project = Project::new("Test Cave", None);
 
     // Create two disconnected lines
-    project.add_line(create_line_with_shots(
-        "Line A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_line(create_line_with_shots(
-        "Line B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    let lines = disconnected_lines(&mut project, 2);
 
-    // Set first datum
-    let gps_a = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a)
-        .unwrap();
-
-    // Add second datum
-    let gps_b = GpsCoordinates {
-        latitude: 46.0,
-        longitude: -123.0,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(1, 0), gps_b)
-        .unwrap();
+    // Set first datum, then the second
+    set_datum(&mut project, lines[0], 0, gps(45.0, -122.0, 0.0));
+    set_datum(&mut project, lines[1], 0, gps(46.0, -123.0, 0.0));
 
     // Update the first datum with new GPS (should update in-place, not reorder)
-    let gps_a_updated = GpsCoordinates {
-        latitude: 45.5,
-        longitude: -122.5,
-        depth_reference: 0.0,
-    };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps_a_updated)
-        .unwrap();
+    set_datum(&mut project, lines[0], 0, gps(45.5, -122.5, 0.0));
+    assert_eq!(project.datums.len(), 2);
 
     // Center should still be from first datum (now with updated values)
     // (lng, lat order for MapLibre)
-    let metadata = project.metadata().unwrap();
+    let metadata = recent_card(&project);
     let (center_lng, center_lat) = metadata.gps_center.unwrap();
 
     // Verify center is the updated first datum, not the second
@@ -2341,366 +2705,224 @@ fn test_gps_metadata_update_preserves_order() {
 /// Test that invalid GPS coordinates are rejected
 #[test]
 fn test_gps_invalid_coordinates_rejected() {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_line(create_line_with_shots(
+    let state = app();
+    let line = create_line_cmd(
+        &state,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-
-    // NaN latitude should be rejected
-    let gps_nan = GpsCoordinates {
-        latitude: f64::NAN,
-        longitude: -122.0,
-        depth_reference: 0.0,
+    );
+    let set = |at: GpsCoordinates| {
+        state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(line, 0),
+            coordinates: at,
+            accuracy_m: None,
+            entrance: None,
+        })
     };
-    assert!(project
-        .set_zero_datum(StationRef::new(0, 0), gps_nan)
-        .is_err());
 
-    // Infinity longitude should be rejected
-    let gps_inf = GpsCoordinates {
-        latitude: 45.0,
-        longitude: f64::INFINITY,
-        depth_reference: 0.0,
-    };
-    assert!(project
-        .set_zero_datum(StationRef::new(0, 0), gps_inf)
-        .is_err());
-
-    // Out of range latitude should be rejected
-    let gps_oob_lat = GpsCoordinates {
-        latitude: 91.0,
-        longitude: -122.0,
-        depth_reference: 0.0,
-    };
-    assert!(project
-        .set_zero_datum(StationRef::new(0, 0), gps_oob_lat)
-        .is_err());
-
-    // Out of range longitude should be rejected
-    let gps_oob_lng = GpsCoordinates {
-        latitude: 45.0,
-        longitude: 181.0,
-        depth_reference: 0.0,
-    };
-    assert!(project
-        .set_zero_datum(StationRef::new(0, 0), gps_oob_lng)
-        .is_err());
+    // NaN latitude, infinite longitude and out of range values are rejected
+    for bad in [
+        gps(f64::NAN, -122.0, 0.0),
+        gps(45.0, f64::INFINITY, 0.0),
+        gps(91.0, -122.0, 0.0),
+        gps(45.0, 181.0, 0.0),
+    ] {
+        assert!(!set(bad).success, "{bad:?} must be refused");
+        assert!(state.get_project_state().unwrap().datums.is_empty());
+        assert!(GpsCoordinates::new(bad.latitude, bad.longitude, 0.0).is_err());
+    }
 
     // Valid coordinates should work
-    let gps_valid = GpsCoordinates {
-        latitude: 45.0,
-        longitude: -122.0,
-        depth_reference: 0.0,
-    };
-    assert!(project
-        .set_zero_datum(StationRef::new(0, 0), gps_valid)
-        .is_ok());
+    assert_success(&set(gps(45.0, -122.0, 0.0)));
+    assert_eq!(state.get_project_state().unwrap().datums.len(), 1);
 }
 
 // ============================================================================
 // Merge Projects Tests
 // ============================================================================
 
+fn merge(sources: &[&Path], output: &Path, name: &str) -> Project {
+    let state = AppState::new().unwrap();
+    let result = state.execute(Command::MergeProjects {
+        source_paths: sources.iter().map(|p| p.to_path_buf()).collect(),
+        output_path: output.to_path_buf(),
+        output_name: name.to_string(),
+        archive_originals: false,
+    });
+    assert_success(&result);
+    // The open project is never touched.
+    assert!(state.get_project_state().is_none());
+    read_v2(output)
+}
+
 /// Test: Merge two projects into a new project
 #[test]
 fn test_merge_projects_basic() {
-    use tempfile::tempdir;
-
-    let dir = tempdir().unwrap();
+    let dir = TempDir::new().unwrap();
 
     // Create first project with 2 lines
     let path1 = dir.path().join("project1.stalx");
-    let mut project1 = Project::new("Cave A".to_string(), Some("Location A".to_string()));
-    project1.add_line(create_line_with_shots(
+    let mut project1 = Project::new("Cave A", Some("Location A".to_string()));
+    add_line(
+        &mut project1,
         "A-Main",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(45.0, 8.0, 5.0, 6.0),
         ],
-    ));
-    project1.add_line(create_line_with_shots(
+    );
+    add_line_at(
+        &mut project1,
         "A-Side",
         vec![create_shot_data(90.0, 5.0, 6.0, 7.0)],
-    ));
-
-    let mut db1 = Database::open(&path1).unwrap();
-    db1.save_project(&project1).unwrap();
-    drop(db1);
+        30.0,
+        0.0,
+    );
+    write_v2(&project1, &path1);
 
     // Create second project with 1 line
     let path2 = dir.path().join("project2.stalx");
-    let mut project2 = Project::new("Cave B".to_string(), Some("Location B".to_string()));
-    project2.add_line(create_line_with_shots(
+    let mut project2 = Project::new("Cave B", Some("Location B".to_string()));
+    add_line(
+        &mut project2,
         "B-Main",
         vec![
             create_shot_data(180.0, 12.0, 4.0, 4.0),
             create_shot_data(270.0, 6.0, 4.0, 5.0),
         ],
-    ));
-
-    let mut db2 = Database::open(&path2).unwrap();
-    db2.save_project(&project2).unwrap();
-    drop(db2);
+    );
+    write_v2(&project2, &path2);
 
     // Merge projects
     let output_path = dir.path().join("merged.stalx");
+    let merged = merge(&[&path1, &path2], &output_path, "Merged Cave");
 
-    // Load both projects
-    let db1 = Database::open_existing(&path1).unwrap();
-    let loaded1 = db1.load_project().unwrap();
-    let db2 = Database::open_existing(&path2).unwrap();
-    let loaded2 = db2.load_project().unwrap();
+    assert_eq!(merged.name, "Merged Cave");
+    let lines = merged.lines();
+    assert_eq!(lines.len(), 3); // 2 from project1 + 1 from project2
+    assert_eq!(lines[0].name, Some("A-Main".to_string()));
+    assert_eq!(lines[1].name, Some("A-Side".to_string()));
+    assert_eq!(lines[2].name, Some("B-Main".to_string()));
 
-    // Create merged project
-    let mut merged = Project::new(
-        "Merged Cave".to_string(),
-        Some("Location A, Location B".to_string()),
-    );
-
-    // Add lines from project 1
-    for line in &loaded1.lines {
-        merged.add_line(line.to_line_data());
-    }
-
-    // Add lines from project 2
-    for line in &loaded2.lines {
-        merged.add_line(line.to_line_data());
-    }
-
-    // Save merged project
-    let mut db_merged = Database::open(&output_path).unwrap();
-    db_merged.save_project(&merged).unwrap();
-
-    // Verify merged project
-    let db_verify = Database::open_existing(&output_path).unwrap();
-    let loaded_merged = db_verify.load_project().unwrap();
-
-    assert_eq!(loaded_merged.name, "Merged Cave");
-    assert_eq!(loaded_merged.lines.len(), 3); // 2 from project1 + 1 from project2
-    assert_eq!(loaded_merged.lines[0].name, Some("A-Main".to_string()));
-    assert_eq!(loaded_merged.lines[1].name, Some("A-Side".to_string()));
-    assert_eq!(loaded_merged.lines[2].name, Some("B-Main".to_string()));
-
-    // Verify line IDs are renumbered correctly (0, 1, 2)
-    assert_eq!(loaded_merged.lines[0].id, 0);
-    assert_eq!(loaded_merged.lines[1].id, 1);
-    assert_eq!(loaded_merged.lines[2].id, 2);
+    // Verify line IDs are numbered in order (0, 1, 2)
+    assert_eq!(lines[0].id, 0);
+    assert_eq!(lines[1].id, 1);
+    assert_eq!(lines[2].id, 2);
 
     // Verify shots are preserved
-    assert_eq!(loaded_merged.lines[0].shots.len(), 2);
-    assert_eq!(loaded_merged.lines[1].shots.len(), 1);
-    assert_eq!(loaded_merged.lines[2].shots.len(), 2);
+    assert_eq!(lines[0].shots.len(), 2);
+    assert_eq!(lines[1].shots.len(), 1);
+    assert_eq!(lines[2].shots.len(), 2);
+    assert_eq!(lines[2].shots[0].uuid, project2.lines()[0].shots[0].uuid);
 
     // Verify total stats
-    let stats = loaded_merged.stats();
+    let raw = merged.raw_positions();
+    let stats = merged.survey_stats(&raw, false);
     assert_eq!(stats.line_count, 3);
     assert_eq!(stats.shot_count, 5);
+    assert_eq!(stats.station_count, 8);
 }
 
 /// Test: Merge projects preserves zero datums with remapped IDs
 #[test]
 fn test_merge_projects_preserves_zero_datums() {
-    use tempfile::tempdir;
-
-    let dir = tempdir().unwrap();
+    let dir = TempDir::new().unwrap();
 
     // Create first project with zero datum
     let path1 = dir.path().join("project_zd1.stalx");
-    let mut project1 = Project::new("Cave ZD1".to_string(), None);
-    project1.add_line(create_line_with_shots(
-        "ZD1-Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project1
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates {
-                latitude: 45.0,
-                longitude: -122.0,
-                depth_reference: 0.0,
-            },
+    let mut project1 = Project::new("Cave ZD1", None);
+    let l1 = project1
+        .add_line(
+            line_meta("ZD1-Main"),
+            StartAt::New,
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
         )
         .unwrap();
-
-    let mut db1 = Database::open(&path1).unwrap();
-    db1.save_project(&project1).unwrap();
-    drop(db1);
+    set_datum(&mut project1, l1, 0, gps(45.0, -122.0, 0.0));
+    write_v2(&project1, &path1);
 
     // Create second project with zero datum
     let path2 = dir.path().join("project_zd2.stalx");
-    let mut project2 = Project::new("Cave ZD2".to_string(), None);
-    project2.add_line(create_line_with_shots(
-        "ZD2-Main",
-        vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
-    ));
-    project2
-        .set_zero_datum(
-            StationRef::new(0, 1), // End of line
-            GpsCoordinates {
-                latitude: 46.0,
-                longitude: -123.0,
-                depth_reference: 5.0,
-            },
+    let mut project2 = Project::new("Cave ZD2", None);
+    let l2 = project2
+        .add_line(
+            line_meta("ZD2-Main"),
+            StartAt::New,
+            vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
         )
         .unwrap();
+    // End of line
+    set_datum(&mut project2, l2, 1, gps(46.0, -123.0, 5.0));
+    write_v2(&project2, &path2);
 
-    let mut db2 = Database::open(&path2).unwrap();
-    db2.save_project(&project2).unwrap();
-    drop(db2);
+    let output_path = dir.path().join("merged_zd.stalx");
+    let merged = merge(&[&path1, &path2], &output_path, "Merged ZD");
 
-    // Load and merge
-    let db1 = Database::open_existing(&path1).unwrap();
-    let loaded1 = db1.load_project().unwrap();
-    let db2 = Database::open_existing(&path2).unwrap();
-    let loaded2 = db2.load_project().unwrap();
-
-    let mut merged = Project::new("Merged ZD".to_string(), None);
-
-    // Add lines and zero datums from project 1
-    for line in &loaded1.lines {
-        let old_id = line.id;
-        let new_line = merged.add_line(line.to_line_data());
-        let new_id = new_line.id;
-
-        // Remap zero datums
-        for zd in &loaded1.zero_datums {
-            if zd.station_ref.line_id == old_id {
-                let idx = loaded1.resolve_key(&zd.station_ref).unwrap().station_index;
-                let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
-            }
-        }
-    }
-
-    // Add lines and zero datums from project 2
-    for line in &loaded2.lines {
-        let old_id = line.id;
-        let new_line = merged.add_line(line.to_line_data());
-        let new_id = new_line.id;
-
-        // Remap zero datums
-        for zd in &loaded2.zero_datums {
-            if zd.station_ref.line_id == old_id {
-                let idx = loaded2.resolve_key(&zd.station_ref).unwrap().station_index;
-                let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
-            }
-        }
-    }
-
-    // Verify zero datums were preserved with remapped line IDs
-    assert_eq!(merged.zero_datums.len(), 2);
+    // Verify zero datums were preserved on the copied lines' stations
+    assert_eq!(merged.datums.len(), 2);
 
     // First zero datum from project 1 (line 0, station 0)
-    let mzd0 = merged
-        .resolve_key(&merged.zero_datums[0].station_ref)
-        .unwrap();
-    assert_eq!(mzd0.line_id, 0);
-    assert_eq!(mzd0.station_index, 0);
-    assert!((merged.zero_datums[0].gps.latitude - 45.0).abs() < 0.001);
+    let slot0 = merged.datum_slot(&merged.datums[0]).unwrap();
+    assert_eq!(slot0, StationRef::new(0, 0));
+    assert!((merged.datums[0].gps.latitude - 45.0).abs() < 0.001);
 
     // Second zero datum from project 2 (line 1, station 1)
-    let mzd1 = merged
-        .resolve_key(&merged.zero_datums[1].station_ref)
-        .unwrap();
-    assert_eq!(mzd1.line_id, 1);
-    assert_eq!(mzd1.station_index, 1);
-    assert!((merged.zero_datums[1].gps.latitude - 46.0).abs() < 0.001);
+    let slot1 = merged.datum_slot(&merged.datums[1]).unwrap();
+    assert_eq!(slot1, StationRef::new(1, 1));
+    assert!((merged.datums[1].gps.latitude - 46.0).abs() < 0.001);
+    assert_eq!(merged.datums[1].gps.depth_reference, 5.0);
 }
 
 /// Test: Merge projects with station merges preserves them with remapped IDs
 #[test]
 fn test_merge_projects_preserves_station_merges() {
-    use tempfile::tempdir;
-
-    let dir = tempdir().unwrap();
+    let dir = TempDir::new().unwrap();
 
     // Create project with 2 lines and a station merge
     let path1 = dir.path().join("project_merge1.stalx");
-    let mut project1 = Project::new("Cave Merge".to_string(), None);
-
-    project1.add_line(create_line_with_shots(
+    let mut project1 = Project::new("Cave Merge", None);
+    let a = add_line(
+        &mut project1,
         "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project1.add_line(create_line_with_shots(
+    );
+    let b = add_line_at(
+        &mut project1,
         "Line B",
         vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
-    ));
+        30.0,
+        0.0,
+    );
 
     // Merge last station of line 0 with first station of line 1
     project1
-        .merge_stations(
-            StationRef::new(0, 1), // End of line 0
-            StationRef::new(1, 0), // Start of line 1
-        )
+        .merge_stations(station_of(&project1, a, 1), station_of(&project1, b, 0))
         .unwrap();
+    write_v2(&project1, &path1);
 
-    let mut db1 = Database::open(&path1).unwrap();
-    db1.save_project(&project1).unwrap();
-    drop(db1);
-
-    // Create second project (empty)
+    // Create second project
     let path2 = dir.path().join("project_merge2.stalx");
-    let mut project2 = Project::new("Empty Cave".to_string(), None);
-    project2.add_line(create_line_with_shots(
+    let mut project2 = Project::new("Empty Cave", None);
+    add_line(
+        &mut project2,
         "Line C",
         vec![create_shot_data(180.0, 6.0, 3.0, 3.0)],
-    ));
+    );
+    write_v2(&project2, &path2);
 
-    let mut db2 = Database::open(&path2).unwrap();
-    db2.save_project(&project2).unwrap();
-    drop(db2);
+    let output_path = dir.path().join("merged_stations.stalx");
+    let merged = merge(&[&path1, &path2], &output_path, "Merged Stations");
 
-    // Load and merge
-    let db1 = Database::open_existing(&path1).unwrap();
-    let loaded1 = db1.load_project().unwrap();
-    let db2 = Database::open_existing(&path2).unwrap();
-    let loaded2 = db2.load_project().unwrap();
-
-    let mut merged = Project::new("Merged Stations".to_string(), None);
-    let mut line_id_map: HashMap<u32, u32> = HashMap::new();
-
-    // Add lines from project 1
-    for line in &loaded1.lines {
-        let old_id = line.id;
-        let new_line = merged.add_line(line.to_line_data());
-        line_id_map.insert(old_id, new_line.id);
-    }
-
-    // Copy station merges from project 1
-    for sm in &loaded1.station_merges {
-        if let (Some(&new_a), Some(&new_b)) = (
-            line_id_map.get(&sm.station_a.line_id),
-            line_id_map.get(&sm.station_b.line_id),
-        ) {
-            let a_idx = loaded1.resolve_key(&sm.station_a).unwrap().station_index;
-            let b_idx = loaded1.resolve_key(&sm.station_b).unwrap().station_index;
-            merged.station_merges.push(StationMerge {
-                station_a: StationRef::new(new_a, a_idx).into(),
-                station_b: StationRef::new(new_b, b_idx).into(),
-                merged_at: sm.merged_at,
-            });
-        }
-    }
-
-    // Add lines from project 2
-    for line in &loaded2.lines {
-        merged.add_line(line.to_line_data());
-    }
-
-    // Verify station merge was preserved with remapped IDs
-    assert_eq!(merged.station_merges.len(), 1);
-    let msa = merged
-        .resolve_key(&merged.station_merges[0].station_a)
-        .unwrap();
-    let msb = merged
-        .resolve_key(&merged.station_merges[0].station_b)
-        .unwrap();
-    assert_eq!(msa.line_id, 0);
-    assert_eq!(msa.station_index, 1);
-    assert_eq!(msb.line_id, 1);
-    assert_eq!(msb.station_index, 0);
+    // Verify the junction was preserved on the copied lines
+    assert_eq!(station_of(&merged, 0, 1), station_of(&merged, 1, 0));
+    let merges = merged.project_wire().station_merges;
+    assert_eq!(merges.len(), 1);
+    let ends = [merges[0].station_a, merges[0].station_b];
+    assert!(ends.contains(&StationRef::new(0, 1)));
+    assert!(ends.contains(&StationRef::new(1, 0)));
+    // ...and no junction across the sources
+    assert!(!merged.topology().is_junction(station_of(&merged, 2, 0)));
 
     // Verify 3 lines total
-    assert_eq!(merged.lines.len(), 3);
+    assert_eq!(merged.lines().len(), 3);
 }
