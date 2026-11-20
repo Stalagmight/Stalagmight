@@ -111,7 +111,7 @@ pub(crate) fn apply_command(
 ) -> Result<Applied, String> {
     use super::{
         command_cave_section, command_comment, command_credit, command_line, command_move,
-        command_shot, command_station, command_station_name, import_tracking, project_add,
+        command_shot, command_station, command_station_name, import_tracking,
     };
     match cmd {
         Command::CreateLine { .. }
@@ -145,7 +145,6 @@ pub(crate) fn apply_command(
             command_cave_section::apply(project, record, cmd)
         }
         Command::UntrackImport { .. } => import_tracking::apply(project, record, cmd),
-        Command::AddProjectFile { .. } => project_add::apply(project, record, cmd),
         Command::Batch { commands, .. } => {
             let mut applied = Applied::default();
             for sub in commands {
@@ -164,6 +163,7 @@ pub(crate) fn apply_command(
         | Command::SaveProject { .. }
         | Command::CloseProject
         | Command::MergeProjects { .. }
+        | Command::AddProjectFile { .. }
         | Command::RepairIntegrity
         | Command::UpdateProjectSettings
         | Command::SetSurfaceElevation => Err(format!(
@@ -333,6 +333,11 @@ impl AppState {
             return f;
         }
         self.speleodb_verify_lock_if_expired();
+        // Reads its source file before it takes the project lock, so it is a
+        // recipe (`project_add.rs`) rather than a family `apply`.
+        if matches!(cmd, Command::AddProjectFile { .. }) {
+            return self.execute_add_project_file(&cmd);
+        }
         tracing::info!(
             command = crate::core::command_kind(&cmd),
             purpose = "apply user action",
