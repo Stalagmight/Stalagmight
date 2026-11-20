@@ -502,6 +502,12 @@ impl Project {
         })
     }
 
+    /// The first of [`Self::combine_candidates`]: what a station with one
+    /// partner offers.
+    pub fn combine_candidate(&self, slot: StationRef) -> Option<CombineCandidate> {
+        self.combine_candidates(slot).into_iter().next()
+    }
+
     /// What the line that `slot` ends can be combined with: one candidate per
     /// other line with an end at the same point (on the same station,
     /// side by side, or across a loop closure), each joined at `slot`.

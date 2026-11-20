@@ -98,6 +98,13 @@ mod reverse_tests;
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod split_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod combine_tests;
 
 pub use combine::{
     CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
