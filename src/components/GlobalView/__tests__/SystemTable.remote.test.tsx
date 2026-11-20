@@ -112,3 +112,10 @@ it('marks a cached copy with un-uploaded edits even when the local-state scan do
   );
   expect(screen.getByTestId('system-row-remote-p1')).toHaveAttribute('data-recent-accent', 'unpushed');
 });
+
+it('labels every column header (the Lines column has its own key, not the pre-rename "sections")', () => {
+  renderTable();
+  const headers = screen.getAllByRole('columnheader').map((th) => th.textContent?.trim() ?? '');
+  expect(headers.slice(0, 5)).toEqual(['Name', 'Path', 'Lines', 'Length', 'Edited']);
+  for (const header of headers) expect(header).not.toMatch(/^\[|globalView\./);
+});

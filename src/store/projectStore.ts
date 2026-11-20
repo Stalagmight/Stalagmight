@@ -1738,7 +1738,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'permanently delete project', fields: { path } }
       );
       // Deleting the file backing the OPEN project closes it - the backend tears
-      // its own session down (project, SQLite handle, undo stack) - so the
+      // its own session down (project, file state, undo stack) - so the
       // frontend has to follow. Without that the UI kept rendering the deleted
       // project as open, and the next autosave tick, which does not care that the
       // file is gone, failed the save with "No project open" and surfaced that as
@@ -1754,11 +1754,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // project is seconds of work to learn one bit.)
       //
       // `result.success` is deliberately NOT a precondition. The backend closes
-      // BEFORE handing the `.stalx` to the OS trash, and it has to: SQLite holds
-      // the file open without `FILE_SHARE_DELETE`, so on Windows the trash fails
-      // with "Access is denied" while that handle lives, and a close-afterwards
-      // would never be reached. A trash that is then denied for some other reason
-      // (no write access to the parent directory) therefore returns FAILURE with
+      // BEFORE handing the `.stalx` to the OS trash. 0.6.0 had to: SQLite held the
+      // file open without `FILE_SHARE_DELETE`, so on Windows the trash failed with
+      // "Access is denied" while that handle lived. A version 2 file is read and
+      // written whole and holds no handle; the order stays. A trash that is then
+      // denied for some other reason (no write access to the parent directory)
+      // therefore returns FAILURE with
       // the session already gone, and a success-only guard left the frontend
       // rendering a phantom project with no backend behind it. The recents refresh
       // below stays success-only for the opposite reason: on that branch the file

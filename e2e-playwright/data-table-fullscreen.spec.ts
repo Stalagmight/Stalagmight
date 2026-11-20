@@ -23,8 +23,9 @@ import {
  * alive - the Lines view itself remains editable.
  *
  * The table picker groups "Lines" (the editable table) and "Raw data" -
- * read-only grids over the raw sqlite tables (mocked get_raw_table_names /
- * get_raw_table; blobs arrive as "<blob N KB>" placeholders). The raw view
+ * read-only grids over the members of the saved version 2 `.stalx`, one row
+ * per record (mocked get_raw_table_names / get_raw_table; objects arrive as
+ * compact JSON). The raw view
  * shows last-saved state, so an "As of last save" hint appears while the
  * project is dirty and a save clears it (and refetches the page).
  */
@@ -268,21 +269,23 @@ test.describe('Data table fullscreen mode', () => {
     await page.keyboard.press('Control+s');
     await expect.poll(() => getIsDirty(page)).toBe(false);
 
-    // The picker groups "Lines" and "Raw data" (raw = the sqlite tables).
+    // The picker groups "Lines" and "Raw data" (raw = the saved file's members).
     // The toolbar picker offers just the two views; tables are chosen in the
     // sub-header.
     const listbox = await openTablePicker(page);
     // (the gap between label and qualifier is flex spacing, not a text space)
     await expect(listbox.getByRole('option')).toHaveText(['Lines', 'Raw data(read-only)']);
 
-    // Entering raw mode auto-selects a table; the sub-header menu lists them
-    // all and switches to the shots table. No Shots|Stations toggle in raw
+    // Entering raw mode auto-selects a member of the saved `.stalx`; the
+    // sub-header menu lists them in file order and switches to the shots. No Shots|Stations toggle in raw
     // mode; the read-only grid shows the saved rows.
     await listbox.getByRole('option', { name: 'Raw data' }).click();
     await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
     await page.getByTestId('data-table-raw-table-menu').click();
     const tableList = page.getByTestId('data-table-raw-table-menu-list');
-    await expect(tableList.getByRole('button')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
+    await expect(tableList.getByRole('button')).toHaveText([
+      'file', 'summary', 'project', 'settings', 'counters', 'stations', 'lines', 'shots', 'history',
+    ]);
     await tableList.getByRole('button', { name: 'shots', exact: true }).click();
     await expect(page.getByTestId('raw-table-view')).toBeVisible();
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('shots');
@@ -294,10 +297,13 @@ test.describe('Data table fullscreen mode', () => {
     await page.getByTestId('grid-cell-0-length').dblclick();
     await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
 
-    // Blob columns arrive as size placeholders.
-    await pickRawTable(page, 'undo_stack');
-    await expect(page.getByTestId('data-table-raw-name')).toHaveText('undo_stack');
-    await expect(page.getByTestId('grid-cell-0-command_json')).toHaveText('<blob 1.2 KB>');
+    // A shot row says which line it is on and where.
+    await expect(page.getByTestId('grid-cell-0-index')).toHaveText('0');
+
+    // Objects arrive as compact JSON (a history entry's changeset).
+    await pickRawTable(page, 'history');
+    await expect(page.getByTestId('data-table-raw-name')).toHaveText('history');
+    await expect(page.getByTestId('grid-cell-0-ops')).toHaveText('{"lines":[]}');
 
     // Back to Lines: the editable table with its normal sub-header.
     await pickView(page, 'Lines');

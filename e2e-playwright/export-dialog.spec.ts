@@ -288,7 +288,9 @@ test.describe('Export Dialog', () => {
     await expect(warningDialog).toContainText('Set Zero Datum');
     await expect(warningDialog).not.toContainText('entrance');
     await expect(warningDialog).not.toContainText('only include lines');
-    await expect(warningDialog).toContainText('Floating Line (#2)');
+    // A line is named by its project-unique name, never its id (SPEC 4.2).
+    await expect(page.locator('[data-testid^="tml-unanchored-section-item-"]')).toHaveText(['Floating Line']);
+    await expect(warningDialog).not.toContainText('(#');
     await expect(warningDialog).not.toContainText('Anchored Line');
     await expect(page.getByTestId('tml-unanchored-warning-continue')).toHaveAttribute('data-primary-action', '');
 

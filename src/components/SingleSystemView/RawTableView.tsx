@@ -14,17 +14,19 @@ const PAGER_HEIGHT = 28;
 const noop = () => {};
 
 interface RawTableViewProps {
-  /** Raw sqlite table to browse (must come from get_raw_table_names). */
+  /** The saved file's member to browse (must come from get_raw_table_names). */
   tableName: string;
   /** Body height in px (the grid + pager must fit it exactly). */
   height: number;
 }
 
 /**
- * Read-only pager over a raw sqlite table of the project database. Values
- * arrive stringified server-side (NULL → "NULL", blobs → "<blob N KB>"), so
- * this always shows the LAST-SAVED state - the host shows an "as of last
- * save" hint while the project is dirty, and a save refetches the page.
+ * Read-only pager over one member of the saved `.stalx` file (docs/file-format.md),
+ * shown as a table with one row per record (a station, a line header, a shot, a
+ * history entry, ...). Values arrive stringified server-side (`null` → "NULL",
+ * objects and arrays → compact JSON, long cells cut), read from disk, so this
+ * always shows the LAST-SAVED state - the host shows an "as of last save" hint
+ * while the project is dirty, and a save refetches the page.
  */
 export default function RawTableView({ tableName, height }: RawTableViewProps) {
   const { t } = useTranslation();
@@ -36,7 +38,7 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
   // newer one) must never clobber the latest page.
   const requestIdRef = useRef(0);
 
-  // Switching tables: reset to page 0 AND drop the previous table's rows so the
+  // Switching members: reset to page 0 AND drop the previous one's rows so the
   // loading state shows instead of the old columns/rows until the new fetch
   // resolves (the grid remounts on `key={tableName}` but would still get stale
   // `data.rows`).
@@ -51,7 +53,7 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
     invokeIpc<RawTableData>(
       'get_raw_table',
       { table, limit: RAW_TABLE_PAGE_SIZE, offset: pageToLoad * RAW_TABLE_PAGE_SIZE },
-      { purpose: 'browse a raw sqlite table', fields: { table, page: pageToLoad } }
+      { purpose: 'browse a member of the saved project file', fields: { table, page: pageToLoad } }
     )
       .then((result) => {
         if (requestId !== requestIdRef.current) return;
@@ -78,7 +80,7 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
     if (wasDirty && !isDirty) fetchPage(tableName, page);
   }, [isDirty, fetchPage, tableName, page]);
 
-  // One read-only text column per sqlite column; rows are pre-stringified.
+  // One read-only text column per record field; rows are pre-stringified.
   const columns = useMemo(
     (): GridColumn<string[]>[] =>
       (data?.columns ?? []).map((name, i) => ({

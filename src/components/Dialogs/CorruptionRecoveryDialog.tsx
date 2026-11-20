@@ -27,7 +27,7 @@ export default function CorruptionRecoveryDialog() {
   const { loadProject } = useProjectStore();
 
   const filePath = dialogData.corruptPath as string;
-  const errorMessage = (dialogData.errorMessage as string) ?? 'Database integrity check failed.';
+  const errorMessage = (dialogData.errorMessage as string) ?? 'The project file is damaged and cannot be opened normally.';
 
   const [step, setStep] = useState<Step>('choose');
   const [backups, setBackups] = useState<BackupInfo[]>([]);
@@ -40,7 +40,7 @@ export default function CorruptionRecoveryDialog() {
     setBusy(true);
     try {
       const res = await invokeIpc<RepairResult>('attempt_repair', { path: filePath }, {
-        purpose: 'repair corrupt database',
+        purpose: 'repair a damaged project file',
       });
       setResult({
         success: res.success,
@@ -74,7 +74,8 @@ export default function CorruptionRecoveryDialog() {
         setResult({
           success: false,
           title: 'No Backups Found',
-          message: 'No backup files were found alongside this project.',
+          // Beside the project, and the originals kept from before an upgrade.
+          message: 'No backups of this project were found.',
           canReopen: false,
         });
         setStep('result');
@@ -129,7 +130,7 @@ export default function CorruptionRecoveryDialog() {
     setBusy(true);
     try {
       const data = await invokeIpc<SalvagedData>('export_salvageable_data', { path: filePath }, {
-        purpose: 'salvage data from corrupt database',
+        purpose: 'salvage data from a damaged project file',
       });
 
       // Prompt user for save location
@@ -215,7 +216,10 @@ export default function CorruptionRecoveryDialog() {
             >
               <div className="font-medium">Attempt Repair</div>
               <div className="text-sm text-text-tertiary mt-0.5">
-                Creates a backup, then runs REINDEX + VACUUM to fix common corruption issues.
+                {/* Both file formats: a version 2 file is rebuilt from what decodes
+                    (the damaged original kept as `.backup`); an old SQLite file
+                    gets 0.6.0's backup, REINDEX and VACUUM. */}
+                Keeps a copy of the damaged file, then rebuilds the project from what can still be read.
               </div>
             </button>
 

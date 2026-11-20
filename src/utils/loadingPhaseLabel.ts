@@ -19,7 +19,8 @@ export function formatPhaseLabel(
 
   const labels: Record<string, string> = {
     // Project opening phases
-    opening_database: t('globalView.loading.phases.openingDatabase'),
+    // The wire keeps the SQLite-era phase names; a `.stalx` is one file now.
+    opening_database: t('globalView.loading.phases.openingFile'),
     loading_project_data: t('globalView.loading.phases.loadingProjectData'),
     loading_lines: t('globalView.loading.phases.loadingSections'),
     computing_stations: t('globalView.loading.phases.computingStations'),
@@ -30,7 +31,7 @@ export function formatPhaseLabel(
     // Timeout message
     loading_taking_long: t('globalView.loading.phases.takingLong'),
     // Create project phases
-    creating_database: t('globalView.loading.phases.creatingDatabase'),
+    creating_database: t('globalView.loading.phases.creatingFile'),
     initializing_project: t('globalView.loading.phases.initializingProject'),
     saving_settings: t('globalView.loading.phases.savingSettings'),
     // Survey-file import phases

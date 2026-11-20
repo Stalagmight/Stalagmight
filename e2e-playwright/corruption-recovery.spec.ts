@@ -21,7 +21,8 @@ async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<vo
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('corruption-recovery', {
         corruptPath: '/mock/corrupt-project.stalx',
-        errorMessage: errorMsg ?? 'Database integrity check failed: index corruption detected.',
+        errorMessage:
+          errorMsg ?? 'The project breaks an invariant and cannot be opened normally: shot 3 of line Main ends at an unknown station.',
       });
     },
     { errorMsg: errorMessage },
@@ -36,7 +37,8 @@ function setupRecoveryMocks(page: Page): Promise<void> {
 
     overrides.attempt_repair = {
       success: true,
-      message: 'Repair complete. REINDEX and VACUUM applied successfully.',
+      message:
+        'Repair succeeded: 1 fix(es): dropped a closure to an unknown station. The damaged original is kept as corrupt-project.stalx.backup.',
     };
 
     overrides.list_backups = [
@@ -93,7 +95,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('File Corruption Detected');
-    await expect(dialog).toContainText('integrity check failed');
+    await expect(dialog).toContainText('cannot be opened normally');
   });
 
   test('dialog shows three recovery action buttons', async ({ page }) => {
@@ -109,7 +111,8 @@ test.describe('Corruption Recovery Dialog', () => {
 
     const repairBtn = page.getByTestId('recovery-attempt-repair');
     await expect(repairBtn).toContainText('Attempt Repair');
-    await expect(repairBtn).toContainText('REINDEX');
+    await expect(repairBtn).toContainText('Keeps a copy of the damaged file');
+    await expect(repairBtn).not.toContainText('REINDEX');
   });
 
   test('Restore from Backup button has description text', async ({ page }) => {
@@ -147,7 +150,7 @@ test.describe('Corruption Recovery Dialog', () => {
     // Should show result with success message
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('Repair Succeeded', { timeout: 5000 });
-    await expect(dialog).toContainText('REINDEX and VACUUM');
+    await expect(dialog).toContainText('The damaged original is kept');
 
     // Should have "Open Project" button on success
     await expect(dialog.getByRole('button', { name: /Open Project/i })).toBeVisible();
@@ -227,7 +230,8 @@ test.describe('Corruption Recovery Dialog', () => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
-        message: 'Database corruption too severe for automatic repair.',
+        message:
+          'Repair could not rebuild the project (too severe: no line decodes). Nothing was changed. Try Restore from Backup or Export Salvageable Data instead.',
       };
       (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
     });

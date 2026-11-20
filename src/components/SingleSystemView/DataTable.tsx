@@ -1421,7 +1421,7 @@ export default function DataTable({ lines }: DataTableProps) {
   const lastRawTableRef = useRef<string | null>(null);
   const fetchRawTableNames = useCallback(() => {
     invokeIpc<string[]>('get_raw_table_names', undefined, {
-      purpose: 'list raw sqlite tables for the data viewer',
+      purpose: 'list the saved project file members for the raw data viewer',
     })
       .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
       .catch(() => setRawTables('unavailable'));
@@ -1430,7 +1430,8 @@ export default function DataTable({ lines }: DataTableProps) {
     if (dataTableFullScreen) fetchRawTableNames();
   }, [dataTableFullScreen, fetchRawTableNames]);
   // Re-list after a save (dirty → clean): the first save of a never-saved
-  // project creates the database, so a list that came back "unavailable" must
+  // project writes its file (and the first save of an old-format one upgrades
+  // it to the version 2 `.stalx`), so a list that came back "unavailable" must
   // refresh rather than stay stuck until the user exits and re-enters fullscreen.
   const prevDirtyRawRef = useRef(isDirty);
   useEffect(() => {

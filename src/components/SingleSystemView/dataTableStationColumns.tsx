@@ -3,9 +3,9 @@
  *
  * Mirrors the previous EditableTable columns (order, widths, formatting) as
  * SpreadsheetGrid column configs. Stations are derived from shots, so X/Y/Depth
- * are read-only, and so is the project-unique Station ID; the name (unique
- * within the line, SPEC 4.1) and the comment are editable (never in a
- * read-only view). The station's name pill sits in the row gutter. The GPS
+ * are read-only, and so is the project-unique Station ID; the name (unique on
+ * every line the station is on, a junction's other lines included: SPEC 4.1,
+ * plan 5.3) and the comment are editable (never in a read-only view). The station's name pill sits in the row gutter. The GPS
  * (zero-datum) cell is a click target that opens the Edit Station dialog.
  */
 import type { ReactNode } from 'react';

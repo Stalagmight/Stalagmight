@@ -1502,7 +1502,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const loadingId = Date.now();
 
             // Emit progress events (these are received by useLoadingProgress hook)
-            // Phase 1: Opening database
+            // Phase 1: opening the project file
             emitEvent('loading-progress', {
               loadingId,
               phase: 'opening_database',
@@ -5718,12 +5718,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
             const lineId = (args?.lineId as number | undefined) ?? 1;
+            // The station graph's preview (plan W6): the removed slot leaves the
+            // junction it shared with another line, and what cannot happen any
+            // more (replacement merges, re-wired closures, a skipped re-wire)
+            // comes back empty.
             return {
               removed_station: { line_id: lineId, station_index: 0 },
               removed_merges: [
                 {
                   station_a: { line_id: lineId, station_index: 0 },
-                  station_b: { line_id: lineId, station_index: 1 },
+                  station_b: { line_id: lineId + 1, station_index: 0 },
                 },
               ],
               removed_closures: [
@@ -5737,7 +5741,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               replacement_closure_updates: [],
               closure_to_merge: [],
               merge_rewire_skipped: false,
-              closure_rewire_skipped: true,
+              closure_rewire_skipped: false,
               shift_blocked: false,
               shift_blocked_reasons: [],
             };
@@ -5747,21 +5751,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true, line_ids: [] };
 
-          case 'split_line_preview': {
-            // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
-            // moves and removes nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the
-            // warning (a half that moves, closures the split removes).
-            const win = window as unknown as Record<string, unknown>;
-            return (
-              win.__MOCK_SPLIT_PREVIEW__ ?? {
-                closures_to_merges: 0,
-                moved_side: null,
-                moved_m: 0,
-                removed_closures: [],
-                removed_already_one_point: [],
-              }
-            );
-          }
+          case 'split_line_preview':
+            // Still registered, but the frontend no longer asks: on the station
+            // graph the halves share the split station, so a split moves,
+            // merges and removes nothing (plan W6) - the answer is always empty.
+            return {
+              closures_to_merges: 0,
+              moved_side: null,
+              moved_m: 0,
+              removed_closures: [],
+              removed_already_one_point: [],
+            };
 
           case 'split_line': {
             console.log('[Mock IPC] split_line called with:', args);
@@ -6608,29 +6608,38 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, line_ids: [] };
           }
 
-          // Raw sqlite browsing (data table fullscreen)
+          // Raw data (data table fullscreen): the saved version 2 `.stalx` file's
+          // members, one table per member and one row per record, as
+          // `AppState::list_raw_table_names` / `read_raw_table` serve them
+          // (`core/state/raw_data.rs`). The mock serves the members a small saved
+          // project has, from its own state.
           case 'get_raw_table_names': {
             console.log('[Mock IPC] get_raw_table_names called');
             if (!currentProject) {
-              throw new Error('No project database; save the project to browse raw data');
+              throw new Error('No project file yet; save the project to browse raw data');
             }
-            // Alphabetical, mirroring list_raw_table_names' ORDER BY name.
-            return ['project', 'sections', 'shots', 'undo_stack'];
+            // File order: the header, then the members as written.
+            return ['file', 'summary', 'project', 'settings', 'counters', 'stations', 'lines', 'shots', 'history'];
           }
 
           case 'get_raw_table': {
             console.log('[Mock IPC] get_raw_table called with:', args);
             if (!currentProject) {
-              throw new Error('No project database; save the project to browse raw data');
+              throw new Error('No project file yet; save the project to browse raw data');
             }
             const project = currentProject;
             const table = (args?.table as string) ?? '';
             const limit = Math.min((args?.limit as number) ?? 1000, 10_000);
             const offset = (args?.offset as number) ?? 0;
-            // Values are stringified "server-side" like Database::read_raw_table:
-            // NULL → "NULL", blobs → a size placeholder like "<blob 4.2 KB>".
+            // Values are stringified "server-side" like `raw_data.rs`'s `cell`:
+            // strings raw, numbers in their shortest form, null as "NULL",
+            // objects and arrays as compact JSON.
             const str = (value: unknown): string =>
-              value === null || value === undefined ? 'NULL' : String(value);
+              value === null || value === undefined
+                ? 'NULL'
+                : typeof value === 'object'
+                  ? JSON.stringify(value)
+                  : String(value);
             const rawLines = project.lines as Array<{
               id: number;
               name?: string | null;
@@ -6640,71 +6649,91 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               direction?: string;
               shots?: Array<{ id: number } & Record<string, unknown>>;
             }>;
+            const shotCount = rawLines.reduce((n, line) => n + (line.shots?.length ?? 0), 0);
             let columns: string[];
             let allRows: string[][];
             switch (table) {
-              case 'project':
-                columns = ['id', 'name', 'location', 'created_at', 'modified_at', 'schema_version', 'next_closure_id'];
+              case 'file':
+                columns = ['format', 'version', 'solver', 'requires', 'conventions', 'generator'];
                 allRows = [[
+                  'stalx',
+                  '2',
                   '1',
-                  project.name,
-                  str(project.location),
-                  project.created_at,
-                  project.modified_at,
-                  '7',
-                  '1',
+                  '[]',
+                  '{"length":"m","angles":"deg","azimuth":"cw-from-north","inclination":"+down","depth":"+down","local":"enu-m","gps":"wgs84-deg","temperature":"degC"}',
+                  'Stalagmight 0.6.0',
                 ]];
                 break;
-              case 'sections':
-                columns = ['id', 'name', 'surveyor', 'date', 'color', 'direction', 'quality', 'created_at'];
+              case 'summary':
+                columns = ['name', 'lines', 'stations', 'shots'];
+                allRows = [[project.name, String(rawLines.length), String(shotCount + rawLines.length), String(shotCount)]];
+                break;
+              case 'project':
+                columns = ['name', 'location', 'created', 'modified'];
+                allRows = [[project.name, str(project.location), project.created_at, project.modified_at]];
+                break;
+              case 'settings':
+                columns = ['validation'];
+                allRows = [['{"warn_shot_length_min":0.3,"warn_shot_length_max":50.0}']];
+                break;
+              case 'counters':
+                columns = ['station', 'closure', 'section'];
+                allRows = [[String(shotCount + rawLines.length), '1', '0']];
+                break;
+              case 'stations':
+                columns = ['id', 'name'];
+                allRows = rawLines.flatMap((line) =>
+                  Array.from({ length: (line.shots?.length ?? 0) + 1 }, (_, index) => [
+                    String(mockStationId(line.id, index)),
+                    mockStationName(line.id, index),
+                  ])
+                );
+                break;
+              case 'lines':
+                columns = ['id', 'name', 'color', 'direction', 'quality', 'start', 'shots'];
                 allRows = rawLines.map((line) => [
                   String(line.id),
                   str(line.name),
-                  str(line.surveyor),
-                  str(line.date),
                   str(line.color),
                   line.direction ?? 'in',
                   '1',
-                  project.created_at,
+                  String(mockStationId(line.id, 0)),
+                  String(line.shots?.length ?? 0),
                 ]);
                 break;
               case 'shots':
                 columns = [
-                  'id', 'section_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
-                  'depth_in', 'depth_out', 'pitch_in', 'pitch_out', 'left_distance', 'right_distance',
-                  'up_distance', 'down_distance', 'comment', 'kind', 'marker_index', 'temperature', 'uuid',
+                  'line', 'index', 'uuid', 'to', 'length', 'azimuth_in', 'azimuth_out', 'depth_in',
+                  'depth_out', 'left', 'right', 'up', 'down', 'kind', 'comment',
                 ];
                 allRows = rawLines.flatMap((line) =>
                   (line.shots ?? []).map((shot, index) => [
-                    String(shot.id),
                     String(line.id),
                     String(index),
+                    `mock-shot-${line.id}-${shot.id}`,
+                    String(mockStationId(line.id, index + 1)),
+                    str(shot.length),
                     str(shot.azimuth_in),
                     str(shot.azimuth_out),
-                    str(shot.length),
                     str(shot.depth_in),
                     str(shot.depth_out),
-                    str(shot.pitch_in),
-                    str(shot.pitch_out),
-                    str(shot.left),
-                    str(shot.right),
-                    str(shot.up),
-                    str(shot.down),
-                    str(shot.comment),
-                    shot.kind === 'Jump' ? '1' : shot.kind === 'Reference' ? '2' : '0',
-                    str(shot.marker_index),
-                    str(shot.temperature),
-                    'NULL',
+                    shot.left === undefined ? '' : str(shot.left),
+                    shot.right === undefined ? '' : str(shot.right),
+                    shot.up === undefined ? '' : str(shot.up),
+                    shot.down === undefined ? '' : str(shot.down),
+                    shot.kind === 'Jump' ? 'jump' : shot.kind === 'Reference' ? 'reference' : '',
+                    shot.comment === undefined || shot.comment === null ? '' : str(shot.comment),
                   ])
                 );
                 break;
-              case 'undo_stack':
-                // BLOB columns render as size placeholders, like the real backend.
-                columns = ['id', 'sequence', 'command_json', 'undo_data_json', 'executed_at'];
-                allRows = [['1', '1', '<blob 1.2 KB>', '<blob 4.2 KB>', project.modified_at]];
+              case 'history':
+                // One row per entry: the list it is in, its position, then the
+                // entry's own keys (objects as compact JSON).
+                columns = ['list', 'position', 'v', 't', 'k', 'label', 'ops'];
+                allRows = [['undo', '0', '1', project.modified_at, 'update_shot', 'Edit shot 0 → 1', '{"lines":[]}']];
                 break;
               default:
-                throw new Error(`Unknown table: ${table}`);
+                throw new Error(`No such table: ${table}`);
             }
             return {
               columns,

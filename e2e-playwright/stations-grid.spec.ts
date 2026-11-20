@@ -12,9 +12,9 @@ import {
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
  *
  * Stations are derived from shots, so X/Y/Depth and the Station ID are
- * read-only; the name (set_station_name, unique within the line) and the
- * comment (set_station_comment) are editable, one command per commit - no
- * batch. The station's name pill lives in the row gutter ("0"); never a
+ * read-only; the name (set_station_name, unique on every line through the
+ * station) and the comment (set_station_comment) are editable, one command
+ * per commit - no batch. The station's name pill lives in the row gutter ("0"); never a
  * positional `line:index` id (SPEC 4.1). The GPS cell opens the
  * Edit Station dialog: add-zero-datum mode (GPS input enabled + focused) for
  * plain stations, plain edit mode when the station already is a zero datum.
@@ -305,5 +305,82 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-header-_y')).toHaveCount(0);
     await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
     await expect(page.getByTestId('grid-header-_depth')).toBeVisible();
+  });
+});
+
+/**
+ * A junction (plan 5.3): Main Line's last station is Side's first - ONE
+ * station two lines pass, sharing its Station ID and name. A rename must be
+ * free on every line through it, so a name only Side holds is refused inline
+ * in Main Line's stations grid (the backend would refuse it too), and a free
+ * name renames the station on both lines.
+ */
+test.describe('Stations grid at a junction', () => {
+  const junctionSeeds: LineSeed[] = [
+    lineSeeds[0]!,
+    {
+      name: 'Side Line',
+      direction: 'in',
+      shots: [
+        { azimuth_in: 180, azimuth_out: 180, length: 5, depth_in: -3, depth_out: -4 },
+        { azimuth_in: 200, azimuth_out: 200, length: 6, depth_in: -4, depth_out: -5 },
+      ],
+    },
+  ];
+
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Stations Grid Junction Test');
+    await seedProjectWithLines(page, junctionSeeds);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+  });
+
+  test('a rename is checked on every line through the junction', async ({ page }) => {
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    // Join Main's end (station 3) to Side's start, and give Side's far station
+    // a name Main Line does not have.
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const store = (window as any).__E2E_TEST__.projectStore;
+        await store
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        (window as any).__MOCK_SET_STATION_NAME__(sideId, 2, 'S2');
+        await store.getState().refreshProjectState();
+      },
+      { mainId, sideId },
+    );
+    // Both slots are the one station: same Station ID, same name.
+    expect(await getStationName(page, sideId, 0)).toBe('3');
+    expect(await getStationName(page, sideId, 2)).toBe('S2');
+
+    await openStationsView(page);
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('3');
+
+    // "S2" is free on Main Line but taken on Side Line, which also passes the
+    // station: refused inline - the editor stays open and nothing is sent.
+    await page.getByTestId('grid-cell-3-name').dblclick();
+    const editor = page.getByTestId('grid-cell-editor');
+    await expect(editor).toBeVisible();
+    await editor.fill('S2');
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeVisible();
+    await expect(page.getByTestId('grid-invalid-flash')).toBeVisible();
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+
+    // A name free on both lines renames the station on both.
+    await editor.fill('J');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('J');
+    expect(await getStationName(page, mainId, 3)).toBe('J');
+    expect(await getStationName(page, sideId, 0)).toBe('J');
   });
 });

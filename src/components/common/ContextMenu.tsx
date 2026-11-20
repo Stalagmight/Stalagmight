@@ -931,7 +931,8 @@ export default function ContextMenu() {
         return <EntityUnlinkSymbol entity="line" size={18} />;
       case 'Merge With...':
         return <ToolGlyph tool="merge" size={16} />;
-      case 'Unmerge Stations':
+      // The junction detach (plan 5.2) was "Unmerge Stations" before the station graph.
+      case 'Detach Line from Station...':
       case 'Remove Closure':
         return <EntityUnlinkSymbol entity="station" size={18} />;
       case 'Add Shot Before':
