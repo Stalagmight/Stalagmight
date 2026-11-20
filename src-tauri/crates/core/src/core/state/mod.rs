@@ -139,9 +139,9 @@ mod datum_ui_tests;
 mod exit_prompt_live_tests;
 #[cfg(sg_unported)]
 mod format_property_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod fuzz_rarity_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod fuzz_shrink_tests;
 #[cfg(test)]
 mod fuzz_undo_tests;

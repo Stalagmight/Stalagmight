@@ -1619,6 +1619,13 @@ pub(super) struct Fuzzer {
     /// reopen, a step through a decoded entry). A depth's ids are compared
     /// exactly only within the generation they were recorded in.
     pub(super) id_gen: u64,
+    /// A step through a DECODED entry (no session ids) happened since the
+    /// last reopen. It minted ids for the shots it re-created; an in-session
+    /// entry stepped after that gives the lines it touches the ids it was
+    /// captured with, so the ids of a depth are a function of the path, not
+    /// of the depth, and only soundness is checked until the next reopen
+    /// (where the loader assigns every id afresh).
+    pub(super) id_taint: bool,
     last_counters: Option<Counters>,
     adjust: ClosureAdjustmentConfig,
     log: Vec<String>,
@@ -1696,6 +1703,7 @@ impl Fuzzer {
             persist_limit: config.general.undo_persist_limit,
             drawn,
             id_gen: 0,
+            id_taint: false,
             last_counters: None,
             adjust: config.closure_adjustment,
             log: Vec::new(),
@@ -1964,7 +1972,7 @@ impl Fuzzer {
             );
         }
         let ids = testkit::session_ids(&project);
-        if exact_ids && recorded.ids_gen == self.id_gen {
+        if exact_ids && !self.id_taint && recorded.ids_gen == self.id_gen {
             if ids != recorded.ids {
                 self.fail(
                     &format!("{what} did not give the shots their session ids back (depth {depth})"),
@@ -2308,6 +2316,7 @@ impl Fuzzer {
         if !session {
             // A decoded entry mints the ids of the shots it re-creates.
             self.id_gen += 1;
+            self.id_taint = true;
         }
         self.expect_stacks(&label);
         self.expect_state(self.cursor, &label, session);
@@ -2359,6 +2368,7 @@ impl Fuzzer {
             let session = self.depth(if back { self.cursor + 1 } else { self.cursor }).session;
             if !session {
                 self.id_gen += 1;
+                self.id_taint = true;
             }
             self.expect_stacks("a jump probe step");
             self.expect_state(self.cursor, "a jump probe step", session);
@@ -3281,7 +3291,11 @@ impl Fuzzer {
                     .combine_candidates(station_ref)
                     .unwrap_or_default();
                 if candidates.is_empty() {
-                    return refs.skip(&label);
+                    // What the context menu does: nothing to offer here.
+                    return Some(Drawn::new(
+                        label,
+                        CommandResult::failure("no line to combine at this station".to_string()),
+                    ));
                 }
                 let chosen = &candidates[usize::from(*candidate) % candidates.len()];
                 let (kept, other) = if *keep_b {

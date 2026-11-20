@@ -92,6 +92,7 @@ impl Fuzzer {
         // Every entry on the stacks is a decoded one now: no session ids, and
         // the loader assigned fresh ones.
         self.id_gen += 1;
+        self.id_taint = false;
         for depth in self.depths.iter_mut().flatten() {
             depth.session = false;
         }
