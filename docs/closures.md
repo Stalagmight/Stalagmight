@@ -107,7 +107,8 @@ figure from the raw layout, every time it is asked; nothing is stored:
   Junctions are free (one station); closures are not traversable. The shot
   graph is a forest, so this is the unique tree path, each shot weighing its
   length. Two ends in different pieces (two datum-held pieces) have no path:
-  `path_length` and `error_percentage` are 0 (D14).
+  `path_length` is then the summed shot length of the first end's piece, as
+  0.6.0's fallback did, so the error percentage is a real figure (D14).
 - **Error percentage** = misclosure / path length * 100 (0 when the path
   length is 0).
 

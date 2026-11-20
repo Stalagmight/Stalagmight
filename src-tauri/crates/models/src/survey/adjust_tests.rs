@@ -240,8 +240,15 @@ fn misclosures_match_the_legacy_model_and_path_length_is_along_shots() {
                     "{what}: never shorter than through closures"
                 );
             } else {
-                assert_eq!(m.path_length, 0.0);
-                assert_eq!(m.error_percentage, 0.0);
+                // No shot path: the first end's piece, shots only (0.6.0's
+                // fallback, B-derived-solver-1), so the % is a real figure.
+                assert!(m.path_length >= 0.0, "{what}");
+                let expected_pct = if m.path_length > 0.0 {
+                    m.misclosure_distance / m.path_length * 100.0
+                } else {
+                    0.0
+                };
+                assert!((m.error_percentage - expected_pct).abs() <= 1e-9, "{what}");
             }
             checked += 1;
         }

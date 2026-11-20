@@ -25,6 +25,10 @@ pub(crate) struct ShotForest {
     parent: Vec<usize>,
     up_length: Vec<f64>,
     depth: Vec<usize>,
+    /// Each dense station's tree (its root).
+    root: Vec<usize>,
+    /// The summed shot length of each tree, indexed by its root.
+    tree_length: Vec<f64>,
 }
 
 impl ShotForest {
@@ -43,11 +47,14 @@ impl ShotForest {
         let mut up_length = vec![0.0; n];
         let mut depth = vec![0; n];
         let mut seen = vec![false; n];
+        let mut root_of = vec![usize::MAX; n];
+        let mut tree_length = vec![0.0; n];
         for root in 0..n {
             if seen[root] {
                 continue;
             }
             seen[root] = true;
+            root_of[root] = root;
             let mut queue = std::collections::VecDeque::from([root]);
             while let Some(u) = queue.pop_front() {
                 for &(v, w) in &neighbours[u] {
@@ -56,6 +63,8 @@ impl ShotForest {
                         parent[v] = u;
                         up_length[v] = w;
                         depth[v] = depth[u] + 1;
+                        root_of[v] = root;
+                        tree_length[root] += w;
                         queue.push_back(v);
                     }
                 }
@@ -65,6 +74,8 @@ impl ShotForest {
             parent,
             up_length,
             depth,
+            root: root_of,
+            tree_length,
         }
     }
 
@@ -96,6 +107,17 @@ impl ShotForest {
             total += w;
         }
         Some(total)
+    }
+
+    /// The summed shot length of the tree `a` (dense) is in: 0.6.0's
+    /// fallback length of a closure with no path between its ends ("the
+    /// reachable line lengths" of the first end's merged lines).
+    pub(crate) fn tree_length(&self, a: usize) -> f64 {
+        self.root
+            .get(a)
+            .and_then(|&r| self.tree_length.get(r))
+            .copied()
+            .unwrap_or(0.0)
     }
 }
 
@@ -153,9 +175,14 @@ impl Project {
         let horizontal_misclosure = (dx * dx + dy * dy).sqrt();
         let misclosure_distance = (dx * dx + dy * dy + dz * dz).sqrt();
         let vertical_misclosure = (pa[2] - pb[2]).abs();
+        // No shot path (a closure between two datum-held pieces): 0.6.0's
+        // fallback, the first end's piece, so the error % is a real figure
+        // and is not graded as a perfect closure (review finding
+        // B-derived-solver-1).
+        let (da, db) = (topology.dense(a)?, topology.dense(b)?);
         let path_length = forest
-            .path_length(topology.dense(a)?, topology.dense(b)?)
-            .unwrap_or(0.0);
+            .path_length(da, db)
+            .unwrap_or_else(|| forest.tree_length(da));
         let error_percentage = if path_length > 0.0 {
             (misclosure_distance / path_length) * 100.0
         } else {

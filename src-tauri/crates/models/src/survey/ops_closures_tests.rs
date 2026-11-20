@@ -340,3 +340,58 @@ fn removing_a_datum_unblocks_a_promotion() {
         "B moved 30 m west onto A: {b1_at:?}"
     );
 }
+
+/// A closure between two datum-held pieces has no shot path between its
+/// ends: its length falls back to the first end's piece, as 0.6.0's did, so
+/// the error % is the 0.6.0 figure and the closure is not graded perfect
+/// (review finding B-derived-solver-1; 0.6.0 is the frozen model here).
+#[test]
+fn a_closure_between_two_datum_held_pieces_has_0_6_0_s_error_percentage() {
+    use super::legacy_convert::{data, old_line, Old};
+    use stalagmight_legacy::models as old;
+
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(0.0, 2, 50.0));
+    let b = free_line(&mut p, [500.0, 0.0], run(0.0, 2, 50.0));
+    ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
+    ok(p.set_datum_at(StationRef::new(b, 0), gps_at(40.0, 0.0), None));
+    let (a2, b2) = (at(&p, a, 2), at(&p, b, 2));
+    ok(p.create_closure(a2, Some(a), b2, Some(b), ClosureStrategy::Batch));
+    assert_valid(&p);
+    let m = p.closures_metrics(&p.raw_positions())[0].clone().unwrap();
+    assert!(m.misclosure_distance > 30.0, "{m:?}");
+    assert!((m.path_length - 100.0).abs() < TOL, "{m:?}");
+
+    let mut o = Old::new("two pieces".to_string(), None);
+    let shots = || {
+        vec![
+            data(0.0, 0.0, 50.0, 0.0, 0.0),
+            data(0.0, 0.0, 50.0, 0.0, 0.0),
+        ]
+    };
+    let oa = old_line(&mut o, shots());
+    let ob = old_line(&mut o, shots());
+    let gps = |east: f64| {
+        let g = gps_at(east, 0.0);
+        old::GpsCoordinates::new(g.latitude, g.longitude, 0.0).unwrap()
+    };
+    o.set_zero_datum(old::StationRef::new(oa, 0), gps(0.0))
+        .unwrap();
+    o.set_zero_datum(old::StationRef::new(ob, 0), gps(40.0))
+        .unwrap();
+    o.create_loop_closure(
+        old::StationRef::new(oa, 2),
+        old::StationRef::new(ob, 2),
+        old::ClosureStrategy::Batch,
+    )
+    .unwrap();
+    let today = &o.loop_closures[0];
+    assert!((m.path_length - today.path_length).abs() < 1e-9);
+    assert!(
+        (m.error_percentage - today.error_percentage).abs() < 1e-6,
+        "{} vs 0.6.0 {}",
+        m.error_percentage,
+        today.error_percentage
+    );
+    assert!(m.error_percentage > 30.0);
+}
