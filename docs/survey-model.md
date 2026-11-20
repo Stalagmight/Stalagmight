@@ -7,8 +7,9 @@ next to the legacy `models::project`, which it does not use or change (it only
 reuses the crate's shared types and pure helpers). Streams M0 to M3 built it;
 in the persistence crate, the `.stalx` v2 codec (`persistence::stalx_v2`,
 [file format](file-format.md)) reads and writes it and the legacy migration
-(`persistence::migrate`) produces it. Undo (U) and the app core (C) build on
-it next.
+(`persistence::migrate`) produces it. Its undo engine (stream U) is
+`survey::changeset` ([Undo engine](#undo-engine-changeset)); the app core (C)
+builds on both next.
 
 Run its tests with:
 
@@ -52,6 +53,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 | `survey/frozen.rs`, `survey/rigid.rs`, `survey/stats.rs` | Frozen shots, rigid groups / anchored lines / immovable stations / merge pairs, survey stats. |
 | `survey/graph.rs` | The survey graph (stations, shots, zero-cost closures), Dijkstra, penetration, the distance field, the ruler. |
 | `survey/gas.rs`, `survey/gas/` | The Plan-mode gas engine on the station graph (`gas_reach`, `GasReach`, `gas_reach_field_wire`). |
+| `survey/changeset.rs`, `survey/changeset/` | The undo engine (stream U): `Changeset`, `capture`, `undo` / `redo`, history entries, the preview digest, the shared test kit. See [Undo engine](#undo-engine-changeset). |
 | `survey/legacy_convert.rs` | Test only: converts a survey built with `models::project` for the cross-checks, plus a random legacy survey generator. |
 | `survey/*_tests.rs`, `survey/test_helpers.rs` | Tests (see the end of this page). |
 
@@ -277,6 +279,160 @@ form for the wire. Most take the alignment of this state,
 | Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct) and `slot_count`; `to_project_stats` keeps today's slot count. |
 | Survey graph | `survey_distances_from`, `penetration_distances`, `penetration`, `distance_field`, `along_line_between` | Junction = one node, closures zero-cost, reference ties infinite unless opted in; shots in line-id order. |
 | Gas | `gas_reach(..) -> GasReach`, `GasReach::to_wire`, `gas_reach_field_wire(..)` | Today's engine on stations; the route has no merge hops. |
+
+## Undo engine (`changeset`)
+
+The undo/redo engine of plan 8: one payload type, the id-keyed
+[`Changeset`], captured generically and applied either way with
+preconditions. It depends on nothing but the model: no `AppState`, no
+`Command`. The core stream wires it into the history stacks.
+
+### API
+
+```rust
+use stalagmight_models::survey::changeset::{
+    capture, undo, redo, step, Changeset, Direction, Refusal,
+    HistoryEntry, HistoryRefs, RecordedPreview, PreviewRow,
+    encode_entry, decode_entry, EntryLimits, EntryError, HISTORY_FORMAT_VERSION,
+    Digest, ShotField, Val,
+};
+
+pub fn capture(before: &Project, after: &Project) -> Changeset;
+pub fn undo(project: &mut Project, changes: &Changeset) -> Result<(), Refusal>;
+pub fn redo(project: &mut Project, changes: &Changeset) -> Result<(), Refusal>;
+pub fn step(project: &mut Project, changes: &Changeset, direction: Direction) -> Result<(), Refusal>;
+impl Changeset {
+    pub fn is_empty(&self) -> bool;          // capture of two equal states
+    pub fn digest(&self) -> Digest;          // what a preview shows
+    pub fn has_session_ids(&self) -> bool;   // captured in this session
+    pub fn forget_session_ids(&mut self);    // as a persisted round trip does
+}
+pub fn encode_entry(entry: &HistoryEntry) -> Result<String, EntryError>;
+pub fn decode_entry(text: &str, limits: &EntryLimits) -> Result<HistoryEntry, EntryError>;
+```
+
+The pipeline the core runs around a command:
+
+```rust
+let before = project.clone();                  // after lock and gate
+/* the model operation(s); refusal or violation: restore `before` */
+let changes = capture(&before, &project);      // after the whole epilogue
+if !changes.is_empty() { push(HistoryEntry { timestamp, kind, label, refs, preview, changes }) }
+
+// undo (redo is the mirror):
+undo(&mut project, &entry.changes)?;           // Err: refused, project untouched
+// if the core also validates and finds a violation, `redo` puts it back exactly
+```
+
+- **Capture** is generic (no per-command code): project fields (name,
+  location, creation time, settings), stations (merge walk over the two
+  maps), the line order, every line (bitwise compare first, only the lines
+  that differ are diffed shot by shot), datums, placements, closures,
+  Sections, import hashes, counters. `modified_at` and `file_path` are not
+  recorded: the command layer stamps the edit time, and a step never
+  touches it. Cost on the 20,000-shot gate survey: a few milliseconds in a
+  debug build.
+- **Preconditions.** A step refuses (`Refusal`, with what differs) and
+  leaves the project untouched unless the live project is the recorded
+  source state on everything the changeset touches: every recorded field
+  value, every station image, the length and hunk contents of every list,
+  the line order, and the full content hash of every line whose shots it
+  rebuilds (source side before the step, target side after it). A refused
+  step needs no clone: `prepare` reads the project and builds the new
+  parts, `commit` moves them in and cannot fail.
+- **Counters** are applied as `max(live, recorded)`: an undo leaves them
+  standing, a redo reinstates exactly the ids it removed.
+- **Session shot ids.** A changeset captured in the session carries each
+  touched line's session ids (never persisted, plan 1.1), so undo and redo
+  give every shot its id back. A decoded entry has none: a copied shot keeps
+  its live id, the others are minted from the line's allocator (which never
+  goes down); the ids stay unique and inside the line's window.
+- **Exactness.** Undo and redo land on the recorded state to the bit (the
+  canonical model text and the v2 bytes; counters may stand higher), in the
+  session and through the persisted entry. Rolling back: a successful
+  `undo` is exactly reversed by `redo` of the same changeset, and the other
+  way round.
+
+### What a changeset records
+
+| Part | Form |
+|---|---|
+| Project fields | `[before, after]` per changed field (settings whole). |
+| Stations | whole images of the stations only one side has (`add`, `del`), and per field (`name`, `comment`, `aliases`, `external`) one column `[id runs, [before...], [after...]]`. |
+| Line order | list hunks over the line ids (create, delete, reorder). |
+| Lines | per touched line, ascending id: field-level metadata `[before, after]` pairs; and when its shots changed (or it exists on one side only), a **side** per state: shot count, content hash, the line image for a side-only line, and **segments**. |
+| Segments | a copy run `[line, at, n, mode, anchor, {edits}]` takes `n` shots of a touched line of the other state from `at` (forwards, or backwards for the reversed modes), transforms them (`0` as they are, `1` reversed, `2` reversed and flipped as Reverse Line flips a shot, `3` the same with left and right swapped), then writes the field-level exceptions; literal rows `{"u": [uuids], "f": {columns}}` carry shots the other state does not hold. A run out of another line records its first shot's uuid as an anchor, checked on apply. |
+| Columns | per shot field (`to`, `len`, `ai`, `ao`, `di`, `do`, `pi`, `po`, `l`, `r`, `u`, `d`, `c`, `k`, `m`, `tp`, `cr`), spans `[at, [values]]` or `[at, n, value]` (a run of equal values). Credits are interned once per changeset (`credits`), cells name them by index. |
+| Lists | datums, placements, closures, Sections, both import-hash lists: `{"n": [before len, after len], "h": [[at, [before...], [after...]], ...]}` (Myers, at most 512 edit steps, else one hunk). |
+| Counters | `[[station, closure, section], [station, closure, section]]`. |
+
+So a cell edit is a run and one value per side; a paste of one column a value
+per cell (about 11 bytes per changed cell); a credit over a whole line one
+repeat span; a reverse one flipped run per side plus the few ulps the flip
+does not give back (computed at capture by re-applying the flip and diffing
+the bits, the #808 precedent); a split or a combine a few runs; a delete the
+deleted shots as literal rows.
+
+### History entries (plan 8.3)
+
+One compact, deterministic JSON value per entry, the element of the v2
+file's `history.undo` / `history.redo` lists (already in the format's
+canonical form, so `RawJson::parse` leaves it unchanged):
+
+```text
+{"v":1,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...",
+ "refs":{"lines":[..],"stations":[..],"shots":["uuid"],"closures":[..],"sections":[..]},
+ "preview":{"rows":[["Length","3.50","4.00"]],"more":2},
+ "ops":{...the changeset...}}
+```
+
+- `v` is `HISTORY_FORMAT_VERSION` (1). Any other version decodes to
+  `EntryError::Version`: drop the history whole with the existing banner.
+  Bump it with any change to the layout or to the line hash.
+- `t` is RFC 3339 UTC with nanoseconds (the format reads it for the
+  SpeleoDB watermark cut).
+- `k`, `label`, `refs`, `preview` are the core's: the command kind (icon),
+  the label resolved at record time, the stable ids it names (never session
+  ids or slots), and rows worded at record time for what the changeset
+  cannot say (a batch's sub-commands, an offset). The forward `Command` is
+  never persisted.
+- `decode_entry` is for untrusted input: a byte limit, the version, a strict
+  layout (unknown keys refused), limits on references, labels and preview
+  rows, then the structural rules (`shape.rs`, run before every step too):
+  ids inside their id spaces, every run fitting the side it reads, each
+  source shot copied at most once per direction, columns in order and in
+  range with values their field takes, list hunks in order and inside the
+  list, the line order consistent with the lines created and deleted. All
+  linear or `n log n`; a step's work is bounded by the live lines it reads
+  plus the rows the entry materialises.
+
+### Previews (`Digest`)
+
+`changes.digest()` reads what a history preview shows off the changeset
+alone (no project, no `Command`): project field changes (`ProjectField`:
+name, location, creation time, surface elevation, default azimuth reference,
+validation), stations created and deleted (whole images: a deleted
+station's name), station field changes, lines created and deleted
+(`LineSummary`: id, name, shot count, start), line metadata changes
+(`LineField`), lines reversed end to end (for the frontend's pin
+mirroring), shot cells changed (`ShotCellChange`: line and index in the
+after state, field, old and new value; the old value is paired for runs
+read forwards), shots created and deleted (the first 16 built, all
+counted), and the elements each list gained and lost.
+
+### Tests
+
+| File | Covers |
+|---|---|
+| `changeset/changeset_tests.rs` | What a capture records per edit kind (cell edit, reverse of 1 to 40 shots with and without the L/R swap, split and combine as runs, deleted line, merge and detach, closures and datums, credits interned, `-0.0`), counters, session ids in the session and after a reload, refusals and their text, the list diff (random lists both ways, far-apart edits stay apart). |
+| `changeset/property_tests.rs` | 48 seeds x 70 random survey operations (every M1/M2 command plus the direct edits: names, comments, credits, Sections, settings, hashes, Add): undo all and redo all land on every state to the bit, in the session (session ids exact) and persisted; at every depth and both directions, a project changed behind the engine's back is refused and untouched; steps out of order refuse. |
+| `changeset/entry_tests.rs` | Entries are canonical fixpoints; versions and unknown members refused; truncation at every byte and byte flips at every offset never panic (a flipped entry that decodes steps or refuses, never panics, never half-applies); garbage, depth bombs, oversized entries; the shape rules one by one; large hostile entries decode in linear time; non-finite numbers refused on write. |
+| persistence `history_size_gate_tests.rs` | The size gates on the v2 file (see `docs/undo-redo.md`). |
+| persistence `history_v2_property_tests.rs` | 32 seeds: identical v2 bytes at every depth; a history that rides the file's `history` member and undoes from the decoded project. |
+
+`changeset/testkit.rs` (compiled for tests and with `test-support`) holds
+the gate surveys, the random walk, the replay and the tamper helpers the
+persistence crate's tests share.
 
 ## Naming and identity (`naming.rs`)
 

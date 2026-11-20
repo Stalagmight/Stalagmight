@@ -53,7 +53,8 @@ pub mod testkit;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod changeset_tests;
 #[cfg(test)]
@@ -66,8 +67,6 @@ mod changeset_tests;
 mod entry_tests;
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]

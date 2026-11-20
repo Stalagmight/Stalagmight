@@ -702,7 +702,15 @@ impl Walk {
                 ("merge", self.project.merge_stations(a, b).is_ok())
             }
             19 => {
-                let Some(station) = self.station() else {
+                // A junction, when there is one.
+                let topology = self.project.topology();
+                let junctions: Vec<StationId> = topology
+                    .stations()
+                    .iter()
+                    .copied()
+                    .filter(|s| topology.is_junction(*s))
+                    .collect();
+                let Some(station) = self.rng.pick(&junctions) else {
                     return ("skip", false);
                 };
                 let lines = self.project.topology().lines_of(station);

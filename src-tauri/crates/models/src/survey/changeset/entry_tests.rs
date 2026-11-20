@@ -268,9 +268,9 @@ fn a_structurally_broken_changeset_is_refused_by_the_shape_rules() {
     let why = shape_error("{\"stations\":{\"add\":[[3000000000,\"x\"]]}}");
     assert!(why.contains("id space"), "{why}");
     // A line created without the order knowing it.
-    let why = shape_error(&format!(
-        "{{\"lines\":[{{\"id\":4,\"after\":{{\"n\":0,\"h\":1,\"line\":{{\"color\":\"#000\",\"dir\":\"in\",\"q\":1.0,\"start\":0}},\"s\":[]}}}}]}}"
-    ));
+    let why = shape_error(
+        "{\"lines\":[{\"id\":4,\"after\":{\"n\":0,\"h\":1,\"line\":{\"color\":\"#000\",\"dir\":\"in\",\"q\":1.0,\"start\":0},\"s\":[]}}]}",
+    );
     assert!(why.contains("order"), "{why}");
     // List hunks out of order or past the list.
     let why = shape_error("{\"closures\":{\"n\":[1,1],\"h\":[[5,[],[]]]}}");

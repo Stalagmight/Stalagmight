@@ -4,6 +4,175 @@
 
 Stalagmight uses a command-pattern undo/redo system. Every state-changing operation is a `Command` enum variant. When executed, the system captures enough data to reverse it (`UndoData`), then pushes both onto an undo stack. Undo pops from the undo stack and pushes to the redo stack; redo does the inverse. Any new command clears the redo stack (standard diverging-timeline semantics).
 
+## The changeset engine (station-graph model) - draft
+
+> **Status.** Written by stream U of the station-graph redesign
+> ([plan](plans/2026-11-20_station-graph-model.md), section 8). The engine
+> exists (`models::survey::changeset`, API in
+> [survey-model.md](survey-model.md#undo-engine-changeset)) and is tested on
+> its own; the app core still runs the pre-switch engine described in the
+> rest of this page. Items marked **C:** are for the core stream to finish
+> when it wires the engine into `AppState`; the sections below this one
+> (from "Core Types" to "Station identity across undo and redo") are deleted
+> then, except where noted.
+
+### One payload type
+
+Every undoable step records one `Changeset`: what changed, as before and
+after images keyed by stable ids (stations by Station ID, lines by line id,
+shots by uuid through per-line runs, closures, datums, placements,
+Sections and import hashes as list hunks, the project fields, the line
+order, the counters). It replaces the 14 `UndoData` variants and the #808
+text-delta engine. There is no per-command capture code: the command runs,
+then `capture(&before, &after)` diffs the two model states after the whole
+epilogue (sweep, anchor settle, validate).
+
+- **One entry serves both stacks.** A changeset is symmetric: undo steps it
+  from its after state to its before state, redo the other way. Nothing is
+  re-encoded on a step, and an entry is self-describing rather than relative
+  to its neighbour.
+- **Preconditions instead of re-derivation.** A step refuses, and changes
+  nothing, unless the live project is exactly the recorded state on
+  everything the changeset touches: every recorded field, every station
+  image, every list's length and replaced stretches, the line order, and
+  the content hash of every line whose shots it rebuilds (before the step
+  for the state it reads, after the step for the state it builds). The
+  refusal names what differs (`Refusal`). A refused entry stays on its
+  stack, as today's failure semantics require.
+- **Nothing derived is stored**, so nothing is re-measured or healed after a
+  step: positions, closure metrics, alignment, gauges and datum roles are
+  recomputed from the model. `undo_to` / `redo_to` can step N changesets and
+  recompute derived state once at the end (today's per-step
+  `reconcile_geometry` existed because the re-deriving arms read live
+  offsets; there are none).
+- **Counters** go to `max(live, recorded)`: an undo of what minted an id
+  leaves the counter standing, so a redo reinstates exactly the ids it
+  removed and nothing hands an id out twice. `next_line_id` is derived
+  (`max + 1`); a stale entry that names a reused line id fails its
+  preconditions.
+- **Session shot ids** are never persisted (plan 1.1). An entry captured in
+  the session carries each touched line's ids in memory, so a step gives
+  every shot its id back; a decoded entry mints ids for the shots it
+  re-creates (copied shots keep theirs).
+- **Bit-exact.** Undo and redo land on the recorded state to the bit:
+  canonical model text and the `.stalx` v2 bytes are identical, the
+  counters may stand higher. Pinned by the property tests and the size
+  gates.
+
+**C:** `UndoEntry { command, undo_data, timestamp, command_bytes }` becomes
+an entry holding a `HistoryEntry` (time, kind, record-time label, refs,
+recorded preview rows, changeset). Decide how to hold it: the `Changeset`
+itself (session ids exact; heap a few times its JSON) or its encoded text
+(the byte budget counts exactly what is held, like #808's `RawValue`; a
+step then decodes it and mints session ids). The byte budget counts
+`encode_entry(..).len()` either way.
+
+### The execute pipeline
+
+**C:** one pipeline for `execute()`, `execute_batch` and the eight bypass
+recipes (plan 9.1): command lock, read-only gate, `let before =
+project.clone()`, the model operation(s), roll back to `before` on a
+refusal or a violation, `let changes = capture(&before, &project)`, push
+unless `changes.is_empty()` (a provable no-op pushes nothing and keeps the
+redo branch, as today), clear redo, stamp `modified_at` (the engine never
+touches it), mark dirty. The label is worded at record time
+(`history_batch.rs`'s rules, with names read from `before` / the project);
+`refs` lists the stable ids it names; `preview.rows` carries what the
+changeset cannot say (a batch's first 8 sub-commands with `more`, a move
+offset).
+
+### Undo, redo, jumps
+
+**C:** `undo()` pops the entry, `undo(&mut project, &entry.changes)`; on
+`Err` the entry goes back where it was and the refusal is the error; on
+success it moves to the redo stack. If the core validates after the step
+(recommended for persisted entries) and finds a violation, `redo` of the
+same changeset restores the project exactly and the step is refused.
+`undo_to(i)` / `redo_to(i)` step i + 1 entries and recompute derived state
+once; a mid-jump refusal reports the steps already applied (today's
+contract). `reversed_lines` for the frontend comes from
+`changes.digest().reversed_lines`.
+
+### Labels and previews
+
+The persisted entry holds the label resolved at record time; previews come
+from `changes.digest()` (the per-field old and new values, the entities
+created and deleted with names from their images, the reversed lines, the
+list elements gained and lost) plus the recorded `preview` rows. Names of
+live entities can still be read at display time from `refs` (stable ids,
+so a reverse or an insert no longer makes a label name another station).
+
+**C:** port `derive_preview_data` / `entry_to_history_item` /
+`history_names.rs` to (`kind`, `label`, `refs`, `preview`, digest); K's
+goldens are the oracle for the wording; `UndoHistoryItem` is unchanged.
+
+### Persisted entries
+
+`history: {"undo": [...], "redo": [...]}` in the v2 file, one entry per
+line, each a stack whose last element is the next step:
+
+```text
+{"v":1,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...",
+ "refs":{...},"preview":{...},"ops":{...}}
+```
+
+`encode_entry` writes it (already in the format's canonical form;
+`RawJson::parse` leaves it unchanged); `decode_entry` reads it as untrusted
+input (size, version, strict layout, limits, then the structural rules that
+also run before every step: ids in their spaces, runs inside what they
+read, each source shot copied at most once, columns and hunks in order and
+in range). The `Command` is never persisted (R2 M10).
+
+**C:** on save, `Extras.history` = the persisted window of both stacks as
+`RawJson`; on load, decode every entry, and drop the history whole with the
+existing banner when one fails (`EntryError::Version` is the "earlier
+version" wording, anything else "could not be read"). Histories of SQLite
+files are dropped on migration (plan 7.2.8). The Full-mode in-file budget
+becomes 4 MiB of JSON (plan 8.3); pushes strip redo and cut undo at the
+watermark and by bytes (the format's `Mode::ForPush`, reading `"t"`).
+
+### The size gate (v2)
+
+`persistence/src/persistence/history_size_gate_tests.rs` builds today's
+gate surveys with the survey API (a tree of 100 or 400 lines of 50 shots on
+junctions, a snap closure every 25 lines, a datum, a Section, an island and
+a leaf; with a 2,000-shot line for the credit gates), runs every gated
+action, and fails if any entry (the persisted JSON, label included) is over
+1% of the survey's v2 file (`stalx_v2::encode`, empty history), or if any
+undo, redo or second undo misses the recorded state to the bit, in the
+session and through the persisted entry (on 5k shots also by the v2
+bytes). A paste costs at most 4,000 bytes plus 40 per changed cell. Run it
+with `--nocapture`, or `STALAGMIGHT_UNDO_SIZE_REPORT=<path>`, for the table.
+
+| Action | Old engine (SQLite file) | Changeset (v2 file) |
+|---|---|---|
+| Delete line, 5k shots | 0.73% | 5,104 B, 0.80% of 640,894 B |
+| 1,000 station names, 20k | 0.86% | 14,809 B, 0.57% of 2,577,031 B |
+| 1,000-cell paste, 20k | 0.77% (33-36 KB) | 10,679 B, 0.41% |
+| Paste, per changed cell | at most 40 B | 10.8-11.2 B |
+| Credit over a 2,000-shot line | 331 B | 381 B |
+| Credit over 1,000 shots in 40 lines | 2.4 KB | 7,153 B (0.79%) |
+| Reverse a 2,000-shot line | - | 295 B |
+
+Every other action is under 0.4% on 5k shots and 0.1% on 20k (full table in
+the stream U report). The denominator is the v2 file, about half the SQLite
+file, so the 1% cap is about twice as tight as before (R2 H6); every gate
+still passes with room.
+
+### Keeps its contract unchanged
+
+The IPC surface, `UndoHistoryItem`, strictly increasing timestamps, the
+SpeleoDB watermark and clear-on-push, the byte budget and history limits,
+privacy (no paths: the engine records no `file_path`), the command lock and
+lock order, the read-only gate: the sections "Hybrid mode for SpeleoDB
+projects", "Lock Ordering" and "History UI" below stay, with their
+SQLite-specific mechanics (tables, gzip, row bounds) replaced by the v2
+`history` member. **C:** rewrite those parts when the persistence switches.
+
+> **The rest of this page describes the pre-switch engine** (`UndoData`,
+> compact deltas, SQLite rows). It is removed when the core switches to
+> `models::survey`.
+
 ## Core Types
 
 ### UndoEntry

@@ -158,6 +158,14 @@ fn text(s: Option<&String>) -> Val {
 }
 
 impl Changeset {
+    /// The credit a [`ShotField::Credit`] cell names (its `Val::Int` index).
+    pub fn credit(&self, index: &Val) -> Option<&SurveyCredit> {
+        match index {
+            Val::Int(i) => self.credits.get(usize::try_from(*i).ok()?).map(|c| &**c),
+            _ => None,
+        }
+    }
+
     /// What a preview shows of this step (module docs).
     pub fn digest(&self) -> Digest {
         let mut d = Digest::default();

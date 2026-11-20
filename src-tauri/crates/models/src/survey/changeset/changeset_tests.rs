@@ -481,3 +481,42 @@ fn a_gate_shot_has_the_usual_uuid_form() {
     assert_eq!(uuid.len(), 36);
     assert_eq!(uuid, gate_shot(3, 4).uuid.unwrap(), "deterministic");
 }
+
+#[test]
+fn the_digest_reads_project_station_and_credit_changes() {
+    let (before, line) = survey(5);
+    let mut after = before.clone();
+    after.name = "Renamed project".to_string();
+    after.settings.surface_elevation = Some(12.0);
+    let station = after.line_stations(line).unwrap()[2];
+    after.station_mut(station).unwrap().name = "Sump".to_string();
+    after.station_mut(station).unwrap().comment = Some("restriction".to_string());
+    set_credit(&mut after, line, 1..3, "Diver");
+    let changes = capture(&before, &after);
+    let digest = changes.digest();
+    let fields: Vec<_> = digest.project.iter().map(|c| c.field).collect();
+    assert_eq!(
+        fields,
+        vec![
+            super::ProjectField::Name,
+            super::ProjectField::SurfaceElevation
+        ]
+    );
+    assert_eq!(digest.project[0].new.as_str(), Some("Renamed project"));
+    assert_eq!(digest.station_fields.len(), 2);
+    assert!(digest.station_fields.iter().all(|c| c.station == station));
+    let credits: Vec<_> = digest
+        .shot_cells
+        .iter()
+        .filter(|c| c.field == ShotField::Credit)
+        .collect();
+    assert_eq!(credits.len(), 2);
+    let credit = changes
+        .credit(&credits[0].new)
+        .expect("the credit it names");
+    assert_eq!(credit.surveyors[0].name, "Diver");
+    assert!(credits[0]
+        .old
+        .as_ref()
+        .is_some_and(|v| matches!(v, Val::Null)));
+}
