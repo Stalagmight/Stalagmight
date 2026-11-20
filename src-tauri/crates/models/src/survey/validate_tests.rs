@@ -1,11 +1,11 @@
 //! Every invariant of plan section 2 is detected, with a precise violation.
 
-use crate::{Section, StationRef, MAX_STATION_ID};
+use crate::{Section, StationRef, MAX_SECTION_ID, MAX_STATION_ID};
 
-use super::test_helpers::{add, at, flat, gps, three_line_junction};
+use super::test_helpers::{add, at, flat, gps, project, three_line_junction};
 use super::{
     ClosureEnd, ClosureStrategy, CounterKind, NumberField, Project, StartAt, Station, StationAlias,
-    Violation, ZeroDatum,
+    Violation, ZeroDatum, MAX_SHOTS_PER_LINE,
 };
 
 /// The base survey validates, and `mutate` makes it report `expected` (among
@@ -512,5 +512,66 @@ fn a_non_finite_validation_threshold_is_reported() {
             },
             value: f64::INFINITY,
         }]
+    );
+}
+
+#[test]
+fn an_alias_id_outside_the_station_id_space_is_reported() {
+    expect_violation(
+        |p| {
+            let host = *p.stations.keys().next().unwrap();
+            p.counters.next_station_id = MAX_STATION_ID;
+            p.station_mut(host).unwrap().aliases.push(StationAlias {
+                id: MAX_STATION_ID,
+                name: None,
+            });
+        },
+        &Violation::AliasOutOfRange {
+            station: 0,
+            alias: MAX_STATION_ID,
+        },
+    );
+}
+
+#[test]
+fn a_line_holds_at_most_99999_shots() {
+    let mut p = project();
+    let full = add(&mut p, StartAt::New, vec![flat(0.0, 1.0); MAX_SHOTS_PER_LINE]);
+    p.set_placement(at(&p, full, 0), 0.0, 0.0).unwrap();
+    assert_eq!(p.validate(), Vec::new(), "99,999 shots is the most");
+    let over = add(
+        &mut p,
+        StartAt::New,
+        vec![flat(0.0, 1.0); MAX_SHOTS_PER_LINE + 1],
+    );
+    p.set_placement(at(&p, over, 0), 5.0, 0.0).unwrap();
+    assert_eq!(
+        p.validate(),
+        vec![Violation::TooManyShots {
+            line: over,
+            count: MAX_SHOTS_PER_LINE + 1,
+        }]
+    );
+}
+
+#[test]
+fn station_and_section_counters_stay_within_their_id_spaces() {
+    let (mut p, _) = three_line_junction();
+    p.counters.next_station_id = MAX_STATION_ID;
+    p.counters.next_section_id = MAX_SECTION_ID;
+    assert_eq!(p.validate(), Vec::new(), "at the bound: the ids are used up");
+    expect_violation(
+        |p| p.counters.next_station_id = MAX_STATION_ID + 1,
+        &Violation::CounterOutOfRange {
+            counter: CounterKind::Station,
+            next: u64::from(MAX_STATION_ID) + 1,
+        },
+    );
+    expect_violation(
+        |p| p.counters.next_section_id = u32::MAX,
+        &Violation::CounterOutOfRange {
+            counter: CounterKind::Section,
+            next: u64::from(u32::MAX),
+        },
     );
 }

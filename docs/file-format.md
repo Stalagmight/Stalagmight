@@ -442,6 +442,9 @@ a repair into a copy), and never writes one:
 
 1. Ids are unique: station ids, line ids, shot uuids (project-wide), closure
    ids, Section ids. Alias ids are not live station ids and appear once.
+   Station ids, alias ids included, and Section ids are below 2^31; line ids
+   are at most 42948; a line holds at most 99,999 shots (Stalagmight numbers
+   a line's shots in its session by `line id * 100000 + index`).
 2. Every reference resolves: a line's `start`, a shot's `to`, every datum,
    placement and closure station, every `via` line (which must pass through
    that station), every hand-move station (on that line), every line's
@@ -457,7 +460,8 @@ a repair into a copy), and never writes one:
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
 8. Station names are unique among the stations of each line.
-9. Counters are above every id in use.
+9. Counters are above every id in use, and the station and Section counters
+   are at most 2^31 (at 2^31 the ids are used up).
 10. Every number is finite.
 
 ## 7. Unknown content
@@ -637,8 +641,9 @@ over 256 MiB and files holding more than 2,100,000 stations or aliases or
 hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
 ignored warnings, import hashes or credited people, 50,000 closures, 10,000
 unknown keys and members (and `requires` names) in all, or an object with
-more than 10,100 members. A line holds at most 99,999 shots (a limit of the
-model, refused by the writer too).
+more than 10,100 members. The id and per-line bounds of section 6 (rule 1 and
+rule 9) are validity rules: a file breaking them is refused after reading,
+with the repair offer, and is never written.
 Preserved unknown content nested deeper than 128 levels is refused. A history
 of more than 65,536 entries is dropped (not refused). Servers should apply
 caps that fit their own deadlines.

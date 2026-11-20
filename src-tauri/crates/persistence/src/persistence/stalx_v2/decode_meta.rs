@@ -12,7 +12,7 @@ use serde_json::value::RawValue;
 
 use crate::models::config::ValidationConfig;
 use crate::models::survey::{ClosureStrategy, LoopClosure, Placement, ProjectSettings, ZeroDatum};
-use crate::models::{GpsCoordinates, Section, MAX_SECTION_ID, MAX_STATION_ID};
+use crate::models::{GpsCoordinates, Section};
 
 use super::canon::{canonical_checked, CanonError};
 use super::decode_records::{AzimuthSeed, Ctx, Loc};
@@ -307,19 +307,7 @@ pub(super) fn read_counters(
         closure: fields.big("closure")?,
         section: fields.opt("section")?,
     };
-    // A counter at the bound means the ids are used up; past it, no id it
-    // could hand out is valid.
-    for (value, max, what) in [
-        (counters.station, MAX_STATION_ID, "station"),
-        (counters.section, MAX_SECTION_ID, "section"),
-    ] {
-        if let Some(value) = value.filter(|&v| v > max) {
-            return Err(DecodeError::BadValue {
-                at: format!("the counters member, field {what}"),
-                message: format!("{value} is above {max}"),
-            });
-        }
-    }
+    // Their id-space bounds are `validate`'s (`CounterOutOfRange`).
     fields.unknown_to(ctx)?;
     Ok(counters)
 }

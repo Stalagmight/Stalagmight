@@ -10,7 +10,7 @@ use std::fmt;
 
 use crate::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
-use super::{ClosureId, Project, Topology, MAX_SHOT_UUID_CHARS};
+use super::{ClosureId, Project, Topology, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS};
 
 /// Which end of a closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -145,6 +145,18 @@ pub enum Violation {
         station: StationId,
         alias: StationId,
     },
+    /// An alias id at or above [`MAX_STATION_ID`] (outside the Station ID
+    /// space).
+    AliasOutOfRange {
+        station: StationId,
+        alias: StationId,
+    },
+    /// A line holds more than [`MAX_SHOTS_PER_LINE`] shots (session shot ids
+    /// would run into the next line's).
+    TooManyShots {
+        line: LineId,
+        count: usize,
+    },
     DuplicateLineId {
         line: LineId,
     },
@@ -268,6 +280,14 @@ pub enum Violation {
         next: u64,
         max_in_use: u64,
     },
+    /// A stored counter past its id space's bound (at the bound the ids are
+    /// used up; past it no id it could hand out is valid). Station and
+    /// Section counters only: the line counter is derived, closure ids are
+    /// `u64`.
+    CounterOutOfRange {
+        counter: CounterKind,
+        next: u64,
+    },
     // 10. numbers
     NonFinite {
         field: NumberField,
@@ -293,6 +313,14 @@ impl fmt::Display for Violation {
             Self::AliasCollision { station, alias } => write!(
                 f,
                 "station {station} keeps alias {alias}, which is another station's id or alias"
+            ),
+            Self::AliasOutOfRange { station, alias } => write!(
+                f,
+                "station {station} keeps alias {alias}, which is not below {MAX_STATION_ID}"
+            ),
+            Self::TooManyShots { line, count } => write!(
+                f,
+                "line {line} has {count} shots; a line holds at most {MAX_SHOTS_PER_LINE}"
             ),
             Self::DuplicateLineId { line } => write!(f, "two lines have id {line}"),
             Self::DuplicateClosureId { closure } => write!(f, "two closures have id {closure}"),
@@ -432,6 +460,13 @@ impl fmt::Display for Violation {
                 f,
                 "the next {counter} id {next} is not above {max_in_use}, an id in use"
             ),
+            Self::CounterOutOfRange { counter, next } => {
+                let bound = match counter {
+                    CounterKind::Section => u64::from(MAX_SECTION_ID),
+                    _ => u64::from(MAX_STATION_ID),
+                };
+                write!(f, "the next {counter} id {next} is past {bound}")
+            }
             Self::NonFinite { field, value } => write!(f, "{field} is {value}, not finite"),
         }
     }
@@ -476,6 +511,12 @@ impl Project {
                 });
             }
             for alias in &station.aliases {
+                if alias.id >= MAX_STATION_ID {
+                    out.push(Violation::AliasOutOfRange {
+                        station: key,
+                        alias: alias.id,
+                    });
+                }
                 if self.stations.contains_key(&alias.id) || !aliases.insert(alias.id) {
                     out.push(Violation::AliasCollision {
                         station: key,
@@ -493,6 +534,12 @@ impl Project {
                 out.push(Violation::IdOutOfRange {
                     kind: CounterKind::Line,
                     id: u64::from(line.id),
+                });
+            }
+            if line.shots.len() > MAX_SHOTS_PER_LINE {
+                out.push(Violation::TooManyShots {
+                    line: line.id,
+                    count: line.shots.len(),
                 });
             }
         }
@@ -785,6 +832,25 @@ impl Project {
     }
 
     fn check_counters(&self, out: &mut Vec<Violation>) {
+        for (counter, next, bound) in [
+            (
+                CounterKind::Station,
+                self.counters.next_station_id,
+                MAX_STATION_ID,
+            ),
+            (
+                CounterKind::Section,
+                self.counters.next_section_id,
+                MAX_SECTION_ID,
+            ),
+        ] {
+            if next > bound {
+                out.push(Violation::CounterOutOfRange {
+                    counter,
+                    next: u64::from(next),
+                });
+            }
+        }
         let station_max = self
             .stations
             .values()

@@ -13,7 +13,7 @@ use std::fmt;
 use crate::models::survey::{
     ClosureId, ClosureStrategy, CounterKind, LoopClosure, Placement, Project, Station, Violation,
 };
-use crate::models::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_STATION_ID};
+use crate::models::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::decode::parse;
 use super::error::DecodeError;
@@ -115,6 +115,11 @@ pub enum Repair {
         counter: CounterKind,
         to: u64,
     },
+    /// A counter past its id space was set to the bound (ids used up).
+    LoweredCounter {
+        counter: CounterKind,
+        to: u64,
+    },
 }
 
 impl fmt::Display for Repair {
@@ -170,7 +175,7 @@ impl fmt::Display for Repair {
                 write!(f, "placed the piece of station {station} at the origin")
             }
             Self::RenamedStation { id, name } => write!(f, "station {id} is now named {name:?}"),
-            Self::RaisedCounter { counter, to } => {
+            Self::RaisedCounter { counter, to } | Self::LoweredCounter { counter, to } => {
                 write!(f, "the next {counter} id is now {to}")
             }
         }
@@ -234,6 +239,7 @@ fn stage(v: &Violation) -> u8 {
         Violation::StationKeyMismatch { .. }
         | Violation::IdOutOfRange { .. }
         | Violation::AliasCollision { .. }
+        | Violation::AliasOutOfRange { .. }
         | Violation::DuplicateLineId { .. }
         | Violation::DuplicateClosureId { .. }
         | Violation::DuplicateSectionId { .. }
@@ -258,7 +264,9 @@ fn stage(v: &Violation) -> u8 {
         | Violation::ClosureAcrossUnplacedPieces { .. } => 3,
         Violation::DuplicateStationName { .. }
         | Violation::CounterNotAbove { .. }
-        | Violation::NonFinite { .. } => 4,
+        | Violation::CounterOutOfRange { .. }
+        | Violation::NonFinite { .. }
+        | Violation::TooManyShots { .. } => 4,
     }
 }
 
@@ -402,7 +410,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 }
                 CounterKind::Closure => {}
             },
-            Violation::AliasCollision { station, alias } => {
+            Violation::AliasCollision { station, alias }
+            | Violation::AliasOutOfRange { station, alias } => {
                 if let Some(s) = p.stations.get_mut(station) {
                     if let Some(i) = s.aliases.iter().position(|a| a.id == *alias) {
                         s.aliases.remove(i);
@@ -571,6 +580,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 }
             }
             Violation::CounterNotAbove { counter, .. } => raise_counter(p, *counter, repairs),
+            Violation::CounterOutOfRange { counter, .. } => lower_counter(p, *counter, repairs),
+            // Splitting a line is not a repair: such a file stays refused.
+            Violation::TooManyShots { .. } => {}
             // No JSON number is non-finite; nothing to repair.
             Violation::NonFinite { .. } => {}
         }
@@ -752,6 +764,21 @@ fn restore_chain_station(
         from: id,
         to,
     });
+}
+
+fn lower_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair>) {
+    let to = match counter {
+        CounterKind::Station => {
+            p.counters.next_station_id = MAX_STATION_ID;
+            u64::from(MAX_STATION_ID)
+        }
+        CounterKind::Section => {
+            p.counters.next_section_id = MAX_SECTION_ID;
+            u64::from(MAX_SECTION_ID)
+        }
+        CounterKind::Line | CounterKind::Closure => return,
+    };
+    repairs.push(Repair::LoweredCounter { counter, to });
 }
 
 fn raise_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair>) {

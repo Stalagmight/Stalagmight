@@ -191,10 +191,9 @@ pub const MAX_INTEGER: u64 = (1 << 53) - 1;
 /// entries. The survey records themselves are at most five levels deep.
 pub const MAX_DEPTH: usize = 128;
 
-/// The most shots one line holds: session shot ids are
-/// `line * FEATURE_ID_STRIDE + index`, so a longer line would hand out the
-/// next line's ids (the legacy model's cap too).
-pub const MAX_SHOTS_PER_LINE: usize = (crate::models::FEATURE_ID_STRIDE - 1) as usize;
+/// The most shots one line holds: the model's bound, checked by `validate`
+/// on both sides (re-exported so format readers find it here).
+pub use crate::models::survey::MAX_SHOTS_PER_LINE;
 
 /// The SpeleoDB upload limit a push is cut to by default (5 MiB, inclusive).
 pub const PUSH_BYTE_CAP: usize = 5 * 1024 * 1024;

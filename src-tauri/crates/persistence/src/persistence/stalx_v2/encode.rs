@@ -22,10 +22,8 @@ use super::types::{Extras, History, IgnoredWarning, LocalState, Mode, PushOption
 use super::write::{
     boolean, date, float, integer, normalized_date, signed, small, string, time, Obj,
 };
-use super::{
-    CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, MAX_SHOTS_PER_LINE, PREFIX, SOLVER, VERSION,
-};
-use crate::models::{UndoMode, MAX_SECTION_ID, MAX_STATION_ID};
+use super::{CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION};
+use crate::models::UndoMode;
 
 /// What an encode did beside writing the survey.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -76,7 +74,6 @@ pub fn encode_with_report(
     if !violations.is_empty() {
         return Err(EncodeError::Invalid { violations });
     }
-    check_bounds(project)?;
 
     let link = match mode {
         Mode::DetachedCopy => None,
@@ -127,47 +124,6 @@ pub fn encode_with_report(
     out.extend_from_slice(END);
     report.size = out.len();
     Ok((out, report))
-}
-
-/// What the decoder refuses and `validate` does not check: write nothing that
-/// cannot be opened again.
-fn check_bounds(project: &Project) -> Result<(), EncodeError> {
-    let out_of_range =
-        |at: String, value: u64, max: u64| EncodeError::OutOfRange { at, value, max };
-    for line in project.lines() {
-        if line.shots.len() > MAX_SHOTS_PER_LINE {
-            return Err(out_of_range(
-                format!("the number of shots of line {}", line.id),
-                line.shots.len() as u64,
-                MAX_SHOTS_PER_LINE as u64,
-            ));
-        }
-    }
-    for station in project.stations.values() {
-        if let Some(alias) = station.aliases.iter().find(|a| a.id >= MAX_STATION_ID) {
-            return Err(out_of_range(
-                format!("an alias of station {}", station.id),
-                u64::from(alias.id),
-                u64::from(MAX_STATION_ID - 1),
-            ));
-        }
-    }
-    let counters = &project.counters;
-    if counters.next_station_id > MAX_STATION_ID {
-        return Err(out_of_range(
-            "the station counter".to_string(),
-            u64::from(counters.next_station_id),
-            u64::from(MAX_STATION_ID),
-        ));
-    }
-    if counters.next_section_id > MAX_SECTION_ID {
-        return Err(out_of_range(
-            "the Section counter".to_string(),
-            u64::from(counters.next_section_id),
-            u64::from(MAX_SECTION_ID),
-        ));
-    }
-    Ok(())
 }
 
 /// A rough size, to allocate once.

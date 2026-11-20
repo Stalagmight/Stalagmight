@@ -15,7 +15,7 @@ use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqA
 use crate::models::survey::{Line, Shot, Station, StationAlias};
 use crate::models::{
     AzimuthReference, CorrectionSource, LineId, NorthReference, Person, ShotKind, StationId,
-    SurveyCredit, SurveyDirection, MAX_STATION_ID,
+    SurveyCredit, SurveyDirection,
 };
 
 use super::error::DecodeError;
@@ -422,11 +422,8 @@ impl<'de> Visitor<'de> for AliasSeed<'_, '_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<StationAlias, A::Error> {
+        // Range-checked by `validate` (`AliasOutOfRange`).
         let id: StationId = cell(&mut seq, self.ctx, "alias id")?;
-        if id >= MAX_STATION_ID {
-            self.ctx.field = "alias id";
-            return Err(self.ctx.bad(format!("{id} is not below {MAX_STATION_ID}")));
-        }
         self.ctx.field = "alias name";
         let name = seq.next_element::<String>()?;
         if name.is_some() {
@@ -526,12 +523,8 @@ impl<'de> Visitor<'de> for ElementSeed<'_, '_> {
             line: build.line.id,
             index: build.line.shots.len(),
         };
-        if build.line.shots.len() >= super::MAX_SHOTS_PER_LINE {
-            return Err(self.ctx.fail(DecodeError::TooComplex {
-                limit: Limit::ShotsPerLine,
-                max: super::MAX_SHOTS_PER_LINE,
-            }));
-        }
+        // The per-line bound is `validate`'s (`TooManyShots`); the total is
+        // capped here.
         let shot = read_shot(seq, self.ctx, build.credit.as_ref())?;
         self.ctx.count(Limit::Shots, 1)?;
         build.line.shots.push(shot);

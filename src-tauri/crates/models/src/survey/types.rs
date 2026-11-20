@@ -24,6 +24,11 @@ pub type ClosureId = u64;
 /// uuids are opaque: minted v4 at creation, imported verbatim.
 pub const MAX_SHOT_UUID_CHARS: usize = 128;
 
+/// The most shots one line holds (99,999): session shot ids are
+/// `line * FEATURE_ID_STRIDE + index`, so a longer line would hand out the
+/// next line's ids (the legacy model's cap too). Checked by `validate`.
+pub const MAX_SHOTS_PER_LINE: usize = (FEATURE_ID_STRIDE - 1) as usize;
+
 /// One physical survey station.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Station {

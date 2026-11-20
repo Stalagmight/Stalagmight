@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::models::survey::{LineMeta, Project, StartAt, StationAlias};
+use crate::models::survey::{CounterKind, LineMeta, Project, StartAt, StationAlias, Violation};
 use crate::models::{Person, ShotData, SurveyCredit};
 
 use super::test_helpers::{generate, text_of, SMALL};
@@ -136,16 +136,24 @@ fn string_lists_are_counted_as_they_arrive() {
     ));
 }
 
+/// Whether `violations` holds a [`Violation::TooManyShots`].
+fn too_many_shots(violations: &[Violation]) -> bool {
+    violations
+        .iter()
+        .any(|v| matches!(v, Violation::TooManyShots { .. }))
+}
+
 /// Session shot ids are `line * 100000 + index`: a line holds at most 99,999
-/// shots, on both sides.
+/// shots, on both sides. The bound is the model's (`validate`), which the
+/// encoder and the decoder both run.
 #[test]
 fn a_line_holds_at_most_99999_shots() {
     let p = one_line(MAX_SHOTS_PER_LINE + 1);
     assert!(matches!(
         encode(&p, &Extras::default(), Mode::Normal),
-        Err(EncodeError::OutOfRange { .. })
+        Err(EncodeError::Invalid { violations }) if too_many_shots(&violations)
     ));
-    // Written by hand: the decoder refuses it too.
+    // Written by hand: the decoder refuses it too, and salvage cannot repair it.
     let mut text = String::from(
         "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n\
          \"conventions\":{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
@@ -161,11 +169,11 @@ fn a_line_holds_at_most_99999_shots() {
     text.push_str("\n],\n\"end\":true}\n");
     assert!(matches!(
         decode(text.as_bytes(), &DecodeOptions::default()),
-        Err(DecodeError::TooComplex {
-            limit: Limit::ShotsPerLine,
-            ..
-        })
+        Err(DecodeError::Invalid { violations }) if too_many_shots(&violations)
     ));
+    let (salvaged, report) = decode_salvage(text.as_bytes());
+    assert!(salvaged.is_none());
+    assert!(too_many_shots(&report.remaining), "{:?}", report.remaining);
 }
 
 #[test]
@@ -177,10 +185,19 @@ fn alias_ids_and_counters_stay_in_range() {
         name: None,
     });
     p.counters.next_station_id = 4_000_000_001;
-    // `validate` does not check the range; the encoder does.
+    // `validate` checks both ranges; the encoder refuses through it.
+    let alias = Violation::AliasOutOfRange {
+        station: host,
+        alias: 4_000_000_000,
+    };
+    let counter = Violation::CounterOutOfRange {
+        counter: CounterKind::Station,
+        next: 4_000_000_001,
+    };
     assert!(matches!(
         encode(&p, &extras, Mode::Normal),
-        Err(EncodeError::OutOfRange { .. })
+        Err(EncodeError::Invalid { violations })
+            if violations.contains(&alias) && violations.contains(&counter)
     ));
     let text =
         text_of(&encode(&one_line(3), &Extras::default(), Mode::Normal).unwrap()).to_string();
@@ -190,13 +207,25 @@ fn alias_ids_and_counters_stay_in_range() {
     let bad = text.replacen(first, &with_alias, 1);
     assert!(matches!(
         decode(bad.as_bytes(), &DecodeOptions::default()),
-        Err(DecodeError::BadValue { .. })
+        Err(DecodeError::Invalid { violations })
+            if violations.iter().any(|v| matches!(v, Violation::AliasOutOfRange { .. }))
     ));
+    let (salvaged, report) = decode_salvage(bad.as_bytes());
+    assert!(salvaged.is_some_and(|q| q.is_valid()), "{report:?}");
     let at = text.find("\"counters\":{\"station\":").unwrap() + "\"counters\":{\"station\":".len();
     let digits = text[at..].find(',').unwrap();
     let counter = format!("{}3000000000{}", &text[..at], &text[at + digits..]);
     assert!(matches!(
         decode(counter.as_bytes(), &DecodeOptions::default()),
-        Err(DecodeError::BadValue { .. })
+        Err(DecodeError::Invalid { violations }) if violations == vec![Violation::CounterOutOfRange {
+            counter: CounterKind::Station,
+            next: 3_000_000_000,
+        }]
     ));
+    let (salvaged, report) = decode_salvage(counter.as_bytes());
+    assert_eq!(
+        salvaged.map(|q| q.counters.next_station_id),
+        Some(crate::models::MAX_STATION_ID),
+        "{report:?}"
+    );
 }
