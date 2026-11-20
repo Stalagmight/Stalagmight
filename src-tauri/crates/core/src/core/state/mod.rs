@@ -143,7 +143,7 @@ mod format_property_tests;
 mod fuzz_rarity_tests;
 #[cfg(sg_unported)]
 mod fuzz_shrink_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod fuzz_undo_tests;
 #[cfg(test)]
 #[expect(
