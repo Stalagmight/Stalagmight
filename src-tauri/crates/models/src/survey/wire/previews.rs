@@ -27,7 +27,8 @@ impl Project {
     /// - `removed_merges`: a junction stays for its other lines; the slot
     ///   that leaves it is no longer merged with them (one pair per other
     ///   slot of the station).
-    /// - `removed_closures`: the closures deleted with the station, the ones
+    /// - `removed_closures`: the closures deleted with the station (at a
+    ///   junction, the `Tie`s the line's slot takes with it, S13), the ones
     ///   the delete leaves across one shot (#737) and the ones the sweep
     ///   removes (both ends on one station).
     /// - `closure_to_merge`: the closures the sweep promotes to a merge
