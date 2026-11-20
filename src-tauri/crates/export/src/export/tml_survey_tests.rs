@@ -439,4 +439,3 @@ fn a_second_datum_on_one_station_is_reported_unwritten() {
     assert_eq!(notes, vec!["gps-anchors-not-written".to_string()]);
     assert!(!xml.is_empty());
 }
-

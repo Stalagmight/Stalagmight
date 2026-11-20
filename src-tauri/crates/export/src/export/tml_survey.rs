@@ -1,10 +1,10 @@
 //! The Ariane rows of a station-graph project (plan 10.5): the front end of
 //! the TML/TMLU export on `models::survey`. Everything after the rows are
 //! built (GPS on the STARTs, the geometry repair, the SpeleoDB hardening, the
-//! orphan guard and the XML) is the legacy exporter's, shared.
+//! orphan guard and the XML) is the parent module's.
 //!
-//! The walk is the legacy one, read off the station graph instead of the merge
-//! list:
+//! The walk is 0.6.0's, read off the station graph instead of the merge list
+//! (plan Deviations X2):
 //!
 //! - **Entrances.** The frame datum's line roots the document; with no datum,
 //!   the first line in list order that is no other line's child (a line is a
@@ -17,7 +17,7 @@
 //!   id, then chain index); each line is walked once, outwards from the
 //!   station it was reached at: its shots after that station forward, the
 //!   ones before it reversed (`"<line> (reversed)"`, or `"(pre-zero-datum)"`
-//!   on an entrance), exactly the legacy blocks and row order.
+//!   on an entrance), exactly 0.6.0's blocks and row order.
 //! - **Ids.** A row's `ID` is the Station ID of the station it ends at and its
 //!   `FromID` that of the station it starts from, so a line hangs off its
 //!   parent's row for the junction with no alias and no placeholder pass, and
@@ -47,14 +47,18 @@ use super::{
 
 /// Export a station-graph project to Ariane TML (`.tml` = ZIP) or TMLU
 /// (`.tmlu` = plain XML). Returns the notes the user has to be told about
-/// this document (the azimuth compromises, unwritten GPS anchors), as the
-/// legacy [`super::export_tml`].
+/// this document (the azimuth compromises, unwritten GPS anchors). Notes,
+/// not warnings: nothing failed, but something about the file is not what
+/// the reader would assume, and the export command is the only moment the
+/// user is looking.
 pub fn export_tml(project: &Project, path: &Path) -> Result<Vec<String>> {
     export_with_profile(project, path, TmlProfile::User)
 }
 
-/// The SpeleoDB co-push sidecar of a station-graph project (the legacy
-/// [`super::export_tml_for_speleodb`]).
+/// The SpeleoDB co-push sidecar (#196) of a station-graph project: the same
+/// document, hardened for `openspeleo_lib`'s GeoJSON conversion (see
+/// `TmlProfile` and `harden_for_speleodb`). Its notes go to the log with the
+/// rest of the push: no user is watching it.
 pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
     export_with_profile(project, path, TmlProfile::SpeleoDbSidecar).map(|_| ())
 }
@@ -220,7 +224,7 @@ fn entrance_datums(project: &Project, topology: &Topology) -> HashMap<LineId, us
     by_line
 }
 
-/// The chain index each non-entrance line is entered at (the legacy parent
+/// The chain index each non-entrance line is entered at (0.6.0's parent
 /// map): a breadth-first walk over lines through their junctions from
 /// `root`, then from one root per remaining connected piece (a line holding a
 /// placement datum first, else the first in list order). A line with no
@@ -277,7 +281,7 @@ fn entry_stations(
     entries
 }
 
-/// A station's depth as its line reads it (the legacy `station_depth`).
+/// A station's depth as its line reads it (0.6.0's `station_depth`).
 fn station_depth(line: &Line, index: usize) -> f64 {
     match (line.shots.first(), line.shots.last()) {
         (Some(first), Some(last)) => {
@@ -406,8 +410,8 @@ fn shot_row(shot: &Shot, line: &str, color: &str, from: StationId, to: StationId
 }
 
 /// Fold each station comment into the one REAL / VIRTUAL row that ends at the
-/// station, and ZWSP-mark every shot comment (`comment_split`), as the legacy
-/// fold does. A station whose node is a START keeps no comment in the file.
+/// station, and ZWSP-mark every shot comment (`comment_split`), as 0.6.0's
+/// fold did. A station whose node is a START keeps no comment in the file.
 fn fold_station_comments(project: &Project, rows: &mut [ExportShot]) {
     let mut by_row: HashMap<i64, &str> = HashMap::new();
     for station in project.stations.values() {

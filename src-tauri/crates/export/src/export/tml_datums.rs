@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{local_to_gps, GpsCoordinates, LineId, Project, StationRef, ZeroDatum};
+use crate::models::{local_to_gps, GpsCoordinates};
 
 use super::{speleodb_anchor, ExportShot, TmlProfile};
 
@@ -62,7 +62,7 @@ pub(super) fn start_shot(
 
 /// A CLOSURE row: Ariane nodes `from_id` and `to_id` are one physical point
 /// surveyed twice, so its length IS the depth gap between the two (see the
-/// closure pass in `build_export_shots_with_report`).
+/// closure pass in `survey::build_rows`).
 ///
 /// `from` is the row of node `from_id`. The CLOSURE takes its depth and its
 /// date and people. A CLOSURE off a mid-line row re-imports as a branch
@@ -121,7 +121,7 @@ pub(super) struct DatumGps {
     fixes: Vec<(i64, usize)>,
 }
 
-/// The datums as the GPS pass reads them, whichever model they come from.
+/// The datums as the GPS pass reads them.
 pub(super) struct DatumNodes {
     /// Every datum's GPS, in the project's list order.
     pub(super) gps: Vec<GpsCoordinates>,
@@ -136,66 +136,8 @@ pub(super) struct DatumNodes {
 
 /// Stamp GPS on every START row, and work out which datums sit on ordinary
 /// rows instead. Datums claim Ariane nodes in list order, so a placement datum
-/// claims its node before any fix of the same component.
-pub(super) fn stamp_starts(
-    project: &Project,
-    frame: Option<&ZeroDatum>,
-    station_to_ariane: &HashMap<(LineId, u32), i64>,
-    shots: &mut [ExportShot],
-    profile: TmlProfile,
-) -> DatumGps {
-    let nodes = project
-        .zero_datums
-        .iter()
-        .map(|datum| {
-            project
-                .resolve_key(&datum.station_ref)
-                .and_then(|sr| station_to_ariane.get(&(sr.line_id, sr.station_index)))
-                .copied()
-        })
-        .collect();
-    let frame_index = frame.and_then(|frame| {
-        project
-            .zero_datums
-            .iter()
-            .position(|d| std::ptr::eq(d, frame))
-    });
-    // Where the raw survey puts the frame's own station. Local `(0, 0)` is
-    // meant to be there, but a legacy project need not hold that, so every
-    // surveyed START is measured from it rather than from the origin.
-    let frame_xy = frame
-        .and_then(|frame| project.resolve_key(&frame.station_ref))
-        .and_then(|sr| project.compute_station_raw_xy(sr));
-    let input = DatumNodes {
-        gps: project.zero_datums.iter().map(|d| d.gps).collect(),
-        nodes,
-        frame: frame_index,
-        frame_xy,
-    };
-    // The station each START stands on. A merged station aliases onto the
-    // START's id too; the lowest key keeps the choice deterministic, and merged
-    // stations share one raw position anyway.
-    let start_ids: HashSet<i64> = shots
-        .iter()
-        .filter(|s| s.shot_type == "START")
-        .map(|s| s.id)
-        .collect();
-    let mut start_station: HashMap<i64, (LineId, u32)> = HashMap::new();
-    for (&key, &id) in station_to_ariane {
-        if start_ids.contains(&id) {
-            let held = start_station.entry(id).or_insert(key);
-            *held = (*held).min(key);
-        }
-    }
-    let start_xy = |start: i64| {
-        let &(line_id, station) = start_station.get(&start)?;
-        project.compute_station_raw_xy(StationRef::new(line_id, station))
-    };
-    stamp_starts_at(input, start_xy, shots, profile)
-}
-
-/// The GPS pass on any model: `start_xy` is the raw position of the station a
-/// START (by id) stands on.
+/// claims its node before any fix of the same component. `start_xy` is the
+/// raw position of the station a START (by id) stands on.
 pub(super) fn stamp_starts_at(
     input: DatumNodes,
     start_xy: impl Fn(i64) -> Option<(f64, f64)>,
