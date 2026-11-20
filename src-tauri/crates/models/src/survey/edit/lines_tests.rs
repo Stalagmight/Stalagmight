@@ -235,3 +235,47 @@ fn reordering_lines_moves_nothing_and_needs_every_line_once() {
     let text = refused(p.reorder_lines(&[a, a, b]));
     assert_eq!(text, "The new line order must name every line exactly once");
 }
+
+/// A `Tie` the migration demoted from a 0.6.0 merge cycle, on the junction
+/// a deleted line leaves, goes with the line, as 0.6.0's Delete Line dropped
+/// the merge (review finding A-model-edits-1). Kept, the orphan sweep promoted
+/// it as the only bridge and moved all of A by the 42 m legacy misclosure.
+#[test]
+fn delete_line_takes_a_member_tie_on_the_junction_it_leaves() {
+    // A east 0..4 from the origin; B north from A:2 (J), three shots; C east
+    // from B:3, three shots; a `Tie` from J (via B) to C:3 (via C).
+    let mut p = empty();
+    let a = line(&mut p, "A", run("a", 90.0, 10.0, 4));
+    let j = st(&p, a, 2);
+    let b = line_from(&mut p, "B", j, run("b", 0.0, 10.0, 3));
+    let b3 = st(&p, b, 3);
+    let c = line_from(&mut p, "C", b3, run("c", 90.0, 10.0, 3));
+    let c3 = st(&p, c, 3);
+    let tie = p.push_closure(j, Some(b), c3, Some(c), ClosureStrategy::Tie);
+    assert_valid(&p);
+    let before = p.raw_positions();
+
+    let edited = p.delete_line(b).unwrap();
+    assert_eq!(
+        edited
+            .value
+            .closures_removed
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        [tie],
+        "the demoted merge leaves with the line"
+    );
+    assert!(
+        edited.report.sweep.promoted.is_empty(),
+        "nothing is promoted: {:?}",
+        edited.report.sweep.promoted
+    );
+    assert!(p.closures.is_empty());
+    let after = p.raw_positions();
+    for i in 0..=4 {
+        let s = st(&p, a, i);
+        near(xy(&after, s), xy(&before, s), 1e-9, "A stays where it was");
+    }
+    assert_valid(&p);
+}

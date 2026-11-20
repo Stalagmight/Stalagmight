@@ -25,7 +25,9 @@ use crate::{
     SurveyCredit, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 
-use super::super::{EditContext, Line, LineMeta, LoopClosure, Project, StartAt, ZeroDatum};
+use super::super::{
+    ClosureStrategy, EditContext, Line, LineMeta, LoopClosure, Project, StartAt, ZeroDatum,
+};
 use super::shots::{max_shots_per_line, stored_credit};
 use super::{EditError, Edited, Epilogue};
 
@@ -170,9 +172,33 @@ impl Project {
     pub fn delete_line(&mut self, line: LineId) -> Result<Edited<DeletedLine>, EditError> {
         let position = self.line_position(line).ok_or_else(EditError::line_gone)?;
         self.apply_edit(|p| {
+            let chain: Vec<StationId> = p.lines()[position].stations().collect();
+            let layout = p.member_tie_layout(line, &chain);
             let removed = p.lines_mut().remove(position);
-            let chain: Vec<StationId> = removed.stations().collect();
-            let gone = p.delete_stations_off_lines(&chain);
+            let mut gone = p.delete_stations_off_lines(&chain);
+            // The junctions the line leaves follow the member rules of Delete
+            // Shot (`edit/junction_leave.rs`): a `Tie` the migration demoted
+            // from a 0.6.0 merge, and a closure doubled from the junction's
+            // replacement member, leave with the line, as 0.6.0's
+            // `cleanup_line_references` dropped the merge and its re-stitch
+            // refused a pair that was not co-located. Kept, the orphan sweep
+            // promoted such a `Tie` and moved a whole piece by the legacy
+            // misclosure (review finding A-model-edits-1). The ends of a kept
+            // re-stitched `Tie` move nothing; every other closure keeps
+            // 0.6.0's plain list-order sweep (Delete Line never re-anchored
+            // closures onto a junction's side).
+            let left = p.leave_junctions(line, &chain, layout.as_ref());
+            let tie_ends: Vec<_> = left
+                .moving_ends
+                .iter()
+                .copied()
+                .filter(|(id, _)| {
+                    p.closures
+                        .iter()
+                        .any(|c| c.id == *id && c.strategy == ClosureStrategy::Tie)
+                })
+                .collect();
+            gone.closures.extend(left.removed.iter().copied());
             let deleted = DeletedLine {
                 line: removed,
                 position,
@@ -184,6 +210,7 @@ impl Project {
             let epilogue = Epilogue {
                 ctx: EditContext::none(),
                 sweep: true,
+                moving_ends: tie_ends,
                 ..Epilogue::default()
             };
             Ok((deleted, epilogue))
