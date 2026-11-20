@@ -1,105 +1,58 @@
 //! A stale SQLite sidecar beside a cached copy never reaches the copy installed
 //! over it, on any install path, and a hot journal is never thrown away unasked.
 //!
-//! All data is synthetic: every database is built here, and a "crash" is a copy
-//! of a live database and its journal taken mid-transaction.
+//! A cache copy written by an older build is a SQLite file, and a kill or a
+//! power loss mid-save can leave its journal (or a WAL) beside it. Every
+//! install now writes a version 2 file, which this build never mixes with a
+//! journal, but an older build opening it would: so the outgoing copy's
+//! sidecars are set aside before the write and deleted once the new file holds
+//! the name, and put back if it never does.
+//!
+//! All data is synthetic: the "legacy copy" is a file with the SQLite magic and
+//! its sidecars are files with the right names (an ARMED journal carries the
+//! journal magic). No SQLite database is built here.
 
 use std::path::{Path, PathBuf};
 
 use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
+use super::speleodb_reload::install_cache_bytes;
 use super::speleodb_sidecars::{has_hot_journal, sidecar_path, SetAsideSidecars};
+use super::stalx_v2_fixtures::{decoded, fixture_link, name_at, seed_linked, FIXTURE_ID};
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::persistence::stalx_v2::{temp_path, DecodeOptions};
 use crate::speleodb::SpeleoDbError;
 
-const ID: &str = "11111111-1111-1111-1111-111111111111";
+const ID: &str = FIXTURE_ID;
 const SERVER_NAME: &str = "Server copy";
 const LOCAL_NAME: &str = "Committed local work";
 
-fn link(dirty: bool) -> SpeleoLink {
-    SpeleoLink {
-        endpoint: "https://example.com".into(),
-        project_id: ID.into(),
-        project_name: "Remote project".into(),
-        base_commit_sha: Some("abc1234".into()),
-        has_unpushed_edits: dirty,
-        last_edit_at: dirty.then(|| "2026-01-01T00:00:00Z".into()),
-        last_verify_at: None,
-        undo_mode: None,
-    }
-}
+/// The first bytes of an armed rollback journal (SQLite's `aJournalMagic`).
+const ARMED: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
 
-/// A linked project with enough undo rows that a transaction touching them
-/// spills pages into the database file.
-fn seed_local(path: &Path, dirty: bool) {
-    let mut db = Database::open(path).expect("local");
-    db.save_project(&Project::new(LOCAL_NAME.into(), None))
-        .expect("project");
-    db.save_speleo_link(Some(&link(dirty))).expect("link");
-    db.save_undo_stack(
-        (0..400)
-            .map(|i| {
-                (
-                    format!(r#"{{"c":{i},"p":"{}"}}"#, "x".repeat(2000)),
-                    "{}".to_owned(),
-                )
-            })
-            .collect(),
-    )
-    .expect("undo rows");
-}
-
-/// The cache copy at `<dir>/cache/project.stalx` exactly as a kill mid-save
-/// leaves it: the database file with an unfinished transaction's pages already
-/// written into it, and the HOT journal that holds what they overwrote. The
-/// COMMITTED state (what a read-write open recovers) is `LOCAL_NAME` with the
-/// given dirty bit.
-fn crashed_copy(dir: &Path, dirty: bool) -> PathBuf {
-    let live = dir.join("live").join("project.stalx");
-    std::fs::create_dir_all(live.parent().expect("parent")).expect("live dir");
-    seed_local(&live, dirty);
+/// The cache copy at `<dir>/cache/project.stalx` as a kill mid-save left an
+/// older build's copy: a SQLite file and the HOT journal beside it.
+fn crashed_legacy_copy(dir: &Path) -> PathBuf {
     let dest = dir.join("cache").join("project.stalx");
     std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
-    let conn = rusqlite::Connection::open(&live).expect("live connection");
-    // A one-page cache forces the spill that arms the journal and writes the
-    // uncommitted pages into the database file.
-    conn.execute_batch(
-        "PRAGMA cache_size = 1; BEGIN IMMEDIATE; \
-         UPDATE project SET name = 'Torn write'; DELETE FROM undo_stack;",
-    )
-    .expect("open a spilling write transaction");
-    std::fs::copy(&live, &dest).expect("copy the database mid-transaction");
-    std::fs::copy(
-        sidecar_path(&live, "-journal"),
-        sidecar_path(&dest, "-journal"),
-    )
-    .expect("copy its live journal");
-    conn.execute_batch("ROLLBACK;")
-        .expect("roll the original back");
-    assert!(
-        has_hot_journal(&dest),
-        "precondition: the copied journal is armed, so the copy is a real crash"
-    );
+    let mut bytes = b"SQLite format 3\0".to_vec();
+    bytes.extend_from_slice(LOCAL_NAME.as_bytes());
+    std::fs::write(&dest, bytes).expect("legacy copy");
+    let mut journal = ARMED.to_vec();
+    journal.extend_from_slice(&[0u8; 504]);
+    std::fs::write(sidecar_path(&dest, "-journal"), journal).expect("hot journal");
+    assert!(has_hot_journal(&dest), "precondition: the journal is armed");
     dest
 }
 
-/// A native download at `<dir>/<name>` whose project is `SERVER_NAME`.
+/// A version 2 download at `<dir>/<name>` whose project is `SERVER_NAME`.
 fn server_copy(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
-    let mut db = Database::open(&path).expect("server");
-    db.save_project(&Project::new(SERVER_NAME.into(), None))
-        .expect("project");
-    db.save_speleo_link(Some(&link(false))).expect("link");
+    seed_linked(
+        &path,
+        SERVER_NAME,
+        &fixture_link("https://example.com", false),
+    );
     path
-}
-
-/// `PRAGMA integrity_check` through a READ-WRITE connection: the open that
-/// would replay any journal sitting beside the file.
-fn integrity(path: &Path) -> String {
-    rusqlite::Connection::open(path)
-        .and_then(|conn| conn.query_row("PRAGMA integrity_check", [], |row| row.get(0)))
-        .unwrap_or_else(|e| format!("could not check: {e}"))
 }
 
 /// Every name beside `dest` that is a sidecar of it, or a parked sidecar.
@@ -124,100 +77,86 @@ fn leftovers(dest: &Path) -> Vec<String> {
     names
 }
 
-/// After an install: no sidecar of the old file survived, the installed copy
-/// is sound when opened read-write, and it is the server's copy byte for byte.
-fn assert_installed_exactly(dest: &Path, server_bytes: &[u8], label: &str) {
+/// After an install: no sidecar of the old file survived, and the installed
+/// copy is the server's survey in a valid version 2 file.
+fn assert_installed_exactly(dest: &Path, label: &str) {
     assert_eq!(
         leftovers(dest),
         Vec::<String>::new(),
         "{label}: sidecars left"
     );
-    assert_eq!(integrity(dest), "ok", "{label}: installed copy is corrupt");
-    let installed = Database::open_existing(dest).expect("installed copy opens");
     assert_eq!(
-        installed.load_project().expect("project").name,
+        name_at(dest),
         SERVER_NAME,
-        "{label}: the old file's pages were mixed into the installed copy"
+        "{label}: the installed copy is the server's"
     );
-    drop(installed);
-    assert_eq!(
-        std::fs::read(dest).expect("installed bytes"),
-        server_bytes,
-        "{label}: the installed copy is not the server's bytes"
+    assert!(
+        decoded(dest).extras.speleodb.is_some(),
+        "{label}: and it is linked"
     );
 }
 
-/// The hazard itself, so the tests below cannot pass vacuously: rename a fresh
-/// file over a crashed copy WITHOUT touching its journal, and the next
-/// read-write open rolls the old file's pages into the new one.
-#[test]
-fn control_a_bare_rename_over_a_crashed_copy_replays_its_journal() {
-    let dir = tempfile::tempdir().expect("temp");
-    let dest = crashed_copy(dir.path(), false);
-    let server = server_copy(dest.parent().expect("cache dir"), "download.tmp");
-    std::fs::rename(&server, &dest).expect("bare rename");
-    let sound = integrity(&dest) == "ok"
-        && Database::open_existing(&dest)
-            .and_then(|db| db.load_project())
-            .is_ok_and(|project| project.name == SERVER_NAME);
-    assert!(
-        !sound,
-        "a stale journal beside a renamed-in file must replay into it, or this \
-         suite proves nothing"
-    );
+fn install(
+    state: &AppState,
+    source: &Path,
+    dest: &Path,
+    policy: LocalEditsPolicy,
+) -> Result<(), SpeleoDbError> {
+    let generation = state.reserve_download_generation();
+    let prepared = state.prepare_download(
+        source,
+        fixture_link("https://example.com", false),
+        InheritedUndo::Drop,
+        &DecodeOptions::default(),
+    )?;
+    state.replace_cache_for_session(prepared, dest, ID, policy, generation)
 }
 
 /// Bug: a cache install renamed the download over the cache file and left the
-/// crashed copy's journal beside it, so the next open replayed the old pages
-/// into the server copy. Under the confirmed discard every install path sets
-/// the journal aside first and deletes it after.
+/// crashed copy's journal beside it, so the next open (by an older build, now)
+/// replayed the old pages into the new file. Under the confirmed discard every
+/// install path sets the journal aside first and deletes it after.
 #[test]
-fn a_discarding_install_never_replays_a_stale_journal_on_any_path() {
+fn a_discarding_install_never_leaves_a_stale_journal_on_any_path() {
     crate::test_helpers::with_isolated_config(|| {
         for path in ["session-bound", "prepared"] {
             let dir = tempfile::tempdir().expect("temp");
-            let dest = crashed_copy(dir.path(), true);
+            let dest = crashed_legacy_copy(dir.path());
             let source = server_copy(dir.path(), "download.stalx");
-            let server_bytes = std::fs::read(&source).expect("server bytes");
             let state = AppState::new().expect("state");
             if path == "session-bound" {
-                let generation = state.reserve_download_generation();
-                state
-                    .replace_cache_for_session(
-                        &source,
-                        &dest,
-                        ID,
-                        LocalEditsPolicy::Discard,
-                        InheritedUndo::Keep,
-                        generation,
-                    )
+                install(&state, &source, &dest, LocalEditsPolicy::Discard)
                     .expect("session-bound install");
             } else {
-                // The fast-forward / revision-swap chokepoint: a prepared file
-                // staged beside the cache copy, renamed over it.
-                let staged = dest.with_file_name("staged.tmp");
-                std::fs::copy(&source, &staged).expect("stage");
-                let prepared = Database::open_existing(&staged).expect("prepared");
-                drop(
-                    state
-                        .install_prepared_database(&staged, &dest, prepared, None)
-                        .expect("prepared install"),
-                );
+                // The fast-forward / revision-swap chokepoint writes through the
+                // same install as the prepared reload.
+                let mut prepared = state
+                    .prepare_download(
+                        &source,
+                        fixture_link("https://example.com", false),
+                        InheritedUndo::Drop,
+                        &DecodeOptions::default(),
+                    )
+                    .expect("prepare");
+                let bytes = prepared
+                    .cache_bytes(std::collections::BTreeMap::new())
+                    .expect("bytes");
+                install_cache_bytes(&dest, &bytes).expect("prepared install");
             }
-            assert_installed_exactly(&dest, &server_bytes, path);
+            assert_installed_exactly(&dest, path);
         }
     });
 }
 
 /// Policy: a hot journal is part of the copy's committed state, so under
 /// `Protect` it makes that state UNKNOWN - every protected install refuses with
-/// the same typed signal an unreadable copy gets, even when the committed dirty
-/// bit says clean, and leaves the copy and its journal exactly as they were.
+/// the same typed signal an unreadable copy gets, and leaves the copy and its
+/// journal exactly as they were.
 #[test]
 fn a_hot_journal_refuses_every_protected_install_and_survives_it() {
     crate::test_helpers::with_isolated_config(|| {
         let dir = tempfile::tempdir().expect("temp");
-        let dest = crashed_copy(dir.path(), false);
+        let dest = crashed_legacy_copy(dir.path());
         let journal = sidecar_path(&dest, "-journal");
         let before = (
             std::fs::read(&dest).expect("copy"),
@@ -226,20 +165,10 @@ fn a_hot_journal_refuses_every_protected_install_and_survives_it() {
         let source = server_copy(dir.path(), "download.stalx");
         let state = AppState::new().expect("state");
 
-        let generation = state.reserve_download_generation();
         let refusals = [
             (
                 "session-bound",
-                state
-                    .replace_cache_for_session(
-                        &source,
-                        &dest,
-                        ID,
-                        LocalEditsPolicy::Protect,
-                        InheritedUndo::Drop,
-                        generation,
-                    )
-                    .map(drop),
+                install(&state, &source, &dest, LocalEditsPolicy::Protect),
             ),
             // The guard the fast-forward and the revision swap run before their
             // prepared install.
@@ -265,11 +194,6 @@ fn a_hot_journal_refuses_every_protected_install_and_survives_it() {
                 "{path}: a refusal must leave the copy AND its journal untouched"
             );
         }
-
-        // ...and what was kept is the user's work: a read-write open recovers it.
-        assert_eq!(integrity(&dest), "ok");
-        let recovered = Database::open_existing(&dest).expect("recovered copy");
-        assert_eq!(recovered.load_project().expect("project").name, LOCAL_NAME);
     });
 }
 
@@ -280,78 +204,37 @@ fn inert_sidecars_do_not_block_a_protected_install_and_do_not_survive_it() {
     crate::test_helpers::with_isolated_config(|| {
         let dir = tempfile::tempdir().expect("temp");
         let dest = dir.path().join("cache").join("project.stalx");
-        std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
-        seed_local(&dest, false);
+        seed_linked(
+            &dest,
+            LOCAL_NAME,
+            &fixture_link("https://example.com", false),
+        );
         std::fs::write(sidecar_path(&dest, "-journal"), [0u8; 512]).expect("unarmed journal");
         std::fs::write(sidecar_path(&dest, "-shm"), vec![0; 32768]).expect("lone shm");
         assert!(!has_hot_journal(&dest), "precondition: nothing is armed");
         let source = server_copy(dir.path(), "download.stalx");
-        let server_bytes = std::fs::read(&source).expect("server bytes");
         let state = AppState::new().expect("state");
-        let generation = state.reserve_download_generation();
-        state
-            .replace_cache_for_session(
-                &source,
-                &dest,
-                ID,
-                LocalEditsPolicy::Protect,
-                InheritedUndo::Keep,
-                generation,
-            )
+        install(&state, &source, &dest, LocalEditsPolicy::Protect)
             .expect("a clean copy with inert sidecars installs");
-        assert_installed_exactly(&dest, &server_bytes, "inert");
+        assert_installed_exactly(&dest, "inert");
     });
 }
 
-/// The cache copy at `<dir>/cache/project.stalx` as a kill leaves a WAL-mode
-/// database: COMMITTED frames still in its `-wal`, never checkpointed.
-fn crashed_wal_copy(dir: &Path) -> PathBuf {
-    let live = dir.join("live").join("project.stalx");
-    std::fs::create_dir_all(live.parent().expect("parent")).expect("live dir");
-    seed_local(&live, true);
-    let dest = dir.join("cache").join("project.stalx");
-    std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
-    let conn = rusqlite::Connection::open(&live).expect("live connection");
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .expect("wal");
-    conn.pragma_update(None, "wal_autocheckpoint", 0)
-        .expect("no checkpoint");
-    conn.execute("UPDATE project SET name = 'Committed in the WAL'", [])
-        .expect("commit into the WAL");
-    std::fs::copy(&live, &dest).expect("copy the database");
-    std::fs::copy(sidecar_path(&live, "-wal"), sidecar_path(&dest, "-wal")).expect("copy its WAL");
-    dest
-}
-
 /// A WAL can carry COMMITTED frames, and SQLite applies them to whatever file
-/// now bears the name. A download must not inherit the old copy's frames,
-/// whichever journal mode the download itself is in.
+/// now bears the name. A download never inherits the old copy's WAL.
 #[test]
-fn a_stale_wal_is_not_replayed_into_the_installed_copy() {
+fn a_stale_wal_is_not_left_beside_the_installed_copy() {
     crate::test_helpers::with_isolated_config(|| {
-        for mode in ["DELETE", "WAL"] {
-            let dir = tempfile::tempdir().expect("temp");
-            let dest = crashed_wal_copy(dir.path());
-            let source = server_copy(dir.path(), "download.stalx");
-            rusqlite::Connection::open(&source)
-                .expect("server connection")
-                .pragma_update(None, "journal_mode", mode)
-                .expect("server journal mode");
-            let server_bytes = std::fs::read(&source).expect("server bytes");
-            let state = AppState::new().expect("state");
-            let generation = state.reserve_download_generation();
-            state
-                .replace_cache_for_session(
-                    &source,
-                    &dest,
-                    ID,
-                    LocalEditsPolicy::Discard,
-                    InheritedUndo::Keep,
-                    generation,
-                )
-                .unwrap_or_else(|e| panic!("{mode}: install failed: {e}"));
-            assert_installed_exactly(&dest, &server_bytes, mode);
-        }
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("cache").join("project.stalx");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
+        std::fs::write(&dest, b"SQLite format 3\0legacy").expect("legacy copy");
+        std::fs::write(sidecar_path(&dest, "-wal"), b"committed frames").expect("wal");
+        std::fs::write(sidecar_path(&dest, "-shm"), [0u8; 64]).expect("shm");
+        let source = server_copy(dir.path(), "download.stalx");
+        let state = AppState::new().expect("state");
+        install(&state, &source, &dest, LocalEditsPolicy::Discard).expect("install");
+        assert_installed_exactly(&dest, "wal");
     });
 }
 
@@ -361,23 +244,19 @@ fn a_stale_wal_is_not_replayed_into_the_installed_copy() {
 fn a_failed_install_puts_the_journal_back_beside_the_original() {
     crate::test_helpers::with_isolated_config(|| {
         let dir = tempfile::tempdir().expect("temp");
-        let dest = crashed_copy(dir.path(), true);
+        let dest = crashed_legacy_copy(dir.path());
         let journal = sidecar_path(&dest, "-journal");
         let before = (
             std::fs::read(&dest).expect("copy"),
             std::fs::read(&journal).expect("journal"),
         );
-        // Prepared, then broken after the fact: the rename succeeds and the
-        // reopen of the installed file fails, which is the path that has to put
-        // the original back.
-        let staged = dest.with_file_name("staged.tmp");
-        std::fs::copy(server_copy(dir.path(), "download.stalx"), &staged).expect("stage");
-        let prepared = Database::open_existing(&staged).expect("prepared");
-        std::fs::write(&staged, b"not a database").expect("break the staged file");
+        // The write is refused after the sidecars moved: a directory holds the
+        // name of the install's temp.
+        std::fs::create_dir(temp_path(&dest)).expect("block the temp");
+        std::fs::write(temp_path(&dest).join("keep"), b"x").expect("non-empty");
+        let source = server_copy(dir.path(), "download.stalx");
         let state = AppState::new().expect("state");
-        assert!(state
-            .install_prepared_database(&staged, &dest, prepared, None)
-            .is_err());
+        assert!(install(&state, &source, &dest, LocalEditsPolicy::Discard).is_err());
         assert_eq!(
             (
                 std::fs::read(&dest).expect("copy"),
@@ -386,16 +265,13 @@ fn a_failed_install_puts_the_journal_back_beside_the_original() {
             before,
             "the original bytes and their journal are back"
         );
-        assert_eq!(leftovers(&dest), vec!["project.stalx-journal".to_owned()]);
-        let recovered = Database::open_existing(&dest).expect("still recoverable");
-        assert_eq!(recovered.load_project().expect("project").name, LOCAL_NAME);
-        assert!(
-            recovered
-                .load_speleo_link()
-                .expect("link")
-                .expect("linked")
-                .has_unpushed_edits,
-            "the un-pushed work the journal protected is still there"
+        assert_eq!(
+            leftovers(&dest),
+            vec![
+                "project.stalx-journal".to_owned(),
+                "project.stalx.tmp".to_owned()
+            ],
+            "only the journal (and the obstacle this test planted) remain"
         );
     });
 }
@@ -410,7 +286,7 @@ fn hot_journal_detection_follows_the_journal_header() {
     assert!(!has_hot_journal(&db), "empty journal");
     std::fs::write(&journal, [0u8; 512]).expect("zero header");
     assert!(!has_hot_journal(&db), "a header SQLite never armed");
-    let mut armed = vec![0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+    let mut armed = ARMED.to_vec();
     armed.extend_from_slice(&[0u8; 504]);
     std::fs::write(&journal, &armed).expect("armed");
     assert!(has_hot_journal(&db), "armed journal");
