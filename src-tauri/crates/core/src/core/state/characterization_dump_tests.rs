@@ -495,9 +495,10 @@ fn query_closures(project: &Project, wire: &Value) -> Value {
     })
 }
 
-fn query_warnings(state: &AppState, project: &Project) -> Value {
+/// `get_project_warnings` (`open_project_warnings`) and the integrity check.
+fn query_warnings(state: &AppState) -> Value {
     json!({
-        "warnings": to_value(&state.compute_project_warnings(project)),
+        "warnings": to_value(&state.open_project_warnings()),
         "integrity": to_value(&state.integrity_check()),
     })
 }
@@ -539,7 +540,7 @@ fn snapshot(state: &AppState) -> Snapshot {
         adjusted: query_adjusted(state),
         closures: query_closures(&project, &wire),
         project: wire,
-        warnings: query_warnings(state, &project),
+        warnings: query_warnings(state),
     }
 }
 
