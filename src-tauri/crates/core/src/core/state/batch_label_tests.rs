@@ -22,7 +22,7 @@ use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates,
     ImportLineConfig, ImportPlacement, LineId, LineUpdates, ShotData, ShotKind, ShotUpdates,
-    SplitAt, SplitLineOptions, SplitSide, StationRef,
+    SplitAt, SplitLineOptions, StationRef,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -206,8 +206,6 @@ fn split_options() -> SplitLineOptions {
         name_b: "Main Line B".to_string(),
         color_a: "#ff0000".to_string(),
         color_b: "#00ff00".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 

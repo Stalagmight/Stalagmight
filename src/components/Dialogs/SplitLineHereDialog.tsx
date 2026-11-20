@@ -98,9 +98,7 @@ export default function SplitLineHereDialog() {
         color_a: colorA,
         color_b: colorB,
         // The halves share the split station, so its comment and datum stay
-        // on it: the sides are not a choice any more (the wire keeps them).
-        comment_side: 'a',
-        datum_side: 'a',
+        // on it: there is no side to choose (S9).
       });
       if (!result.success) {
         setError(result.error ?? 'Failed to split line');

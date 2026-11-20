@@ -1034,8 +1034,6 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
                     color_b: "#222222".to_string(),
-                    comment_side: crate::models::SplitSide::A,
-                    datum_side: crate::models::SplitSide::A,
                 },
             ),
         );

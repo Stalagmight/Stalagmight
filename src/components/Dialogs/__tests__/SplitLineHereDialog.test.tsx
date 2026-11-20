@@ -157,8 +157,6 @@ describe('SplitLineHereDialog', () => {
       name_b: 'Main B',
       color_a: '#123456',
       color_b: LINE_COLORS[0],
-      comment_side: 'a',
-      datum_side: 'a',
     });
     expect(clearSelection).toHaveBeenCalled();
   });
@@ -183,7 +181,13 @@ describe('SplitLineHereDialog', () => {
     expect(screen.queryByTestId('split-here-datum-side')).toBeNull();
     fireEvent.click(screen.getByTestId('split-here-confirm'));
     await waitFor(() => expect(splitLine).toHaveBeenCalled());
-    expect(splitLine.mock.calls[0]?.[2]).toMatchObject({ comment_side: 'a', datum_side: 'a' });
+    // Nothing to send either: the options carry the names and colours only.
+    expect(Object.keys(splitLine.mock.calls[0]?.[2] ?? {}).sort()).toEqual([
+      'color_a',
+      'color_b',
+      'name_a',
+      'name_b',
+    ]);
   });
 
   it('refuses to split in a read-only view', () => {

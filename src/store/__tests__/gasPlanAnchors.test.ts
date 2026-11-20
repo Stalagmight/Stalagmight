@@ -507,8 +507,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
       name_b: 'B',
       color_a: '#111111',
       color_b: '#222222',
-      comment_side: 'a' as const,
-      datum_side: 'a' as const,
     };
     const combine = {
       name: 'K',

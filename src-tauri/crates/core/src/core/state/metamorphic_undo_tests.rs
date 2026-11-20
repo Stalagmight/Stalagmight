@@ -80,8 +80,7 @@ use crate::models::survey::changeset::testkit::Rng;
 use crate::models::survey::Project;
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId, Person,
-    ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationId, StationRef,
-    SurveyCredit,
+    ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions, StationId, StationRef, SurveyCredit,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -1392,8 +1391,6 @@ fn split_options(name: &str, second: &str, color: &str) -> SplitLineOptions {
         name_b: second.to_string(),
         color_a: color.to_string(),
         color_b: color.to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 
@@ -1409,16 +1406,15 @@ fn combine_options(name: &str, color: &str, swap_lr: bool) -> CombineLinesOption
 }
 
 /// Split Line Here at a random mid-line station, then undo it, against
-/// doing nothing; every comment side is drawn.
+/// doing nothing.
 fn pair_split_line_then_undo_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
     let line_id = line_with_shots(&twins.left, rng, 2)?;
     let shot_count = shot_ids(&twins.left, line_id).len();
     let station_index = 1 + rng.below(shot_count - 1) as u32;
-    let side = |n: usize| match n {
-        0 => SplitSide::A,
-        1 => SplitSide::B,
-        _ => SplitSide::Both,
-    };
+    // The comment and datum sides the dialog sent were drawn here; they have
+    // left the wire (S9), and the draws stay so every seed draws what it drew.
+    rng.below(3);
+    rng.below(2);
     let split = twins.right.execute_split_line(
         line_id,
         SplitAt::Station { station_index },
@@ -1427,8 +1423,6 @@ fn pair_split_line_then_undo_is_identity(twins: &Twins, rng: &mut Rng) -> Option
             name_b: "split-b".to_string(),
             color_a: "#111111".to_string(),
             color_b: "#222222".to_string(),
-            comment_side: side(rng.below(3)),
-            datum_side: side(rng.below(2)),
         },
     );
     if !split.success {

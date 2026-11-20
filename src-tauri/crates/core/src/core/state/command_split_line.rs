@@ -6,10 +6,10 @@
 //!
 //! Declared change (plan 12.2, S9): the split station is no longer duplicated
 //! into two co-located unmerged stations, so it has one name, one comment and
-//! one set of datums, and the dialog's comment and datum sides choose nothing
-//! (`SplitLineOptions::comment_side` / `datum_side` are ignored; a datum "on
-//! both halves" is no longer refused, it IS on both). Nothing moves and no
-//! loop closure becomes a merge, so the preview always reports none.
+//! one set of datums, and the dialog has no comment or datum side to choose
+//! (`SplitLineOptions` carries the names and colours only; a datum "on both
+//! halves" is no longer refused, it IS on both). Nothing moves and no loop
+//! closure becomes a merge, so the preview always reports none.
 //!
 //! The model ([`crate::models::survey::Project::split_line`]) decides every
 //! refusal in 0.6.0's order and wording except one it leaves to the command

@@ -25,7 +25,7 @@ use crate::core::{Command, CommandResult};
 use crate::models::survey::{LineMeta, Project, SplitOptions, StartAt};
 use crate::models::{
     CombineJoinEnds, CombineLinesOptions, CombinePick, CombineRenameReason, Coordinates, LineEnd,
-    LineId, LineUpdates, ShotData, SplitAt, SplitLineOptions, SplitSide, StationRef, LINE_GONE,
+    LineId, LineUpdates, ShotData, SplitAt, SplitLineOptions, StationRef, LINE_GONE,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -130,8 +130,6 @@ fn split_options(name_a: &str, name_b: &str) -> SplitLineOptions {
         name_b: name_b.to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 

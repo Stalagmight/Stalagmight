@@ -92,7 +92,7 @@ use crate::models::survey::Project;
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CreditEdit, CreditTargets,
     GpsCoordinates, LineId, LineUpdates, Person, ShotData, ShotId, ShotUpdates, SplitAt,
-    SplitLineOptions, SplitSide, Station, StationRef, SurveyCredit, SurveyDirection,
+    SplitLineOptions, Station, StationRef, SurveyCredit, SurveyDirection,
 };
 
 // ---------------------------------------------------------------------------
@@ -163,19 +163,12 @@ fn gps_at(east_m: f64, north_m: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).expect("valid synthetic gps")
 }
 
-fn split_options(
-    name_a: &str,
-    name_b: &str,
-    comment: SplitSide,
-    datum: SplitSide,
-) -> SplitLineOptions {
+fn split_options(name_a: &str, name_b: &str) -> SplitLineOptions {
     SplitLineOptions {
         name_a: name_a.to_string(),
         name_b: name_b.to_string(),
         color_a: "#aa3300".to_string(),
         color_b: "#0033aa".to_string(),
-        comment_side: comment,
-        datum_side: datum,
     }
 }
 
@@ -1543,7 +1536,7 @@ fn split_line_here(s: &mut Script) {
             closure_strategy: ClosureStrategy::Batch,
         },
     );
-    let options = split_options("Main A", "Main B", SplitSide::Both, SplitSide::A);
+    let options = split_options("Main A", "Main B");
     let cut = SplitAt::Station { station_index: 2 };
     s.preview(
         "preview-split-at-station",
@@ -1557,7 +1550,7 @@ fn split_line_here(s: &mut Script) {
         shot_id: s.shot(second, 1),
         distance: 4.0,
     };
-    let options = split_options("Main B1", "Main B2", SplitSide::B, SplitSide::B);
+    let options = split_options("Main B1", "Main B2");
     s.preview(
         "preview-split-along-shot",
         &Preview::SplitLine(second, cut, options.clone()),
@@ -1643,7 +1636,7 @@ fn combine_side_by_side(s: &mut Script) {
         state.execute_split_line(
             whole,
             SplitAt::Station { station_index: 2 },
-            split_options("Whole A", "Whole B", SplitSide::A, SplitSide::A),
+            split_options("Whole A", "Whole B"),
         )
     });
     let (a, b) = (s.line_named("Whole A"), s.line_named("Whole B"));

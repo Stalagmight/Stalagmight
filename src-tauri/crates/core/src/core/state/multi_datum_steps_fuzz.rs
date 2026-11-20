@@ -18,8 +18,7 @@ use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
     local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick, Coordinates,
-    GpsCoordinates, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions, SplitSide, StationId,
-    StationRef,
+    GpsCoordinates, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions, StationId, StationRef,
 };
 
 /// Accuracies a datum is given: the default (a hard pin), an explicit hard
@@ -707,8 +706,6 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
                 name_b: format!("S{line}b"),
                 color_a: "#123456".to_string(),
                 color_b: "#654321".to_string(),
-                comment_side: SplitSide::A,
-                datum_side: SplitSide::A,
             },
         ),
         Op::Combine {

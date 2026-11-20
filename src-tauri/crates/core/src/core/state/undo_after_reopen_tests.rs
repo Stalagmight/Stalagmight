@@ -35,7 +35,7 @@ use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
     ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick, LineEnd, LineId, ShotData,
-    SplitAt, SplitLineOptions, SplitSide, StationRef,
+    SplitAt, SplitLineOptions, StationRef,
 };
 use crate::persistence::stalx_v2::{self, DecodeOptions, Extras, History, Mode, RawJson};
 
@@ -177,8 +177,6 @@ fn split_options() -> SplitLineOptions {
         name_b: "Main-B".to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 

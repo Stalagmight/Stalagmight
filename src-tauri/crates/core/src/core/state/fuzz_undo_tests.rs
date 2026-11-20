@@ -773,6 +773,9 @@ pub(super) enum Op {
         shot: ShotRefT,
         along: bool,
         distance: f64,
+        /// The comment and datum sides the dialog sent, which have left the
+        /// wire (S9). Still drawn and printed, so every seed draws and labels
+        /// what it did.
         side: u8,
         names: u32,
     },
@@ -3320,7 +3323,7 @@ impl Fuzzer {
                 shot,
                 along,
                 distance,
-                side,
+                side: _,
                 names,
             } => {
                 let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
@@ -3340,18 +3343,11 @@ impl Fuzzer {
                         station_index: position as u32 + 1,
                     }
                 };
-                let pick = |n: u8| match n {
-                    0 => crate::models::SplitSide::A,
-                    1 => crate::models::SplitSide::B,
-                    _ => crate::models::SplitSide::Both,
-                };
                 let options = crate::models::SplitLineOptions {
                     name_a: format!("split-{names}a"),
                     name_b: format!("split-{names}b"),
                     color_a: "#111111".to_string(),
                     color_b: "#222222".to_string(),
-                    comment_side: pick(side % 3),
-                    datum_side: pick(side % 2),
                 };
                 let result = self.state.execute_split_line(line_id, at, options);
                 if result.success {

@@ -51,9 +51,7 @@ use super::split_combine_kit::{
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::{ClosureId, ClosureStrategy, LoopClosure, Project};
-use crate::models::{
-    LineId, SplitAt, SplitLineOptions, SplitSide, StationRef, CLOSURE_REMOVED_MERGED_ENDS,
-};
+use crate::models::{LineId, SplitAt, SplitLineOptions, StationRef, CLOSURE_REMOVED_MERGED_ENDS};
 
 fn options() -> SplitLineOptions {
     SplitLineOptions {
@@ -61,8 +59,6 @@ fn options() -> SplitLineOptions {
         name_b: "S-B".to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 
