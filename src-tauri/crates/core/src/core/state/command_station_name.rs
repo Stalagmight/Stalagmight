@@ -20,15 +20,7 @@ impl AppState {
     /// name and de-duplicate their lines themselves. `None` when the name is
     /// fine or no project is open (the command then fails on its own).
     pub fn refuse_new_line_name(&self, name: Option<&str>) -> Option<CommandResult> {
-        let guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let project = guard.as_ref()?;
-        project
-            .validate_line_name(name.unwrap_or_default(), &[])
-            .err()
-            .map(|e| CommandResult::failure(e.to_string()))
+        self.new_line_name_refusal(name)
     }
 }
 
