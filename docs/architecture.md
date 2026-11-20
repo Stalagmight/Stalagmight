@@ -15,7 +15,7 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-models` | The data model: the station-graph survey (`survey.rs`, `survey/`: stations, lines, shots, datums, placements, closures, the derived views, the changeset undo engine, the wire projection), the shared DTOs, geometry (`geo.rs`), `app_dirs`, gas config | - (base crate) |
 | `stalagmight-telemetry` | Telemetry collector + event registry (`telemetry/`), tracing/logging setup (`logging/`); its `build.rs` owns `TELEMETRY_ENDPOINT` validation and `APP_VERSION` | models |
 | `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
-| `stalagmight-legacy` | A frozen copy of the 0.6.0 model, SQLite reader and load pipeline: opens every old SQLite `.stalx` exactly as the 0.6.0 app did. Read-only in production; the `writer` feature (tests only) is the 0.6.0 save path | - (standalone) |
+| `stalagmight-legacy` | A frozen copy of the 0.6.0 model, SQLite reader and load pipeline: opens every old SQLite `.stalx` exactly as the 0.6.0 app did. Read-only in production; the `writer` feature (tests only) is the 0.6.0 save path. Published to crates.io with persistence and stalx-reader, as an internal crate | - (standalone) |
 | `stalagmight-persistence` | The `.stalx` version 2 codec (`persistence/stalx_v2/`), the legacy migration (`persistence/migrate/`), the legacy recovery dialog's SQLite repair and salvage (`persistence/recovery.rs`), the `.plnx` dive-plan store, tile caches (`cache/`, `tilemap_cache`) | models, legacy |
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, project file transfer, sync, TLS policy, metrics | models, telemetry |

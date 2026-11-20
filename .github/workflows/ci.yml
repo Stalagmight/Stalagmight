@@ -233,8 +233,9 @@ jobs:
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # stalx-reader and the two internal crates it depends on are published to
-      # crates.io (#593). Keep them publishable between releases: a path
+      # stalx-reader and the three internal crates it depends on (models, the
+      # frozen 0.6.0 reader `stalagmight-legacy` and persistence) are published
+      # to crates.io (#593). Keep them publishable between releases: a path
       # dependency without a version, a new unpublished internal dependency or
       # missing metadata fails here, not on release day; and each package must
       # carry the AGPL text. `cargo package`, not `publish --dry-run`, so an
@@ -242,7 +243,7 @@ jobs:
       # rebuild from the packaged sources (minutes); the release runs it in full.
       - name: crates.io packaging check (stalx-reader)
         run: |
-          crates="stalagmight-models stalagmight-persistence stalx-reader"
+          crates="stalagmight-models stalagmight-legacy stalagmight-persistence stalx-reader"
           cargo package --no-verify --manifest-path src-tauri/Cargo.toml $(printf -- '-p %s ' $crates)
           for c in $crates; do
             cargo package --list --manifest-path src-tauri/Cargo.toml -p "$c" | grep -qx LICENSE \

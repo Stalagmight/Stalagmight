@@ -42,9 +42,9 @@ ryu = { workspace = true }
 sha2 = { workspace = true }
 # The frozen 0.6.0 model and SQLite reader: old `.stalx` files are opened
 # exactly as 0.6.0 opened them and migrated into `models::survey`
-# (`persistence::migrate`). Not published: it must be published (or this
-# dependency gated) before `stalagmight-persistence` can be.
-stalagmight-legacy = { path = "../legacy" }
+# (`persistence::migrate`). Published with this crate (pinned exactly, like
+# models) so the CI packaging gate and crates.io see a versioned dependency.
+stalagmight-legacy = { path = "../legacy", version = "=0.1.0" }
 
 [dev-dependencies]
 # The undo engine's shared test kit (`survey::changeset::testkit`: the gate
