@@ -465,6 +465,13 @@ mod topology_commands_tests;
     reason = "test kit: panics on a failed assumption are the point"
 )]
 mod topology_kit;
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: a failing seed prints its replay line, a sweep its coverage counts"
+)]
+mod transition_fuzz_tests;
 #[cfg(sg_unported)]
 #[expect(
     clippy::unwrap_used,

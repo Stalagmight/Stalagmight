@@ -1233,6 +1233,22 @@ fn transition_properties(
     Ok(())
 }
 
+/// The count a classified C24-F3 seed adds (printed with the totals).
+const F3_CLASS: &str = "finding C24-F3: Computed View differs on extreme geometry, twin clean";
+
+/// The same seed without the extreme values migrates and passes the whole
+/// check (the rng stream is the same, so the rest of the case is identical).
+fn extreme_free_twin_is_clean(seed: u64) -> bool {
+    let knobs = Knobs {
+        extremes: false,
+        ..DEFAULT_KNOBS
+    };
+    let Ok(Some(twin)) = catch_unwind(|| hostile_case(seed, knobs)) else {
+        return false;
+    };
+    matches!(open_and_migrate(&twin.bytes), Ok(Ok((legacy, migrated))) if check(&legacy, &migrated).is_ok())
+}
+
 fn run_seed(seed: u64) -> Result<Outcome, Failure> {
     let built = catch_unwind(|| hostile_case(seed, DEFAULT_KNOBS))
         .map_err(|p| fail("generator-panic", panic_text(p.as_ref())))?;
@@ -1244,7 +1260,26 @@ fn run_seed(seed: u64) -> Result<Outcome, Failure> {
         Ok(pair) => pair,
         Err(class) => return Ok(Outcome::Refused(class, tally)),
     };
-    check(&legacy, &migrated).map_err(|e| fail("migration-check", e))?;
+    if let Err(e) = check(&legacy, &migrated) {
+        // Finding C24-F3, and only it: a Computed View difference on a seed
+        // with extreme values whose twin without them is clean. 0.6.0's
+        // solve is not reproducible on such geometry; counted, never hidden.
+        let f3 = e.contains("unexplained Computed View mismatches")
+            && tally.get("extreme values") > 0
+            && extreme_free_twin_is_clean(seed);
+        if !f3 {
+            return Err(fail("migration-check", e));
+        }
+        tally.add(F3_CLASS, 1);
+        let again = migrate(&legacy, &ClosureAdjustmentConfig::default())
+            .map_err(|e| fail("second-migrate", e.class()))?;
+        if again.project != migrated.project || again.report != migrated.report {
+            return Err(fail(
+                "determinism",
+                "migrating twice gave different results",
+            ));
+        }
+    }
     let dir = tempfile::tempdir().map_err(|e| fail("io", e.to_string()))?;
     legacy_recognised(&hostile.bytes, &legacy, dir.path())?;
     tally.report(&migrated.report);
@@ -1318,12 +1353,13 @@ fn report_and_assert(totals: &Totals, test: &str) {
         );
     }
     eprintln!(
-        "C24 migration fuzz: seeds={} migrated={} refused={:?} unbuilt={} failed={}",
+        "C24 migration fuzz: seeds={} migrated={} refused={:?} unbuilt={} failed={} classified_f3={}",
         totals.seeds,
         totals.migrated,
         totals.refused,
         totals.unbuilt,
-        totals.failures.len()
+        totals.failures.len(),
+        totals.tally.get(F3_CLASS)
     );
     assert!(
         totals.failures.is_empty(),

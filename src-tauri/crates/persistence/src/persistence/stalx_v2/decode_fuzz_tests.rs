@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use super::test_helpers::{generate, Rng, Shape, MEDIUM, SMALL};
 use super::{
     decode, decode_salvage, encode, probe_bytes, rewrite_local, sniff, DecodeError, DecodeNote,
-    DecodeOptions, Decoded, EncodeError, Mode,
+    DecodeOptions, Decoded, EncodeError, Extras, Mode,
 };
 
 /// Seeds the CI window runs when no window is set (each operator several
@@ -1281,4 +1281,36 @@ fn every_row_boundary_truncation_is_a_typed_refusal() {
             }
         }
     }
+}
+
+/// A `version` that is not a number (`"2"`, `null`, `true`) is a version
+/// this build never wrote, not a truncated file (fuzz seeds 1367 and 1942:
+/// the sniff reported "the file ends early" for a complete file).
+#[test]
+fn a_version_that_is_not_a_number_is_unsupported_not_truncated() {
+    for seed in [1367, 1942] {
+        match run_seed(seed) {
+            Ok(_) => {}
+            Err((op, why)) => panic!("seed {seed} ({op}): {why}"),
+        }
+    }
+    let base = String::from_utf8(base_of(3)).unwrap_or_default();
+    for token in ["\"2\"", "null", "true", "\"\"", "[2]", "{}"] {
+        let text = base.replacen("\"version\":2", &format!("\"version\":{token}"), 1);
+        match decode(text.as_bytes(), &DecodeOptions::default()) {
+            Err(DecodeError::UnsupportedVersion { found }) => assert!(!found.is_empty(), "{token}"),
+            other => panic!("{token}: {:?}", other.map(|d| d.project.name)),
+        }
+        // A local-only rewrite of such a file is refused the same way.
+        assert!(
+            rewrite_local(text.as_bytes(), &Extras::default()).is_err(),
+            "{token}"
+        );
+    }
+    // A file cut inside the version token is still truncated.
+    let cut = &base.as_bytes()[..base.find("\"version\":").unwrap_or(0) + 11];
+    assert!(matches!(
+        decode(cut, &DecodeOptions::default()),
+        Err(DecodeError::Truncated { .. })
+    ));
 }
