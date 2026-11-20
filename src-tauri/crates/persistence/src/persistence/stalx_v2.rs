@@ -123,6 +123,13 @@ mod format_v2_crash_tests;
 )]
 mod format_v2_bench_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_doc_tests;
+
 pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, Stage, WriteError};
 pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
