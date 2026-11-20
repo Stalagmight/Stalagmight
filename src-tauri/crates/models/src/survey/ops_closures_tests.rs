@@ -4,7 +4,6 @@
 
 use crate::{DatumRole, StationRef};
 
-use super::m3_stubs::datum_roles;
 use super::ops_test_helpers::{
     assert_shifted, assert_valid, free_line, gps_at, ok, origin, run, xy, xy_all,
 };
@@ -333,7 +332,7 @@ fn removing_a_datum_unblocks_a_promotion() {
         (a2, b0)
     );
     assert!(p.closures.is_empty());
-    assert_eq!(datum_roles(&p), vec![Some(DatumRole::Placement)]);
+    assert_eq!(p.datum_roles(), vec![Some(DatumRole::Placement)]);
     assert_eq!(at(&p, b, 0), a2, "B starts on the junction");
     let b1_at = xy(&p, b1);
     assert!(

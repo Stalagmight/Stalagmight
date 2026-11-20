@@ -21,7 +21,6 @@ use std::collections::BTreeSet;
 
 use crate::{ClosurePreview, LineId, StationId};
 
-use super::m3_stubs::{closure_metrics, closure_spans_one_shot};
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::{EditContext, Project, StationAlias};
 
@@ -164,12 +163,12 @@ impl Project {
         }
         let connected = self.topology().connected(a, b) || self.closure_linked(a, b);
         let preview = if connected {
-            closure_metrics(self, a, b)
+            self.closure_metrics(a, b)
         } else {
             None
         };
         let closure_refusal = if connected {
-            closure_spans_one_shot(self, a, b)
+            self.closure_spans_one_shot(a, b)
                 .map(|(line, index)| self.across_one_shot_error(line, index).to_string())
         } else {
             None

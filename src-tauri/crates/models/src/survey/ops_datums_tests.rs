@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 
 use crate::{gps_to_local, DatumRole, GpsCoordinates, StationId, StationRef, MAX_GPS_ACCURACY_M};
 
-use super::m3_stubs::{datum_gap, datum_roles};
 use super::ops_test_helpers::{
     assert_shifted, assert_still, assert_valid, branch, free_line, gps_at, gps_local, near, ok,
     origin, run, xy, xy_all, z_all,
@@ -18,7 +17,7 @@ use super::{DatumChange, LineId, OpError, Project, ZeroDatum};
 const TOL: f64 = 1e-9;
 
 fn roles(p: &Project) -> Vec<Option<DatumRole>> {
-    datum_roles(p)
+    p.datum_roles()
 }
 
 /// Two entrances joined by a 500 m traverse: A (250 m north from the first
@@ -70,7 +69,7 @@ fn a_second_datum_in_a_placed_survey_is_a_gps_fix_and_moves_nothing() {
         "the frame stays on the first entrance"
     );
 
-    let gap = datum_gap(&p, second, &p.datums[1].gps).unwrap();
+    let gap = p.datum_gap(second, &p.datums[1].gps).unwrap();
     assert!((gap.gap_m - 40.0).abs() < 0.01, "gap {}", gap.gap_m);
     assert!(
         (gap.bearing_deg - 90.0).abs() < 0.1,
@@ -94,7 +93,7 @@ fn re_setting_a_fix_updates_it_in_place_and_moves_nothing() {
     assert_eq!(p.datums.len(), 2);
     assert_eq!(p.datums[1].accuracy_m, Some(0.0));
     assert_eq!(roles(&p)[1], Some(DatumRole::GpsFix));
-    let gap = datum_gap(&p, at(&p, b, 5), &p.datums[1].gps).unwrap();
+    let gap = p.datum_gap(at(&p, b, 5), &p.datums[1].gps).unwrap();
     assert!((gap.gap_m - 10.0_f64.hypot(20.0)).abs() < 0.01);
 }
 

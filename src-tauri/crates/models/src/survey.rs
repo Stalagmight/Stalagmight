@@ -52,7 +52,6 @@ mod validate;
 
 // Stream M2: topology, closures, datums, move tools, Add (plan 4-5).
 mod append;
-mod m3_stubs;
 mod ops;
 mod ops_closures;
 mod ops_datums;

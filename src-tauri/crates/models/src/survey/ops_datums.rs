@@ -31,7 +31,6 @@ use crate::{
     ZeroDatumPreview,
 };
 
-use super::m3_stubs::{datum_gap, datum_is_entrance, datum_roles};
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::{EditContext, Project, ZeroDatum};
 
@@ -117,7 +116,7 @@ impl Project {
             })?,
         };
         let (index, change) = outcome.value;
-        let role = datum_roles(self).get(index).copied().flatten();
+        let role = self.datum_roles().get(index).copied().flatten();
         Ok(OpOutcome {
             value: DatumSet {
                 index,
@@ -181,14 +180,8 @@ impl Project {
     /// default rule, plan 3.8). `None` for an unknown or unplaced datum.
     pub fn datum_entrance(&self, index: usize) -> Option<bool> {
         let datum = self.datums.get(index)?;
-        let role = datum_roles(self).get(index).copied().flatten()?;
-        Some(datum_is_entrance(
-            self,
-            datum.station,
-            datum.via,
-            role,
-            datum.entrance,
-        ))
+        let role = self.datum_roles().get(index).copied().flatten()?;
+        Some(self.datum_is_entrance(datum, role))
     }
 
     /// What setting a datum with `gps` on `station` (via `via`) would do, for
@@ -205,7 +198,7 @@ impl Project {
         self.existing_station(station).ok()?;
         let stored = self.datum_index_for(station, via);
         let role = stored
-            .and_then(|index| datum_roles(self).get(index).copied().flatten())
+            .and_then(|index| self.datum_roles().get(index).copied().flatten())
             .unwrap_or_else(|| {
                 if self.placement_datum_of(station).is_some() {
                     DatumRole::GpsFix
@@ -214,16 +207,21 @@ impl Project {
                 }
             });
         let gap = match role {
-            DatumRole::GpsFix => datum_gap(self, station, gps),
+            DatumRole::GpsFix => self.datum_gap(station, gps),
             DatumRole::Placement => None,
         };
         let (via, entrance) = stored
             .and_then(|index| self.datums.get(index))
             .map_or((via, None), |d| (d.via.or(via), d.entrance));
+        let candidate = ZeroDatum {
+            via,
+            entrance,
+            ..ZeroDatum::new(station, *gps)
+        };
         Some(ZeroDatumPreview {
             role,
             gap,
-            is_entrance: datum_is_entrance(self, station, via, role, entrance),
+            is_entrance: self.datum_is_entrance(&candidate, role),
         })
     }
 

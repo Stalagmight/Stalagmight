@@ -3,7 +3,6 @@
 
 use crate::{DatumRole, StationRef};
 
-use super::m3_stubs::datum_roles;
 use super::ops_test_helpers::{
     assert_shifted, assert_still, assert_valid, branch, free_line, gps_at, ok, origin, run, xy,
     xy_all,
@@ -156,7 +155,7 @@ fn unmerging_places_the_detached_piece_on_its_own_gps() {
     assert_valid(&p);
     assert_eq!(out.value.moved_datums, vec![1]);
     assert_eq!(
-        datum_roles(&p),
+        p.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
     );
     assert_eq!(out.anchors.placed_on_gps, vec![1]);

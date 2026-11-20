@@ -6,7 +6,6 @@
 
 use crate::{gps_to_local, DatumRole, StationRef};
 
-use super::m3_stubs::datum_roles;
 use super::ops_test_helpers::{
     assert_shifted, assert_valid, branch, free_line, gps_at, gps_from, gps_local, near, ok, origin,
     run, xy, xy_all,
@@ -73,7 +72,7 @@ fn a_placement_datum_and_a_fix_merged_then_detached_put_the_fixs_piece_on_its_gp
     assert_valid(&p);
     assert_eq!(out.value.moved_datums, vec![set.index]);
     assert_eq!(
-        datum_roles(&p),
+        p.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
     );
     near(

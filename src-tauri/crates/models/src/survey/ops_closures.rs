@@ -13,7 +13,6 @@
 
 use crate::{ClosurePreview, LineId, StationId, StationRef};
 
-use super::m3_stubs::{closure_metrics, closure_spans_one_shot};
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::{ClosureId, ClosureStrategy, EditContext, LoopClosure, Project};
 
@@ -45,7 +44,7 @@ impl Project {
                 }
             }
         }
-        let metrics = closure_metrics(self, a, b);
+        let metrics = self.closure_metrics_via((a, a_via), (b, b_via));
         self.run_op(Sweep::Skip, |p| {
             let id = p.push_closure(a, a_via, b, b_via, strategy);
             let closure = *p
@@ -103,7 +102,7 @@ impl Project {
         if self.closure_between(a, b).is_some() {
             return Err(OpError::DuplicateClosure);
         }
-        if let Some((line, index)) = closure_spans_one_shot(self, a, b) {
+        if let Some((line, index)) = self.closure_spans_one_shot(a, b) {
             return Err(self.across_one_shot_error(line, index));
         }
         match strategy {
@@ -122,7 +121,8 @@ impl Project {
     pub fn closure_preview(&self, a: StationId, b: StationId) -> Result<ClosurePreview, OpError> {
         self.existing_station(a)?;
         self.existing_station(b)?;
-        closure_metrics(self, a, b).ok_or(OpError::UnknownStation(a))
+        self.closure_metrics(a, b)
+            .ok_or(OpError::UnknownStation(a))
     }
 
     /// The first closure (list order) joining `a` and `b`, either way round.

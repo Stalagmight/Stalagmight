@@ -4,7 +4,6 @@
 
 use crate::{DatumRole, StationRef};
 
-use super::m3_stubs::{datum_gap, datum_roles};
 use super::ops_test_helpers::{
     assert_shifted, assert_still, assert_valid, free_line, gps_at, ok, origin, run, xy, xy_all,
 };
@@ -32,7 +31,7 @@ fn two_placed_pieces() -> (Project, LineId, LineId) {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(30.0, 100.0), None));
     assert_eq!(
-        datum_roles(&p),
+        p.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
     );
     let b0 = xy(&p, at(&p, b, 0));
@@ -137,13 +136,13 @@ fn merging_two_placed_pieces_moves_the_later_one_and_makes_its_datum_a_fix() {
             shift.shift_m
         );
         assert_eq!(
-            datum_roles(&p),
+            p.datum_roles(),
             vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
         );
         assert_eq!(p.datums[1].correction, None);
         assert_eq!(p.datums[1].station, a2, "the fix sits on the junction");
         assert_eq!(p.datums[1].via, Some(b), "and keeps its via hint");
-        let gap = datum_gap(&p, a2, &p.datums[1].gps).unwrap();
+        let gap = p.datum_gap(a2, &p.datums[1].gps).unwrap();
         assert!((gap.gap_m - 30.0).abs() < 0.01, "gap {}", gap.gap_m);
     }
 }
