@@ -106,10 +106,13 @@ export default function DeleteShotChoiceDialog() {
           </div>
         )}
 
-        <DeleteShotImpactDetails
-          impact={impact}
-          title="If you choose Shift Geometry, these relationships will update:"
-        />
+        {/* What Shift Geometry would change: only while it can be chosen (UX-5). */}
+        {!shiftBlocked && (
+          <DeleteShotImpactDetails
+            impact={impact}
+            title="If you choose Shift Geometry, these relationships will update:"
+          />
+        )}
 
         <div className="flex justify-end gap-2">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="delete-shot-choice-cancel">
