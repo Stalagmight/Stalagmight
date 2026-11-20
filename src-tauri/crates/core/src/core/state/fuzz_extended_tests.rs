@@ -807,7 +807,14 @@ fn added_project(seed: u32, count: usize, repeats: &[String]) -> Project {
         .flat_map(|(s, line)| (0..line.shots.len()).map(move |i| (s, i)))
         .collect();
     slots.reverse();
-    for (uuid, (s, i)) in repeats.iter().zip(slots) {
+    // Each repeated uuid once: a draw can name the same live shot twice.
+    let mut distinct: Vec<&String> = Vec::new();
+    for uuid in repeats {
+        if !distinct.contains(&uuid) {
+            distinct.push(uuid);
+        }
+    }
+    for (uuid, (s, i)) in distinct.into_iter().zip(slots) {
         project.lines_mut()[s].shots[i].uuid = uuid.clone();
     }
     assert!(
