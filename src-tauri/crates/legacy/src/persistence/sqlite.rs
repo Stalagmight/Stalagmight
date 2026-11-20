@@ -546,6 +546,9 @@ mod stored_times;
 mod undo;
 mod warnings;
 mod write;
+// Added by the legacy crate (not frozen 0.6.0 code): the writer's 0.5.5 shape.
+#[cfg(feature = "writer")]
+mod legacy_shape;
 
 pub use datum_extras::holds_datum_extras;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
@@ -612,7 +615,7 @@ struct SalvagedLine {
 }
 
 /// Resolved warning record
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWarning {
     pub line_id: u32,
     pub shot_id: u32,

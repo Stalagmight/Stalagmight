@@ -80,12 +80,6 @@ pub fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
     normalize_azimuth(azimuth_in + diff / 2.0)
 }
 
-/// Convert horizontal + vertical components into slope length.
-#[cfg_attr(not(test), expect(dead_code))] // used only by tests; dead in the lib build
-pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
-    (horizontal * horizontal + dz * dz).sqrt()
-}
-
 /// Compute pitch (degrees) from horizontal + vertical components.
 /// Positive pitch corresponds to increasing depth (downwards).
 pub fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {

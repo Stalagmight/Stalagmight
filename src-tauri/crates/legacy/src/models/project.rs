@@ -11,11 +11,6 @@ use super::{
 };
 use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
-// Re-export the sibling module so the relocated `suggest_orphan_placements` (now in
-// the `distance` child) keeps resolving `super::placement_suggest` - its `super` is
-// now `project`, not `models`.
-use super::placement_suggest;
-
 mod closure;
 mod coordinates;
 mod datum_entrance;
@@ -25,7 +20,6 @@ mod distance;
 // Crate-visible only so the `.plnx` load path can reach the engine's segment-speed bounds
 // (`MIN/MAX_SEGMENT_SPEED_M_PER_MIN`) and rank stored speeds on the same domain the engine
 // honours (#317). Everything else in here stays behind the `pub use` list below.
-pub mod gas;
 mod lsq;
 mod merge_datum_shift;
 mod pathfinding;
@@ -53,6 +47,8 @@ mod station_rekey;
 
 mod integrity;
 mod legacy_anchoring;
+// Added by the legacy crate (not frozen 0.6.0 code): read-only accessors.
+mod legacy_oracle;
 mod merge_topology;
 mod offsets;
 mod relationships;
@@ -76,12 +72,9 @@ pub use datum_roles::{
     datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,
     DATUM_GAP_WARN_FRACTION,
 };
-pub use gas::{
-    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
-    TankMaterial, Team,
-};
 pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use legacy_oracle::{ComponentAnchor, ComponentHold};
 pub use merge_datum_shift::MergeDatumShift;
 pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};

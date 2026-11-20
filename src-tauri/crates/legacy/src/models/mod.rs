@@ -5,21 +5,16 @@
 //! `stalx-reader`, whose API is the supported one.
 
 pub mod angle;
-pub mod app_dirs;
 pub mod azimuth_reference;
-pub mod comment_split;
 pub mod config;
 pub mod credit;
 pub mod disk_names;
-pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
-pub mod import_receipt;
 pub mod line;
 pub mod line_combine;
 pub mod line_split;
 pub mod newer_schema;
-pub mod placement_suggest;
 pub mod project;
 pub mod section;
 pub mod shot;
@@ -31,15 +26,12 @@ pub mod warning;
 pub use angle::*;
 pub use azimuth_reference::*;
 pub use credit::*;
-pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;
-pub use import_receipt::*;
 pub use line::*;
 pub use line_combine::*;
 pub use line_split::*;
 pub use newer_schema::NewerSchema;
-pub use placement_suggest::*;
 pub use project::*;
 pub use section::*;
 pub use shot::*;
