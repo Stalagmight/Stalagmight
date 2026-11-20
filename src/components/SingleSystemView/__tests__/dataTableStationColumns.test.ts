@@ -33,8 +33,10 @@ function columns(overrides: Partial<StationColumnContext> = {}) {
       stationName: (ref) => String(ref.station_index),
       stationId: () => null,
       lineName: () => 'Main Line',
+      // Line 1 names its stations 4, 5, 6 by index.
+      stationNameTakenOn: (ref, name) =>
+        ['4', '5', '6'].some((n, i) => n === name && i !== ref.station_index) ? ref.line_id : null,
     },
-    lineStationNames: ['4', '5', '6'],
     ...overrides,
   });
 }

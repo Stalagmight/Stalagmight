@@ -22,7 +22,7 @@ import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import { stationRenameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
 
 const DIALOG_ID = 'edit-station';
 
@@ -73,7 +73,7 @@ export default function EditStationDialog() {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [accuracyInput, setAccuracyInput] = useState(() => String(storedAccuracy));
   const [comment, setComment] = useState('');
-  // The station's name (SPEC 4.1): required, unique within its line. Checked
+  // The station's name (SPEC 4.1): required, unique on each of its lines. Checked
   // inline as typed; a backend refusal lands on the same field.
   const [name, setName] = useState(storedName);
   const [nameRefusal, setNameRefusal] = useState<string | null>(null);
@@ -84,9 +84,13 @@ export default function EditStationDialog() {
   const accuracy = parseDatumAccuracy(accuracyInput);
 
   const nameChanged = name.trim() !== storedName;
-  const nameProblem =
-    stationRef && nameChanged ? stationNameProblem(name, labels.lineStationNames(stationRef.line_id), stationRef.station_index) : null;
-  const nameError = nameProblem ? stationNameProblemMessage(nameProblem, lineName, name) : nameRefusal;
+  // A junction's name must be free on every line through it (plan 5.3), so
+  // the message names the line the name is taken on.
+  const nameTakenOn = stationRef && nameChanged ? labels.stationNameTakenOn(stationRef, name.trim()) : null;
+  const nameProblem = stationRef && nameChanged ? stationRenameProblem(name, nameTakenOn) : null;
+  const nameError = nameProblem
+    ? stationNameProblemMessage(nameProblem, nameTakenOn !== null ? labels.lineName(nameTakenOn) : lineName, name)
+    : nameRefusal;
 
   // What this datum would do, as soon as valid GPS is entered (#741).
   const preview = useZeroDatumPreview(

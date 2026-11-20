@@ -1,6 +1,7 @@
 /**
  * The client-side name rules (SPEC 4.1/4.2): a line name is required and
- * unique in the project, a station name required and unique in its line; the
+ * unique in the project, a station name required and unique on each of its
+ * lines (a junction's on all of them, plan 5.3); the
  * defaults a dialog offers never clash.
  */
 import { describe, it, expect } from 'vitest';
@@ -13,7 +14,7 @@ import {
   lineNameProblemMessage,
   nextFreeLineName,
   splitNameProblems,
-  stationNameProblem,
+  stationRenameProblem,
   stationNameProblemMessage,
   uniqueLineName,
 } from '../nameValidation';
@@ -48,18 +49,16 @@ describe('lineNameProblem', () => {
   });
 });
 
-describe('stationNameProblem', () => {
-  it('refuses an empty name and a name another station of the line holds', () => {
-    const names = ['0', '1', '2a', '3'];
-    expect(stationNameProblem(' ', names, 1)).toBe('empty');
-    expect(stationNameProblem('3', names, 1)).toBe('duplicate');
-    expect(stationNameProblem(' 2a ', names, 1)).toBe('duplicate');
+describe('stationRenameProblem', () => {
+  it('refuses an empty name and a name taken on a line through the station', () => {
+    expect(stationRenameProblem(' ', null)).toBe('empty');
+    expect(stationRenameProblem('3', 7)).toBe('duplicate');
+    expect(stationRenameProblem(' 2a ', 7)).toBe('duplicate');
   });
 
-  it("accepts the station's own name and a fresh one", () => {
-    const names = ['0', '1', '2'];
-    expect(stationNameProblem('1', names, 1)).toBeNull();
-    expect(stationNameProblem('1a', names, 1)).toBeNull();
+  it('accepts a name free on every line through the station', () => {
+    expect(stationRenameProblem('1', null)).toBeNull();
+    expect(stationRenameProblem('1a', null)).toBeNull();
   });
 });
 
@@ -185,11 +184,11 @@ describe('forbidden characters', () => {
     expect(lineNameProblemMessage('invalidChars', 'x')).toBe(
       'A name cannot contain control characters or invisible formatting characters.',
     );
-    expect(stationNameProblem('5\u200B', ['4', '5'], 1)).toBe('invalidChars');
+    expect(stationRenameProblem('5\u200B', null)).toBe('invalidChars');
     expect(stationNameProblemMessage('invalidChars', 'Main', 'x')).toBe(
       'A name cannot contain control characters or invisible formatting characters.',
     );
     // Empty still wins over everything else.
-    expect(stationNameProblem('  ', ['4'], 0)).toBe('empty');
+    expect(stationRenameProblem('  ', 3)).toBe('empty');
   });
 });

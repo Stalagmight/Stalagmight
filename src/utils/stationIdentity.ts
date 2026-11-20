@@ -104,6 +104,64 @@ export function lineStationNamesOf(src: IdentitySource, lineId: number): string[
   return names;
 }
 
+/** Station ID -> the global indices of every slot that carries it, built once per SurveyData. */
+const idIndexCache = new WeakMap<Uint32Array, Map<number, number[]>>();
+
+function idIndexOf(data: IdentityData): Map<number, number[]> {
+  const cached = idIndexCache.get(data.stationIds);
+  if (cached) return cached;
+  const byId = new Map<number, number[]>();
+  for (let g = 0; g < data.stationCount; g++) {
+    const id = data.stationIds[g];
+    if (id === undefined) continue;
+    const slots = byId.get(id);
+    if (slots) slots.push(g);
+    else byId.set(id, [g]);
+  }
+  idIndexCache.set(data.stationIds, byId);
+  return byId;
+}
+
+/**
+ * Every slot of the station `ref` is on: the slots that share its Station ID.
+ * On the station graph a junction is ONE station that two or more lines pass
+ * (plan 9.2), so its slots share one id, name and comment; a station on one
+ * line has the one slot. `ref` alone when the station is unknown.
+ */
+export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef[] {
+  const data = src.surveyData;
+  if (data && data.stationCount > 0) {
+    const g = stationGlobalIndexOf(data, ref);
+    const id = g === null ? undefined : data.stationIds[g];
+    const slots = id === undefined ? undefined : idIndexOf(data).get(id);
+    if (slots) {
+      return slots.map((s) => ({ line_id: data.stationLineIds[s]!, station_index: data.stationIndices[s]! }));
+    }
+    if (g !== null) return [ref];
+  }
+  const station = findStationIn(src.stations, ref);
+  if (!station) return [ref];
+  return (src.stations ?? []).filter((s) => s.id === station.id).map((s) => s.station_ref);
+}
+
+/**
+ * The first line through the station `ref` on which ANOTHER station is already
+ * named `name`, or null when the name is free. A station's name must be unique
+ * on every line it is on, so renaming a junction checks all of its lines (plan
+ * 5.3); on one line this is the old per-line check.
+ */
+export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
+  const own = stationSlotsOf(src, ref);
+  const ownKeys = new Set(own.map((s) => `${s.line_id}:${s.station_index}`));
+  for (const slot of own) {
+    const names = lineStationNamesOf(src, slot.line_id);
+    for (let i = 0; i < names.length; i++) {
+      if (names[i] === name && !ownKeys.has(`${slot.line_id}:${i}`)) return slot.line_id;
+    }
+  }
+  return null;
+}
+
 /** The project-unique Station ID of `ref`, or null when the station is unknown. */
 export function stationIdOf(src: IdentitySource, ref: StationRef): number | null {
   const data = src.surveyData;
@@ -169,6 +227,10 @@ export function shotLabelOf(src: IdentitySource, lineId: number, shotId: number,
 export interface IdentityLabels {
   stationName: (ref: StationRef) => string;
   lineStationNames: (lineId: number) => string[];
+  /** Every slot of the station (see {@link stationSlotsOf}). */
+  stationSlots: (ref: StationRef) => StationRef[];
+  /** The line a rename to `name` would collide on (see {@link lineWithStationNamed}). */
+  stationNameTakenOn: (ref: StationRef, name: string) => number | null;
   stationId: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
   station: (ref: StationRef, withLine?: boolean) => string;
@@ -180,6 +242,8 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
   return {
     stationName: (ref) => stationNameOf(src, ref),
     lineStationNames: (lineId) => lineStationNamesOf(src, lineId),
+    stationSlots: (ref) => stationSlotsOf(src, ref),
+    stationNameTakenOn: (ref, name) => lineWithStationNamed(src, ref, name),
     stationId: (ref) => stationIdOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),
