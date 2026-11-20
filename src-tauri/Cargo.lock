@@ -4777,7 +4777,6 @@ dependencies = [
  "sha2",
  "stalagmight-legacy",
  "stalagmight-models",
- "stalagmight-parsers",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
