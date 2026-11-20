@@ -16,7 +16,9 @@
 //! - **Observations**: every shot between two groups, today's vector plus the
 //!   difference of its two stations' hand moves on its line (#759), with
 //!   today's per-axis weights from `base_sigma_length_m * quality` and
-//!   `base_sigma_azimuth_deg * quality`; soft GPS fixes add a diagonal term.
+//!   `base_sigma_azimuth_deg * quality`, each axis's sigma floored at
+//!   `sigma_len x sigma_az` ([`ShotSigmas`]); soft GPS fixes add a diagonal
+//!   term.
 //! - **Held**: each placement datum's group at its raw position (two in one
 //!   group fail the component), hard GPS fixes (accuracy below 1 mm, the
 //!   default) at their GPS, else the gauge: the component's anchor station
@@ -234,6 +236,89 @@ impl StationPositions for AdjustedPositions {
 
     fn station_z(&self, station: StationId) -> Option<f64> {
         self.z(station)
+    }
+}
+
+/// The per-axis standard deviations (metres) one shot's horizontal vector
+/// is weighed with in the Closures Computed View (weight `1 / sigma^2` per
+/// axis, x east, y north).
+///
+/// **First order (0.6.0's).** With `sigma_len = base_sigma_length_m *
+/// quality` and `sigma_az = base_sigma_azimuth_deg * quality` (radians), the
+/// shot vector `len * (sin az, cos az)` has
+///
+/// ```text
+/// sigma_x^2 = (sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2
+/// sigma_y^2 = (cos(az) * sigma_len)^2 + (len * sin(az) * sigma_az)^2
+/// ```
+///
+/// **The floor (plan Deviations G9, C24 finding F2).** On a grid axis
+/// (az = 0, 90, 180 or 270 degrees) the length term of the axis across the
+/// shot vanishes, and so does the azimuth term as `len -> 0`. A zero-length
+/// connector at azimuth 0 then has sigma_x = 0 (no weight on x at all), and
+/// a 1 mm shot there sigma_x = 1.7e-5 m (a weight of 3e9, where ordinary
+/// shots weigh tens to hundreds), so a short shot near an axis left the
+/// normal equations singular or so ill-conditioned that the solve opened a
+/// connector by the whole misclosure or moved stations by kilometres. The
+/// first-order propagation drops the product of the two errors: the azimuth
+/// error turns the true length, which differs from the measured one by the
+/// length error, so the axis across the shot also carries `e_len * e_az`
+/// (times `cos(az)` on x, `sin(az)` on y), with variance
+/// `sigma_len^2 * sigma_az^2` there. No axis of any shot is known better than
+/// that (for `sigma_az` under 1 radian), so each axis's sigma is at least
+/// `sigma_len * sigma_az` (8.7e-4 m with the defaults). The floor binds only
+/// for a shot shorter than `sigma_len` (5 cm by default) within about
+/// `sigma_az` (1 degree) of a grid axis, where the first-order terms vanish;
+/// every other shot keeps 0.6.0's weights bit for bit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShotSigmas {
+    /// 0.6.0's first-order sigmas, `[x, y]`.
+    pub first_order: [f64; 2],
+    /// What the solve weighs with: each first-order sigma raised to
+    /// `floor` when below it (a NaN stays NaN and the axis is not observed).
+    pub axes: [f64; 2],
+    /// `sigma_len * sigma_az`.
+    pub floor: f64,
+}
+
+impl ShotSigmas {
+    /// The sigmas of a shot of slope `length` at true azimuth `azimuth_rad`
+    /// on a line of `quality` (a quality that is not a positive number
+    /// counts as 1, as in 0.6.0).
+    pub fn of(
+        config: &ClosureAdjustmentConfig,
+        quality: f64,
+        length: f64,
+        azimuth_rad: f64,
+    ) -> Self {
+        let quality = if quality.is_finite() && quality > 0.0 {
+            quality
+        } else {
+            1.0
+        };
+        let sigma_len = config.base_sigma_length_m * quality;
+        let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
+        let (sin, cos) = (azimuth_rad.sin(), azimuth_rad.cos());
+        let first_order = [
+            ((sin * sigma_len).powi(2) + (length * cos * sigma_az).powi(2)).sqrt(),
+            ((cos * sigma_len).powi(2) + (length * sin * sigma_az).powi(2)).sqrt(),
+        ];
+        let floor = sigma_len * sigma_az;
+        let axes = first_order.map(|sigma| if sigma < floor { floor } else { sigma });
+        Self {
+            first_order,
+            axes,
+            floor,
+        }
+    }
+
+    /// Whether the floor raised an axis: 0.6.0 weighed this shot with a
+    /// degenerate (huge, infinite or zero) weight there.
+    pub fn floored(&self) -> bool {
+        self.first_order
+            .iter()
+            .zip(&self.axes)
+            .any(|(first, axis)| first.to_bits() != axis.to_bits())
     }
 }
 
@@ -749,13 +834,6 @@ impl Project {
             }
             let line = edge.line;
             let shot = &line.shots[edge.index];
-            let quality = if line.quality.is_finite() && line.quality > 0.0 {
-                line.quality
-            } else {
-                1.0
-            };
-            let sigma_len = config.base_sigma_length_m * quality;
-            let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
             let reference = self.azimuth_reference_for(line);
             let mut vec = shot.vector(reference);
             let (hand_i, hand_j) = (
@@ -769,11 +847,7 @@ impl Project {
                 vec[1] += hj[1] - hi[1];
             }
             let az = shot.average_azimuth_true_rad(reference);
-            let len = shot.length;
-            let sigma_dx =
-                ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
-            let sigma_dy =
-                ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
+            let [sigma_dx, sigma_dy] = ShotSigmas::of(config, line.quality, shot.length, az).axes;
             let w_x = if sigma_dx > 0.0 {
                 1.0 / (sigma_dx * sigma_dx)
             } else {
