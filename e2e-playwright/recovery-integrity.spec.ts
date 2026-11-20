@@ -20,7 +20,7 @@ async function openRecoveryDialog(page: import('./fixtures/coverage').Page): Pro
 
     e2e.uiStore.getState().openDialog('corruption-recovery', {
       corruptPath: '/mock/corrupt-project.stalx',
-      errorMessage: 'Database integrity check failed: index corruption detected.',
+      errorMessage: 'The project breaks an invariant and cannot be opened normally: a line passes a station twice.',
     });
   });
 }

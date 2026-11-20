@@ -11,7 +11,7 @@ const RAW_VALUE = 'raw';
 
 /**
  * Fullscreen-toolbar view picker: the Lines-backed data table, or the raw
- * sqlite tables of the project database. WHICH raw table is browsed is chosen
+ * members of the saved `.stalx` file. WHICH member is browsed is chosen
  * in the data-table sub-header next to the table-name pill; selecting "Raw
  * data" here enters raw mode with an empty selection that the sub-header
  * resolves to the last-browsed (or first) table.

@@ -202,8 +202,8 @@ test.describe('Loading Progress', () => {
         });
       });
 
-      // Phase text should be visible (Opening database... formatted)
-      await expect(page.getByText(/Opening database/)).toBeVisible();
+      // Phase text should be visible (opening_database, worded for the file)
+      await expect(page.getByText(/Opening the project file/)).toBeVisible();
     });
 
     test('cancel button dismisses loading UI', async ({ page }) => {

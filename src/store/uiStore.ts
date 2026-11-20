@@ -460,7 +460,7 @@ export interface UIStore extends SectionsViewSlice {
   // Data-table fullscreen mode: the table overlays the whole window below the
   // toolbar. Session-only - never persisted, so the app always starts windowed.
   dataTableFullScreen: boolean;
-  /** Raw sqlite table browsed read-only while fullscreen (null = the normal
+  /** Saved-file member browsed read-only while fullscreen (null = the normal
    *  Lines-backed view). Only reachable from the fullscreen toolbar. */
   rawTableSelection: string | null;
   enterDataTableFullScreen: () => void;
