@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::speleodb_reload::install_cache_bytes;
 use super::speleodb_sidecars::{has_hot_journal, sidecar_path, SetAsideSidecars};
-use super::stalx_v2_fixtures::{decoded, fixture_link, name_at, seed_linked, FIXTURE_ID};
+use super::stalx_fixtures::{decoded, fixture_link, name_at, write_v2, FIXTURE_ID};
 use super::AppState;
 use crate::persistence::stalx_v2::{temp_path, DecodeOptions};
 use crate::speleodb::SpeleoDbError;
@@ -47,10 +47,10 @@ fn crashed_legacy_copy(dir: &Path) -> PathBuf {
 /// A version 2 download at `<dir>/<name>` whose project is `SERVER_NAME`.
 fn server_copy(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
-    seed_linked(
+    write_v2(
         &path,
         SERVER_NAME,
-        &fixture_link("https://example.com", false),
+        Some(&fixture_link("https://example.com", false)),
     );
     path
 }
@@ -204,10 +204,10 @@ fn inert_sidecars_do_not_block_a_protected_install_and_do_not_survive_it() {
     crate::test_helpers::with_isolated_config(|| {
         let dir = tempfile::tempdir().expect("temp");
         let dest = dir.path().join("cache").join("project.stalx");
-        seed_linked(
+        write_v2(
             &dest,
             LOCAL_NAME,
-            &fixture_link("https://example.com", false),
+            Some(&fixture_link("https://example.com", false)),
         );
         std::fs::write(sidecar_path(&dest, "-journal"), [0u8; 512]).expect("unarmed journal");
         std::fs::write(sidecar_path(&dest, "-shm"), vec![0; 32768]).expect("lone shm");

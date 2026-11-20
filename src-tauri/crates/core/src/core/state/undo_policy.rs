@@ -193,7 +193,7 @@ impl AppState {
     reason = "poisoned-lock tests must panic while holding the mutex guard"
 )]
 mod tests {
-    use super::super::synthetic_stalx_tests::{link_on_disk, write_v2};
+    use super::super::stalx_fixtures::{link_on_disk, write_v2};
     use super::*;
     use crate::core::state::AppState;
     use crate::test_helpers::with_isolated_config;

@@ -714,7 +714,7 @@ impl AppState {
 mod tests {
     use std::path::Path;
 
-    use super::super::synthetic_stalx_tests::write_v2;
+    use super::super::stalx_fixtures::write_v2;
     use super::AppState;
     use crate::models::SpeleoLink;
     use crate::speleodb::SpeleoDbError;

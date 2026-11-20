@@ -1794,8 +1794,8 @@ mod tests {
     // from here (they share this module's fixtures), so they reach it by its new path.
     use crate::core::state::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
     use crate::core::state::speleodb_push::{head_with_empty_retry, type_still_says_ariane};
-    use crate::core::state::stalx_v2_fixtures::{
-        display_at, empty_survey, extras_for, name_at, seed_linked, seed_unlinked, set_display,
+    use crate::core::state::stalx_fixtures::{
+        display_at, extras_for, name_at, set_display, write_v2,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::models::survey::Project;
@@ -2011,14 +2011,14 @@ mod tests {
         // the server must not carry the dirty bit, the edit time, the view or any other
         // per-machine state: the push mode leaves `local` out entirely, and keeps the
         // shared link identity (and the project's undo policy) as they are.
-        let mut link = crate::core::state::stalx_v2_fixtures::fixture_link("http://x/", true);
+        let mut link = crate::core::state::stalx_fixtures::fixture_link("http://x/", true);
         link.base_commit_sha = Some("abc".to_owned());
         let mut extras = extras_for(Some(&link));
         extras
             .local
             .display
             .insert("grid".to_owned(), "off".to_owned());
-        let project = empty_survey("Snap");
+        let project = Project::new("Snap", None);
         let snapshot = crate::core::state::speleodb_push::push_snapshot(
             &project,
             &extras,
@@ -2077,7 +2077,7 @@ mod tests {
 
     /// Write a minimal openable, unlinked `.stalx` at `path`.
     fn seed_stalx(path: &Path, name: &str) {
-        seed_unlinked(path, name);
+        write_v2(path, name, None);
     }
 
     /// Whether a project is currently open in `state`.
@@ -2099,7 +2099,7 @@ mod tests {
     ) -> Result<(), SpeleoDbError> {
         let prepared = state.prepare_download(
             source,
-            crate::core::state::stalx_v2_fixtures::fixture_link("http://speleo.test/", false),
+            crate::core::state::stalx_fixtures::fixture_link("http://speleo.test/", false),
             InheritedUndo::Drop,
             &crate::persistence::stalx_v2::DecodeOptions::default(),
         )?;
@@ -2294,10 +2294,10 @@ mod tests {
     /// Write a cache `.stalx` at `path` carrying a SpeleoDB link for `project_id`
     /// with the given dirty bit.
     fn seed_linked_stalx(path: &Path, project_id: &str, dirty: bool) {
-        seed_linked(
+        write_v2(
             path,
             "Cached",
-            &SpeleoLink {
+            Some(&SpeleoLink {
                 endpoint: "http://speleo.test/".to_owned(),
                 project_id: project_id.to_owned(),
                 project_name: "Cached".to_owned(),
@@ -2308,7 +2308,7 @@ mod tests {
                 // Current linked fixtures carry an explicit project policy. Legacy
                 // NULL behavior is covered separately by the undo-policy tests.
                 undo_mode: Some(crate::models::UndoMode::Full),
-            },
+            }),
         );
     }
 
@@ -2846,10 +2846,10 @@ mod tests {
         // gate, so a token-less session can't keep mutating a project it can't push.
         let temp = TempDir::new().expect("temp");
         let path = temp.path().join("remote.stalx");
-        seed_linked(
+        write_v2(
             &path,
             "Remote",
-            &SpeleoLink {
+            Some(&SpeleoLink {
                 endpoint: "http://x/".to_owned(),
                 project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
                 project_name: "Remote".to_owned(),
@@ -2858,7 +2858,7 @@ mod tests {
                 last_edit_at: None,
                 last_verify_at: None,
                 undo_mode: None,
-            },
+            }),
         );
 
         let state = AppState::new().expect("state");
@@ -2885,10 +2885,10 @@ mod tests {
     fn remote_fixture_with_dirty_bit(dirty: bool) -> (TempDir, AppState) {
         let temp = TempDir::new().expect("temp");
         let path = temp.path().join("remote.stalx");
-        seed_linked(
+        write_v2(
             &path,
             "Remote",
-            &SpeleoLink {
+            Some(&SpeleoLink {
                 endpoint: "http://x/".to_owned(),
                 project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
                 project_name: "Remote".to_owned(),
@@ -2897,7 +2897,7 @@ mod tests {
                 last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
                 last_verify_at: None,
                 undo_mode: None,
-            },
+            }),
         );
 
         let state = AppState::new().expect("state");

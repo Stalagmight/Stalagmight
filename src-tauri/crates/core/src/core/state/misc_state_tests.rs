@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::synthetic_stalx_tests::{link, write_v2_project};
+use super::stalx_fixtures::{link, write_v2_project};
 use super::topology_kit::{
     assert_near, assert_round_trip, assert_same, assert_same_xy, empty, line_from, meta, north,
     open, origin, project, raw_xy, run, shot, slot, snapshot, st, xy, Opened,
@@ -1348,7 +1348,7 @@ fn dirty_bit_is_idempotent_and_set_only() {
     run(&state, Command::SaveProject { path: None });
     assert!(dirty_bit(&state), "the dirty bit stays set after a save");
     let path = state.open_project_path().unwrap();
-    let on_disk = super::synthetic_stalx_tests::link_on_disk(&path).unwrap();
+    let on_disk = super::stalx_fixtures::link_on_disk(&path).unwrap();
     assert!(on_disk.has_unpushed_edits, "and the file says so");
 }
 
@@ -1496,7 +1496,7 @@ fn save_as_onto_the_managed_file_itself_is_a_normal_save_that_keeps_the_link() {
 
     assert!(result.success, "{:?}", result.error);
     assert!(result.unlinked_copy_path.is_none(), "not a copy save");
-    let on_disk = super::synthetic_stalx_tests::link_on_disk(&open_path);
+    let on_disk = super::stalx_fixtures::link_on_disk(&open_path);
     assert_eq!(
         on_disk.map(|l| l.project_id),
         Some(REMOTE_ID.to_string()),
@@ -1531,7 +1531,7 @@ fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() 
     );
     let path = state.open_project_path().unwrap();
     assert!(
-        super::synthetic_stalx_tests::link_on_disk(&path)
+        super::stalx_fixtures::link_on_disk(&path)
             .unwrap()
             .has_unpushed_edits
     );

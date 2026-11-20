@@ -9,7 +9,7 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use super::synthetic_stalx_tests::write_v2;
+use super::stalx_fixtures::write_v2;
 use super::AppState;
 use crate::models::SpeleoLink;
 use crate::speleodb::StartEditingResult;

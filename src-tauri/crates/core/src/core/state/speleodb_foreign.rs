@@ -492,7 +492,7 @@ impl AppState {
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::super::synthetic_stalx_tests::{
+    use super::super::stalx_fixtures::{
         legacy_linked_project, link_on_disk, write_legacy_link_only, write_v2,
     };
     use super::*;

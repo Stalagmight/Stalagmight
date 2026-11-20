@@ -1414,9 +1414,8 @@ model's construction API (`models::survey` `build.rs`: `add_line`,
 `set_placement`, `push_datum`, `push_closure`, or the commands themselves),
 writes it with `stalx_v2::encode` into a `TempDir`, and opens it through
 `AppState` like the app does. The core's test kits do this
-(`state/topology_kit.rs`, `stalx_v2_fixtures.rs`,
-`synthetic_stalx_tests.rs`, `robustness_kit.rs`). A file is compared by its
-canonical bytes; nothing needs masking but `modified_at`.
+(`state/topology_kit.rs`, `stalx_fixtures.rs`, `robustness_kit.rs`). A file is
+compared by its canonical bytes; nothing needs masking but `modified_at`.
 
 A test that needs an OLD file writes it at run time with the frozen 0.6.0 save
 (`stalagmight-legacy`'s `writer` feature, `write_v18`, both 0.6.0 file shapes),

@@ -14,7 +14,7 @@
 use chrono::{DateTime, Utc};
 
 use super::speleodb_push::push_snapshot;
-use super::stalx_v2_fixtures::{extras_for, fixture_link, line_survey, raw_entries};
+use super::stalx_fixtures::{extras_for, fixture_link, line_survey, raw_entries};
 use crate::models::survey::Project;
 use crate::models::UndoMode;
 use crate::persistence::stalx_v2::{decode, DecodeOptions, Decoded, Extras, History, RawJson};

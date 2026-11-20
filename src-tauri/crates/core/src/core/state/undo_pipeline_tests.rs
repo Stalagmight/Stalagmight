@@ -599,7 +599,7 @@ fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
     crate::test_helpers::with_isolated_config(|| {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("post-push-history.stalx");
-        let mut p = super::stalx_v2_fixtures::line_survey("Post push");
+        let mut p = super::stalx_fixtures::line_survey("Post push");
         p.modified_at = p.created_at;
         write_v2(&path, &p);
         let state = open(&path);
