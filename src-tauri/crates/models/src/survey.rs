@@ -56,6 +56,9 @@ mod topology;
 mod types;
 mod validate;
 
+// Undo and redo (plan 8).
+pub mod changeset;
+
 // Commands (plan 4-5).
 mod append;
 mod edit;
@@ -240,6 +243,7 @@ pub use types::{
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
 
 pub use append::{AppendSummary, ShotUuidRename};
+pub use changeset::{Changeset, HistoryEntry, Refusal};
 pub use edit::{
     CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
     TornTie, TornTieKind, TornTieReason,
