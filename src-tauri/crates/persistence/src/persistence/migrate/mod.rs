@@ -191,6 +191,25 @@ pub enum MigrateError {
 }
 
 impl MigrateError {
+    /// Whether this build refuses to CONVERT a file that is not damaged: the
+    /// frozen 0.6.0 open accepted it (or it is only over that open's size
+    /// cap), and the conversion cannot represent it. Such a file is reported
+    /// as one this version cannot convert, never as corrupt, and no repair
+    /// is run on it (review findings D-migration-upgrade-9,
+    /// J-docs-tests-truth-6). The legacy reader's other refusals (not
+    /// SQLite, a failed integrity or foreign-key check, a newer or hostile
+    /// schema, an I/O error) are about the file itself.
+    pub fn is_conversion_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::Legacy(LegacyError::TooLarge { .. })
+                | Self::LineIdOutOfRange(_)
+                | Self::DuplicateLineId(_)
+                | Self::StationIdsExhausted
+                | Self::Invalid(_)
+        )
+    }
+
     /// A stable name for the error's class, safe to print for a private file
     /// (never the error text, which can quote the file).
     pub fn class(&self) -> &'static str {

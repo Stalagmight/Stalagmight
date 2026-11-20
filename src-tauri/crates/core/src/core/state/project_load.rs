@@ -136,7 +136,7 @@ fn decode_error(path: &Path, error: &DecodeError) -> LoadError {
 }
 
 /// The load error of a migration refusal.
-fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
+pub(super) fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
     match error {
         MigrateError::Legacy(LegacyError::NewerSchema { found, supported }) => {
             LoadError::newer_schema(
@@ -158,6 +158,14 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
                 LoadError::new("IO", e.to_string())
             }
         }
+        refusal if refusal.is_conversion_refusal() => {
+            tracing::warn!(
+                class = refusal.class(),
+                purpose = "never call a healthy file corrupt",
+                "this build cannot convert a legacy project"
+            );
+            LoadError::cannot_convert(&conversion_refusal_reason(refusal), &path_text(path))
+        }
         other => {
             tracing::warn!(
                 class = other.class(),
@@ -165,6 +173,18 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
             );
             LoadError::corrupt(other.to_string(), &path_text(path))
         }
+    }
+}
+
+/// What a file the conversion refuses needs, in words
+/// ([`MigrateError::is_conversion_refusal`]).
+pub(super) fn conversion_refusal_reason(error: &MigrateError) -> String {
+    match error {
+        MigrateError::Legacy(LegacyError::TooLarge { max }) => format!(
+            "it is larger than the {} MiB this version reads",
+            max / (1024 * 1024)
+        ),
+        other => other.to_string(),
     }
 }
 

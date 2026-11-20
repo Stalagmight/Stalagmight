@@ -258,25 +258,146 @@ fn the_open_project_and_newer_files_are_refused() {
     assert_eq!(std::fs::read_to_string(&newer).unwrap(), content);
 }
 
-/// A legacy SQLite file keeps 0.6.0's repair: a numbered backup, then
-/// REINDEX and VACUUM in place.
+/// A 0.6.0 file that opens needs no repair: Attempt Repair writes nothing
+/// and says so (0.6.0's REINDEX and VACUUM would only rewrite a healthy
+/// original; review finding D-migration-upgrade-9).
 #[test]
-fn a_legacy_file_keeps_the_sqlite_repair() {
+fn a_legacy_file_that_opens_is_not_repaired() {
+    crate::app_dirs::init_for_test();
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("legacy.stalx");
-    super::legacy_fixture_kit::write_legacy_file(
-        &path,
-        &super::legacy_fixture_kit::Legacy::new("Legacy".to_string(), None),
-    );
+    super::stalx_fixtures::legacy_linked_project(&path, None);
+    let before = std::fs::read(&path).unwrap();
 
     let result = state().repair_project_file(&path).unwrap();
 
     assert!(result.success, "{}", result.message);
-    assert_eq!(
-        result.message,
-        "Repair succeeded - database integrity restored."
+    assert!(
+        result.message.starts_with("Nothing to repair"),
+        "{}",
+        result.message
     );
-    assert!(Path::new(&result.backup_path).exists());
+    assert_eq!(result.backup_path, "");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing written");
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "no backup"
+    );
+}
+
+/// A 0.6.0 file the open refuses for damage (a merge naming lines that do
+/// not exist: a foreign-key violation 0.6.0's open refuses) gets 0.6.0's
+/// repair behind a numbered backup, and the answer is the open's: REINDEX
+/// and VACUUM leave the violation, so the repair does not say it succeeded
+/// (review finding J-docs-tests-truth-6). Injection: report success on the
+/// integrity check alone, as before, and this reads "Repair succeeded".
+#[test]
+fn a_damaged_legacy_file_is_repaired_and_judged_by_the_open() {
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("legacy.stalx");
+    super::stalx_fixtures::legacy_linked_project(&path, None);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         INSERT INTO station_merges (station_a_section, station_a_index, \
+         station_b_section, station_b_index, merged_at) \
+         VALUES (9998, 0, 9999, 0, '2023-11-14T22:13:20+00:00');",
+    )
+    .unwrap();
+    drop(conn);
+    assert!(
+        !state().open_project(path.clone()).success,
+        "the open refuses it"
+    );
+
+    let result = state().repair_project_file(&path).unwrap();
+
+    assert!(!result.success, "{}", result.message);
+    assert!(
+        result
+            .message
+            .starts_with("Repair completed, but the project still cannot be opened"),
+        "{}",
+        result.message
+    );
+    assert!(Path::new(&result.backup_path).exists(), "behind a backup");
+}
+
+/// A file this build cannot convert is not damaged: no repair runs, and the
+/// message says what it needs. A damaged one is repaired.
+#[test]
+fn a_conversion_refusal_is_never_repaired() {
+    use crate::persistence::migrate::{LegacyError, MigrateError};
+    let refused =
+        super::project_salvage::legacy_without_repair(Err(&MigrateError::StationIdsExhausted))
+            .expect("no repair");
+    assert!(!refused.success);
+    assert!(
+        refused
+            .message
+            .starts_with("Not repaired: the file is not damaged."),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("no station id is left"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        super::project_salvage::legacy_without_repair(Err(&MigrateError::Legacy(
+            LegacyError::Corrupt("damaged".to_owned())
+        )))
+        .is_none()
+    );
+}
+
+/// A migration refusal of a file 0.6.0 opened is "this file needs ...", with
+/// the reason, never `CORRUPT` (which opens the recovery dialog and its
+/// repair); real damage stays `CORRUPT` (review findings
+/// D-migration-upgrade-9, J-docs-tests-truth-6). Injection: map every
+/// migration error but the three typed ones to `LoadError::corrupt`, as
+/// before.
+#[test]
+fn a_conversion_refusal_opens_as_cannot_convert_never_corrupt() {
+    use crate::models::LineId;
+    use crate::persistence::migrate::{LegacyError, MigrateError};
+    let path = Path::new("/surveys/cave.stalx");
+    for refusal in [
+        MigrateError::StationIdsExhausted,
+        MigrateError::DuplicateLineId(7),
+        MigrateError::LineIdOutOfRange(LineId::MAX),
+        MigrateError::Invalid(Vec::new()),
+        MigrateError::Legacy(LegacyError::TooLarge { max: 1 << 30 }),
+    ] {
+        let error = super::project_load::migrate_error(path, &refusal);
+        assert_eq!(error.code, "CANNOT_CONVERT", "{refusal}");
+        assert!(
+            error.message.starts_with("This file needs converting"),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("corrupt"), "{}", error.message);
+        assert_eq!(error.details.as_deref(), Some("/surveys/cave.stalx"));
+    }
+    let too_large = super::project_load::migrate_error(
+        path,
+        &MigrateError::Legacy(LegacyError::TooLarge { max: 1 << 30 }),
+    );
+    assert!(
+        too_large
+            .message
+            .contains("larger than the 1024 MiB this version reads"),
+        "{}",
+        too_large.message
+    );
+    let damaged = super::project_load::migrate_error(
+        path,
+        &MigrateError::Legacy(LegacyError::Corrupt("damaged".to_owned())),
+    );
+    assert_eq!(damaged.code, "CORRUPT");
 }
 
 #[test]
