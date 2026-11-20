@@ -281,10 +281,12 @@ back into a loop closure before the offset re-solve (see
 1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
    destination folder is not reachable (see Failure classification below)
 2. Load display settings from current database or in-memory cache
-3. Write project data to temp file (file.stalx.tmp)
+3. Write project data to temp file (file.stalx.tmp), opened with
+   `Database::open_staging`: SQLite's per-commit syncs off
 4. Copy display settings to temp database
 5. Persist undo/redo stacks synchronously into the temp database
-6. Close temp database, atomically rename to final path
+6. Close temp database, sync it to disk once, atomically rename to final path,
+   sync the folder
 7. Reopen database at final path
 8. Update project.file_path
 9. Swap in the new database handle
@@ -380,8 +382,25 @@ The frontend calls `refreshProjectState()` after a save ONLY when the project en
 All saves use a temp file with atomic rename to prevent data loss on crash or power failure:
 
 1. Write to `file.stalx.tmp` (new SQLite database)
-2. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
-3. On failure: delete `file.stalx.tmp`, original file untouched
+2. Close it and sync it to disk (`sync_staged_save`)
+3. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
+4. Sync the folder, so the rename itself survives a power loss (Unix; best effort, the file is already in place)
+5. On failure before the rename: delete `file.stalx.tmp`, original file untouched
+
+### One sync per save
+
+The temp file is written through `Database::open_staging`, which sets `PRAGMA synchronous = OFF`. Building a file takes 39 commits (each `CREATE TABLE`, each display setting, the survey, the history), and with SQLite's default each one synced the journal twice, the folder and the database: 156 syncs for the temp file, about 0.7 s on a fast NVMe disk whatever the project's size. A save now makes four: the temp file, the folder, and the two config files the recent-projects update rewrites. The app never opens the temp file as the project before the rename, so those syncs bought nothing; one sync of the closed file before the rename gives the same guarantee.
+
+What the staging connection keeps:
+
+- **The rollback journal** (DELETE mode, like every other connection). A failed transaction still rolls back, and the copies of the undo history and of the ignored warnings rely on that. `PRAGMA journal_mode = OFF` would leave a failed copy's spilled pages in the file.
+- **The bytes.** A staging file is byte-identical to the same writes through `Database::open`, so the format, older builds and outside readers see no difference.
+
+A process killed during a save leaves exactly the files it left before: its writes are in the OS whether or not they were synced. A power loss before the sync can leave the temp in a state no journal repairs, but the project file is untouched until the rename, and the sync runs before the rename, so the project file's name never points at data that is not on disk. A sync failure (a write error the OS reports only when syncing, such as an I/O error or a full network drive) fails the save before the rename.
+
+One reader does see a leftover temp: the recovery dialog lists `<project>.stalx.tmp` as a backup (`Database::list_backups`), and Restore installs it after a quick check of its structure. A temp left by a killed process is what it always was (the crash-timing gate checks it). A temp left by a power loss during a save could before hold only whole commits, a prefix of the save; it can now also mix pages of different commits, which that quick check does not always catch. Restore copies it over the project, keeping the replaced file as `<project>.stalx.pre-restore`.
+
+The project file's own connection (`Database::open`, reopened after the rename) keeps SQLite's default `synchronous = FULL`: its writes (display settings, the SpeleoDB dirty bit) go into the file itself.
 
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
 

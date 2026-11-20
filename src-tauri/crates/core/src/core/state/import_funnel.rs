@@ -20,6 +20,13 @@
 //!   its name; a comment the file gives it is joined to its own (the merge
 //!   rule, plan 5.1).
 //!
+//! One line that cannot be imported costs the user that line, never the file
+//! (#814): a line the project refuses is left out, a line whose placement
+//! cannot be made is imported as a free piece at the origin (a line joining
+//! a refused one imports on its own), and the receipt names each in
+//! `line_problems`. Only when every line is refused does the import fail.
+//! The DMP wizard keeps the whole import or nothing ([`RefusedLine`]).
+//!
 //! Lines are built in one pass with the low-level construction API (the
 //! topology and the uuid index are rebuilt once, not per line), the anchors
 //! are settled once, and the closures are judged against the solve's own
@@ -61,6 +68,30 @@ pub(super) struct ImportRequest<'a> {
     pub(super) updates: &'a [ExistingShotUpdate],
     pub(super) mode: VirtualShotMode,
     pub(super) surface_elevation: Option<f64>,
+    pub(super) on_refused: RefusedLine,
+}
+
+/// What an import does when one line cannot be created or placed (#814).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefusedLine {
+    /// Leave it out (or unconnected), name it in the receipt, import the rest.
+    SkipAndReport,
+    /// Roll the whole import back, as every import did before #814: the DMP
+    /// wizard maps the returned line ids onto its configs by position,
+    /// records a content hash per selected line and sends overlap edits tied
+    /// to particular lines, so a skipped or unconnected line would break all
+    /// three.
+    FailImport,
+}
+
+/// What [`LineBuilder::build`] does with a placement it cannot make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Unplaceable {
+    /// Refuse the line (create-and-merge: the placement is the step).
+    Refuse,
+    /// Build the line as a free piece at the origin, as an `Origin` import
+    /// places it, and report why ([`BuiltLine::unplaced`]).
+    Float,
 }
 
 /// One step of an import as 0.6.0's batch recorded it, for the history
@@ -107,18 +138,41 @@ pub(super) struct ImportOutcome {
     pub(super) junctions: Vec<StationId>,
     pub(super) closure_ids: Vec<ClosureId>,
     pub(super) section_ids: Vec<SectionId>,
+    /// One receipt entry per line the import lost or could not connect
+    /// (#814): the refused lines first, then the unconnected ones, each in
+    /// file order.
+    pub(super) line_problems: Vec<String>,
 }
 
 /// Why one line could not be built. The funnel and the create-and-merge
 /// recipe word it differently (0.6.0's texts).
 #[derive(Debug)]
 pub(super) enum LineError {
-    /// The line itself is refused (today's create-line refusals).
+    /// The line itself is refused (today's create-line refusals), before
+    /// anything is added.
     Create(String),
-    /// Its placement is refused.
+    /// Its placement is refused, before anything is added.
     Placement(String),
     /// A same-batch placement names a line not created yet.
     NotCreatedYet(u32),
+    /// The model refused a station or the line after the line's stations were
+    /// minted: the project is part-way, so the whole edit is refused (the
+    /// pipeline rolls it back).
+    Fatal(String),
+}
+
+/// Where a new line goes: what its placement becomes once checked.
+#[derive(Debug, Clone, Copy)]
+enum Plan {
+    /// A free piece, its file's first station at the origin plus `offset`.
+    Free { offset: Option<Coordinates> },
+    /// A datum on the new line's station `station_index`.
+    Datum {
+        coordinates: GpsCoordinates,
+        station_index: u32,
+    },
+    /// The new line's station is an existing (or same-batch) one.
+    Join(Junction),
 }
 
 /// The placement's station on the new line, and what it is placed on.
@@ -150,6 +204,10 @@ pub(super) struct BuiltLine {
     pub(super) id: LineId,
     pub(super) warnings: Vec<ValidationWarning>,
     pub(super) junction: Option<(usize, StationId, StationRef)>,
+    /// Why its placement could not be made, when [`Unplaceable::Float`]
+    /// built it as a free piece instead (a [`LineError::Placement`] or
+    /// [`LineError::NotCreatedYet`]).
+    pub(super) unplaced: Option<LineError>,
 }
 
 impl LineBuilder {
@@ -194,7 +252,10 @@ impl LineBuilder {
     /// Build `config` as a new line (module docs), with `created` mapping the
     /// import indices of the lines built so far to their ids. Datums and
     /// placements are added; the caller settles the anchors once for the
-    /// whole import (`ctx` collects the placements set here).
+    /// whole import (`ctx` collects the placements set here). A refusal
+    /// other than [`LineError::Fatal`] comes before anything is added; a
+    /// placement that cannot be made is refused or floated as `unplaceable`
+    /// says.
     pub(super) fn build(
         &mut self,
         project: &mut Project,
@@ -202,6 +263,7 @@ impl LineBuilder {
         created: &HashMap<u32, LineId>,
         ctx: &mut EditContext,
         steps: &mut Vec<ImportStep>,
+        unplaceable: Unplaceable,
     ) -> Result<BuiltLine, LineError> {
         let id = self.next_line_id;
         let mut shots = prepared_shots(config);
@@ -209,35 +271,14 @@ impl LineBuilder {
         let warnings = validation_warnings(project, config.name.as_deref(), &shots);
         let n = shots.len();
 
-        let junction = self.junction_of(project, config, id, n, created)?;
-        if let ImportPlacement::ZeroDatum {
-            coordinates,
-            station_index,
-        } = &config.placement
-        {
-            if *station_index as usize > n {
-                return Err(LineError::Placement(unknown_slot(id, *station_index)));
-            }
-            GpsCoordinates::validate(
-                coordinates.latitude,
-                coordinates.longitude,
-                coordinates.depth_reference,
-            )
-            .map_err(LineError::Placement)?;
-        }
-        let manual_offset = match &config.placement {
-            ImportPlacement::Manual {
-                offset: Some(offset),
-                ..
-            } => {
-                if !(offset.x.is_finite() && offset.y.is_finite() && offset.z.is_finite()) {
-                    return Err(LineError::Placement(
-                        "Move offset must be finite (no NaN/inf)".to_string(),
-                    ));
-                }
-                Some(*offset)
-            }
-            _ => None,
+        let (plan, unplaced) = match self.plan(project, config, id, n, created) {
+            Ok(plan) => (plan, None),
+            Err(e) if unplaceable == Unplaceable::Float => (Plan::Free { offset: None }, Some(e)),
+            Err(e) => return Err(e),
+        };
+        let junction = match plan {
+            Plan::Join(j) => Some(j),
+            Plan::Free { .. } | Plan::Datum { .. } => None,
         };
 
         let names = station_names(project, config, n, junction);
@@ -248,7 +289,7 @@ impl LineBuilder {
                 _ => chain.push(
                     project
                         .mint_station(name)
-                        .map_err(|e| LineError::Create(e.to_string()))?,
+                        .map_err(|e| LineError::Fatal(e.to_string()))?,
                 ),
             }
         }
@@ -290,13 +331,13 @@ impl LineBuilder {
         };
         project
             .insert_line(line)
-            .map_err(|e| LineError::Create(e.to_string()))?;
+            .map_err(|e| LineError::Fatal(e.to_string()))?;
         self.next_line_id = id.saturating_add(1);
 
         apply_station_comments(project, config, &chain, junction);
         steps.push(ImportStep::CreateLine { line: id });
-        match &config.placement {
-            ImportPlacement::Origin | ImportPlacement::Manual { .. } => {
+        match plan {
+            Plan::Free { offset } => {
                 // The file's first station: the line's last after a reverse.
                 let anchor = if config.reverse {
                     chain.last()
@@ -304,38 +345,34 @@ impl LineBuilder {
                     chain.first()
                 };
                 if let Some(&station) = anchor {
-                    let (x, y) = manual_offset.map_or((0.0, 0.0), |o| (o.x, o.y));
+                    let (x, y) = offset.map_or((0.0, 0.0), |o| (o.x, o.y));
                     project.placements.push(Placement { station, x, y });
                     ctx.placed.push(station);
                 }
-                if let Some(offset) = manual_offset {
+                if let Some(offset) = offset {
                     steps.push(ImportStep::Move { line: id, offset });
                 }
             }
-            ImportPlacement::ZeroDatum {
+            Plan::Datum {
                 coordinates,
                 station_index,
             } => {
-                if let Some(&station) = chain.get(*station_index as usize) {
+                if let Some(&station) = chain.get(station_index as usize) {
                     project.push_datum(ZeroDatum {
                         via: Some(id),
-                        ..ZeroDatum::new(station, *coordinates)
+                        ..ZeroDatum::new(station, coordinates)
                     });
                 }
                 steps.push(ImportStep::Datum {
-                    slot: StationRef::new(id, *station_index),
-                    gps: *coordinates,
+                    slot: StationRef::new(id, station_index),
+                    gps: coordinates,
                 });
             }
-            ImportPlacement::FromExisting { .. }
-            | ImportPlacement::FromImporting { .. }
-            | ImportPlacement::ManualSnap { .. } => {
-                if let Some(j) = junction {
-                    steps.push(ImportStep::Join {
-                        slot: StationRef::new(id, j.index as u32),
-                        target: j.target,
-                    });
-                }
+            Plan::Join(j) => {
+                steps.push(ImportStep::Join {
+                    slot: StationRef::new(id, j.index as u32),
+                    target: j.target,
+                });
             }
         }
         self.chains.insert(id, chain);
@@ -343,7 +380,62 @@ impl LineBuilder {
             id,
             warnings,
             junction: junction.map(|j| (j.index, j.station, j.target)),
+            unplaced,
         })
+    }
+
+    /// What `config`'s placement becomes for the new line `id` of `n` shots,
+    /// or why it cannot be made. Reads the project only.
+    fn plan(
+        &self,
+        project: &Project,
+        config: &ImportLineConfig,
+        id: LineId,
+        n: usize,
+        created: &HashMap<u32, LineId>,
+    ) -> Result<Plan, LineError> {
+        if let Some(junction) = self.junction_of(project, config, id, n, created)? {
+            return Ok(Plan::Join(junction));
+        }
+        match &config.placement {
+            ImportPlacement::ZeroDatum {
+                coordinates,
+                station_index,
+            } => {
+                if *station_index as usize > n {
+                    return Err(LineError::Placement(unknown_slot(id, *station_index)));
+                }
+                GpsCoordinates::validate(
+                    coordinates.latitude,
+                    coordinates.longitude,
+                    coordinates.depth_reference,
+                )
+                .map_err(LineError::Placement)?;
+                Ok(Plan::Datum {
+                    coordinates: *coordinates,
+                    station_index: *station_index,
+                })
+            }
+            ImportPlacement::Manual {
+                offset: Some(offset),
+                ..
+            } => {
+                if !(offset.x.is_finite() && offset.y.is_finite() && offset.z.is_finite()) {
+                    return Err(LineError::Placement(
+                        "Move offset must be finite (no NaN/inf)".to_string(),
+                    ));
+                }
+                Ok(Plan::Free {
+                    offset: Some(*offset),
+                })
+            }
+            // A joining placement returned above (a junction or a refusal).
+            ImportPlacement::Origin
+            | ImportPlacement::Manual { offset: None, .. }
+            | ImportPlacement::FromExisting { .. }
+            | ImportPlacement::FromImporting { .. }
+            | ImportPlacement::ManualSnap { .. } => Ok(Plan::Free { offset: None }),
+        }
     }
 
     /// The chain position and station a joining placement puts the new line
@@ -712,42 +804,105 @@ pub(super) fn import_lines(
     let mut builder = LineBuilder::new(project, placement_targets(request.lines));
     let mut ctx = EditContext::none();
     let mut created: HashMap<u32, LineId> = HashMap::new();
+    // What one bad line cost (#814): lines the project refused and left
+    // out, and lines imported unconnected because their placement could not
+    // be made.
+    let mut skipped: Vec<String> = Vec::new();
+    let mut unconnected: Vec<String> = Vec::new();
     for (idx, config) in request.lines.iter().enumerate() {
-        let name = config.name.as_deref().unwrap_or("unnamed");
-        let built = builder
-            .build(project, config, &created, &mut ctx, &mut outcome.steps)
-            .map_err(|e| funnel_error(name, &config.placement, e))?;
+        // Sanitised where the file-controlled name is born (0.6.0's F12c):
+        // the DMP route never calls `decorate_receipt`.
+        let line_name = receipt_line_name(config, idx);
+        let built = match builder.build(
+            project,
+            config,
+            &created,
+            &mut ctx,
+            &mut outcome.steps,
+            Unplaceable::Float,
+        ) {
+            Ok(built) => built,
+            Err(LineError::Create(why)) => {
+                // Refused before anything was added: nothing to undo.
+                tracing::debug!(
+                    line = idx,
+                    reason = %receipt_reason(&why),
+                    purpose = "import every line that can be imported (#814)",
+                    "Line refused; skipping it and importing the rest"
+                );
+                let entry = format!(
+                    "Line \"{line_name}\" was not imported: {}",
+                    receipt_reason(&why)
+                );
+                if request.on_refused == RefusedLine::FailImport {
+                    return Err(whole_import_undone(&entry));
+                }
+                skipped.push(entry);
+                continue;
+            }
+            Err(error) => {
+                let name = config.name.as_deref().unwrap_or("unnamed");
+                return Err(funnel_error(name, &config.placement, error));
+            }
+        };
         created.insert(config.line_index, built.id);
         outcome.line_ids.push(built.id);
+        outcome.shot_count = outcome.shot_count.saturating_add(config.shots.len() as u32);
         outcome.warnings.extend(built.warnings);
         if let Some((_, station, _)) = built.junction {
             outcome.junctions.push(station);
         }
-        if matches!(config.placement, ImportPlacement::ZeroDatum { .. }) {
+        if let Some(error) = built.unplaced {
+            let entry = unplaced_problem(&line_name, &config.placement, error);
+            if request.on_refused == RefusedLine::FailImport {
+                return Err(whole_import_undone(&entry));
+            }
+            unconnected.push(entry);
+        } else if matches!(config.placement, ImportPlacement::ZeroDatum { .. }) {
             outcome.zero_datum_count += 1;
             if outcome.zero_datum_line.is_none() {
-                // Sanitised where the file-controlled name is born (0.6.0's
-                // F12c): the DMP route never calls `decorate_receipt`.
-                outcome.zero_datum_line = Some(sanitize_display_text(
-                    &config
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("Line {}", idx + 1)),
-                    MAX_RECEIPT_NAME_LEN,
-                ));
+                outcome.zero_datum_line = Some(line_name);
             }
         }
+    }
+    // One log line per import, not per refused line: a hostile file
+    // controls how many lines it refuses.
+    if !skipped.is_empty() || !unconnected.is_empty() {
+        tracing::warn!(
+            refused = skipped.len(),
+            unconnected = unconnected.len(),
+            purpose = "import every line that can be imported (#814)",
+            "Some lines were left out or imported unconnected"
+        );
+    }
+    // Every line refused: there is no partial import to keep, so this is the
+    // one per-line outcome that still fails the import, naming why. The
+    // pipeline's rollback also undoes the overlap updates applied above.
+    if outcome.line_ids.is_empty() && !request.lines.is_empty() {
+        return Err(nothing_imported_message(&skipped));
     }
     project.settle_anchors(&before, &ctx);
 
     let mut labelled: Vec<(u32, LineId)> = created.iter().map(|(&i, &id)| (i, id)).collect();
     labelled.sort_unstable();
     outcome.labelled_lines = labelled.into_iter().map(|(_, id)| id).collect();
-    outcome.shot_count = request.lines.iter().map(|c| c.shots.len() as u32).sum();
 
     outcome.section_ids = assign_sections_by_name(project, request.lines, &created)?;
     import_closures(project, request.closures, &builder, &created, &mut outcome);
-    track_hashes(project, request.file_hash, request.line_hashes);
+    // The file hash is kept on a partial import: part of the file did land,
+    // so re-importing it unchanged should be flagged (a file fixed to bring
+    // the lost line in hashes differently). The line hashes are one per
+    // SELECTED line, not per landed one, so a partial import records none:
+    // a refused line marked "already imported" would be deselected on the
+    // next import of the same file.
+    let line_hashes = if skipped.is_empty() {
+        request.line_hashes
+    } else {
+        &[]
+    };
+    track_hashes(project, request.file_hash, line_hashes);
+    skipped.extend(unconnected);
+    outcome.line_problems = skipped;
     let scope: BTreeSet<LineId> = outcome.line_ids.iter().copied().collect();
     let changed = super::import_classify::classify_virtual_shots(project, request.mode, &scope);
     if changed > 0 {
@@ -778,10 +933,94 @@ pub(super) fn import_lines(
     Ok(outcome)
 }
 
+/// How a line the file names reads in an import receipt (#814): its name
+/// from the file, sanitised like every file-controlled receipt string, or its
+/// position when it has none.
+fn receipt_line_name(config: &ImportLineConfig, idx: usize) -> String {
+    sanitize_display_text(
+        &config
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Line {}", idx + 1)),
+        MAX_RECEIPT_NAME_LEN,
+    )
+}
+
+/// Why a line was refused, as a receipt entry carries it. The reason names
+/// the line and its stations from the file's own text (`Shot Main: 1 -> 2 has
+/// zero length`), so it gets the same filter and bound as the line's name: no
+/// bidi override or control character reaches the receipt or the failure
+/// message built from it.
+fn receipt_reason(reason: &str) -> String {
+    sanitize_display_text(reason, MAX_RECEIPT_NAME_LEN)
+}
+
+/// The receipt entry for a line that imported but whose `placement` could
+/// not be made (`error`, from [`BuiltLine::unplaced`]).
+fn unplaced_problem(line_name: &str, placement: &ImportPlacement, error: LineError) -> String {
+    let what = match placement {
+        ImportPlacement::ZeroDatum { .. } => "its zero datum could not be set",
+        ImportPlacement::FromExisting { .. } => {
+            "its connection to the existing survey could not be made"
+        }
+        ImportPlacement::FromImporting { .. } => {
+            "its connection to the line it joins could not be made"
+        }
+        ImportPlacement::Manual { .. } => "it could not be moved to where it was placed",
+        ImportPlacement::ManualSnap { .. } => "it could not be snapped to its station",
+        ImportPlacement::Origin => "it could not be placed",
+    };
+    match error {
+        // The line it joins was refused above, or comes later in the list.
+        LineError::NotCreatedYet(_) => format!(
+            "Line \"{line_name}\" was imported on its own: the line it joins was not imported"
+        ),
+        LineError::Placement(why) | LineError::Create(why) | LineError::Fatal(why)
+            if !why.is_empty() =>
+        {
+            format!(
+                "Line \"{line_name}\" was imported, but {what}: {}",
+                receipt_reason(&why)
+            )
+        }
+        LineError::Placement(_) | LineError::Create(_) | LineError::Fatal(_) => {
+            format!("Line \"{line_name}\" was imported, but {what}")
+        }
+    }
+}
+
+/// The failure of an all-or-nothing import ([`RefusedLine::FailImport`]):
+/// the first line problem, after saying that nothing was kept.
+fn whole_import_undone(problem: &str) -> String {
+    format!(
+        "The import was undone and nothing was kept, because one line could not be \
+         imported whole. {problem}"
+    )
+}
+
+/// The failure message when no line of the file could be imported, naming
+/// the first few reasons (#814).
+fn nothing_imported_message(skipped: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut message = "Nothing was imported: no line in the file could be imported.".to_string();
+    for line in skipped.iter().take(SHOWN) {
+        message.push(' ');
+        message.push_str(line);
+        message.push('.');
+    }
+    if skipped.len() > SHOWN {
+        let more = skipped.len() - SHOWN;
+        message = format!("{message} ({more} more lines were not imported.)");
+    }
+    message
+}
+
 /// 0.6.0's wording of a line the funnel could not build.
 fn funnel_error(name: &str, placement: &ImportPlacement, error: LineError) -> String {
     match error {
-        LineError::Create(why) => format!("Failed to create line \"{name}\": {why}"),
+        LineError::Create(why) | LineError::Fatal(why) => {
+            format!("Failed to create line \"{name}\": {why}")
+        }
         LineError::NotCreatedYet(index) => format!(
             "Line \"{name}\" references import line index {index} which has not been created yet"
         ),

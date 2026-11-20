@@ -101,6 +101,12 @@ mod characterization_dump_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod closure_promotion_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -279,6 +285,14 @@ mod multi_datum_tests;
 mod name_rules_tests;
 #[cfg(sg_unported)]
 mod open_undo_bugs_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod partial_import_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

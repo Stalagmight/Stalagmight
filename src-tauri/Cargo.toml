@@ -26,7 +26,7 @@ members = [
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
-exclude = ["vendor/compass_data"]
+exclude = ["vendor/compass_data", "vendor/igrf"]
 
 # Shared keys future members inherit via `key.workspace = true`. Deliberately
 # no `version` here: members declare their own 0.0.0, and the root package
@@ -71,13 +71,14 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 rmp-serde = "1"
 serde_bytes = "0.11"
-igrf = "0.2"
+# Vendored fork carrying IGRF-14 (see vendor/igrf/MODIFICATIONS.md).
+igrf = { path = "vendor/igrf" }
 proj4rs = "0.1"
 time = "0.3"
 tempfile = "3.24.0"
 
 # SpeleoDB's published async SDK and its native-file transport.
-speleodb-api = "=0.8.0"
+speleodb-api = "=0.9.0"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 # The TLS stack reqwest already uses (same version, no extra features). Named
 # directly only so a handshake / certificate failure can be told apart by its

@@ -273,19 +273,29 @@ fn check_guard(dest: &Path, guard: Guard<'_>) -> Result<(), WriteError> {
 /// Make the rename durable: fsync the directory that holds `dest`. Unix only
 /// (a directory cannot be opened for syncing on Windows, where the rename is
 /// journaled by NTFS). A failure is logged, not returned: the new file is
-/// already in place.
+/// already in place. A folder that never syncs (some network or removable
+/// volumes) warns once per run and is a debug line after that (release/0.6.0's
+/// one-sync save, #823), so every save does not repeat it.
 fn sync_parent(dest: &Path) {
     #[cfg(unix)]
     {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let parent = match dest.parent() {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
         };
         if let Err(error) = File::open(parent).and_then(|dir| dir.sync_all()) {
-            tracing::warn!(
-                error = %error,
-                "Saved the project, but could not flush its folder to disk"
-            );
+            if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::debug!(
+                    error = %error,
+                    "Saved the project, but could not flush its folder to disk"
+                );
+            } else {
+                tracing::warn!(
+                    error = %error,
+                    "Saved the project, but could not flush its folder to disk"
+                );
+            }
         }
     }
     #[cfg(not(unix))]

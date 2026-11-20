@@ -1911,7 +1911,7 @@ fn units_grid_convergence_subtracted_from_ct() {
 
 #[test]
 fn out_of_range_date_warns_on_declination_derive() {
-    // The bundled IGRF model stops at 2025; a later survey date with the
+    // The bundled IGRF model stops at the end of 2029; a later survey date with the
     // derive flag on must warn instead of silently using 0° declination.
     let georef = Some(test_ref(0.0, 60.0, -150.0));
     let srv = "#DATE 2030-01-01\n#UNITS meters order=DAV\nA B 10 90 0\n";
@@ -1929,6 +1929,42 @@ fn out_of_range_date_warns_on_declination_derive() {
             .iter()
             .any(|w| w.contains("declination") && w.contains("IGRF")),
         "an out-of-range derive date must warn, got {warnings:?}"
+    );
+}
+
+/// #811: a 2026 derive date used to fall past the bundled model (IGRF-13
+/// stopped short of 2025) and import with 0° and a warning. With IGRF-14 it derives a real
+/// declination, recorded with its epoch, and warns about nothing.
+#[test]
+fn a_2026_derive_date_gets_an_igrf_declination() {
+    let georef = Some(test_ref(0.0, 60.0, -150.0));
+    let srv = "#DATE 2026-06-01\n#UNITS meters order=DAV\nA B 10 90 0\n";
+    let (configs, _c, warnings) = convert_survey_with(
+        parse_srv_geo(srv, georef.clone(), true),
+        georef,
+        &WallsImportOptions::default(),
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("declination")),
+        "{warnings:?}"
+    );
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        matches!(
+            reference.source,
+            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2026 }
+        ),
+        "{:?}",
+        reference.source
+    );
+    // About +13.9 degrees east at (60, -150) in mid-2026 (the BGS IGRF-14
+    // calculator gives 13.848 on 2027-01-01): a sign flip or the fallback fails.
+    assert!(
+        (13.0..15.0).contains(&reference.applied_correction()),
+        "{}",
+        reference.applied_correction()
     );
 }
 

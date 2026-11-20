@@ -216,6 +216,7 @@ export function presentImportReceipt(
 ): void {
   if (
     receipt.warnings.length > 0 ||
+    (receipt.line_problems?.length ?? 0) > 0 ||
     isEmptyImportReceipt(receipt) ||
     receipt.unit_conversion != null ||
     receipt.zero_datum_created != null

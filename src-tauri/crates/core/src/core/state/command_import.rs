@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 
 use super::commands::Record;
-use super::import_funnel::{self, ImportOutcome, ImportRequest, LineBuilder, LineError};
+use super::import_funnel::{
+    self, ImportOutcome, ImportRequest, LineBuilder, LineError, RefusedLine, Unplaceable,
+};
 use super::AppState;
 use crate::core::command::ImportReceipt;
 use crate::core::{CommandResult, ValidationWarning};
@@ -100,6 +102,9 @@ fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt
         warnings,
         info: Vec::new(),
         zero_datum_created,
+        // What the file lost has its own field, which the dialog shows in
+        // full above the warnings: it is what the user most needs to read.
+        line_problems: (!outcome.line_problems.is_empty()).then(|| outcome.line_problems.clone()),
     };
     receipt.cap_warnings();
     receipt
@@ -219,9 +224,18 @@ impl AppState {
                 let mut ctx = EditContext::none();
                 let mut steps = Vec::new();
                 let built = builder
-                    .build(project, &config, &HashMap::new(), &mut ctx, &mut steps)
+                    .build(
+                        project,
+                        &config,
+                        &HashMap::new(),
+                        &mut ctx,
+                        &mut steps,
+                        Unplaceable::Refuse,
+                    )
                     .map_err(|e| match e {
-                        LineError::Create(why) | LineError::Placement(why) => why,
+                        LineError::Create(why)
+                        | LineError::Placement(why)
+                        | LineError::Fatal(why) => why,
                         LineError::NotCreatedYet(index) => {
                             format!("Import line index {index} has not been created yet")
                         }
@@ -260,6 +274,11 @@ impl AppState {
     /// `mode` picks how this file's virtual shots are split into Jump vs
     /// Reference (#27). The pass runs inside this edit, so undo-then-redo of
     /// an import keeps the classified kinds.
+    ///
+    /// One line that cannot be imported costs only itself (#814): it is left
+    /// out, or imported unconnected when its placement cannot be made, and
+    /// the receipt's `line_problems` names it. The import fails only when no
+    /// line can be imported.
     pub fn execute_import_lines(
         &self,
         lines: Vec<ImportLineConfig>,
@@ -277,6 +296,33 @@ impl AppState {
             existing_shot_updates,
             mode,
             None,
+            RefusedLine::SkipAndReport,
+        )
+    }
+
+    /// [`Self::execute_import_lines`] for the DMP import wizard, which
+    /// still needs the whole import or nothing (#814): it maps the returned
+    /// `line_ids` onto its configs by position, records a content hash per
+    /// selected line, and sends overlap edits to existing shots that belong
+    /// to particular incoming lines. A skipped or unconnected line would
+    /// break all three, so here any one rolls the import back.
+    pub fn execute_import_lines_all_or_nothing(
+        &self,
+        lines: Vec<ImportLineConfig>,
+        file_hash: Option<String>,
+        line_hashes: Vec<String>,
+        existing_shot_updates: Vec<ExistingShotUpdate>,
+        mode: VirtualShotMode,
+    ) -> CommandResult {
+        self.execute_import_lines_inner(
+            lines,
+            Vec::new(),
+            file_hash,
+            line_hashes,
+            existing_shot_updates,
+            mode,
+            None,
+            RefusedLine::FailImport,
         )
     }
 
@@ -303,6 +349,7 @@ impl AppState {
             existing_shot_updates,
             mode,
             surface_elevation,
+            RefusedLine::SkipAndReport,
         )
     }
 
@@ -315,6 +362,7 @@ impl AppState {
         existing_shot_updates: Vec<ExistingShotUpdate>,
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
+        on_refused: RefusedLine,
     ) -> CommandResult {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
@@ -356,6 +404,7 @@ impl AppState {
             updates: &existing_shot_updates,
             mode,
             surface_elevation,
+            on_refused,
         };
         let recorded = self.run_recorded(
             |_| Record {

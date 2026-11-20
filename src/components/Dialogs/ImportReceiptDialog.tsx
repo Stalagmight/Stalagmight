@@ -41,6 +41,7 @@ export default function ImportReceiptDialog() {
   const receipt = dialogData.receipt as ImportReceipt | undefined;
   if (!receipt) return null;
 
+  const lineProblems = receipt.line_problems ?? [];
   const allWarnings = receipt.warnings;
   const visibleWarnings = allWarnings.slice(0, MAX_VISIBLE_WARNINGS);
   const hiddenWarnings = allWarnings.slice(MAX_VISIBLE_WARNINGS);
@@ -75,6 +76,20 @@ export default function ImportReceiptDialog() {
             </li>
           )}
         </ul>
+
+        {/* #814: lines the import lost or could not connect. Every entry,
+            above the warnings and never folded behind Details: a user who
+            closes the dialog without reading the rest must still see these. */}
+        {lineProblems.length > 0 && (
+          <ul
+            className="space-y-1 text-sm font-medium text-warning"
+            data-testid="import-receipt-line-problems"
+          >
+            {lineProblems.map((problem, i) => (
+              <li key={i}>&#9888; {problem}</li>
+            ))}
+          </ul>
+        )}
 
         {visibleWarnings.length > 0 && (
           <ul className="space-y-1 text-sm text-warning" data-testid="import-receipt-warnings">

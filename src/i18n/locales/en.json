@@ -4062,7 +4062,6 @@
       "failed": "Could not publish to SpeleoDB",
       "recentCleanupFailed": "Converted to SpeleoDB, but the local shortcut could not be removed from Recent Projects. You can remove it manually; the original file is unchanged.",
       "reloadFailed": "The project was created on SpeleoDB, but a fresh server copy could not be reopened. Use Reload Project to retry.",
-      "descriptionRequired": "A description is required to publish.",
       "name": "Name",
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
