@@ -144,7 +144,8 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
 
 /// A comment the file gives the station a line is placed on is joined to the
 /// junction's own (the merge rule), never silently replacing it; the
-/// junction keeps its name and its id.
+/// junction keeps its name and its id, and the file's own name for it is kept
+/// as an alias under a retired id (I-import-export-4).
 #[test]
 fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     let state = import(config(false, &[], &[(1, "first visit")]));
@@ -182,6 +183,20 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     // The file's name for the junction is not the junction's; the branch's own
     // stations take the seed rule around it.
     assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
+    let aliases = &project.station(junction).unwrap().aliases;
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(aliases[0].name.as_deref(), Some("Z9"), "the file's name");
+    assert!(
+        project.station(aliases[0].id).is_none()
+            && aliases[0].id < project.counters.next_station_id,
+        "a retired id, never a live one"
+    );
+    assert!(project.validate().is_empty());
+    // "1a" is a seed, not a name the file gave: nothing to report.
+    assert_eq!(
+        result.import_receipt.unwrap().warnings,
+        Vec::<String>::new()
+    );
 }
 
 // ----- external ids (plan 10.5) ---------------------------------------------------
@@ -265,4 +280,210 @@ fn a_joined_station_keeps_the_external_id_it_already_has() {
         "the junction keeps A4"
     );
     assert_eq!(ext(b.station(1).unwrap()), Some("B2".to_string()));
+}
+
+// ----- a file's own names at a junction (I-import-export-4) -------------------
+
+/// A main line of 14 shots (stations named "0" to "14" by the seed rule),
+/// and a DMP-style branch whose file names its stations "0" to "14" (MNemo
+/// numbers), placed with its station 0 on main's station "12".
+fn main_and_branch_onto_12() -> (AppState, crate::core::CommandResult) {
+    let mut main = config(false, &[], &[]);
+    main.shots = (0..14).map(|i| shot(f64::from(i * 7 % 360), 3.0)).collect();
+    let state = import(main);
+    let main_id = state.get_project_state().unwrap().lines()[0].id;
+    let mut branch = config(false, &[], &[]);
+    branch.name = Some("B01".to_string());
+    branch.shots = (0..14)
+        .map(|i| shot(f64::from(i * 11 % 360), 2.0))
+        .collect();
+    branch.station_names = (0..=14u32).map(|i| (i, i.to_string())).collect();
+    branch.placement = ImportPlacement::FromExisting {
+        import_station: 0,
+        existing_station: crate::models::StationRef::new(main_id, 12),
+    };
+    let result = state.execute_import_lines(
+        vec![branch],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "{:?}", result.error);
+    (state, result)
+}
+
+fn line_names(project: &Project, position: usize) -> Vec<String> {
+    project.lines()[position]
+        .stations()
+        .map(|s| project.station(s).unwrap().name.clone())
+        .collect()
+}
+
+/// The file names the joined station "0": that name is kept as an alias of
+/// the junction (under a retired id, as Merge Stations keeps the station it
+/// retires), and the branch's own station "12", whose name the junction holds
+/// on that line, takes a suffix that the receipt reports. Undo takes the
+/// alias away with the import; a save and reopen keeps it.
+#[test]
+fn a_join_keeps_the_files_name_as_an_alias_and_reports_the_renamed_station() {
+    let (state, result) = main_and_branch_onto_12();
+    let project = state.get_project_state().unwrap();
+    let junction = project.lines()[0].station(12).unwrap();
+    assert_eq!(project.lines()[1].start, junction);
+    let mut expected: Vec<String> = (0..=14).map(|i| i.to_string()).collect();
+    expected[0] = "12".to_string();
+    expected[12] = "12a".to_string();
+    assert_eq!(line_names(&project, 1), expected, "the branch");
+    assert_eq!(
+        project.station(junction).unwrap().name,
+        "12",
+        "main keeps its name"
+    );
+    let aliases = project.station(junction).unwrap().aliases.clone();
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(
+        aliases[0].name.as_deref(),
+        Some("0"),
+        "the file's name is kept"
+    );
+    assert!(project.station(aliases[0].id).is_none());
+    assert!(project.validate().is_empty());
+    assert_eq!(
+        result.import_receipt.unwrap().warnings,
+        vec![
+            "Line \"B01\" joins station \"12\", so its own station \"12\" was renamed \"12a\""
+                .to_string()
+        ]
+    );
+
+    // Saved and reopened, the alias is in the file.
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("join.stalx");
+    let saved = state.execute(Command::SaveProject {
+        path: Some(path.clone()),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path });
+    assert!(opened.success, "{:?}", opened.error);
+    let project = reopened.get_project_state().unwrap();
+    assert_eq!(project.station(junction).unwrap().aliases, aliases);
+
+    // One undo takes the branch and the alias away.
+    assert!(state.undo().success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.lines().len(), 1);
+    assert!(project.station(junction).unwrap().aliases.is_empty());
+    assert!(state.redo().success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.station(junction).unwrap().aliases, aliases);
+}
+
+/// The same survey as 0.6.0 left it, built with the frozen 0.6.0 model: its
+/// import created the branch with a name per slot and merged the branch's
+/// slot 0 into main's slot 12, so the branch kept "0" and "12" and main kept
+/// "12". The station graph has one name per station, and a name is unique on
+/// each line it is on, so one station of the branch must change either way:
+/// opening that 0.6.0 file (the migration) and importing (the funnel) both
+/// keep the file's "0" as an alias of the junction and give the branch
+/// unique names. What differs is which station yields: the import never
+/// renames a station of the survey it joins (main's "12" stays), and
+/// suffixes the branch's own "12" instead.
+#[test]
+fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
+    use super::legacy_fixture_kit::{
+        frozen, old, read_legacy_file, slot, write_legacy_file, Legacy,
+    };
+
+    let mut legacy = Legacy::new("Names".to_string(), None);
+    let main_shots: Vec<ShotData> = (0..14).map(|i| shot(f64::from(i * 7 % 360), 3.0)).collect();
+    let branch_shots: Vec<ShotData> = (0..14)
+        .map(|i| shot(f64::from(i * 11 % 360), 2.0))
+        .collect();
+    let mut add = |shots: &[ShotData]| {
+        legacy
+            .add_line(old::LineData {
+                shots: shots.iter().map(frozen).collect(),
+                quality: 1.0,
+                ..Default::default()
+            })
+            .id
+    };
+    let main = add(&main_shots);
+    let branch = add(&branch_shots);
+    for line in [main, branch] {
+        for i in 0..=14u32 {
+            legacy
+                .set_station_name(slot(line, i), &i.to_string())
+                .unwrap();
+        }
+    }
+    legacy
+        .merge_stations(slot(branch, 0), slot(main, 12))
+        .unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("legacy.stalx");
+    write_legacy_file(&path, &legacy);
+
+    // 0.6.0: a name per slot, nothing renamed by the merge.
+    let read = read_legacy_file(&path);
+    let per_slot: Vec<String> = read
+        .line_station_names(branch)
+        .into_iter()
+        .map(Option::unwrap_or_default)
+        .collect();
+    assert_eq!(
+        per_slot,
+        (0..=14).map(|i| i.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(read.station_name_at(slot(main, 12)), Some("12"));
+
+    // Opened now: the migration keeps "0" as an alias of the junction.
+    let opened = AppState::new().unwrap();
+    let r = opened.execute(Command::OpenProject { path });
+    assert!(r.success, "{:?}", r.error);
+    let migrated = opened.get_project_state().unwrap();
+    let junction = migrated.lines()[0].station(12).unwrap();
+    let alias_names = |p: &Project, s| -> Vec<String> {
+        p.station(s)
+            .unwrap()
+            .aliases
+            .iter()
+            .filter_map(|a| a.name.clone())
+            .collect()
+    };
+    assert_eq!(alias_names(&migrated, junction), named(&["0"]));
+    let migrated_branch = line_names(&migrated, 1);
+    assert_eq!(
+        migrated_branch
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        15,
+        "unique on the line: {migrated_branch:?}"
+    );
+
+    // Imported now: the same alias, unique names, and main's "12" kept.
+    let (state, _) = main_and_branch_onto_12();
+    let imported = state.get_project_state().unwrap();
+    let junction = imported.lines()[0].station(12).unwrap();
+    assert_eq!(alias_names(&imported, junction), named(&["0"]));
+    assert_eq!(imported.station(junction).unwrap().name, "12");
+    let imported_branch = line_names(&imported, 1);
+    assert_eq!(
+        imported_branch
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        15
+    );
+    // Every other station keeps the name 0.6.0 showed for it.
+    for i in 1..=14 {
+        if i != 12 {
+            assert_eq!(imported_branch[i], i.to_string());
+            assert_eq!(migrated_branch[i], i.to_string());
+        }
+    }
 }

@@ -622,7 +622,7 @@ the model:
 | `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
 | `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
 | `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
-| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction), `append_project` |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction; a different name the file gives it becomes an alias under a minted retired id, and a new station whose file name is the junction's is suffixed and reported in the receipt), `append_project` |
 
 Subsystems ported onto the model and the v2 file:
 

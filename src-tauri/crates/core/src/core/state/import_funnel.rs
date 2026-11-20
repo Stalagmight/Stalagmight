@@ -15,10 +15,15 @@
 //!   datum becomes the frame, at the origin).
 //! - `FromExisting` / `FromImporting` / `ManualSnap`: the chosen chain
 //!   station of the new line IS the target station (a junction). Nothing is
-//!   recorded as a merge, no station id is minted for it and nothing moves:
-//!   the new line hangs off the station it was placed on. The junction keeps
-//!   its name; a comment the file gives it is joined to its own (the merge
-//!   rule, plan 5.1).
+//!   recorded as a merge and nothing moves: the new line hangs off the
+//!   station it was placed on. The junction keeps its name; a comment the
+//!   file gives it is joined to its own (the merge rule, plan 5.1); a
+//!   different name the file gives it is kept as an alias of the junction,
+//!   under a retired Station ID minted for it, as Merge Stations keeps the
+//!   retired station's (I-import-export-4). A station of the new line whose
+//!   file name is the junction's takes a letter suffix (names are unique on
+//!   a line, invariant 8) and the receipt says so: 0.6.0 kept a name per
+//!   slot, so neither was needed there.
 //!
 //! One line that cannot be imported costs the user that line, never the file
 //! (#814): a line the project refuses is left out, a line whose placement
@@ -43,8 +48,8 @@ use crate::models::station_naming::{
 };
 use crate::models::survey::changeset::{PreviewRow, RecordedPreview};
 use crate::models::survey::{
-    ClosureId, ClosureStrategy, EditContext, Line, Placement, Project, Shot, ZeroDatum,
-    MAX_SHOT_UUID_CHARS,
+    ClosureId, ClosureStrategy, EditContext, Line, Placement, Project, Shot, StationAlias,
+    ZeroDatum, MAX_SHOT_UUID_CHARS,
 };
 use crate::models::{
     clamp_section_name, reminted_shot_uuid_avoiding, reverse_shots, sanitize_display_text,
@@ -142,6 +147,9 @@ pub(super) struct ImportOutcome {
     /// (#814): the refused lines first, then the unconnected ones, each in
     /// file order.
     pub(super) line_problems: Vec<String>,
+    /// One receipt entry per station that took a letter suffix because its
+    /// file name is the name of the station its line joins, in file order.
+    pub(super) renamed_stations: Vec<String>,
 }
 
 /// Why one line could not be built. The funnel and the create-and-merge
@@ -204,6 +212,9 @@ pub(super) struct BuiltLine {
     pub(super) id: LineId,
     pub(super) warnings: Vec<ValidationWarning>,
     pub(super) junction: Option<(usize, StationId, StationRef)>,
+    /// Stations of the line whose file name is the junction's and which took
+    /// a letter suffix instead: `(file name, name now)`, in chain order.
+    pub(super) renamed: Vec<(String, String)>,
     /// Why its placement could not be made, when [`Unplaceable::Float`]
     /// built it as a free piece instead (a [`LineError::Placement`] or
     /// [`LineError::NotCreatedYet`]).
@@ -281,7 +292,11 @@ impl LineBuilder {
             Plan::Free { .. } | Plan::Datum { .. } => None,
         };
 
-        let names = station_names(project, config, n, junction);
+        let StationNames {
+            names,
+            junction_alias,
+            renamed,
+        } = station_names(project, config, n, junction);
         let mut chain = Vec::with_capacity(n + 1);
         for (index, name) in names.into_iter().enumerate() {
             match junction {
@@ -336,6 +351,9 @@ impl LineBuilder {
 
         apply_station_comments(project, config, &chain, junction);
         apply_external_ids(project, config, &chain);
+        if let (Some(j), Some(name)) = (junction, junction_alias) {
+            keep_file_name_as_alias(project, j.station, name);
+        }
         steps.push(ImportStep::CreateLine { line: id });
         match plan {
             Plan::Free { offset } => {
@@ -381,6 +399,7 @@ impl LineBuilder {
             id,
             warnings,
             junction: junction.map(|j| (j.index, j.station, j.target)),
+            renamed,
             unplaced,
         })
     }
@@ -665,6 +684,18 @@ fn mirrored(config: &ImportLineConfig, index: u32, n: usize) -> Option<usize> {
     }
 }
 
+/// The names [`station_names`] gives a new line's stations, and what the
+/// file named differently at a junction.
+struct StationNames {
+    /// In chain order.
+    names: Vec<String>,
+    /// The file's own name for the junction station, when it is not the
+    /// junction's: kept as an alias ([`keep_file_name_as_alias`]).
+    junction_alias: Option<String>,
+    /// Stations whose file name is the junction's, `(file name, name now)`.
+    renamed: Vec<(String, String)>,
+}
+
 /// The names of the new line's stations, in chain order: the file's names
 /// (mirrored), the rest by the creation rules around them; with none, the
 /// seed rule (each station's index). A junction keeps its own name and a new
@@ -674,7 +705,7 @@ fn station_names(
     config: &ImportLineConfig,
     n: usize,
     junction: Option<Junction>,
-) -> Vec<String> {
+) -> StationNames {
     let mut names: Vec<Option<String>> = vec![None; n + 1];
     // Whether the file names a station of its own (the junction's name is
     // the junction's, whatever the file calls it).
@@ -688,6 +719,16 @@ fn station_names(
             named |= junction.is_none_or(|j| j.index != position);
         }
     }
+    // The file's own names, trimmed, before the junction's replaces its slot.
+    let file_names: Vec<Option<String>> = names
+        .iter()
+        .map(|name| {
+            name.as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
     let fixed = junction.and_then(|j| {
         project
             .stations
@@ -704,6 +745,8 @@ fn station_names(
     }
     settle_line_station_names(&mut names);
     let mut names: Vec<String> = names.into_iter().map(Option::unwrap_or_default).collect();
+    let mut junction_alias = None;
+    let mut renamed = Vec::new();
     if let Some((index, name)) = fixed {
         let mut taken: HashSet<String> = names.iter().cloned().collect();
         taken.insert(name.clone());
@@ -714,11 +757,48 @@ fn station_names(
                 *slot = fresh;
             }
         }
+        for (i, (file, now)) in file_names.iter().zip(&names).enumerate() {
+            if let Some(file) = file.as_ref().filter(|file| **file == name) {
+                if i != index && now != file {
+                    renamed.push((file.clone(), now.clone()));
+                }
+            }
+        }
+        junction_alias = file_names
+            .get(index)
+            .cloned()
+            .flatten()
+            .filter(|file| *file != name);
         if let Some(slot) = names.get_mut(index) {
             *slot = name;
         }
     }
-    names
+    StationNames {
+        names,
+        junction_alias,
+        renamed,
+    }
+}
+
+/// Keep `name`, the file's own name for the existing station `station` a new
+/// line joins, as an alias of that station under a retired Station ID minted
+/// for it: what Merge Stations keeps of the station it retires, and what the
+/// migration keeps of a 0.6.0 merge member. Without an id left the name is
+/// not kept (the import itself does not depend on it).
+fn keep_file_name_as_alias(project: &mut Project, station: StationId, name: String) {
+    let Ok(id) = project.mint_station_id() else {
+        tracing::warn!(
+            purpose = "keep the file's name for a joined station",
+            "No Station ID left for the alias; the file's name is not kept"
+        );
+        return;
+    };
+    if let Some(station) = project.stations.get_mut(&station) {
+        station.aliases.push(StationAlias {
+            id,
+            name: Some(name),
+        });
+    }
 }
 
 /// The file's station comments on the new line's stations (mirrored); on the
@@ -878,6 +958,16 @@ pub(super) fn import_lines(
         outcome.warnings.extend(built.warnings);
         if let Some((_, station, _)) = built.junction {
             outcome.junctions.push(station);
+            let joined = project.stations.get(&station).map(|s| s.name.as_str());
+            for (file, now) in &built.renamed {
+                outcome.renamed_stations.push(format!(
+                    "Line \"{line_name}\" joins station \"{}\", so its own station \"{}\" \
+                     was renamed \"{}\"",
+                    receipt_reason(joined.unwrap_or(file)),
+                    receipt_reason(file),
+                    receipt_reason(now),
+                ));
+            }
         }
         if let Some(error) = built.unplaced {
             let entry = unplaced_problem(&line_name, &config.placement, error);

@@ -403,7 +403,7 @@ divers key their notes to those numbers. The `.dmp` file carries no station
 numbers, and every later edit - the shots the importer skips, an overlap trim,
 a deleted or added row, any edit after import - shifts the positional station
 indexes, so the import records each station's MNemo number as its **name**
-(`Project.station_names`; names are unique within a line, see
+(`Station.name`; names are unique within a line, see
 [SPEC 4.2](SPEC.md#42-station-identification)).
 
 - **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
@@ -428,9 +428,16 @@ indexes, so the import records each station's MNemo number as its **name**
   numbers are gone with their stations - one name per station, no aliases.
   Indices are in the emitted, pre-reverse order: the backend mirrors them for a
   reversed import exactly like `station_comments`.
-- **After import.** Names are keyed by `StationKey`, so they follow their
-  station through later inserts, deletes, splits and reverses; a merge keeps
-  both stations' own numbers. On the map, the Display menu's **Station
+- **At a junction.** A line placed on an existing station starts ON that
+  station, which keeps its own name; the line's own number for it is kept as
+  an alias of the junction (under a retired Station ID, as Merge Stations keeps
+  the station it retires). Names are unique on a line, so a station of the new
+  line whose number is the junction's name takes a letter (`12a`), and the
+  import summary says so, naming the line, the junction and the new name.
+  0.6.0 kept a name per slot, so it needed neither.
+- **After import.** A name belongs to its station, so it follows the station
+  through later inserts, deletes, splits and reverses; a merge keeps the
+  surviving station's name and the other one's as an alias. On the map, the Display menu's **Station
   names** labels each station with its name in place of its Station ID (it
   and **Station IDs** are one choice), and the image export has the same
   **Station names** option.

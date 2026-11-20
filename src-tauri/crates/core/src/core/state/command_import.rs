@@ -81,6 +81,11 @@ fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt
             if dropped == 1 { "was" } else { "were" }
         ));
     }
+    // A station whose file name was taken by the junction its line joins:
+    // the user matches names against the slates, so a suffix is said. Last,
+    // so a file joining many lines cannot push the summaries above out of
+    // the capped list.
+    warnings.extend(outcome.renamed_stations.iter().cloned());
     // "and N more": naming only the first zero-datum line without saying so
     // would read as a claim that it was the only one.
     let zero_datum_created = outcome.zero_datum_line.clone().map(|name| {
