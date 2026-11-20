@@ -527,14 +527,13 @@ Only three wire types are new (their legacy source is the old model
 itself): `ProjectWire` (TS `Project`, without `line_offsets`), `LineWire`
 (TS `Line`) and `ProjectStateWire` (TS `ProjectState`). Every other payload
 is today's DTO type, so its TS cannot drift. The three derive `TS` with the
-legacy names (`#[ts(rename)]`) and no `export`: no test writes them and the
-generator still writes `src/types/ipc/` from the legacy types.
-`wire/ts_tests.rs` renders each one as `pnpm gen:ipc-types` would (ts-rs
-`export_to_string` plus the generator's import flattening) and compares it
-with the committed file, less the declared change (`line_offsets`); the
-comparison holds before and after the switch.
+legacy names (`#[ts(rename)]`) and no `export`: no test writes them into
+`bindings/`; `src-tauri/examples/gen_ipc_types.rs` renders them
+(`export_wire`, ts-rs `export_to_string` plus the generator's import
+flattening) into `src/types/ipc/`. `wire/ts_tests.rs` renders each one the
+same way and compares it with the committed file.
 
-**The switch** (stream C):
+**The switch** (done in C0 and C21), for the record:
 
 1. In `src-tauri/examples/gen_ipc_types.rs` export
    `models::survey::wire::{ProjectWire, LineWire, ProjectStateWire}` in place
