@@ -179,6 +179,36 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
+/// Sync a closed staging file to disk, through a handle that may write it:
+/// Windows flushes a file's buffers only through a handle opened for writing.
+fn sync_staged_save(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(hook) = STAGED_SYNC_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook(path)?;
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()
+}
+
+#[cfg(test)]
+type StagedSyncHook = Box<dyn FnOnce(&Path) -> std::io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    static STAGED_SYNC_HOOK: std::cell::RefCell<Option<StagedSyncHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: run `hook` at the start of the next staged-file sync on this
+/// thread, with the staging path. An `Err` from it fails that sync.
+#[cfg(test)]
+pub(super) fn set_staged_sync_hook(hook: impl FnOnce(&Path) -> std::io::Result<()> + 'static) {
+    STAGED_SYNC_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
 /// The undo-less heals a save applies to the LIVE project, in one place.
 ///
 /// Every one of them mutates the open project with **no undo entry of its own**,
@@ -1054,8 +1084,9 @@ impl AppState {
             let _ = std::fs::remove_file(&temp_path);
         }
 
-        // Save to temporary file first
-        let mut db = match Database::open(&temp_path) {
+        // Save to temporary file first. A staging connection: no commit below
+        // syncs, and the one sync after `drop(db)` makes the file durable.
+        let mut db = match Database::open_staging(&temp_path) {
             Ok(db) => db,
             Err(e) => {
                 // Clean up temp file on failure
@@ -1185,6 +1216,23 @@ impl AppState {
         // Close the temp database before renaming
         drop(db);
 
+        // The staging connection wrote with SQLite's syncs off
+        // (`Database::open_staging`), so this is the sync that makes the file
+        // durable. It has to land before the rename: a rename that reaches the
+        // disk ahead of the data can leave the project's name on a file that is
+        // not all there. A failure here (a full disk can surface only now) leaves
+        // the destination untouched, like every failure before the rename.
+        if let Err(e) = sync_staged_save(&temp_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            let e = anyhow::Error::from(e);
+            tracing::error!(
+                error = %e,
+                purpose = "persist edits safely",
+                "Failed to sync the staged save file; destination untouched"
+            );
+            return save_failure("Failed to write the save to disk", &save_path, &e);
+        }
+
         if copy_only {
             // The destination is provably NOT the live file (refused above), so
             // the live connection stays open, the session keeps its file_path and
@@ -1202,6 +1250,7 @@ impl AppState {
                 );
                 return save_failure("Failed to finalize save", &save_path, &e);
             }
+            super::project_restore::sync_dir(&save_path);
             drop(proj_guard);
             self.note_recent_project(&save_path);
             tracing::info!(
@@ -1256,6 +1305,9 @@ impl AppState {
             );
             return save_failure("Failed to finalize save", &save_path, &e);
         }
+        // So that a power loss right after this save cannot bring back the old
+        // file under the name. Best effort: the file is already in place.
+        super::project_restore::sync_dir(&save_path);
 
         // The `.stalx` is now written, so the initial save is no longer deferred.
         // Set this BEFORE the reopen below: that path returns early on failure, and

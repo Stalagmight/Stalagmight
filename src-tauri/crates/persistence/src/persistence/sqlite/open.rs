@@ -5,8 +5,41 @@ use std::path::Path;
 use super::{Database, SCHEMA_VERSION};
 
 impl Database {
+    /// The pragmas a save's staging file is written under
+    /// ([`Self::open_staging`]). Public so the crash-timing tests build their
+    /// interrupted staging writes the same way.
+    pub const STAGING_PRAGMAS: &'static str = "PRAGMA synchronous = OFF;";
+
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    /// Open or create the STAGING file a save builds and then renames over the
+    /// project (`<project>.stalx.tmp`), with SQLite's per-commit syncs off.
+    ///
+    /// Nothing reads the staging file before the rename, so syncing each commit
+    /// bought nothing: the save syncs the finished file ONCE, after closing this
+    /// connection and before the rename (`AppState::save_project`). With the
+    /// syncs on, the ~40 commits that build a file (each CREATE TABLE, each
+    /// display setting) cost four syncs apiece, ~160 per save, which was most
+    /// of a save's time on a real disk (`docs/saving.md`).
+    ///
+    /// The rollback journal stays, in the same DELETE mode as every other
+    /// connection. A failed transaction still rolls back - the copies of the
+    /// undo history and of the ignored warnings depend on that - and a process
+    /// killed mid-commit leaves the same temp plus hot journal as before. Only a
+    /// power loss before the sync can leave the temp in a state no journal
+    /// repairs, and until the rename the temp is a scratch file: the project
+    /// file is not touched.
+    ///
+    /// Never open a project's own file this way: a power loss during one of its
+    /// writes could corrupt it.
+    pub fn open_staging(path: &Path) -> Result<Self> {
+        Self::open_with(path, true)
+    }
+
+    fn open_with(path: &Path, staging: bool) -> Result<Self> {
         // Per-open chatter is debug-only - `open` is called for every
         // project create / save-as / import / recent-list refresh.
         tracing::debug!("Opening database at: {:?}", path);
@@ -19,6 +52,10 @@ impl Database {
         let file_existed = path.exists();
 
         let conn = Connection::open(path).context("Failed to open database")?;
+        // Before anything below writes, so none of its commits syncs either.
+        if staging {
+            conn.execute_batch(Self::STAGING_PRAGMAS)?;
+        }
         if file_existed {
             // An existing file may come from anywhere; refuse a hostile schema
             // before init_schema or a migration touches it (#608), and a newer

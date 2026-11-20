@@ -546,12 +546,14 @@ fn install(staged: tempfile::TempPath, dest: &Path) -> Result<(), String> {
 }
 
 /// Make a rename in `dest`'s directory durable (Unix; Windows has no directory
-/// handle to sync and makes the rename durable itself).
-fn sync_dir(dest: &Path) {
+/// handle to sync and makes the rename durable itself). Best effort: the caller
+/// has already renamed, so a failure is logged, not returned. Also used by the
+/// save (`project_io.rs`).
+pub(super) fn sync_dir(dest: &Path) {
     #[cfg(unix)]
     if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Err(error) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
-            tracing::warn!(%error, path = %parent.display(), "could not sync the restored project's folder");
+            tracing::warn!(%error, path = %parent.display(), "could not sync the project's folder after a rename");
         }
     }
     #[cfg(not(unix))]
