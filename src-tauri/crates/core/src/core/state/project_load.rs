@@ -479,11 +479,7 @@ impl AppState {
             .derived
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(super::app_state::DerivedCache {
-                revision,
-                raw,
-                adjusted: None,
-            });
+            Some(super::app_state::DerivedCache::new(revision, raw));
         self.note_recent_project(&path);
         progress.complete_phase(LoadingPhase::Finalizing);
         tracing::info!(path = ?path, purpose = "load project for workspace", "Project loaded via load_project_full");

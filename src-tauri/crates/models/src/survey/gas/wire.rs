@@ -19,7 +19,7 @@ use crate::config::GasConfig;
 use crate::gas::{Cylinder, Diver, GasReachField, PlanSegment, RouteLeg, RouteProfilePoint};
 use crate::{LineId, ShotKind, StationId, StationRef};
 
-use super::super::{Project, Topology};
+use super::super::{Project, RawPositions, Topology};
 use super::GasReach;
 
 /// `station`'s slot on `line`, else its first slot.
@@ -187,13 +187,41 @@ impl Project {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> GasReachField {
+        self.gas_reach_field_wire_with(
+            &self.raw_positions(),
+            origin,
+            endpoint,
+            waypoints,
+            segments,
+            diver,
+            cylinders,
+            gas_config,
+            stage_drop_overrides,
+        )
+    }
+
+    /// [`Self::gas_reach_field_wire`] on this state's raw layout
+    /// `positions` ([`Project::gas_reach_with`]).
+    pub fn gas_reach_field_wire_with(
+        &self,
+        positions: &RawPositions,
+        origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
+        waypoints: &[StationRef],
+        segments: &[PlanSegment],
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationRef>],
+    ) -> GasReachField {
         let resolve = |slot: &StationRef| self.station_at(*slot);
         let resolved_waypoints: Vec<Option<StationId>> = waypoints.iter().map(resolve).collect();
         let resolved_overrides: Vec<Option<StationId>> = stage_drop_overrides
             .iter()
             .map(|o| o.as_ref().and_then(resolve))
             .collect();
-        self.gas_reach(
+        self.gas_reach_with(
+            positions,
             origin.and_then(resolve),
             endpoint.and_then(resolve),
             &resolved_waypoints,
