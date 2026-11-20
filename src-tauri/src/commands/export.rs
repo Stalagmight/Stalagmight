@@ -187,10 +187,7 @@ pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<Str
 /// Server-populated (#27): the export must colour its distance ramp and label
 /// its penetration with the same graph the app is showing, so the flag comes
 /// from the config, never from whatever the frontend sent.
-fn image_views(
-    state: &AppState,
-    options: &mut ExportImageOptions,
-) -> Result<ExportViews, String> {
+fn image_views(state: &AppState, options: &mut ExportImageOptions) -> Result<ExportViews, String> {
     options.include_reference_legs = state.get_config().gas.include_reference_legs;
     // The memoised Closures Computed View, so the image matches the on-screen
     // (adjusted) map; where nothing is adjusted it is the measured layout.
@@ -724,5 +721,373 @@ mod tests {
             let err = render_profile_for(&project, request(Vec::new()), format).unwrap_err();
             assert!(err.contains("no route to export"), "{format:?}: {err}");
         }
+    }
+}
+
+/// Every export command on a v2 project opened from its file: each writes
+/// what `export::survey` writes for the open project, images and the Levels
+/// histogram from the memoised Closures Computed View, and each refuses a
+/// file the open project owns and a state with no project.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod v2_tests {
+    use super::*;
+    use crate::export::color_scale::ExportValueKind;
+    use crate::export::ImageFormat;
+    use crate::models::survey::{ClosureStrategy, LineMeta, StartAt, ZeroDatum};
+    use crate::models::{CylRole, GpsCoordinates, LineId, ShotData, TankMaterial};
+    use crate::test_helpers::{app_state_with_project_db, TestDb};
+    use tempfile::TempDir;
+
+    fn shot(length: f64, azimuth: f64, depth_in: f64, depth_out: f64) -> ShotData {
+        ShotData {
+            length,
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            depth_in,
+            depth_out,
+            ..ShotData::default()
+        }
+    }
+
+    fn line_meta(name: &str) -> LineMeta {
+        LineMeta {
+            name: Some(name.to_string()),
+            color: "#336699".to_string(),
+            ..LineMeta::default()
+        }
+    }
+
+    /// "Export Cave": Main, a square loop surveyed with a 1 m misclosure and
+    /// closed by a Batch closure (so the Computed View moves it), its start
+    /// held by a datum; Branch starts on Main's station 1, a junction with a
+    /// station comment.
+    fn cave() -> (Project, LineId) {
+        let mut p = Project::new("Export Cave", None);
+        let main = p
+            .add_line(
+                line_meta("Main"),
+                StartAt::New,
+                vec![
+                    shot(10.0, 0.0, 1.0, 2.0),
+                    shot(10.0, 90.0, 2.0, 3.0),
+                    shot(10.0, 180.0, 3.0, 2.5),
+                    shot(9.0, 270.0, 2.5, 1.0),
+                ],
+            )
+            .unwrap();
+        let chain: Vec<StationId> = p.line(main).unwrap().stations().collect();
+        p.add_line(
+            line_meta("Branch"),
+            StartAt::Station(chain[1]),
+            vec![shot(5.0, 45.0, 2.0, 4.0), shot(5.0, 45.0, 4.0, 6.0)],
+        )
+        .unwrap();
+        p.datums.push(ZeroDatum {
+            via: Some(main),
+            ..ZeroDatum::new(chain[0], GpsCoordinates::new(20.5, -87.25, 0.0).unwrap())
+        });
+        p.push_closure(
+            chain[4],
+            Some(main),
+            chain[0],
+            Some(main),
+            ClosureStrategy::Batch,
+        );
+        p.station_mut(chain[1]).unwrap().comment = Some("junction".to_string());
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+        (p, main)
+    }
+
+    /// The cave written as a v2 `.stalx` and opened from it, with the project
+    /// as the app holds it.
+    fn opened() -> (AppState, TestDb, Project, LineId) {
+        let (project, main) = cave();
+        let (state, db) = app_state_with_project_db(project).unwrap();
+        let open = state.get_project_state().unwrap();
+        assert_eq!(
+            open.file_path.as_deref(),
+            Some(db.path()),
+            "opened from its file"
+        );
+        (state, db, open, main)
+    }
+
+    fn svg_options() -> ExportImageOptions {
+        ExportImageOptions {
+            format: ImageFormat::Svg,
+            ..ExportImageOptions::default()
+        }
+    }
+
+    /// The two views the image commands must draw: the open project's
+    /// Computed View under the live config, and its measured layout.
+    fn views_of(state: &AppState, open: &Project) -> (Arc<AdjustedPositions>, RawPositions) {
+        let config = state.get_config();
+        (
+            Arc::new(open.adjusted_positions(&config.closure_adjustment)),
+            open.raw_positions(),
+        )
+    }
+
+    use crate::models::survey::{AdjustedPositions, RawPositions};
+    use std::sync::Arc;
+
+    fn plan(main: LineId, waypoints: Vec<StationRef>) -> DiveProfileRequest {
+        DiveProfileRequest {
+            origin: Some(StationRef::new(main, 0)),
+            endpoint: Some(StationRef::new(main, 3)),
+            waypoints,
+            segments: Vec::new(),
+            diver: Diver::new(20.0, None).unwrap(),
+            cylinders: vec![Cylinder::new(
+                11.1,
+                207.0,
+                200.0,
+                TankMaterial::Aluminium,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()],
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn csv_writes_the_survey_exporters_rows_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.csv");
+        export_csv_impl(&state, path.clone()).unwrap();
+        let mut expected = Vec::new();
+        crate::export::survey::write_csv(&open, &mut expected).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        // The junction is one station: its Station ID ends Main's first row
+        // and starts Branch's (declared change, plan 12.2). Columns: line,
+        // from, to, from_id, to_id, ...
+        let junction = open.lines()[0].shots[0].to.to_string();
+        let text = String::from_utf8(expected).unwrap();
+        let ids: Vec<(&str, &str, &str)> = text
+            .lines()
+            .skip(1)
+            .map(|row| {
+                let fields: Vec<&str> = row.split(',').collect();
+                (fields[0], fields[3], fields[4])
+            })
+            .collect();
+        let start = open.lines()[0].start.to_string();
+        assert_eq!(
+            ids[0],
+            ("Main", start.as_str(), junction.as_str()),
+            "{text}"
+        );
+        assert_eq!(ids[4].0, "Branch", "{text}");
+        assert_eq!(ids[4].1, junction, "Branch starts on the junction: {text}");
+    }
+
+    #[test]
+    fn json_writes_the_survey_exporters_records_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.json");
+        export_json_impl(&state, path.clone()).unwrap();
+        let written = std::fs::read(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(value["project"]["name"], "Export Cave");
+        let at =
+            chrono::DateTime::parse_from_rfc3339(value["project"]["exported_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+        let mut expected = Vec::new();
+        crate::export::survey::write_json(&open, at, &mut expected).unwrap();
+        assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn tml_writes_the_survey_exporters_document_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        for name in ["cave.tmlu", "cave.tml"] {
+            let path = dir.path().join(name);
+            let notes = export_tml_impl(&state, path.clone()).unwrap();
+            assert!(
+                notes.is_empty(),
+                "an ordinary project has no notes: {notes:?}"
+            );
+            let reference = dir.path().join(format!("reference-{name}"));
+            crate::export::survey::export_tml(&open, &reference).unwrap();
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                std::fs::read(&reference).unwrap(),
+                "{name}"
+            );
+        }
+        // Ariane ids are Station IDs (plan X1): the START is Main's start.
+        let text = std::fs::read_to_string(dir.path().join("cave.tmlu")).unwrap();
+        let start = open.lines()[0].start;
+        assert!(text.contains(&format!("<ID>{start}</ID>")), "{text}");
+    }
+
+    #[test]
+    fn the_image_and_its_preview_draw_the_memoised_computed_view() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.svg");
+        // The frontend's reference-leg flag is ignored: the config's wins (#27).
+        let include = state.get_config().gas.include_reference_legs;
+        let sent = ExportImageOptions {
+            include_reference_legs: !include,
+            ..svg_options()
+        };
+        export_image_impl(&state, path.clone(), sent.clone()).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        let preview = preview_svg_export_impl(&state, sent).unwrap();
+        assert_eq!(preview, written, "the preview is the file");
+
+        let (adjusted, raw) = views_of(&state, &open);
+        let options = ExportImageOptions {
+            include_reference_legs: include,
+            ..svg_options()
+        };
+        let expected = crate::export::survey::generate_svg_string_with_positions(
+            &open,
+            &options,
+            adjusted.as_ref(),
+            &raw,
+        )
+        .unwrap();
+        assert_eq!(written, expected);
+        let measured = crate::export::survey::generate_svg_string(&open, &options).unwrap();
+        assert_ne!(
+            written, measured,
+            "the loop is adjusted, so the image is not the measured layout"
+        );
+
+        // The raster writer runs from the same views.
+        let png = dir.path().join("cave.png");
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 72,
+            ..ExportImageOptions::default()
+        };
+        export_image_impl(&state, png.clone(), options).unwrap();
+        assert!(std::fs::read(&png).unwrap().starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn the_levels_histogram_bins_the_computed_view() {
+        let (state, _db, open, _) = opened();
+        let (adjusted, raw) = views_of(&state, &open);
+        let include = state.get_config().gas.include_reference_legs;
+        for (kind, bins) in [(ExportValueKind::Depth, 16), (ExportValueKind::Distance, 4)] {
+            let got = export_value_histogram_impl(&state, kind, bins).unwrap();
+            let expected = crate::export::survey::export_value_histogram(
+                &open,
+                adjusted.as_ref(),
+                &raw,
+                kind,
+                bins as usize,
+                include,
+            );
+            assert_eq!(got, expected, "{kind:?}");
+            assert_eq!(got.counts.len(), bins as usize);
+        }
+        let depth = export_value_histogram_impl(&state, ExportValueKind::Depth, 16).unwrap();
+        assert_eq!(
+            depth.counts.iter().sum::<u32>(),
+            7,
+            "one count per station: Main's 5 and Branch's 2 (its start is the junction)"
+        );
+    }
+
+    #[test]
+    fn the_dive_profile_renders_and_writes_the_route_of_the_open_project() {
+        let (state, _db, _open, main) = opened();
+        let text = render_dive_profile_text_impl(&state, plan(main, Vec::new())).unwrap();
+        assert!(text.contains("Export Cave"), "{text}");
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dive.txt");
+        export_dive_profile_impl(
+            &state,
+            &path,
+            ProfileFormat::PlainText,
+            plan(main, Vec::new()),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        let xml = dir.path().join("dive.ssrf");
+        export_dive_profile_impl(
+            &state,
+            &xml,
+            ProfileFormat::SubsurfaceXml,
+            plan(main, vec![StationRef::new(main, 2)]),
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&xml).unwrap().starts_with("<?xml"));
+    }
+
+    #[test]
+    fn every_export_refuses_a_file_the_open_project_owns() {
+        let (state, db, _open, main) = opened();
+        let plnx = db.path().with_extension("plnx");
+        std::fs::write(&plnx, b"dive plans").unwrap();
+        for target in [db.path().to_path_buf(), plnx] {
+            let before = std::fs::read(&target).unwrap();
+            let refusals = [
+                export_csv_impl(&state, target.clone()).err(),
+                export_json_impl(&state, target.clone()).err(),
+                export_tml_impl(&state, target.clone()).err(),
+                export_image_impl(&state, target.clone(), svg_options()).err(),
+                export_dive_profile_impl(
+                    &state,
+                    &target,
+                    ProfileFormat::PlainText,
+                    plan(main, Vec::new()),
+                )
+                .err(),
+            ];
+            for refusal in refusals {
+                assert_eq!(refusal.as_deref(), Some(OWNED_FILE_REFUSAL), "{target:?}");
+            }
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                before,
+                "{target:?} untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn every_export_needs_an_open_project() {
+        let state = AppState::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("out");
+        let main = 1;
+        let errors = [
+            export_csv_impl(&state, path.clone()).err(),
+            export_json_impl(&state, path.clone()).err(),
+            export_tml_impl(&state, path.clone()).err(),
+            export_image_impl(&state, path.clone(), svg_options()).err(),
+            preview_svg_export_impl(&state, svg_options()).err(),
+            export_value_histogram_impl(&state, ExportValueKind::Depth, 8).err(),
+            render_dive_profile_text_impl(&state, plan(main, Vec::new())).err(),
+            export_dive_profile_impl(
+                &state,
+                &path,
+                ProfileFormat::PlainText,
+                plan(main, Vec::new()),
+            )
+            .err(),
+        ];
+        for error in errors {
+            assert_eq!(error.as_deref(), Some("No project open"));
+        }
+        assert!(!path.exists());
     }
 }
