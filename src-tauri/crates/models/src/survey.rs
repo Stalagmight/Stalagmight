@@ -121,6 +121,13 @@ mod ops_detach_tests;
 mod ops_merge_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod ops_move_tests;
+#[cfg(test)]
+#[expect(
     clippy::panic,
     reason = "test helpers: a refused setup step is a broken test"
 )]
