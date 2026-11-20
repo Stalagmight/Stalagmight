@@ -2806,7 +2806,7 @@ files beside the project named after it plus a suffix that contains `.backup`
 or ends in `.tmp` (`cave.stalx.backup`, `cave.stalx.backup.1`,
 `cave.stalx.tmp`, the temp a version 2 save writes through), and the SQLite
 original a project's first version 2 save kept in the app-data `backups/`
-folder (`<stem>.<UTC stamp>.pre-v2.stalx`). It offers only files that are a
+folder (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`). It offers only files that are a
 SQLite project or a complete version 2 file: never a version 2 file a save
 tore before it finished, the project itself (nor, on Unix, a hard link to it),
 its `.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty

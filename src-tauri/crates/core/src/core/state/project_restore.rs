@@ -207,7 +207,7 @@ impl AppState {
     ///   (`cave.backup.stalx`) is never offered as a backup of itself, and
     ///   neither is its safety copy `cave.backup.stalx.pre-restore` (#720);
     /// - in the app-data `backups/` folder, the SQLite original the first
-    ///   version 2 save of this project kept (`<stem>.<UTC stamp>.pre-v2.stalx`,
+    ///   version 2 save of this project kept (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`,
     ///   C3).
     ///
     /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, and
@@ -249,10 +249,8 @@ impl AppState {
                 backups.extend(restorable(&entry.path()));
             }
         }
-        if let (Some(folder), Some(stem)) =
-            (super::project_io::upgrade_backup_dir(), path.file_stem())
-        {
-            let prefix = format!("{}.", stem.to_string_lossy());
+        if let Some(folder) = super::project_io::upgrade_backup_dir() {
+            let prefix = super::project_io::upgrade_backup_prefix(path);
             for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
                 let file_name = entry.file_name().to_string_lossy().into_owned();
                 let stamp = file_name

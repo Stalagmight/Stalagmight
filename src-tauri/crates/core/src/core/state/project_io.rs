@@ -209,6 +209,41 @@ pub(super) fn upgrade_backup_dir() -> Option<PathBuf> {
     Some(crate::app_dirs::data_local_dir()?.join("backups"))
 }
 
+/// The name prefix of the pre-upgrade originals kept for the project file at
+/// `original`: `<stem>.<path key>.`, then the UTC stamp and `.pre-v2.stalx`.
+/// The key is a hash of the file's full path (its folder resolved), so two
+/// projects with the same file name in different folders never share their
+/// backups in the one app-data folder (review findings D-migration-upgrade-3,
+/// J-docs-tests-truth-1). A file moved after its upgrade no longer lists the
+/// original kept before the move; it is still in the folder.
+pub(super) fn upgrade_backup_prefix(original: &Path) -> String {
+    let stem = original
+        .file_stem()
+        .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
+    let full = match (original.parent(), original.file_name()) {
+        (Some(folder), Some(name)) => {
+            let folder = if folder.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                folder
+            };
+            folder
+                .canonicalize()
+                .unwrap_or_else(|_| folder.to_path_buf())
+                .join(name)
+        }
+        _ => original.to_path_buf(),
+    };
+    // FNV-1a, 64 bits: stable across builds and platforms (unlike the std
+    // hasher), and only a name, not a security boundary.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in full.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{stem}.{:012x}.", hash >> 16)
+}
+
 impl AppState {
     /// [#92] Whether the open project's initial save is still deferred.
     pub fn initial_save_deferred(&self) -> bool {

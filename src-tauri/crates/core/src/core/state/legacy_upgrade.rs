@@ -319,17 +319,16 @@ fn remove_sidecars(original: &Path) -> Result<(), UpgradeError> {
 }
 
 /// Step 4: keep `bytes` (the original, whole) in the backups folder as
-/// `<stem>.<UTC stamp>.pre-v2.stalx`. Returns where.
+/// `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`
+/// ([`super::project_io::upgrade_backup_prefix`]). Returns where.
 fn keep(original: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
     let dir = super::project_io::upgrade_backup_dir()
         .ok_or_else(|| "the app data folder is not available".to_owned())?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let stem = original
-        .file_stem()
-        .map_or_else(|| "project".into(), |s| s.to_string_lossy().into_owned());
+    let prefix = super::project_io::upgrade_backup_prefix(original);
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
-    let name = format!("{stem}.{stamp}.pre-v2.stalx");
+    let name = format!("{prefix}{stamp}.pre-v2.stalx");
     let kept = dir.join(&name);
     // Hidden, and not ending in `.pre-v2.stalx`: never listed by Recovery.
     let staged = dir.join(format!(".{name}.partial"));
@@ -382,7 +381,7 @@ fn discard_backup(kept: &Path, original: &Path, expected: &Fingerprint) {
 /// backups folder ([`keep`]). Neither is ever needed: at every step the
 /// original under its own name is whole. Best effort.
 fn remove_leftovers(original: &Path) {
-    let (Some(name), Some(stem)) = (original.file_name(), original.file_stem()) else {
+    let Some(name) = original.file_name() else {
         return;
     };
     let staged_prefix = format!(".{}.settled-", name.to_string_lossy());
@@ -393,7 +392,7 @@ fn remove_leftovers(original: &Path) {
                 .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
         })
     };
-    let partial_prefix = format!(".{}.", stem.to_string_lossy());
+    let partial_prefix = format!(".{}", super::project_io::upgrade_backup_prefix(original));
     let folder = original
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

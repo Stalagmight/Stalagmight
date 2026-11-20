@@ -1104,23 +1104,25 @@ fn the_dialog_offers_the_pre_upgrade_original_from_the_backups_folder() {
     let folder = super::project_io::upgrade_backup_dir().unwrap();
     std::fs::create_dir_all(&folder).unwrap();
     let stem = format!("restore-list-{}", uuid::Uuid::new_v4());
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), &format!("{stem}.stalx"), "Current");
+    let other_project = project_file(dir.path(), &format!("{stem}.old.stalx"), "Other");
+    let mine = super::project_io::upgrade_backup_prefix(&project);
+    let theirs = super::project_io::upgrade_backup_prefix(&other_project);
     let original = legacy_file(
         &folder,
-        &format!("{stem}.20261120T101112.123456789Z.pre-v2.stalx"),
+        &format!("{mine}20261120T101112.123456789Z.pre-v2.stalx"),
         "Original",
     );
     let other = legacy_file(
         &folder,
-        &format!("{stem}.old.20261120T101112.123456789Z.pre-v2.stalx"),
+        &format!("{theirs}20261120T101112.123456789Z.pre-v2.stalx"),
         "Other",
     );
     let sidecar = folder.join(format!(
-        "{stem}.20261120T101112.123456789Z.pre-v2.stalx-journal"
+        "{mine}20261120T101112.123456789Z.pre-v2.stalx-journal"
     ));
     std::fs::write(&sidecar, [0u8; 512]).unwrap();
-    let dir = TempDir::new().unwrap();
-    let project = project_file(dir.path(), &format!("{stem}.stalx"), "Current");
-    let other_project = project_file(dir.path(), &format!("{stem}.old.stalx"), "Other");
 
     let listed = offered(&project);
     let listed_other = offered(&other_project);

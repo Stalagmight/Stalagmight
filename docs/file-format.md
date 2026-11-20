@@ -693,7 +693,7 @@ For context; nothing here changes the format. The app's side is
   as SQLite's own open would), every `-journal`, `-wal` or `-shm` beside it is
   removed, so no older build can roll a stale journal into the JSON file, and
   the original is kept in the app's data folder
-  (`backups/<stem>.<UTC stamp>.pre-v2.stalx`, one self-contained file).
+  (`backups/<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, one self-contained file; the path key is a short hash of the file's full path, so same-named projects in different folders never share an original).
   Until that save the file is untouched. Its undo history is not converted.
 - **Repair** of a damaged version 2 file copies it to `<name>.stalx.backup` (or
   the next free `.backup.N`) first, then writes the salvaged survey in its

@@ -204,7 +204,10 @@ fn kept_originals(stem: &str) -> Vec<PathBuf> {
                 .to_string_lossy()
                 .strip_prefix(&prefix)
                 .and_then(|rest| rest.strip_suffix(".pre-v2.stalx"))
-                .is_some_and(super::project_restore::is_upgrade_stamp)
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(key, stamp)| {
+                    key.len() == 12 && super::project_restore::is_upgrade_stamp(stamp)
+                })
         })
         .map(|entry| entry.path())
         .collect();
@@ -572,8 +575,9 @@ fn stage(dir: &Path, stem: &str, original: &Original, state: Staged) -> Option<P
     let destination = dir.join(format!("{stem}.stalx"));
     let backups = upgrade_backup_dir()?;
     std::fs::create_dir_all(&backups).ok()?;
-    let kept = backups.join(format!("{stem}.{STAMP}.pre-v2.stalx"));
-    let partial = backups.join(format!(".{stem}.{STAMP}.pre-v2.stalx.partial"));
+    let prefix = super::project_io::upgrade_backup_prefix(&destination);
+    let kept = backups.join(format!("{prefix}{STAMP}.pre-v2.stalx"));
+    let partial = backups.join(format!(".{prefix}{STAMP}.pre-v2.stalx.partial"));
     let staged_copy = dir.join(format!(".{stem}.stalx.settled-1-0"));
     let temp = stalx_v2::temp_path(&destination);
     let half = |bytes: &[u8]| bytes[..bytes.len() / 2].to_vec();
@@ -1254,5 +1258,38 @@ fn a_legacy_file_over_the_version_2_cap_still_opens_and_upgrades() {
     drop(state);
     assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
     assert!(open_fresh(&path).is_some(), "the upgraded file reopens");
+    forget_backups(&stem);
+}
+
+/// Two projects with the same file name in different folders each get their
+/// own pre-upgrade original, and Recovery offers each only its own (review
+/// findings D-migration-upgrade-3, J-docs-tests-truth-1: the backups folder
+/// is one for the whole app, and it was keyed by the file name alone).
+#[test]
+fn same_named_projects_in_different_folders_keep_separate_originals() {
+    let _config = isolated_config();
+    crate::app_dirs::init_for_test();
+    let stem = unique_stem("same-name");
+    let (one, two) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let paths = [one.path(), two.path()].map(|dir| dir.join(format!("{stem}.stalx")));
+    for (i, path) in paths.iter().enumerate() {
+        write_legacy(path, &mut Rng::new(11 + i as u32), "Legacy");
+        let state = open_fresh(path).unwrap();
+        assert!(state.save_project(None).success, "upgrade {i}");
+    }
+    let offered: Vec<Vec<PathBuf>> = paths
+        .iter()
+        .map(|path| {
+            AppState::list_project_backups(path)
+                .into_iter()
+                .map(|b| PathBuf::from(b.path))
+                .filter(|b| b.to_string_lossy().ends_with(".pre-v2.stalx"))
+                .collect()
+        })
+        .collect();
+    assert_eq!(offered[0].len(), 1, "{offered:?}");
+    assert_eq!(offered[1].len(), 1, "{offered:?}");
+    assert_ne!(offered[0], offered[1], "each its own original");
+    assert_eq!(kept_originals(&stem).len(), 2);
     forget_backups(&stem);
 }

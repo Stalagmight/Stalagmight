@@ -283,7 +283,7 @@ alone opens as another survey). The upgrade runs in this order:
 3. Remove every `-journal` / `-wal` / `-shm` beside the original: none holds
    anything the file does not now.
 4. Keep the original: write its bytes to `<app data>/backups/` under a hidden
-   name, sync it, rename it to `<stem>.<UTC stamp>.pre-v2.stalx`, sync the
+   name, sync it, rename it to `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, sync the
    folder. The kept copy is one self-contained SQLite file, never a pair.
 5. Write version 2 (`write_atomic`, above), guarded by what the original holds
    now.
