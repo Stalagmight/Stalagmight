@@ -307,6 +307,9 @@ pushed); undo through those and the next Unwind loads the parent, and so on
 back to the root. `sync::rewind_target` is the mirror, finding the child on
 BASE's own first-parent chain. Mechanically it is the revision swap with
 `keep_undo_history: true`: the download keeps its undo entries (never redo).
+A revision an earlier Stalagmight pushed is a SQLite file whose history is
+never converted (plan 7.2.8), so a step onto one is refused after the download
+and before the swap, with nothing replaced and no position recorded.
 
 - **The position** is `local.speleodb.unwound_from` (per machine, never
   uploaded), on disk so an Unwind interrupted by a restart resumes. It is

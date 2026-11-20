@@ -75,6 +75,13 @@ fn downloaded_revision_undo_mode_with_limits(
     Ok(stored_mode.map_or(UndoMode::Disabled, UndoMode::resolved))
 }
 
+/// Whether a downloaded revision is a legacy (SQLite) `.stalx`, from its first
+/// bytes. Anything that cannot be read is not called legacy: the install that
+/// follows reads and refuses it on its own terms.
+fn downloaded_revision_is_legacy(source: &std::path::Path) -> bool {
+    stalx_v2::probe_path(source).is_ok_and(|header| header.format == Format::Legacy)
+}
+
 /// [#218] Validate a git commit SHA supplied over IPC (revision restore) before it
 /// is interpolated into the download-at-hash URL. A git object id is 7..=40 lowercase
 /// or uppercase hex digits (the `/revisions/` endpoint returns full 40-hex ids; a
@@ -450,6 +457,17 @@ impl AppState {
             .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        // Review G-speleodb-5: a revision an earlier Stalagmight pushed is a SQLite
+        // file, and its undo history is never converted (plan 7.2.8). A step that
+        // asks for that history would replace the copy and record a chain position
+        // with no history to walk, so it is refused here, before anything changes.
+        if keep_undo_history && downloaded_revision_is_legacy(native.path()) {
+            return Err(local_dto(SpeleoDbError::Io(
+                "this revision was saved by an earlier version of Stalagmight, so its undo \
+                 history cannot be loaded; restore it without its history instead"
+                    .to_owned(),
+            )));
+        }
         if keep_undo_history && chain_forward {
             let target_mode = downloaded_revision_undo_mode(native.path()).map_err(local_dto)?;
             if !target_mode.pushes_history() {

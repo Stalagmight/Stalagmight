@@ -308,6 +308,13 @@ commit under the project lock, re-checking the session generation, the open link
 and the in-memory project there; if any moved, it replaces nothing, leaves the
 project open now untouched, and the frontend treats the late reply as stale.
 
+A Restore of a revision a newer Stalagmight saved (one that opens read-only here,
+plan 6.4) is refused before anything is replaced: the copy it would stamp
+un-pushed could never be saved, so never pushed, and would hold the lock until
+discarded. A View still shows it, read-only, and restoring the tip itself stamps
+nothing. A push whose save is refused says why (`READ_ONLY_FILE`,
+`EXTERNALLY_MODIFIED`) instead of a bare "failed to flush".
+
 ## Authentication and transport
 
 Email/password login exchanges the supplied credentials for a token; pasted-token
