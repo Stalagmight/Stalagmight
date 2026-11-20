@@ -185,13 +185,14 @@ mod issue_649_tests;
               beside snaps prints what it covered"
 )]
 mod issue_737_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_738_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
