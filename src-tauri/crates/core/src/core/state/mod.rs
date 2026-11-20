@@ -236,14 +236,6 @@ mod issue_738_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_756_tests;
-#[cfg(sg_unported)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::print_stdout,
-    reason = "on-demand vector dump: fails loudly, and says where it wrote"
-)]
-mod legacy_disk_vectors_dump_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -321,7 +313,7 @@ mod project_restore_tests;
 mod project_salvage_tests;
 #[cfg(test)]
 mod project_save_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -361,12 +353,9 @@ mod shot_commands_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    clippy::float_cmp,
-    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod snapshot_fixes_tests;

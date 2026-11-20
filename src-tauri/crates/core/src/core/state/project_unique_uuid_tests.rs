@@ -1,39 +1,44 @@
-//! End to end: a file saved before shot UUIDs were unique across the project
-//! opens with every id held once, and its whole undo/redo history still walks.
+//! Shot UUIDs are unique across the project, by invariant on the station
+//! graph (`validate` refuses a repeat). What is left to pin end to end is
+//! what the user sees of a file saved before they were:
 //!
-//! The legacy state is built the way an older build held it: the slot gets a
-//! project whose lines repeat each other's ids, and real commands then record
-//! a history against those ids (the integrity guard lets edits through on a
-//! project that was already critical). Saving writes both; reopening through
-//! the load path heals the project and translates the history. Every survey here
-//! is synthetic.
+//! - it opens with every id held once: the frozen 0.6.0 load renames the
+//!   repeats (`reminted_shot_uuid`: line 0 keeps the file's ids, the copies
+//!   get derived ones) and the migration keeps the result;
+//! - its warning ignores follow the rename (plan 7.2.9) and do not leak to
+//!   the line that kept the id;
+//! - two opens of the unsaved file derive the same ids, the first save writes
+//!   them (and the ignore under the new id), and the saved file reads back
+//!   with nothing renamed a second time;
+//! - un-ignoring a renamed shot clears its ignore;
+//! - an edit that brings in a client id the project already holds (Create
+//!   and Merge) gets the derived id, and undo and redo keep every id once.
+//!
+//! Retired with the SQLite engine: the history walks of
+//! `a_legacy_history_walks_whole_*` (a legacy history is dropped on the
+//! upgrade, plan 7.2.8; the open half is kept), `undoing_a_repair_of_a_cross_
+//! line_repeat_restores_it_exactly` (the in-memory repeat it undid back to is
+//! unrepresentable: no model state, file or history entry can hold one), and
+//! `the_renamed_ids_flag_belongs_to_the_open_project` (the alias-lookup flag
+//! is gone: the migration re-keys the ignores itself). Every survey here is
+//! synthetic.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use chrono::Utc;
 use tempfile::TempDir;
 
+use super::robustness_kit::NullSink;
 use super::AppState;
-use crate::core::events::EventSink;
 use crate::core::Command;
 use crate::models::{
-    reminted_shot_uuid, ClosureStrategy, LineData, LineId, Project, ShotData, ShotUpdates,
-    StationKey, StationRef,
+    reminted_shot_uuid, ClosureStrategy, LineData, LineId, ShotData, StationRef,
+    FEATURE_ID_STRIDE,
 };
+use crate::persistence::stalx_v2::{self, DecodeOptions, Format};
 use crate::persistence::{Database, ResolvedWarning};
-
-/// The production load path reports progress through a sink; nothing listens.
-struct NullSink;
-
-impl EventSink for NullSink {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
 
 const X: [&str; 4] = [
     "c0c0c0c0-0000-4000-8000-000000000001",
@@ -64,402 +69,187 @@ fn copy() -> LineData {
     }
 }
 
-fn three_copies() -> Project {
-    let mut project = Project::new("Legacy".to_string(), None);
-    for _ in 0..3 {
+/// The SHORT_SHOT ignore of the second copy's shot 1, keyed as 0.6.0 keyed
+/// it (the file's id, which the copy shares with line 0).
+fn ignore_on_the_copy() -> ResolvedWarning {
+    ResolvedWarning {
+        line_id: 1,
+        shot_id: FEATURE_ID_STRIDE + 1,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some(X[1].to_string()),
+    }
+}
+
+/// A legacy file of `copies` lines that repeat each other's ids, as an
+/// older build wrote it, with the copy's ignore when `ignored`.
+fn legacy_file(dir: &Path, copies: usize, ignored: bool) -> PathBuf {
+    let path = dir.join("legacy.stalx");
+    let mut project = crate::models::Project::new("Legacy".to_string(), None);
+    for _ in 0..copies {
         project.add_line(copy());
     }
-    project
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    if ignored {
+        db.save_resolved_warning(&ignore_on_the_copy()).unwrap();
+    }
+    path
 }
 
-/// An open session holding the legacy project with an empty history, backed by
-/// a file at `path` that holds the same project.
-fn legacy_session(dir: &Path) -> (AppState, PathBuf) {
-    let path = dir.join("legacy.stalx");
-    let mut project = three_copies();
-    Database::open(&path)
-        .unwrap()
-        .save_project(&project)
-        .unwrap();
+fn open(path: &Path) -> AppState {
     let state = AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success, "open the file");
-    project.file_path = Some(path.clone());
-    state.set_project_for_tests(project);
-    state.undo_stack.lock().unwrap().clear();
-    (state, path)
-}
-
-fn run(state: &AppState, command: Command) {
-    let what = format!("{command:?}");
-    let result = state.execute(command);
-    assert!(result.success, "{what} failed: {:?}", result.error);
-}
-
-/// A history touching the copies: every kind of entry a live edit records
-/// about a shot, a station or a line, plus one entry left on the redo stack.
-fn record_history(state: &AppState) {
-    let in_one = |position: u32| crate::models::FEATURE_ID_STRIDE + position;
-    run(
-        state,
-        Command::UpdateShot {
-            line_id: 1,
-            shot_id: in_one(2),
-            updates: ShotUpdates {
-                comment: Some(Some("edited on the copy".to_string())),
-                ..Default::default()
-            },
-        },
-    );
-    run(
-        state,
-        Command::CreateShot {
-            line_id: 1,
-            shot: ShotData {
-                azimuth_in: 200.0,
-                azimuth_out: 200.0,
-                length: 6.0,
-                depth_in: 2.0,
-                depth_out: 2.5,
-                ..Default::default()
-            },
-            after_shot_id: Some(in_one(2)),
-            before_shot_id: None,
-        },
-    );
-    run(
-        state,
-        Command::SetStationComment {
-            station_ref: StationRef::new(1, 3),
-            comment: Some("on the copy".to_string()),
-        },
-    );
-    run(
-        state,
-        Command::MergeStations {
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(0, 2),
-        },
-    );
-    run(
-        state,
-        Command::CreateLoopClosure {
-            station_a: StationRef::new(1, 5),
-            station_b: StationRef::new(0, 4),
-            closure_strategy: ClosureStrategy::Move,
-        },
-    );
-    run(
-        state,
-        Command::DeleteShot {
-            line_id: 2,
-            shot_id: 2 * crate::models::FEATURE_ID_STRIDE + 3,
-        },
-    );
-    run(state, Command::DeleteLine { line_id: 2 });
-    assert!(state.undo().success, "leave the delete on the redo stack");
-}
-
-/// The open project with every station reference resolved to its position and
-/// every shot id dropped: the survey as the user sees it, independent of what
-/// the shots are called.
-fn survey_state(state: &AppState) -> String {
-    let raw = state.capture_project_snapshot_text().unwrap();
-    let mut project: Project = serde_json::from_str(&raw).unwrap();
-    project.rebuild_line_index();
-    project.rebuild_shot_uuid_index();
-    let resolved = project.clone();
-    project.map_station_refs(|key| {
-        let at = resolved
-            .resolve_key(&key)
-            .unwrap_or_else(|| panic!("dangling station key {key:?}"));
-        StationKey::positional(at.line_id, at.station_index)
+    let r = state.execute(Command::OpenProject {
+        path: path.to_path_buf(),
     });
-    for line in &mut project.lines {
-        let position = |uuid: &Option<String>| {
-            uuid.as_ref()
-                .and_then(|u| line.shots.iter().position(|s| s.uuid.as_ref() == Some(u)))
-        };
-        let gauge = (
-            position(&line.gauge_shot_uuid),
-            position(&line.gauge_neighbour_uuid),
-        );
-        line.gauge_shot_uuid = gauge.0.map(|p| p.to_string());
-        line.gauge_neighbour_uuid = gauge.1.map(|p| p.to_string());
-        for shot in &mut line.shots {
-            shot.uuid = None;
-        }
-    }
-    let value = serde_json::to_value(&project).unwrap();
-    super::fuzz_undo_tests::canonicalize(&value, "", true).to_string()
+    assert!(r.success, "open: {:?}", r.error);
+    state
 }
 
-/// Every shot id the open project holds is held once, and integrity is clean.
-fn assert_ids_unique(state: &AppState, at: &str) {
-    let project = state.get_project_state().unwrap();
-    let mut seen = std::collections::HashSet::new();
-    for line in &project.lines {
-        for uuid in line.shots.iter().filter_map(|s| s.uuid.as_deref()) {
-            assert!(
-                seen.insert(uuid.to_string()),
-                "{at}: shot UUID {uuid} held twice"
-            );
-        }
-    }
-    assert!(
-        project.check_structural_integrity().is_empty(),
-        "{at}: {:?}",
-        project.check_structural_integrity()
-    );
-}
-
-/// Undo to the bottom, recording the survey at every depth (top first), then
-/// redo back to where it started.
-fn walk(state: &AppState, check: &dyn Fn(&AppState, &str)) -> Vec<String> {
-    let mut states = vec![survey_state(state)];
-    check(state, "top");
-    let mut steps = 0;
-    while state.undo_stack.lock().unwrap().can_undo() {
-        let result = state.undo();
-        assert!(result.success, "undo {steps} failed: {:?}", result.error);
-        steps += 1;
-        check(state, &format!("after undo {steps}"));
-        states.push(survey_state(state));
-    }
-    for step in 0..steps {
-        let result = state.redo();
-        assert!(result.success, "redo {step} failed: {:?}", result.error);
-        check(state, &format!("after redo {step}"));
-    }
-    assert_eq!(survey_state(state), states[0], "redo returns to the top");
-    states
-}
-
-fn stack_lengths(state: &AppState) -> (usize, usize) {
-    (state.get_undo_stack().len(), state.get_redo_stack().len())
+/// The same, through the full load the UI uses.
+fn load_full(path: &Path) -> AppState {
+    let state = AppState::new().unwrap();
+    state.set_event_sink(Arc::new(NullSink));
+    state.do_load_project_full(path.to_path_buf()).unwrap();
+    state
 }
 
 fn line_ids(state: &AppState, line: LineId) -> Vec<String> {
     state
         .get_project_state()
         .unwrap()
-        .get_line(line)
+        .line(line)
         .unwrap()
         .shots
         .iter()
-        .filter_map(|s| s.uuid.clone())
+        .map(|s| s.uuid.clone())
         .collect()
+}
+
+fn all_ids(state: &AppState) -> Vec<Vec<String>> {
+    state
+        .get_project_state()
+        .unwrap()
+        .lines()
+        .iter()
+        .map(|l| l.shots.iter().map(|s| s.uuid.clone()).collect())
+        .collect()
+}
+
+/// Every shot id the open project holds is held once, and it is valid.
+fn assert_ids_unique(state: &AppState, at: &str) {
+    let mut seen = BTreeSet::new();
+    for uuid in all_ids(state).into_iter().flatten() {
+        assert!(seen.insert(uuid.clone()), "{at}: shot UUID {uuid} held twice");
+    }
+    let violations = state.integrity_violation_messages();
+    assert!(violations.is_empty(), "{at}: {violations:?}");
 }
 
 fn short_shot_resolved(state: &AppState, line: LineId) -> bool {
     let project = state.get_project_state().unwrap();
-    let shot = project.get_line(line).unwrap().shots[1].id;
+    let shot = project.line(line).unwrap().shots[1].id;
     state
-        .compute_project_warnings(&project, None)
+        .compute_project_warnings(&project)
         .iter()
         .find(|w| w.line_id == line && w.shot_id == shot && w.code == "SHORT_SHOT")
         .unwrap_or_else(|| panic!("line {line} must raise SHORT_SHOT"))
         .is_resolved
 }
 
+fn check_the_opened_copies(state: &AppState, how: &str) {
+    assert_eq!(line_ids(state, 0), X, "{how}: line 0 keeps the file's ids");
+    assert_eq!(
+        line_ids(state, 1),
+        X.iter()
+            .map(|id| reminted_shot_uuid(1, id))
+            .collect::<Vec<_>>(),
+        "{how}: the copy's repeats are renamed"
+    );
+    assert_ids_unique(state, how);
+    assert!(short_shot_resolved(state, 1), "{how}: the ignore follows the rename");
+    assert!(
+        !short_shot_resolved(state, 0),
+        "{how}: and does not leak to the first copy"
+    );
+    assert!(
+        state.get_undo_stack().is_empty(),
+        "{how}: a legacy history is not carried"
+    );
+}
+
 #[test]
-fn a_legacy_history_walks_whole_after_the_load_renames_its_repeats() {
-    legacy_history_walks_whole(Reopen::OpenProject);
-}
-
-/// The same, through the load path the app's UI uses.
-#[test]
-fn a_legacy_history_walks_whole_through_the_full_load_path() {
-    legacy_history_walks_whole(Reopen::LoadFull);
-}
-
-#[derive(Clone, Copy)]
-enum Reopen {
-    OpenProject,
-    LoadFull,
-}
-
-fn reopen(state: &AppState, path: &Path, how: Reopen) {
-    match how {
-        Reopen::OpenProject => assert!(state.open_project(path.to_path_buf()).success, "reopen"),
-        Reopen::LoadFull => {
-            state.set_event_sink(Arc::new(NullSink));
-            state.do_load_project_full(path.to_path_buf()).unwrap();
-        }
-    }
-}
-
-fn legacy_history_walks_whole(how: Reopen) {
+fn a_file_with_repeated_ids_opens_with_every_id_held_once() {
+    let _config = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
-    let (state, path) = legacy_session(dir.path());
-    record_history(&state);
-    state
-        .save_resolved_warning(&ResolvedWarning {
-            line_id: 1,
-            shot_id: crate::models::FEATURE_ID_STRIDE + 1,
-            warning_code: "SHORT_SHOT".to_string(),
-            resolved_at: Utc::now(),
-            resolved_comment: None,
-            shot_uuid: Some(X[1].to_string()),
-        })
-        .unwrap();
-    assert!(
-        short_shot_resolved(&state, 1),
-        "precondition: the ignore holds"
-    );
-
-    // Saved BEFORE the walk is recorded, so the states include what any save
-    // does regardless of this change (it captures a gauge pair per line).
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-    let legacy_states = walk(&state, &|_, _| {});
-    let legacy_lengths = stack_lengths(&state);
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-    assert!(state.execute(Command::CloseProject).success);
-
-    // Reopen: line 0 keeps the file's ids, line 1 gets the derived ones.
-    reopen(&state, &path, how);
-    assert_eq!(line_ids(&state, 0)[..2], X[..2]);
-    assert_eq!(
-        line_ids(&state, 1)[0],
-        reminted_shot_uuid(1, X[0]),
-        "the copy's repeats are renamed"
-    );
-    assert_eq!(
-        stack_lengths(&state),
-        legacy_lengths,
-        "no entry was dropped"
-    );
-    assert!(
-        short_shot_resolved(&state, 1),
-        "the ignore follows the rename"
-    );
-    assert!(
-        !short_shot_resolved(&state, 0),
-        "and does not leak to the first copy"
-    );
-
-    // The same survey at every depth, every id held once at every depth.
-    let healed_states = walk(&state, &|state, at| assert_ids_unique(state, at));
-    assert_eq!(healed_states.len(), legacy_states.len());
-    for (depth, (healed, legacy)) in healed_states.iter().zip(&legacy_states).enumerate() {
-        assert_eq!(
-            healed, legacy,
-            "the survey differs at depth {depth} from the top"
-        );
-    }
-
-    // The deleted line comes back from the redo stack under its own ids.
-    assert!(state.redo().success, "redo the line delete");
-    assert!(state.undo().success, "and undo it again");
-    assert_ids_unique(&state, "after the redo stack round trip");
+    let path = legacy_file(dir.path(), 3, true);
+    check_the_opened_copies(&open(&path), "OpenProject");
+    check_the_opened_copies(&load_full(&path), "the full load");
 }
 
 #[test]
 fn reopening_without_saving_derives_the_same_ids_and_a_save_persists_them() {
+    let _config = crate::test_helpers::isolated_config();
+    crate::app_dirs::init_for_test();
     let dir = TempDir::new().unwrap();
-    let (state, path) = legacy_session(dir.path());
-    record_history(&state);
-    state
-        .save_resolved_warning(&ResolvedWarning {
-            line_id: 1,
-            shot_id: crate::models::FEATURE_ID_STRIDE + 1,
-            warning_code: "SHORT_SHOT".to_string(),
-            resolved_at: Utc::now(),
-            resolved_comment: None,
-            shot_uuid: Some(X[1].to_string()),
-        })
-        .unwrap();
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-    assert!(state.execute(Command::CloseProject).success);
+    let path = legacy_file(dir.path(), 3, true);
+    let first = all_ids(&open(&path));
+    let state = open(&path);
+    assert_eq!(all_ids(&state), first, "two opens of the unsaved file agree");
 
-    let opened = |state: &AppState| -> (Vec<Vec<String>>, Vec<String>) {
-        let project = state.get_project_state().unwrap();
-        let ids = project
-            .lines
-            .iter()
-            .map(|s| s.shots.iter().filter_map(|x| x.uuid.clone()).collect())
-            .collect();
-        let history = state
-            .get_undo_stack()
-            .iter()
-            .map(|item| item.description.clone())
-            .collect();
-        (ids, history)
-    };
-
-    assert!(state.open_project(path.clone()).success);
-    let first = opened(&state);
-    assert!(state.execute(Command::CloseProject).success);
-    assert!(state.open_project(path.clone()).success);
-    assert_eq!(opened(&state), first, "two opens of the unsaved file agree");
-
-    // A save writes the derived ids and re-keys the ignore to them.
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-    let rows = Database::open_existing(&path)
-        .unwrap()
-        .load_resolved_warnings()
-        .unwrap();
-    assert_eq!(rows.len(), 1);
+    // The first save upgrades the file: the derived ids, and the ignore
+    // under the copy's new id.
+    let saved = state.execute(Command::SaveProject { path: None });
+    assert!(saved.success, "{:?}", saved.error);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(stalx_v2::sniff(&bytes), Format::V2);
+    let decoded = stalx_v2::decode(&bytes, &DecodeOptions::default()).unwrap();
+    let ignores: Vec<(String, String)> = decoded
+        .extras
+        .ignored_warnings
+        .iter()
+        .map(|i| (i.shot.clone(), i.code.clone()))
+        .collect();
     assert_eq!(
-        rows[0].shot_uuid.as_deref(),
-        Some(reminted_shot_uuid(1, X[1]).as_str())
+        ignores,
+        vec![(reminted_shot_uuid(1, X[1]), "SHORT_SHOT".to_string())]
     );
-    assert!(state.execute(Command::CloseProject).success);
 
-    // The production load path agrees, and nothing is renamed a second time.
-    state.set_event_sink(Arc::new(NullSink));
-    state.do_load_project_full(path).unwrap();
-    assert_eq!(opened(&state), first, "the saved file reads back unchanged");
-    assert!(short_shot_resolved(&state, 1));
-    assert_ids_unique(&state, "after the second open");
+    // The saved file reads back unchanged, nothing renamed a second time.
+    let reopened = load_full(&path);
+    assert_eq!(all_ids(&reopened), first);
+    assert!(short_shot_resolved(&reopened, 1));
+    assert_ids_unique(&reopened, "after the second open");
 }
 
 #[test]
-fn unignoring_a_renamed_shot_clears_the_row_stored_against_its_old_id() {
+fn unignoring_a_renamed_shot_clears_its_ignore() {
+    let _config = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
-    let (state, path) = legacy_session(dir.path());
-    state
-        .save_resolved_warning(&ResolvedWarning {
-            line_id: 1,
-            shot_id: crate::models::FEATURE_ID_STRIDE + 1,
-            warning_code: "SHORT_SHOT".to_string(),
-            resolved_at: Utc::now(),
-            resolved_comment: None,
-            shot_uuid: Some(X[1].to_string()),
-        })
-        .unwrap();
-    assert!(state.execute(Command::SaveProject { path: None }).success);
-    assert!(state.execute(Command::CloseProject).success);
-    assert!(state.open_project(path).success);
+    let path = legacy_file(dir.path(), 3, true);
+    let state = open(&path);
     assert!(short_shot_resolved(&state, 1));
 
     let live = reminted_shot_uuid(1, X[1]);
-    assert!(
-        state.shot_uuid_is_persisted(1, &live),
-        "a derived id counts as persisted: every open derives it again"
-    );
+    assert!(state.shot_uuid_is_persisted(1, &live));
     state
-        .delete_resolved_warning(
-            1,
-            crate::models::FEATURE_ID_STRIDE + 1,
-            "SHORT_SHOT",
-            Some(&live),
-        )
+        .delete_resolved_warning(1, FEATURE_ID_STRIDE + 1, "SHORT_SHOT", Some(&live))
         .unwrap();
     assert!(!short_shot_resolved(&state, 1), "the ignore is gone");
+    assert!(
+        state.has_unsaved_changes(),
+        "an un-ignore rides the next save (plan 6.5)"
+    );
 }
 
 #[test]
 fn create_and_merge_renames_a_client_id_the_project_already_holds() {
+    let _config = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("one.stalx");
-    let mut project = Project::new("One".to_string(), None);
-    project.add_line(copy());
-    Database::open(&path)
-        .unwrap()
-        .save_project(&project)
-        .unwrap();
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path).success);
+    let path = legacy_file(dir.path(), 1, false);
+    let state = open(&path);
+    assert_eq!(line_ids(&state, 0), X);
 
     let result = state.execute_create_and_merge(
         Some("Again".to_string()),
@@ -474,75 +264,25 @@ fn create_and_merge_renames_a_client_id_the_project_already_holds() {
     );
     assert!(result.success, "{:?}", result.error);
     let new_line = result.line_id.unwrap();
-    assert_eq!(line_ids(&state, 0), X);
+    assert_eq!(line_ids(&state, 0), X, "the project keeps its ids");
     assert_eq!(
         line_ids(&state, new_line),
         X.iter()
             .map(|id| reminted_shot_uuid(new_line, id))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        "the incoming repeats get the derived ids"
     );
     assert_ids_unique(&state, "after create-and-merge");
 
-    // The merge anchored on the renamed start, so undo and redo both hold.
     assert!(state.undo().success);
+    assert_ids_unique(&state, "after undo");
     assert!(state.redo().success);
-    assert_ids_unique(&state, "after undo + redo");
-}
-
-#[test]
-fn undoing_a_repair_of_a_cross_line_repeat_restores_it_exactly() {
-    let dir = TempDir::new().unwrap();
-    let (state, _path) = legacy_session(dir.path());
-    let before = line_ids(&state, 1);
-    assert_eq!(before, X);
-
-    // `legacy_session` swapped the unhealed project in after a load that set
-    // the flag; clear it so only the Repair below can set it again.
-    state.load_renamed_shots.store(false, Ordering::Relaxed);
-    let repaired = state.repair_open_project_integrity();
-    assert!(repaired.changed && repaired.remaining == 0, "{repaired:?}");
-    assert_ids_unique(&state, "after repair");
-    assert!(
-        state.load_renamed_shots.load(Ordering::Relaxed),
-        "a Repair that renamed ids turns on the stored-ignore alias lookup"
-    );
-
-    // Undo puts the recorded state back verbatim, repeats included; the next
-    // load heals them with the same rule.
-    assert!(state.undo().success);
-    assert_eq!(line_ids(&state, 1), before);
-    assert!(state.redo().success);
-    assert_ids_unique(&state, "after redoing the repair");
-}
-
-/// INJECTION (tried): dropping the reset from `close_open_project_locked` fails
-/// the close assertion; dropping it from `create_project` fails the last one.
-#[test]
-fn the_renamed_ids_flag_belongs_to_the_open_project() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("legacy.stalx");
-    Database::open(&path)
-        .unwrap()
-        .save_project(&three_copies())
-        .unwrap();
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success, "open the file");
-    assert!(
-        state.load_renamed_shots.load(Ordering::Relaxed),
-        "the load renamed the repeats"
-    );
-
-    assert!(state.close_project().success);
-    assert!(
-        !state.load_renamed_shots.load(Ordering::Relaxed),
-        "closing forgets it"
-    );
-
-    assert!(state.open_project(path).success, "reopen");
-    assert!(state.load_renamed_shots.load(Ordering::Relaxed));
-    assert!(state.create_project("Fresh".to_string(), None).success);
-    assert!(
-        !state.load_renamed_shots.load(Ordering::Relaxed),
-        "a new project has renamed nothing"
+    assert_ids_unique(&state, "after redo");
+    assert_eq!(
+        line_ids(&state, new_line),
+        X.iter()
+            .map(|id| reminted_shot_uuid(new_line, id))
+            .collect::<Vec<_>>(),
+        "redo brings the same derived ids back"
     );
 }
