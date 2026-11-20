@@ -2628,6 +2628,44 @@ fn test_initial_save_deferred_uses_explicit_flag() {
     assert!(state(&app).initial_save_deferred());
 }
 
+/// The first implicit save of a deferred project whose reserved path was taken
+/// meanwhile moves to the next free name (`_1`), as 0.6.0 did, and leaves the
+/// other file as it was; the session follows the renamed file.
+#[test]
+fn test_first_implicit_save_of_a_deferred_project_avoids_a_taken_path() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let reserved = dir.path().join("Cave.stalx");
+        let mut project = project_with_line(vec![shot_data(1.0)]);
+        project.file_path = Some(reserved.clone());
+        set_project_for_tests(&app, project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        fs::write(&reserved, b"someone else's file").unwrap();
+
+        let result = project::save_project(state(&app), None, None);
+        assert_success(&result);
+        let renamed = dir.path().join("Cave_1.stalx");
+        assert_eq!(result.saved_path.as_deref(), renamed.to_str());
+        assert_eq!(fs::read(&reserved).unwrap(), b"someone else's file");
+        assert_eq!(read_v2(&renamed).lines().len(), 1);
+        assert_eq!(
+            state(&app).get_project_state().unwrap().file_path,
+            Some(renamed.clone())
+        );
+        assert!(!state(&app).initial_save_deferred());
+
+        // The next implicit save goes to the renamed file, guarded as usual.
+        create_line_with_shots(&app, vec![shot_data(2.0)]);
+        assert_success(&project::save_project(state(&app), None, None));
+        assert_eq!(read_v2(&renamed).lines().len(), 2);
+        assert!(!dir.path().join("Cave_2.stalx").exists());
+        assert_eq!(fs::read(&reserved).unwrap(), b"someone else's file");
+    });
+}
+
 #[test]
 fn test_list_recent_projects_includes_saved() {
     with_config_lock(|| {
@@ -4166,6 +4204,14 @@ fn test_merge_stations_success_between_lines() {
     create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
     assert_success(&result);
+    // A merge is one shared station: both slots carry its id.
+    let project = state(&app).get_project_state().unwrap();
+    assert_eq!(
+        project.station_at(StationRef::new(0, 1)),
+        project.station_at(StationRef::new(1, 0))
+    );
+    let wire = project::get_project_state(state(&app)).unwrap();
+    assert_eq!(wire.project.station_merges.len(), 1);
 }
 
 #[test]
@@ -4183,9 +4229,21 @@ fn test_unmerge_stations_removes_merge() {
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+    ));
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);
+    // The slot's line is detached: the two slots no longer share a station.
+    let project = state(&app).get_project_state().unwrap();
+    assert_ne!(
+        project.station_at(StationRef::new(0, 1)),
+        project.station_at(StationRef::new(1, 0))
+    );
+    let wire = project::get_project_state(state(&app)).unwrap();
+    assert!(wire.project.station_merges.is_empty());
 }
 
 #[test]
