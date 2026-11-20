@@ -34,11 +34,12 @@
 //! - `edit/reverse.rs` - reverse a line (plan 4.4).
 //! - `edit/split.rs` - Split Line Here (the halves share the split station).
 //! - `edit/combine/` - Combine Lines (candidates, plan preview, the join).
-//! - `edit/fold.rs` - the station fold a merge, a promotion and a combine
-//!   share (one station replaced by another everywhere).
 //!
-//! The across-one-shot skip set these operations remove closures by is the
-//! solve's own ([`Project::closures_across_one_shot`], `closures.rs`).
+//! Shared with the topology commands (`ops_*.rs`): the merge and detach
+//! mutations Combine Lines joins and tears with (`Project::merge_ids`,
+//! `Project::detach_ids`), the orphan-closure sweep (`sweep.rs`), and the
+//! across-one-shot skip set closures are removed by, which is the solve's
+//! own ([`Project::closures_across_one_shot`], `closures.rs`).
 
 use std::fmt;
 
@@ -50,7 +51,6 @@ use super::{
 };
 
 mod combine;
-mod fold;
 mod lines;
 mod ranges;
 mod reverse;
@@ -130,7 +130,6 @@ pub use combine::{
     CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
     TornTie, TornTieKind, TornTieReason,
 };
-pub use fold::{CommentRule, Fold};
 pub use lines::DeletedLine;
 pub use ranges::{DeleteRangePreview, DeletedRange, RangeDeleteMode};
 pub use shots::{CreatedShot, DeleteShotPreview, DeletedShot, ShotPlace, SplitShot};
@@ -181,6 +180,15 @@ impl fmt::Display for EditError {
 }
 
 impl std::error::Error for EditError {}
+
+impl From<super::OpError> for EditError {
+    fn from(error: super::OpError) -> Self {
+        match error {
+            super::OpError::Invalid(violations) => Self::Invalid(violations),
+            other => Self::Refused(other.to_string()),
+        }
+    }
+}
 
 impl From<super::BuildError> for EditError {
     fn from(error: super::BuildError) -> Self {

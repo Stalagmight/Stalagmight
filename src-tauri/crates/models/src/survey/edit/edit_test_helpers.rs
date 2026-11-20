@@ -82,15 +82,21 @@ pub(super) fn add_datum(p: &mut Project, station: StationId, at: crate::GpsCoord
     p.settle_anchors(&before, &super::super::EditContext::none());
 }
 
-/// Merge station `moving` into `stationary` the way plan 5.1 / 5.5 merge
-/// (a test stand-in for stream M2's Merge Stations): `moving`'s piece moves
-/// so `moving` lands on `stationary`, which survives (its id and name; the
-/// other becomes an alias). Panics if refused or invalid.
+/// Merge station `moving` into `stationary` with a forced direction (Merge
+/// Stations' mutation core, `merge_ids`, without its direction rule or the
+/// sweep): `moving`'s piece moves so `moving` lands on `stationary`, which
+/// survives (its id and name; the other becomes an alias). Closures between
+/// the two are removed (#738). Panics if refused or invalid.
 pub(super) fn merge(p: &mut Project, moving: StationId, stationary: StationId) {
     let before = p.anchor_snapshot();
-    if let Err(error) = p.fold_station(moving, stationary, super::CommentRule::Join) {
+    if let Err(error) = p.merge_ids(
+        stationary,
+        moving,
+        super::super::ops_merge::CommentRule::Join,
+    ) {
         panic!("merge refused: {error}");
     }
+    p.closures.retain(|c| c.a != c.b);
     let ctx = super::super::EditContext::merge(stationary, moving).with_renamed(moving, stationary);
     p.settle_anchors(&before, &ctx);
     let violations = p.validate();

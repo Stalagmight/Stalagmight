@@ -11,7 +11,7 @@ use crate::{
 use super::super::super::{
     ClosureId, ClosureStrategy, EditContext, LoopClosure, Placement, Project, RawPositions,
 };
-use super::super::fold::CommentRule;
+use super::super::super::ops_merge::CommentRule;
 use super::super::lines::absorb_legacy_credit;
 use super::super::EditError;
 use super::plan::{moving_side, Decision, DUST_M};
@@ -162,7 +162,7 @@ impl Project {
                 .unwrap_or(StationRef::new(0, 0))
         };
         for d in &decision.detaches {
-            let fresh = self.detach_line_from(d.line, d.station)?;
+            let fresh = self.detach_ids(d.station, d.line)?.new_station;
             renamed.push((d.station, fresh));
             slot_map.insert((d.line, d.station), fresh);
             if d.line == k && d.station == jk {
@@ -297,7 +297,9 @@ impl Project {
         // Step 4: the two join stations become one, the kept one.
         let mut folded: Option<(StationId, StationId)> = None;
         if jo != jk {
-            self.fold_station(jo, jk, CommentRule::Pick(options.comment_pick))?;
+            self.merge_ids(jk, jo, CommentRule::Pick(options.comment_pick))?;
+            // Closures between the two join stations close nothing now (#738).
+            self.closures.retain(|c| c.a != c.b);
             renamed.push((jo, jk));
             folded = Some((jo, jk));
         }

@@ -22,6 +22,7 @@
 
 use crate::StationId;
 
+use super::ops_merge::CommentRule;
 use super::{ClosureId, EditContext, LoopClosure, Project};
 
 /// What the sweep did, as warning data for the command's result.
@@ -102,7 +103,7 @@ impl Project {
                 (closure.b, closure.a)
             };
             let before = self.anchor_snapshot();
-            if self.merge_ids(survivor, retired).is_err() {
+            if self.merge_ids(survivor, retired, CommentRule::Join).is_err() {
                 continue;
             }
             let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);

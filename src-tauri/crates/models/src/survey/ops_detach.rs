@@ -15,6 +15,10 @@
 //! detaches the slot's line from every other line at that station (a no-op
 //! on a station that is not a junction, as today). Declared change (plan
 //! 5.2): on a hub of three or more lines the other lines stay joined.
+//!
+//! The mutation ([`Project::detach_ids`]) is the one core every detach goes
+//! through: these commands and Combine Lines' torn junctions
+//! (`edit/combine/`, plan 5.4 steps 2, 3 and 6).
 
 use crate::{LineId, StationId, StationRef};
 
@@ -45,17 +49,7 @@ impl Project {
         station: StationId,
         line: LineId,
     ) -> Result<OpOutcome<DetachReport>, OpError> {
-        self.existing_station(station)?;
-        if self.line(line).is_none() {
-            return Err(OpError::UnknownLine(line));
-        }
-        let topology = self.topology();
-        if topology.slot_on(station, line).is_none() {
-            return Err(OpError::StationNotOnLine { station, line });
-        }
-        if !topology.is_junction(station) {
-            return Err(OpError::NotDirectlyMerged);
-        }
+        self.detach_refusal(station, line)?;
         self.run_op(Sweep::Run, |p| {
             let report = p.detach_ids(station, line)?;
             let ctx = EditContext::line(line).with_renamed(station, report.new_station);
@@ -100,9 +94,36 @@ impl Project {
         })
     }
 
-    /// The low-level detach: mint the new station, rewrite the line's chain,
-    /// move what the line's member owned. No anchors, no sweep.
-    fn detach_ids(&mut self, station: StationId, line: LineId) -> Result<DetachReport, OpError> {
+    /// Why line `line` may not be detached from `station`, if it may not:
+    /// an unknown station or line, a station off the line, or a station no
+    /// other line passes (nothing to detach from).
+    fn detach_refusal(&self, station: StationId, line: LineId) -> Result<(), OpError> {
+        self.existing_station(station)?;
+        if self.line(line).is_none() {
+            return Err(OpError::UnknownLine(line));
+        }
+        let topology = self.topology();
+        if topology.slot_on(station, line).is_none() {
+            return Err(OpError::StationNotOnLine { station, line });
+        }
+        if !topology.is_junction(station) {
+            return Err(OpError::NotDirectlyMerged);
+        }
+        Ok(())
+    }
+
+    /// The low-level detach (plan 5.2's mutation): mint the new station
+    /// (named as the junction, then letter-suffixed if taken on the line; no
+    /// comment, aliases or external id), rewrite the line's chain, move what
+    /// the line's member owned (datums and closure ends whose `via` is the
+    /// line, its hand move). Refused, with nothing changed, as
+    /// [`Self::detach_line`]. No anchors, no sweep, no validation.
+    pub(super) fn detach_ids(
+        &mut self,
+        station: StationId,
+        line: LineId,
+    ) -> Result<DetachReport, OpError> {
+        self.detach_refusal(station, line)?;
         let name = self
             .stations
             .get(&station)

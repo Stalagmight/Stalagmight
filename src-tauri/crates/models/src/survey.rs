@@ -236,8 +236,8 @@ pub use edit::{
     TornTie, TornTieKind, TornTieReason,
 };
 pub use edit::{
-    CommentRule, CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
-    DeletedShot, EditError, EditReport, Edited, Fold, RangeDeleteMode, ShotPlace, SplitLinePreview,
+    CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
+    DeletedShot, EditError, EditReport, Edited, RangeDeleteMode, ShotPlace, SplitLinePreview,
     SplitOptions, SplitShot,
 };
 pub use sweep::{Promotion, SweepReport};

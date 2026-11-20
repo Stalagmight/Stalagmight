@@ -16,13 +16,31 @@
 //! Refused: two ends that are one station already; two stations already
 //! connected (one piece, or tied by an aligned closure), so the user is routed
 //! to Create Loop Closure, as today.
+//!
+//! The mutation itself ([`Project::merge_ids`]: one station replaced by
+//! another everywhere) is the one core every merge goes through: Merge
+//! Stations, the sweep's closure promotions (`sweep.rs`) and Combine Lines'
+//! join (`edit/combine/apply.rs`, with the dialog's comment pick). Each caller
+//! decides the direction and settles anchors itself.
 
 use std::collections::BTreeSet;
 
-use crate::{ClosurePreview, LineId, StationId};
+use crate::{ClosurePreview, CombinePick, LineId, StationId};
 
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::{EditContext, Project, StationAlias};
+
+/// How a merge settles the two stations' comments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CommentRule {
+    /// Plan 5.1: both kept, the retired one appended after a blank line, when
+    /// both are non-empty and different; otherwise whichever exists.
+    Join,
+    /// Combine Lines: the dialog's pick between the survivor's (kept) and the
+    /// retired one's (other), or both joined by a newline (today's
+    /// `pick_text`). Identical texts are kept once.
+    Pick(CombinePick),
+}
 
 /// What a merge did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +101,7 @@ impl Project {
         self.merge_refusal(a, b)?;
         let (stationary, moving) = self.merge_direction(a, b);
         self.run_op(Sweep::Run, |p| {
-            let report = p.merge_ids(stationary, moving)?;
+            let report = p.merge_ids(stationary, moving, CommentRule::Join)?;
             let ctx = EditContext::merge(stationary, moving).with_renamed(moving, stationary);
             Ok((report, ctx))
         })
@@ -225,14 +243,21 @@ impl Project {
         find(&mut parent, ca) == find(&mut parent, cb)
     }
 
-    /// The low-level merge: replace `retired` by `survivor` everywhere, fold
-    /// the retired station into the survivor (alias, comment), re-uniquify
-    /// names on the moving piece's lines through the junction. No anchors,
-    /// no sweep, no validation (callers run the pipeline).
+    /// The low-level merge: replace `retired` by `survivor` everywhere (line
+    /// starts, shot ends, hand-move keys, datums, closure ends), drop a
+    /// placement on `retired`, fold the retired station into the survivor
+    /// (aliases, the comment by `comment`, its `external` id when the survivor
+    /// has none), re-uniquify names on the moving piece's lines through the
+    /// junction. A closure between the two stations is left with both ends on
+    /// the survivor for the caller to remove (the sweep does, #738). No
+    /// anchors, no sweep, no validation (callers run the pipeline). Refused,
+    /// with nothing changed, when a line passes both stations (it would pass
+    /// the survivor twice, invariant 3) or either station is missing.
     pub(super) fn merge_ids(
         &mut self,
         survivor: StationId,
         retired: StationId,
+        comment: CommentRule,
     ) -> Result<MergeReport, OpError> {
         let topology = self.topology_arc();
         let moving_lines = self.piece_lines(retired);
@@ -289,7 +314,7 @@ impl Project {
                 id: retired,
                 name: Some(gone.name.clone()),
             });
-            keep.comment = joined_comment(keep.comment.take(), gone.comment.clone());
+            keep.comment = merged_comment(keep.comment.take(), gone.comment.clone(), comment);
             if keep.external.is_none() {
                 keep.external.clone_from(&gone.external);
             }
@@ -321,15 +346,25 @@ impl Project {
     }
 }
 
-/// The survivor's comment after a merge (plan 5.1): both, separated by a
-/// blank line, when both are non-empty and different; else whichever exists.
-fn joined_comment(survivor: Option<String>, retired: Option<String>) -> Option<String> {
+/// The survivor's comment after a merge by `rule` (plan 5.1 for
+/// [`CommentRule::Join`], today's `pick_text` for a pick). Identical texts
+/// are kept once; with one side empty, whichever exists.
+fn merged_comment(
+    survivor: Option<String>,
+    retired: Option<String>,
+    rule: CommentRule,
+) -> Option<String> {
     let keep = survivor.filter(|c| !c.is_empty());
     let gone = retired.filter(|c| !c.is_empty());
     match (keep, gone) {
-        (Some(k), Some(g)) if k != g => Some(format!("{k}\n\n{g}")),
-        (Some(k), _) => Some(k),
-        (None, g) => g,
+        (Some(k), Some(g)) if k == g => Some(k),
+        (Some(k), Some(g)) => Some(match rule {
+            CommentRule::Join => format!("{k}\n\n{g}"),
+            CommentRule::Pick(CombinePick::Kept) => k,
+            CommentRule::Pick(CombinePick::Other) => g,
+            CommentRule::Pick(CombinePick::Both) => format!("{k}\n{g}"),
+        }),
+        (k, g) => k.or(g),
     }
 }
 
