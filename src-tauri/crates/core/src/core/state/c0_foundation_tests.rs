@@ -287,6 +287,57 @@ fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     assert!(r.success, "{:?}", r.error);
 }
 
+/// A display toggle reads the file once while it holds the project lock:
+/// it rewrites from the bytes the open (or its last write) kept, and only
+/// the guard reads the file, before the rename (review finding
+/// C-file-format-10). A marker planted in the kept copy (same length, same
+/// fingerprint) reaches the file, which a second read would have replaced. Kept bytes whose fingerprint is
+/// not the guard's are never used. Injection: rewriting from
+/// `read_unchanged` again loses the marker.
+#[test]
+fn a_display_toggle_rewrites_from_the_kept_bytes_and_reads_the_file_once() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let state = open(&path);
+    let on_disk = std::fs::read(&path).unwrap();
+    let kept = state.with_file(|f| f.saved_bytes.as_ref().map(|(_, b)| b.to_vec()));
+    assert_eq!(kept.as_deref(), Some(on_disk.as_slice()));
+
+    let marked = String::from_utf8(on_disk.clone()).unwrap().replacen(
+        "\"project\":{\"name\":\"C0\"",
+        "\"project\":{\"name\":\"K0\"",
+        1,
+    );
+    assert_ne!(marked.as_bytes(), on_disk.as_slice());
+    state.with_file(|f| {
+        let (fingerprint, _) = f.saved_bytes.take().unwrap();
+        f.saved_bytes = Some((fingerprint, std::sync::Arc::from(marked.as_bytes())));
+    });
+    state.save_display_setting("showGrid", "true").unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.contains("\"project\":{\"name\":\"K0\""), "{after}");
+    let kept = state.with_file(|f| f.saved_bytes.as_ref().map(|(_, b)| b.to_vec()));
+    assert_eq!(kept.as_deref(), Some(after.as_bytes()), "the write is kept");
+
+    // Kept bytes of another fingerprint are not used: the file is read.
+    state.with_file(|f| {
+        let other = stalx_v2::Fingerprint::of(b"other", None);
+        f.saved_bytes = Some((other, std::sync::Arc::from(&b"other"[..])));
+    });
+    state.save_display_setting("showGrid", "false").unwrap();
+    let decoded = stalx_v2::decode(&std::fs::read(&path).unwrap(), &Default::default()).unwrap();
+    assert_eq!(decoded.project.name, "K0");
+    assert_eq!(
+        decoded
+            .extras
+            .local
+            .display
+            .get("showGrid")
+            .map(String::as_str),
+        Some("false")
+    );
+}
+
 #[test]
 fn a_file_with_an_unknown_required_feature_opens_read_only() {
     let dir = TempDir::new().unwrap();

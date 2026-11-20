@@ -466,6 +466,8 @@ impl AppState {
             return CommandResult::success().with_unlinked_copy_path(target.display().to_string());
         }
         project.file_path = Some(target.clone());
+        let written = bytes.len();
+        file.saved_bytes = Some((fingerprint.clone(), std::sync::Arc::from(bytes)));
         file.fingerprint = Some(fingerprint);
         file.origin = FileOrigin::V2;
         file.dirty = false;
@@ -479,7 +481,7 @@ impl AppState {
         self.note_recent_project(&target);
         tracing::info!(
             path = ?target,
-            bytes = bytes.len(),
+            bytes = written,
             upgraded = upgrade,
             purpose = "persist project",
             "Saved project"

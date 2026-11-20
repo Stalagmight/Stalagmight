@@ -201,7 +201,8 @@ impl AppState {
                 }
                 let mut project = decoded.project;
                 project.file_path = Some(path.to_path_buf());
-                let mut file = FileState::from_v2(decoded.extras, fingerprint);
+                let mut file =
+                    FileState::from_v2(decoded.extras, fingerprint, Some(Arc::from(bytes)));
                 let history = file.saved_history.clone();
                 // An unreadable history member was already dropped by the
                 // decoder (tier 3); the banner says so.
