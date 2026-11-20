@@ -109,16 +109,45 @@ used only by test cleanup.
 
 Offline HTTP tests check request methods, paths, bearer headers, login payloads,
 permission and mutex projection, nullable metadata patches, one multipart
-`project.stalx` artifact, commit messages, upload SHA selection, status errors,
+`project.stalx` artifact (its content type sniffed from the bytes:
+`application/json` for a version 2 file, `application/vnd.sqlite3` for a legacy
+SQLite one), commit messages, upload SHA selection, status errors,
 malformed successful responses, retry boundaries and bounded streamed downloads.
-Core tests keep the existing local-edit fences, atomic cache replacement, SQLite
-schema checks, undo sanitization, revision fencing and lock-ownership races.
+Core tests keep the existing local-edit fences, atomic cache replacement, the
+download checks (a version 2 download decoded under the reader's caps, hostile
+input refused, a newer version refused, a newer feature opened read-only, a
+legacy revision migrated in memory), the push serialization (no `local`, no
+redo, undo only in Full mode, cut at the watermark and to the 5 MiB limit),
+revision fencing and lock-ownership races.
 Credential-file tests cover malformed/unreadable input without resetting general
 preferences, preservation during unrelated saves, rollback after a failed settings
 write, owner-only permissions and token-safe diagnostics. Native installation tests
 refuse a failed link write before replacing the cache.
 
-The live test generates synthetic SQLite databases in temporary directories. For
+### Version 2 uploads and the server prerequisite
+
+The app uploads the project file in format version 2 (canonical JSON,
+[file-format.md](file-format.md)), written in the push mode: no `local`, no
+redo, undo only in Full mode. A SpeleoDB server whose upload processor and
+Python reader take only SQLite refuses it; that is the rollout prerequisite
+outside this repository ([plan 12.1](plans/2026-11-20_station-graph-model.md#121-rollout-prerequisites-outside-this-repository-called-out-in-the-pr):
+the server accepts version 2, its reader reads it, and ideally a
+minimum-client gate for projects whose HEAD is version 2). Until then a push
+fails through the existing error path: the project stays dirty, BASE is
+unchanged and the editing lock is held. `core/state/speleodb_push_v2_tests.rs`
+pins both sides against a loopback server
+(`a_confirmed_push_uploads_v2_json_and_is_durable_at_once`,
+`a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked`,
+`clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk`). A manual test
+of the app against a server without version 2 support should expect that
+refusal on every upload of an edited project; a legacy SQLite revision on the
+server still downloads, and is migrated in memory.
+
+### The live test
+
+The live test generates synthetic project files in temporary directories (the
+SDK treats the bytes as opaque; they are written in the legacy SQLite format,
+which every server accepts). For
 each authentication path it creates a unique private `STALAGMIGHT` project, verifies
 metadata and locking, uploads two native revisions, checks the unchanged-file
 response, and compares downloaded bytes at HEAD and at the first revision. It
