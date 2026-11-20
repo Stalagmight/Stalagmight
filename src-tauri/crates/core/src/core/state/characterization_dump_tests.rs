@@ -1048,9 +1048,8 @@ impl Script {
         if let Ok(dir) = std::env::var("STALAGMIGHT_CHAR_SAVE") {
             let dir = PathBuf::from(dir);
             std::fs::create_dir_all(&dir).expect("create the save directory");
-            let path = dir.join(format!("{}.stalx", self.rec.scenario));
             let saved = self.state.execute(Command::SaveProject {
-                path: Some(path.clone()),
+                path: Some(dir.join(format!("{}.stalx", self.rec.scenario))),
             });
             assert!(saved.success, "save the final state: {:?}", saved.error);
             let book: BTreeMap<String, usize> = self.rec.uuids.ids.clone();
