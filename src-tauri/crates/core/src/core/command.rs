@@ -312,11 +312,12 @@ pub enum Command {
         /// The file's own name, no directory, sanitized: the history label.
         file_name: String,
     },
-    /// Repair the open project's structural integrity (drop dangling refs, re-mint
-    /// duplicate UUIDs, re-cascade offsets). Applied directly via the
-    /// `repair_project_integrity` IPC command, which records its own snapshot-pair
-    /// undo entry; this variant exists only to LABEL that entry in the undo
-    /// history and is never run through `execute()`.
+    /// 0.6.0's integrity Repair (drop dangling refs, re-mint duplicate UUIDs,
+    /// re-cascade offsets), which recorded its own snapshot-pair undo entry; this
+    /// variant only LABELLED that entry and is never run through `execute()`.
+    /// Nothing records one on the station graph (the Repair and its
+    /// `repair_project_integrity` command are gone: the open project always
+    /// validates); the variant stays with the history kinds.
     RepairIntegrity,
     /// Per-project settings change (name + validation thresholds, #57). Like
     /// RepairIntegrity, applied via `update_project_settings` which records its

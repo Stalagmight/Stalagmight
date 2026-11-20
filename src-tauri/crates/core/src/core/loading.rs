@@ -192,11 +192,10 @@ pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
 /// list could not be read, so the save was refused rather than rebuilding the
 /// file without it (#517).
 ///
-/// It needs a marker of its own because the frontend's failure router
-/// (`surfaceSaveFailure`) sends any UNMARKED failure to Review & Repair
-/// whenever `integritySaveBlocked` is set - and Review & Repair cannot fix a
-/// broken `resolved_warnings` table, so on a project with both problems this
-/// refusal would never reach a surface at all.
+/// The message after the marker is a full sentence: the frontend strips the
+/// marker and shows the rest (`saveFailureMessage`, `autosaveFailureMessage`).
+/// (0.6.0's failure router also needed it to keep this refusal out of the
+/// integrity banner's Review & Repair, which is gone.)
 pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
 
 /// How much of an underlying error may be quoted into a user-facing message.
