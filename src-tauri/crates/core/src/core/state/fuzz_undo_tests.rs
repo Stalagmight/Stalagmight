@@ -441,6 +441,15 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             }),
         );
     }
+    // One junction in every starting project: line 6 starts on line 3's
+    // middle station, so detach and unmerge have something to act on.
+    expect_ok(
+        "MergeStations",
+        &state.execute(Command::MergeStations {
+            station_a: StationRef::new(ids[3], 2),
+            station_b: StationRef::new(ids[6], 0),
+        }),
+    );
     if !closures {
         return ids;
     }
@@ -492,6 +501,10 @@ pub(super) struct Targets {
     /// The import hashes the project tracks.
     pub(super) file_hashes: Vec<String>,
     pub(super) line_hashes: Vec<String>,
+    /// Each station's connected component (closures do not connect).
+    pub(super) component: BTreeMap<StationId, usize>,
+    /// The components holding a datum.
+    pub(super) held: BTreeSet<usize>,
 }
 
 impl Targets {
@@ -536,6 +549,16 @@ impl Targets {
             .filter(|station| station.comment.is_some())
             .map(|station| station.id)
             .collect();
+        let topology = project.topology();
+        let component: BTreeMap<StationId, usize> = slots
+            .iter()
+            .filter_map(|&(_, _, station)| Some((station, topology.component_of(station)?)))
+            .collect();
+        let held = project
+            .datums
+            .iter()
+            .filter_map(|d| component.get(&d.station).copied())
+            .collect();
         Self {
             lines,
             shot_uuids,
@@ -547,6 +570,8 @@ impl Targets {
             commented,
             file_hashes: project.imported_file_hashes.clone(),
             line_hashes: project.imported_line_hashes.clone(),
+            component,
+            held,
         }
     }
 
@@ -736,6 +761,8 @@ pub(super) enum Op {
     },
     DeleteShotAndSplit {
         shot: ShotRefT,
+        /// The two halves are named `split-<names>a` / `-b`.
+        names: u32,
     },
     /// Split Line Here at the shot's end station, or `distance` along it.
     SplitLine {
@@ -743,6 +770,7 @@ pub(super) enum Op {
         along: bool,
         distance: f64,
         side: u8,
+        names: u32,
     },
     /// Combine Lines at a line end: the `pick`-th candidate there (modulo
     /// their count), keeping its `b` line when `keep_b`. A blocked candidate
@@ -762,6 +790,7 @@ pub(super) enum Op {
         from: ShotRefT,
         to: ShotRefT,
         split: bool,
+        names: u32,
     },
     Batch {
         commands: Vec<BatchOp>,
@@ -886,7 +915,7 @@ impl Op {
                 shot: target,
                 distance,
             } => format!("splitShotAtDistance({},{distance})", shot(target)),
-            Self::DeleteShotAndSplit { shot: target } => {
+            Self::DeleteShotAndSplit { shot: target, .. } => {
                 format!("deleteShotAndSplit({})", shot(target))
             }
             Self::SplitLine {
@@ -894,6 +923,7 @@ impl Op {
                 along,
                 distance,
                 side,
+                ..
             } => format!(
                 "splitLine({},along={along},{distance},side={side})",
                 shot(target)
@@ -916,6 +946,7 @@ impl Op {
                 from,
                 to,
                 split,
+                ..
             } => format!(
                 "{}(s={line},{}..{})",
                 if *split {
@@ -2080,7 +2111,11 @@ impl Fuzzer {
         self.note(format!(
             "{} -> {} (undo {}->{undo}, redo {}->{redo})",
             drawn.label,
-            if accepted { "ok" } else { "rejected" },
+            if accepted {
+                "ok".to_string()
+            } else {
+                format!("rejected [{}]", drawn.result.error.as_deref().unwrap_or(""))
+            },
             before.undo,
             before.redo,
         ));
@@ -2697,7 +2732,24 @@ impl Fuzzer {
                 closure: targets.closures[self.rng.below(targets.closures.len())],
             });
         }
-        let (a, b) = self.pick_cross_pair(targets)?;
+        // Mostly two stations a closure may tie: in one component (a loop),
+        // or in two datum-held ones; else any pair, which is refused.
+        let a = self.pick_station(targets)?;
+        let comp = |s: StationId| targets.component.get(&s).copied();
+        let tieable: Vec<usize> = (0..targets.slots.len())
+            .filter(|&i| {
+                let (_, _, b) = targets.slots[i];
+                b != a.station
+                    && (comp(b) == comp(a.station)
+                        || (comp(b).is_some_and(|c| targets.held.contains(&c))
+                            && comp(a.station).is_some_and(|c| targets.held.contains(&c))))
+            })
+            .collect();
+        let b = if !tieable.is_empty() && self.rng.chance(80) {
+            targets.station_at(tieable[self.rng.below(tieable.len())])
+        } else {
+            self.pick_cross_pair(targets)?.1
+        };
         // The legacy strategies are refused at creation: drawn now and then,
         // so the refusal is exercised.
         let strategy = *self.rng.pick(&[
@@ -2779,6 +2831,18 @@ impl Fuzzer {
         let (line_id, shot_id) = self.pick_shot(targets)?;
         let shots = targets.shots_of(line_id).unwrap_or_default().to_vec();
         let shot = targets.shot_ref(line_id, shot_id);
+        let names = self.rng.below(1000) as u32;
+        // A mid-line shot of a line long enough to have one: an end shot is
+        // refused by the split recipes ("delete the shot instead").
+        let inner = |rng: &mut Rng| -> Option<ShotRefT> {
+            let long: Vec<&(LineId, Vec<ShotId>)> =
+                targets.lines.iter().filter(|(_, s)| s.len() >= 3).collect();
+            if long.is_empty() {
+                return None;
+            }
+            let (line, ids) = long[rng.below(long.len())];
+            Some(targets.shot_ref(*line, ids[1 + rng.below(ids.len() - 2)]))
+        };
         match self.rng.below(7) {
             0 => {
                 let distance = if self.rng.chance(20) {
@@ -2788,20 +2852,62 @@ impl Fuzzer {
                 };
                 Some(Op::SplitShotAtDistance { shot, distance })
             }
-            1 => Some(Op::DeleteShotAndSplit { shot }),
-            2 => Some(Op::DeleteLastShotAndLine { shot }),
+            1 => Some(Op::DeleteShotAndSplit {
+                shot: if self.rng.chance(80) {
+                    inner(&mut self.rng).unwrap_or(shot)
+                } else {
+                    shot
+                },
+                names,
+            }),
+            2 => {
+                // The recipe is for a line's ONLY shot; any other is refused.
+                let single: Vec<&(LineId, Vec<ShotId>)> =
+                    targets.lines.iter().filter(|(_, s)| s.len() == 1).collect();
+                let shot = if !single.is_empty() && self.rng.chance(80) {
+                    let (line, ids) = single[self.rng.below(single.len())];
+                    targets.shot_ref(*line, ids[0])
+                } else {
+                    shot
+                };
+                Some(Op::DeleteLastShotAndLine { shot })
+            }
             3 => Some(Op::SplitLine {
-                shot,
+                shot: if self.rng.chance(80) {
+                    inner(&mut self.rng).unwrap_or(shot)
+                } else {
+                    shot
+                },
                 along: self.rng.chance(50),
                 distance: if self.rng.chance(20) {
                     *self.rng.pick(&[0.0, 1e-9, 0.005])
                 } else {
-                    self.rng.float(0.1, 8.0)
+                    self.rng.float(0.1, 1.0)
                 },
                 side: self.rng.below(6) as u8,
+                names,
             }),
             4 => self.gen_combine_lines(targets),
             _ => {
+                let split = self.rng.chance(50);
+                if split {
+                    // Strictly inside the line most of the time: a prefix or
+                    // a suffix is refused ("use the shift").
+                    let long: Vec<&(LineId, Vec<ShotId>)> =
+                        targets.lines.iter().filter(|(_, s)| s.len() >= 3).collect();
+                    if !long.is_empty() && self.rng.chance(80) {
+                        let (line, ids) = long[self.rng.below(long.len())];
+                        let lo = 1 + self.rng.below(ids.len() - 2);
+                        let hi = lo + self.rng.below(ids.len() - 1 - lo);
+                        return Some(Op::DeleteShotRange {
+                            line: *line,
+                            from: targets.shot_ref(*line, ids[lo]),
+                            to: targets.shot_ref(*line, ids[hi]),
+                            split,
+                            names,
+                        });
+                    }
+                }
                 if shots.len() < 2 {
                     return None;
                 }
@@ -2812,7 +2918,8 @@ impl Fuzzer {
                     line: line_id,
                     from: targets.shot_ref(line_id, shots[lo]),
                     to: targets.shot_ref(line_id, shots[hi]),
-                    split: self.rng.chance(50),
+                    split,
+                    names,
                 })
             }
         }
@@ -3098,15 +3205,15 @@ impl Fuzzer {
                 self.state
                     .execute_split_shot_at_distance(line_id, shot_id, *distance)
             }
-            Op::DeleteShotAndSplit { shot } => {
+            Op::DeleteShotAndSplit { shot, names } => {
                 let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&label);
                 };
                 self.state.execute_delete_shot_and_split(
                     line_id,
                     shot_id,
-                    "split-a".to_string(),
-                    "split-b".to_string(),
+                    format!("split-{names}a"),
+                    format!("split-{names}b"),
                 )
             }
             Op::SplitLine {
@@ -3114,6 +3221,7 @@ impl Fuzzer {
                 along,
                 distance,
                 side,
+                names,
             } => {
                 let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&label);
@@ -3138,8 +3246,8 @@ impl Fuzzer {
                     _ => crate::models::SplitSide::Both,
                 };
                 let options = crate::models::SplitLineOptions {
-                    name_a: "split-a".to_string(),
-                    name_b: "split-b".to_string(),
+                    name_a: format!("split-{names}a"),
+                    name_b: format!("split-{names}b"),
                     color_a: "#111111".to_string(),
                     color_b: "#222222".to_string(),
                     comment_side: pick(side % 3),
@@ -3208,6 +3316,7 @@ impl Fuzzer {
                 from,
                 to,
                 split,
+                names,
             } => {
                 let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&label);
@@ -3222,8 +3331,8 @@ impl Fuzzer {
                         line_id,
                         lo,
                         hi,
-                        "range-a".to_string(),
-                        "range-b".to_string(),
+                        format!("range-{names}a"),
+                        format!("range-{names}b"),
                     )
                 } else {
                     self.state.execute_delete_shot_range_shift(line_id, lo, hi)
@@ -3817,13 +3926,13 @@ pub(super) fn coverage_table<'a>(outcomes: impl IntoIterator<Item = &'a Outcome>
         }
     }
     let mut out = format!(
-        "  {:<28} {:>7} {:>7} {:>8} {:>6}\n",
-        "family", "applied", "pushed", "rejected", "no-op"
+        "  {:<28} {:>7} {:>7} {:>8} {:>6} {:>7}\n",
+        "family", "applied", "pushed", "rejected", "no-op", "skipped"
     );
     for (kind, count) in &total {
         out.push_str(&format!(
-            "  {kind:<28} {:>7} {:>7} {:>8} {:>6}\n",
-            count.applied, count.pushed, count.rejected, count.noops
+            "  {kind:<28} {:>7} {:>7} {:>8} {:>6} {:>7}\n",
+            count.applied, count.pushed, count.rejected, count.noops, count.skipped
         ));
     }
     out

@@ -328,7 +328,8 @@ impl AppState {
 
     /// [`Self::persist_local_state`] for a caller that already holds the
     /// `project` guard (which is not reentrant): `path` is the open project's
-    /// `file_path`, read through that guard. Takes `file`, then `undo_stack`.
+    /// `file_path`, read through that guard. Takes `file`, then `undo_stack`
+    /// and `config` (the persisted window).
     pub(crate) fn persist_local_state_at(
         &self,
         path: Option<PathBuf>,
@@ -350,10 +351,7 @@ impl AppState {
         extras.history = if file.dirty {
             file.saved_history.clone()
         } else {
-            self.undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .persisted()
+            self.history_to_persist(&file)
         };
         let bytes = crate::persistence::stalx_v2::rewrite_local(&original, &extras)
             .map_err(|e| LocalSaveError::Encode(e.to_string()))?;

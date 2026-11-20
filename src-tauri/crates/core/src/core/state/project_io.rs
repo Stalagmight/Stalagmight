@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::models::survey::Project;
-use crate::persistence::stalx_v2::{write_atomic, Guard, Mode, WriteError};
+use crate::persistence::stalx_v2::{write_atomic, Guard, History, Mode, WriteError};
 
 /// What a failed save actually was, once the error chain and the destination
 /// have both been consulted. Each variant except `Other` carries a marker the
@@ -293,6 +293,22 @@ impl AppState {
         self.save_with(path, None, OnDisk::Overwrite)
     }
 
+    /// The history a write of the open file carries (0.6.0's
+    /// `history_rows_to_persist`): the newest `general.undo_persist_limit`
+    /// entries of each stack, or both stacks whole when the project's history
+    /// rides to SpeleoDB (Full mode, bounded by bytes instead). Takes the
+    /// `undo_stack` and `config` locks; the caller holds `file`.
+    pub(super) fn history_to_persist(&self, file: &FileState) -> History {
+        let window = (!self
+            .undo_policy_for(file.speleo_link().as_ref())
+            .unlimited_depth())
+        .then(|| self.get_config().general.undo_persist_limit);
+        self.undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .persisted_window(window)
+    }
+
     /// The save (plan 6.5): validate, encode in memory, write atomically with
     /// the external-modification guard. `path` `None` saves to the open
     /// file; an explicit `path` on a SpeleoDB-managed project writes a
@@ -344,11 +360,7 @@ impl AppState {
         let detached = file.extras.speleodb.is_some() && path.is_some() && !to_open_file;
         let mut extras = file.extras.clone();
         extras.generator = generator();
-        extras.history = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .persisted();
+        extras.history = self.history_to_persist(&file);
         let mode = if detached {
             Mode::DetachedCopy
         } else {

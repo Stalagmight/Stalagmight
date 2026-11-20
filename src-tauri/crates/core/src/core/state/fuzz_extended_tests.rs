@@ -303,7 +303,7 @@ fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp
                 person,
             })
         }
-        4..=5 => {
+        4..=6 => {
             if targets.junctions.is_empty() {
                 return None;
             }
@@ -315,7 +315,7 @@ fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp
                 },
             })
         }
-        6..=8 => draw_move_comment(rng, targets, project),
+        7..=8 => draw_move_comment(rng, targets, project),
         9..=10 => Some(ExtOp::ProjectSettings {
             rename: rng.chance(50).then(|| rng.below(1000) as u32),
             nudge: rng.below(40) as u32,
@@ -596,13 +596,13 @@ pub(super) fn apply_extended(
                 let len = targets.sections.len() as u32;
                 targets.sections[(*at % len) as usize]
             });
+            // With no Section yet every kind creates one.
             let command = match (*kind, section) {
-                (0, _) => Command::CreateCaveSection {
+                (0, _) | (_, None) => Command::CreateCaveSection {
                     name: format!("Region {name}"),
                     color: COLORS[*name as usize % COLORS.len()].to_string(),
                     line_ids,
                 },
-                (_, None) => return refs.skip(&label),
                 (1, Some(section_id)) => Command::UpdateCaveSection {
                     section_id,
                     name: Some(format!("Region {name}")),
