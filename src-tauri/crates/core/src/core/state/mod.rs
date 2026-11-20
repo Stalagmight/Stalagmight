@@ -21,7 +21,6 @@ mod import_tracking;
 mod labels;
 mod open_file;
 mod project_add;
-mod project_append;
 mod project_create;
 mod project_io;
 mod project_load;
