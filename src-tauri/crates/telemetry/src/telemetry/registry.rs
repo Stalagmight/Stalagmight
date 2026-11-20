@@ -867,6 +867,19 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.add-or-open-project",
     "dwell.dialog.add-or-open-project",
     "active-dwell.dialog.add-or-open-project",
+    // `.stalx` v2 (station-graph model): the save prompt's Overwrite answer
+    // to the external-modification guard, the conversion notice of a legacy
+    // open, the backend dirty flag read after a warning ignore, the
+    // read-only reason of a file made with a newer Stalagmight, and the
+    // save-conflict prompt itself.
+    "command.save_project_overwriting",
+    "command.take_conversion_notice",
+    "command.has_unsaved_changes",
+    "command.project_read_only_reason",
+    "action.dialog.save-conflict",
+    "dialog-cancel.save-conflict",
+    "dwell.dialog.save-conflict",
+    "active-dwell.dialog.save-conflict",
 ];
 
 #[cfg(test)]
@@ -1209,7 +1222,11 @@ mod tests {
         //   + 1 the discarded-history banner asks whether the history it reports
         //       was an earlier version's (compact undo entries):
         //       command.history_discarded_from_earlier_version = 744.
-        assert_eq!(EVENT_NAMES.len(), 744);
+        //   + 8 `.stalx` v2: command.save_project_overwriting,
+        //       command.take_conversion_notice, command.has_unsaved_changes,
+        //       command.project_read_only_reason, and the full per-dialog set
+        //       for save-conflict = 752.
+        assert_eq!(EVENT_NAMES.len(), 752);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

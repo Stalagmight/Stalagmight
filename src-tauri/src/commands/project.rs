@@ -58,6 +58,56 @@ pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> Comm
     state.execute(Command::SaveProject { path })
 }
 
+/// The "Overwrite" answer to a save the external-modification guard refused
+/// (`EXTERNALLY_MODIFIED: ...`, plan 6.5): write the open project over a file
+/// another program changed since it was last read or written. `path` is as
+/// in [`save_project`]; the frontend's conflict prompt passes `null`. Every
+/// other refusal (read-only file, invalid survey) still applies.
+#[tauri::command]
+pub fn save_project_overwriting(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "replace a project file another program changed, at the user's request",
+        "Overwrite save requested"
+    );
+    state.save_project_overwriting(path)
+}
+
+/// The one-line notice a legacy (SQLite) open leaves when the conversion to
+/// the station-graph model moved stations (plan 7.2.10), taken once: the
+/// frontend asks after a load and shows it as a banner. `None` for a version
+/// 2 file and for a conversion that moved nothing.
+#[tauri::command]
+pub fn take_conversion_notice(state: State<'_, AppState>) -> Option<String> {
+    let notice = state.take_conversion_notice();
+    if notice.is_some() {
+        tracing::info!(
+            purpose = "tell the user the old file format conversion moved stations",
+            "Handing the conversion notice to the frontend"
+        );
+    }
+    notice
+}
+
+/// Whether the open project has changes no save has written yet (the
+/// backend's dirty flag). Warning ignores mark it without an undo entry
+/// (plan 6.5), so the frontend reads it after one to keep its own dirty flag,
+/// which autosave and the exit prompt watch, in step.
+#[tauri::command]
+pub fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
+    state.has_unsaved_changes()
+}
+
+/// Why the open project is read-only, when the file was made with a newer
+/// Stalagmight (an unknown `requires` feature or unknown survey content, plan
+/// 6.4); `None` when it is editable as far as the file is concerned. A peek,
+/// like [`history_discarded`]: the condition lasts as long as the project is
+/// open, and edits, undo and saves are refused with `READ_ONLY_FILE: ...`.
+#[tauri::command]
+pub fn project_read_only_reason(state: State<'_, AppState>) -> Option<String> {
+    state.read_only_reason()
+}
+
 /// What a close does with a held SpeleoDB write lock - the exit prompt's three
 /// answers, plus the silent default for a project with nothing un-uploaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
