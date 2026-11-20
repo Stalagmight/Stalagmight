@@ -14,8 +14,8 @@
 use super::commands::{Applied, Record};
 use crate::core::Command;
 use crate::models::survey::changeset::PreviewRow;
-use crate::models::survey::{OpError, Project};
-use crate::models::{Coordinates, StationId, StationRef};
+use crate::models::survey::{OpError, Project, SegmentMoved};
+use crate::models::{Coordinates, LineId, StationId, StationRef};
 
 /// 0.6.0's Move Station refusal of a NaN or infinite offset (its Move
 /// Segment refusal, the model's [`OpError::NonFiniteOffset`], is worded
@@ -38,15 +38,16 @@ pub(super) fn apply(
         Command::MoveLine { line_id, offset } => {
             let line = project
                 .line(*line_id)
-                .map(|_| project.line_label_of(*line_id));
-            project
+                .map(|_| row("Line", project.line_label_of(*line_id)));
+            let moved = project
                 .move_line(*line_id, xyz(offset))
                 .map_err(|e| e.to_string())?;
+            log_segment_move(*line_id, &moved.value);
             if alone {
-                let mut rows: Vec<PreviewRow> =
-                    line.map(|name| row("Line", name)).into_iter().collect();
-                rows.push(row("Offset", offset.display_offset()));
-                record.preview.rows = rows;
+                record.preview.rows = line
+                    .into_iter()
+                    .chain([row("Offset", offset.display_offset())])
+                    .collect();
             }
             Ok(Applied::default())
         }
@@ -54,6 +55,7 @@ pub(super) fn apply(
             let moved = project
                 .move_segment(*line_id, xyz(offset))
                 .map_err(|e| e.to_string())?;
+            log_segment_move(*line_id, &moved.value);
             if alone {
                 record.preview.rows = vec![
                     row("Offset", offset.display_offset()),
@@ -91,13 +93,33 @@ fn move_station(
         return Err(STATION_OFFSET_NOT_FINITE.to_string());
     }
     let station = moved_station(project, slot)?;
-    project
+    let moved = project
         .move_station(station, xyz(offset))
         .map_err(|e| match e {
             OpError::NonFiniteOffset => STATION_OFFSET_NOT_FINITE.to_string(),
             other => other.to_string(),
         })?;
+    tracing::info!(
+        ?slot,
+        station,
+        shots_rewritten = moved.value.rewritten.len(),
+        placement_moved = moved.value.placement_moved,
+        hand_moves_folded = moved.value.hand_moves_folded.len(),
+        purpose = "adjust station position",
+        "Station moved (shot data updated)"
+    );
     Ok(())
+}
+
+/// 0.6.0's log line of a segment move (ids and counts only).
+fn log_segment_move(line_id: LineId, moved: &SegmentMoved) {
+    tracing::info!(
+        line_id,
+        line_count = moved.lines.len(),
+        placements_moved = moved.placements.len(),
+        purpose = "move connected segment as rigid group",
+        "Segment moved"
+    );
 }
 
 /// The station a Move Station addresses, or 0.6.0's refusal.

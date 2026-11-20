@@ -25,6 +25,12 @@ pub(super) fn apply(
         } => {
             let station = commented_station(project, *station_ref)?;
             write(project, Holder::Station(station), comment.clone());
+            tracing::info!(
+                ?station_ref,
+                station,
+                purpose = "set station comment",
+                "Station comment updated"
+            );
             Ok(Applied::default())
         }
         Command::MoveComment {
@@ -33,6 +39,11 @@ pub(super) fn apply(
             swap,
         } => {
             move_comment(project, source, target, *swap)?;
+            tracing::info!(
+                swap,
+                purpose = "move comment atomically",
+                "Move comment completed"
+            );
             Ok(Applied::default())
         }
         _ => Err(format!(

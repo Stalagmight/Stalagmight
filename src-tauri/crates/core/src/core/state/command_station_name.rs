@@ -73,6 +73,12 @@ fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Resu
     if let Some(s) = project.stations.get_mut(&station) {
         s.name = name.to_string();
     }
+    tracing::info!(
+        ?slot,
+        station,
+        purpose = "rename station",
+        "Station name updated"
+    );
     Ok(())
 }
 
