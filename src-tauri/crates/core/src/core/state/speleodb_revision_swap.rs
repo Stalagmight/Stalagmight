@@ -150,7 +150,7 @@ impl AppState {
     /// - [#303] the Unwind chain pointer (`unwound_to`), and the inherited-history
     ///   watermark: for a history-keeping step the later of now and the newest
     ///   loaded entry (`speleodb_loaded_history_watermark`), else cleared.
-    fn speleodb_after_swap(
+    pub(super) fn speleodb_after_swap(
         &self,
         path: Option<PathBuf>,
         display: BTreeMap<String, String>,

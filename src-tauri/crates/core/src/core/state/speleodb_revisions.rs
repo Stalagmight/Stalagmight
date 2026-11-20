@@ -569,15 +569,16 @@ impl AppState {
     }
 }
 
-#[cfg(sg_unported)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic, reason = "unit test fixtures")]
 mod tests {
+    use super::super::speleodb_test_files::{link_on_disk, write_legacy_link_only, write_v2};
     use super::{
         downloaded_revision_undo_mode, downloaded_revision_undo_mode_with_limits,
         revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState,
     };
-    use crate::models::{Project, SpeleoLink, UndoMode};
-    use crate::persistence::Database;
+    use crate::models::{SpeleoLink, UndoMode};
+    use crate::persistence::stalx_v2;
     use crate::speleodb::SpeleoDbError;
 
     /// The project id every fixture here is stamped with; `validate_project_id` requires
@@ -590,26 +591,10 @@ mod tests {
     fn linked_state_with_undo_mode(undo_mode: Option<UndoMode>) -> (AppState, tempfile::TempDir) {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = temp.path().join("linked.stalx");
-        let mut db = Database::open(&path).expect("open fixture .stalx");
-        db.save_project(&Project::new("Linked".to_owned(), None))
-            .expect("save fixture project");
-        let link = SpeleoLink {
-            endpoint: "https://example.invalid".to_owned(),
-            project_id: FIXTURE_PROJECT_ID.to_owned(),
-            project_name: "Linked".to_owned(),
-            base_commit_sha: Some("deadbeefcafe".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode,
-        };
-        db.save_speleo_link(Some(&link))
-            .expect("stamp the fixture link");
-
+        write_v2(&path, "Linked", Some(&fixture_link("Linked", undo_mode)));
         let state = AppState::new().expect("construct AppState");
-        // Installed without an open; the fixture setter derives the edit gate from
-        // the link the way an open would (read-only until a claim is bound).
-        state.set_database_for_tests(db);
+        // A linked open is read-only until a claim is bound (`speleodb_edit_gate`).
+        assert!(state.open_project(path).success, "open the fixture");
         (state, temp)
     }
 
@@ -617,71 +602,82 @@ mod tests {
         linked_state_with_undo_mode(None)
     }
 
-    fn revision_stalx_with_undo_mode(mode: Option<UndoMode>) -> tempfile::NamedTempFile {
-        let temp = tempfile::TempDir::new().expect("revision temp dir");
-        let path = temp.path().join("revision.stalx");
-        {
-            let mut db = Database::open(&path).expect("open revision fixture");
-            db.save_project(&Project::new("Revision".to_owned(), None))
-                .expect("save revision project");
-            db.save_speleo_link(Some(&SpeleoLink {
-                endpoint: "https://example.invalid".to_owned(),
-                project_id: FIXTURE_PROJECT_ID.to_owned(),
-                project_name: "Revision".to_owned(),
-                base_commit_sha: Some("deadbeefcafe".to_owned()),
-                has_unpushed_edits: false,
-                last_edit_at: None,
-                last_verify_at: None,
-                undo_mode: mode,
-            }))
-            .expect("stamp revision policy");
+    fn fixture_link(name: &str, undo_mode: Option<UndoMode>) -> SpeleoLink {
+        SpeleoLink {
+            endpoint: "https://example.invalid".to_owned(),
+            project_id: FIXTURE_PROJECT_ID.to_owned(),
+            project_name: name.to_owned(),
+            base_commit_sha: Some("deadbeefcafe".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode,
         }
-
-        let native = tempfile::NamedTempFile::new().expect("native file");
-        std::fs::copy(&path, native.path()).expect("copy native file");
-        native
     }
+
+    /// A downloaded revision in either format: a version 2 file as a push writes
+    /// it (`speleodb` rides every push), or a legacy SQLite one an older build
+    /// pushed (its `speleo_link` row).
+    #[derive(Clone, Copy, Debug)]
+    enum Shape {
+        V2,
+        Legacy,
+    }
+
+    fn revision_stalx_with_undo_mode(
+        shape: Shape,
+        mode: Option<UndoMode>,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::TempDir::new().expect("revision temp dir");
+        let path = temp.path().join("download.tmp");
+        let link = fixture_link("Revision", mode);
+        match shape {
+            Shape::V2 => write_v2(&path, "Revision", Some(&link)),
+            Shape::Legacy => write_legacy_link_only(&path, &link),
+        }
+        (temp, path)
+    }
+
     /// A forward step loads the child revision's stack, so the child policy wins even
     /// when the older working copy says the exact opposite.
     #[test]
     fn downloaded_child_policy_decides_forward_history_eligibility() {
         crate::test_helpers::with_isolated_config(|| {
-            for (current, child) in [
-                (UndoMode::Disabled, UndoMode::Full),
-                (UndoMode::Full, UndoMode::Disabled),
-            ] {
-                let (state, temp) = linked_state_with_undo_mode(Some(current));
-                assert_eq!(
-                    state.undo_policy().mode,
-                    current,
-                    "sanity: the open older revision carries the opposite policy"
-                );
-                let native = revision_stalx_with_undo_mode(Some(child));
-                let mode = downloaded_revision_undo_mode(
-                    native.path(),
-                    &temp.path().join("project.stalx"),
-                )
-                .expect("read child policy");
-                assert_eq!(
-                    mode, child,
-                    "forward eligibility must come from the downloaded child, not the open parent"
-                );
-                let leftovers = std::fs::read_dir(temp.path())
-                    .expect("read temp directory")
-                    .filter_map(Result::ok)
-                    .filter(|entry| entry.file_name().to_string_lossy().contains(".undo-mode."))
-                    .count();
-                assert_eq!(leftovers, 0, "the policy probe must clean up its `.stalx`");
+            for shape in [Shape::V2, Shape::Legacy] {
+                for (current, child) in [
+                    (UndoMode::Disabled, UndoMode::Full),
+                    (UndoMode::Full, UndoMode::Disabled),
+                ] {
+                    let (state, _temp) = linked_state_with_undo_mode(Some(current));
+                    assert_eq!(
+                        state.undo_policy().mode,
+                        current,
+                        "sanity: the open older revision carries the opposite policy"
+                    );
+                    let (dir, native) = revision_stalx_with_undo_mode(shape, Some(child));
+                    let before = std::fs::read(&native).expect("bytes");
+                    let mode = downloaded_revision_undo_mode(&native).expect("read child policy");
+                    assert_eq!(
+                        mode, child,
+                        "{shape:?}: forward eligibility must come from the downloaded child, \
+                         not the open parent"
+                    );
+                    assert_eq!(
+                        std::fs::read(&native).expect("bytes"),
+                        before,
+                        "{shape:?}: the probe reads the download, never writes it"
+                    );
+                    let entries = std::fs::read_dir(dir.path()).expect("read temp").count();
+                    assert_eq!(entries, 1, "{shape:?}: and leaves nothing beside it");
+                }
             }
         });
     }
 
     #[test]
     fn downloaded_policy_probe_rejects_oversized_values_and_expired_deadlines() {
-        let native = revision_stalx_with_undo_mode(Some(UndoMode::Full));
-        let temp = tempfile::tempdir().expect("temp");
-        let scratch = temp.path().join("project.stalx");
-        rusqlite::Connection::open(native.path())
+        let (_dir, native) = revision_stalx_with_undo_mode(Shape::Legacy, Some(UndoMode::Full));
+        rusqlite::Connection::open(&native)
             .expect("database")
             .execute(
                 "UPDATE speleo_link SET project_name = ?1",
@@ -689,38 +685,51 @@ mod tests {
             )
             .expect("oversized synthetic name");
         assert!(downloaded_revision_undo_mode_with_limits(
-            native.path(),
-            &scratch,
+            &native,
             1024,
             std::time::Duration::from_secs(30)
         )
         .is_err());
         assert!(downloaded_revision_undo_mode_with_limits(
-            native.path(),
-            &scratch,
+            &native,
             64 * 1024 * 1024,
             std::time::Duration::ZERO
         )
         .is_err());
         assert_eq!(
-            std::fs::read_dir(temp.path()).expect("directory").count(),
-            0,
-            "both failed probes clean up their private copies"
+            downloaded_revision_undo_mode_with_limits(
+                &native,
+                64 * 1024 * 1024,
+                std::time::Duration::from_secs(30)
+            )
+            .expect("within the caps"),
+            UndoMode::Full
         );
+    }
+
+    #[test]
+    fn a_download_that_is_not_a_project_or_is_cut_short_is_refused() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let junk = temp.path().join("junk.tmp");
+        std::fs::write(&junk, b"<html>a proxy error page</html>").expect("junk");
+        assert!(downloaded_revision_undo_mode(&junk).is_err());
+        let cut = temp.path().join("cut.tmp");
+        std::fs::write(&cut, br#"{"format":"stalx","version":2,"solver":1,"requi"#).expect("cut");
+        assert!(downloaded_revision_undo_mode(&cut).is_err());
     }
 
     #[test]
     fn legacy_null_revision_does_not_inherit_the_current_global_default() {
         crate::test_helpers::with_isolated_config(|| {
-            let (state, temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
-            let native = revision_stalx_with_undo_mode(None);
+            for shape in [Shape::V2, Shape::Legacy] {
+                let (state, _temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
+                state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+                let (_dir, native) = revision_stalx_with_undo_mode(shape, None);
 
-            let mode =
-                downloaded_revision_undo_mode(native.path(), &temp.path().join("project.stalx"))
-                    .expect("read legacy policy");
+                let mode = downloaded_revision_undo_mode(&native).expect("read legacy policy");
 
-            assert_eq!(mode, UndoMode::Disabled);
+                assert_eq!(mode, UndoMode::Disabled, "{shape:?}");
+            }
         });
     }
 
@@ -873,54 +882,37 @@ mod tests {
         );
     }
 
-    /// [#303] A save must carry the Unwind chain position onto the fresh file.
+    /// [#303] A save must carry the Unwind chain position onto the file it writes.
     ///
-    /// `save_project` writes a brand-new `.stalx` and renames it over the destination, so
-    /// every local-only table it does not explicitly re-apply is destroyed - the same shape
-    /// of bug as the undo history losing its rows. Here the loss is not just "the walk
-    /// restarts from BASE" (documented, benign): the pointer is what EXCUSES the dirty bit
-    /// an Unwind leaves, so dropping it makes a copy the user only unwound read as holding
-    /// un-pushed work. The confirmation resolves the flag before an autosave and the guard
-    /// re-derives it after, they disagree, and the Unwind fails on press. Nothing in a
-    /// scripted run saves between two Unwinds; a person pausing between them always does.
+    /// Losing it is not just "the walk restarts from BASE" (documented, benign): the
+    /// pointer is what EXCUSES the dirty bit an Unwind leaves, so dropping it makes a copy
+    /// the user only unwound read as holding un-pushed work. And the inherited-history
+    /// watermark decides which undo entries are cut from the next upload, so a save that
+    /// dropped it would let a loaded revision's history ride into the commit as though
+    /// this session had authored it. Both live in the file state's `local.speleodb`,
+    /// which every save writes whole; this pins that, on a real save and reopen.
     #[test]
     fn a_save_carries_the_unwind_chain_position_onto_the_fresh_file() {
-        let io = std::include_str!("project_io.rs");
-        let snapshot = io
-            .find("load_speleo_undo_chain")
-            .expect("the save path must snapshot the chain pointer before rebuilding");
-        let reapply = io
-            .find("save_speleo_undo_chain")
-            .expect("...and re-apply it to the fresh file");
-        assert!(
-            snapshot < reapply,
-            "the snapshot has to be read from the OLD database - taken after the rebuild it \
-             would read the fresh file's empty table and preserve nothing"
-        );
-        // Re-applied while the temp database is still open, like its `speleo_link` sibling.
-        let closed = io
-            .find("// Close the temp database before renaming")
-            .expect("the save path closes the temp db before the rename");
-        assert!(
-            reapply < closed,
-            "the write must land before the temp database is dropped and renamed"
-        );
-
-        // [#303] The inherited-history watermark needs the same carry-over, and loses more
-        // by missing it: it decides which undo rows are cut from the next upload, so a save
-        // that dropped it would let a loaded revision's history ride into the commit as
-        // though this session had authored it - the duplication it exists to prevent,
-        // reintroduced by an idle autosave.
-        let snapshot_wm = io
-            .find("load_speleo_undo_watermark")
-            .expect("the save path must snapshot the inherited-history watermark");
-        let reapply_wm = io
-            .find("save_speleo_undo_watermark")
-            .expect("...and re-apply it to the fresh file");
-        assert!(
-            snapshot_wm < reapply_wm && reapply_wm < closed,
-            "read from the OLD database, written before the temp file is renamed"
-        );
+        crate::test_helpers::with_isolated_config(|| {
+            let (state, temp) = linked_state();
+            let path = temp.path().join("linked.stalx");
+            state.speleodb_set_unwound_from(Some("abc1234"));
+            state.speleodb_set_inherited_through(Some("2026-11-09T10:00:00Z"));
+            assert!(state.save_project(None).success, "save");
+            let bytes = std::fs::read(&path).expect("bytes");
+            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let sync = &decoded.extras.local.speleodb;
+            assert_eq!(sync.unwound_from.as_deref(), Some("abc1234"));
+            assert_eq!(
+                sync.inherited_through,
+                chrono::DateTime::parse_from_rfc3339("2026-11-09T10:00:00Z")
+                    .ok()
+                    .map(|t| t.with_timezone(&chrono::Utc))
+            );
+            let reopened = AppState::new().expect("state");
+            assert!(reopened.open_project(path).success);
+            assert_eq!(reopened.speleodb_unwound_from().as_deref(), Some("abc1234"));
+        });
     }
 
     /// [#303] The watermark outlives an edit; the chain pointer does not.
@@ -989,20 +981,13 @@ mod tests {
             }
         }
         forward_calls.sort();
+        // The station-graph switch routes every command family and bypass recipe
+        // through `run_recorded` (commands.rs), so the direct writers left are the
+        // pipeline itself, the Recents rename of the open project and the warning
+        // ignores.
         assert_eq!(
             forward_calls,
-            [
-                "command_combine_lines.rs",
-                "command_comment.rs",
-                "command_delete_split.rs",
-                "command_import.rs",
-                "command_split_line.rs",
-                "command_split_shot.rs",
-                "commands.rs",
-                "project_create.rs",
-                "recent_projects.rs",
-                "warnings.rs",
-            ],
+            ["commands.rs", "recent_projects.rs", "warnings.rs"],
             "enumerate every direct forward writer so a new path is reviewed explicitly"
         );
         assert!(
@@ -1014,19 +999,29 @@ mod tests {
 
     /// [#303] The fourth writer of the project file, which the test above cannot see.
     ///
-    /// `a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not` counts sites in
-    /// `commands.rs`, so it was blind to `speleodb_set_undo_mode` - which writes
-    /// `speleo_link.undo_mode` into the `.stalx`, rides to the server in the next push, and
-    /// is therefore an edit of the project like any other. The mode, dirty stamp, and chain
-    /// clear now share one database transaction: calling the older best-effort helper here
-    /// would re-open both the half-write and silent-Unwind hazards.
+    /// `a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not` counts direct
+    /// forward writers, so it is blind to `speleodb_set_undo_mode` - which writes the
+    /// project's undo mode into the `.stalx`, rides to the server in the next push, and is
+    /// therefore an edit of the project like any other. The mode, the dirty stamp and the
+    /// chain clear are one change and one durable save.
     #[test]
     fn the_undo_mode_setter_forgets_the_unwind_position_too() {
-        let policy = std::include_str!("undo_policy.rs");
-        assert!(
-            policy.contains("set_speleo_undo_mode_and_mark_forward_edit"),
-            "the undo-mode write must atomically dirty the link and clear the chain pointer"
-        );
+        crate::test_helpers::with_isolated_config(|| {
+            let (state, temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
+            state.speleodb_set_unwound_from(Some("abc1234"));
+            state.set_edit_enabled(true);
+            state
+                .speleodb_set_undo_mode(UndoMode::Disabled)
+                .expect("an edit session may change the policy");
+            assert_eq!(state.speleodb_unwound_from(), None, "the pointer is gone");
+            let bytes = std::fs::read(temp.path().join("linked.stalx")).expect("bytes");
+            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            assert_eq!(
+                decoded.extras.local.speleodb.unwound_from, None,
+                "on disk too"
+            );
+            assert!(decoded.extras.local.speleodb.unpushed_edits);
+        });
     }
 
     /// [#303] The predicate behind both the warning and the refusal.
@@ -1060,30 +1055,81 @@ mod tests {
     /// View / Restore.
     ///
     /// Ordering is the whole point: the reload replaces the very file the pointer is
-    /// written into (and the downloaded copy carries no chain row of its own, since it is
-    /// stripped from every push), so a write before it would be thrown away.
+    /// written into (and the downloaded copy carries no chain position of its own, since
+    /// `local` is stripped from every push), so a write before it would be thrown away.
     #[test]
     fn unwind_records_its_chain_position_after_the_reload() {
         let restore = prod_source()
             .split_once("pub fn speleodb_restore_revision")
             .map(|(_, rest)| rest)
             .expect("the swap verb is in this file");
-        let reload = restore
-            .find("self.speleodb_swap_in_revision(")
+        assert!(
+            restore.contains("keep_undo_history.then_some(hexsha.as_str()),"),
+            "an Unwind asks the swap to record this step's revision, a plain View / \
+             Restore to clear the pointer"
+        );
+        let swap = include_str!("speleodb_revision_swap.rs");
+        let body = swap
+            .split_once("fn speleodb_swap_in_revision(")
+            .map(|(_, rest)| rest)
+            .expect("the swap is present");
+        let reload = body
+            .find("self.open_project_download(")
             .expect("the swap reloads in place");
-        let record = restore
-            .find("self.speleodb_set_unwound_from(Some(&hexsha));")
-            .expect("an Unwind must record where the chain now stands");
+        let record = body
+            .find("self.speleodb_after_swap(")
+            .expect("the swap records the chain position");
         assert!(
             reload < record,
             "the pointer is written after the reload - the reload replaces the file it \
              lives in, so an earlier write would be discarded"
         );
-        assert!(
-            restore.contains("self.speleodb_set_unwound_from(None);"),
-            "a plain View / Restore must CLEAR the pointer: the working copy is no longer \
-             where the chain thought it was"
-        );
+    }
+
+    /// The swap's follow-up, run the way the swap runs it: under the project guard,
+    /// only while the swapped-in copy is open, with the display settings carried over
+    /// and the chain position and watermark recorded in one durable save (the guard is
+    /// not reentrant: the primitives' own save would deadlock here).
+    #[test]
+    fn the_swap_follow_up_records_on_the_open_copy_only_and_does_not_deadlock() {
+        crate::test_helpers::with_isolated_config(|| {
+            let (state, temp) = linked_state();
+            let path = temp.path().join("linked.stalx");
+            let display: std::collections::BTreeMap<String, String> =
+                [("showGrid".to_owned(), "true".to_owned())].into();
+            state.while_swapped_in_project_is_open(&path, FIXTURE_PROJECT_ID, |at| {
+                state.speleodb_after_swap(at, display.clone(), Some("abc1234"));
+            });
+            assert_eq!(state.speleodb_unwound_from().as_deref(), Some("abc1234"));
+            let bytes = std::fs::read(&path).expect("bytes");
+            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            let local = &decoded.extras.local;
+            assert_eq!(local.speleodb.unwound_from.as_deref(), Some("abc1234"));
+            assert!(local.speleodb.inherited_through.is_some(), "the watermark");
+            assert_eq!(
+                local.display.get("showGrid").map(String::as_str),
+                Some("true")
+            );
+            assert!(link_on_disk(&path).is_some(), "the link is untouched");
+
+            // A plain View / Restore clears both.
+            state.while_swapped_in_project_is_open(&path, FIXTURE_PROJECT_ID, |at| {
+                state.speleodb_after_swap(at, std::collections::BTreeMap::new(), None);
+            });
+            let bytes = std::fs::read(&path).expect("bytes");
+            let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("decode");
+            assert_eq!(decoded.extras.local.speleodb.unwound_from, None);
+            assert_eq!(decoded.extras.local.speleodb.inherited_through, None);
+
+            // Another project open at that moment: nothing is stamped onto it.
+            let mut ran = false;
+            state.while_swapped_in_project_is_open(
+                &path,
+                "33333333-3333-3333-3333-333333333333",
+                |_| ran = true,
+            );
+            assert!(!ran, "a different project id skips the follow-up");
+        });
     }
 
     #[test]
@@ -1104,7 +1150,7 @@ mod tests {
             "a Restore must not record a claim of its own"
         );
         assert!(
-            restore.contains("            restore,\n        )?;"),
+            restore.contains("            restore,\n            keep_undo_history.then_some("),
             "the swap carries the edit session exactly when this is a Restore"
         );
         assert!(

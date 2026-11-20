@@ -74,16 +74,22 @@ impl AppState {
             )));
         }
         drop(project_guard);
-        self.mutate_speleo_link(|link| {
-            let Some(link) = link.as_mut() else {
-                return false;
+        // The mode, the dirty stamp and the Unwind chain clear are ONE change of
+        // the file state and ONE durable save: the setting is a forward edit
+        // (see `mark_remote_forward_edit`), so it invalidates an Unwind position,
+        // and a half-write could leave the dirt excused by a stale pointer.
+        self.with_file(|file| {
+            let Some(mut link) = file.speleo_link() else {
+                return;
             };
             link.undo_mode = Some(mode);
             link.has_unpushed_edits = true;
             link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
-            true
-        })
-        .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e)))?;
+            file.set_speleo_link(Some(&link));
+            file.extras.local.speleodb.unwound_from = None;
+        });
+        self.persist_local_state()
+            .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))?;
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,
