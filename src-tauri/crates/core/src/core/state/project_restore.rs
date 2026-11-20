@@ -158,7 +158,7 @@ impl AppState {
                 Err(DecodeError::NewerVersion { found, supported }) => {
                     Err(newer_refusal(backup, found, supported))
                 }
-                Err(e) => Err(unopenable_backup(backup, &Unopenable::of_v2(&e))),
+                Err(e) => Err(unopenable_backup(backup, &Unopenable::of_v2(&e, &bytes))),
             },
             Format::Legacy => {
                 drop(bytes);
@@ -350,7 +350,7 @@ fn restorable(path: &Path) -> Option<BackupInfo> {
 }
 
 /// Whether a version 2 file of `len` bytes ends with its end marker (a torn
-/// temp does not): `"end":true}` and nothing but whitespace after it.
+/// temp does not).
 fn ends_like_a_complete_file(path: &Path, len: u64) -> bool {
     use std::io::{Seek as _, SeekFrom};
     const TAIL: u64 = 64;
@@ -367,9 +367,20 @@ fn ends_like_a_complete_file(path: &Path, len: u64) -> bool {
     if file.take(TAIL).read_to_end(&mut tail).is_err() {
         return false;
     }
-    let text = String::from_utf8_lossy(&tail);
-    let compact: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    compact.ends_with("\"end\":true}")
+    ends_with_end_marker(&tail)
+}
+
+/// `"end":true}` and nothing but whitespace after it, at the end of `bytes`.
+fn ends_with_end_marker(bytes: &[u8]) -> bool {
+    let tail = bytes
+        .get(bytes.len().saturating_sub(64)..)
+        .unwrap_or_default();
+    let compact: Vec<u8> = tail
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    compact.ends_with(b"\"end\":true}")
 }
 
 /// `20261120T101112.123456789Z`: the stamp `UpgradeBackup` names a
@@ -672,13 +683,17 @@ enum Unopenable {
 }
 
 impl Unopenable {
-    fn of_v2(error: &DecodeError) -> Self {
+    /// `bytes` is the file: malformed text in a file that does not end with
+    /// its end marker is a torn file (a save cut short mid-token), not a
+    /// malformed one.
+    fn of_v2(error: &DecodeError, bytes: &[u8]) -> Self {
         tracing::warn!(reason = %error, "The version 2 backup does not open as a project");
         match error {
             DecodeError::NotStalx | DecodeError::ByteOrderMark | DecodeError::Legacy => {
                 Self::NotStalagmight
             }
             DecodeError::Truncated { .. } | DecodeError::MissingEnd => Self::Incomplete,
+            DecodeError::Syntax { .. } if !ends_with_end_marker(bytes) => Self::Incomplete,
             DecodeError::Invalid { .. } | DecodeError::DuplicateStation { .. } => Self::Damaged,
             other => Self::Other(other.to_string()),
         }

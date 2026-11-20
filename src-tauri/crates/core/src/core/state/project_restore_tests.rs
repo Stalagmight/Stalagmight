@@ -1,9 +1,14 @@
 //! [#720] `AppState::restore_project_from_backup`: what it writes, what it
-//! refuses, and that a refusal or a failure leaves every file as it was.
+//! refuses, and that a refusal or a failure leaves every file as it was; and
+//! `AppState::list_project_backups`, what the dialog offers.
+//!
+//! Projects and backups are version 2 files unless a test is about SQLite
+//! itself (sidecars a SQLite file carries, a damaged page, WAL mode), which
+//! uses a legacy SQLite file: those are still restorable backups (an old
+//! `.backup`, the pre-upgrade original the first version 2 save keeps).
 //!
 //! All data is synthetic: projects built in memory and saved by this build. No
 //! fixture is read or written.
-#![cfg(sg_unported)] // C13: being ported; removed when the port lands
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,7 +19,8 @@ use tempfile::TempDir;
 use super::project_restore::pre_restore_path;
 use super::AppState;
 use crate::core::events::EventSink;
-use crate::models::Project;
+use crate::models::survey::{LineMeta, Project, StartAt};
+use crate::persistence::stalx_v2::{self, Extras, Format, Mode};
 use crate::persistence::Database;
 
 /// The load needs a sink for its progress events; nothing listens here.
@@ -37,21 +43,61 @@ fn state() -> AppState {
     state
 }
 
-/// A saved project named `label` at `dir/file`.
+/// A one-line survey named `label`, valid (its piece is placed).
+fn survey(label: &str) -> Project {
+    let mut project = Project::new(label, None);
+    let line = project
+        .add_line(
+            LineMeta::default(),
+            StartAt::New,
+            vec![crate::models::ShotData {
+                length: 4.0,
+                azimuth_in: 30.0,
+                azimuth_out: 30.0,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+    let start = project.line(line).unwrap().start;
+    project.set_placement(start, 0.0, 0.0).unwrap();
+    project
+}
+
+/// The version 2 bytes of [`survey`]`(label)`.
+fn v2_bytes(label: &str) -> Vec<u8> {
+    stalx_v2::encode(&survey(label), &Extras::default(), Mode::Normal).unwrap()
+}
+
+/// A saved version 2 project named `label` at `dir/file`.
 fn project_file(dir: &Path, file: &str, label: &str) -> PathBuf {
     let path = dir.join(file);
+    std::fs::write(&path, v2_bytes(label)).unwrap();
+    path
+}
+
+/// A saved legacy (SQLite) project named `label` at `dir/file`.
+fn legacy_file(dir: &Path, file: &str, label: &str) -> PathBuf {
+    let path = dir.join(file);
     let mut db = Database::open(&path).unwrap();
-    db.save_project(&Project::new(label.to_string(), None))
+    db.save_project(&crate::models::Project::new(label.to_string(), None))
         .unwrap();
     path
 }
 
-/// The project name stored in the file, read without writing to it.
+/// The project name stored in the file (either format), read without writing
+/// to it.
 fn label(path: &Path) -> String {
-    rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .unwrap()
-        .query_row("SELECT name FROM project", [], |row| row.get(0))
-        .unwrap()
+    let head = std::fs::read(path).unwrap();
+    match stalx_v2::sniff(&head) {
+        Format::V2 => stalx_v2::probe_bytes(&head).project.unwrap().name,
+        Format::Legacy => {
+            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap()
+                .query_row("SELECT name FROM project", [], |row| row.get(0))
+                .unwrap()
+        }
+        Format::Unknown => unreachable!("{} is not a project", path.display()),
+    }
 }
 
 /// Every file in `dir` with its length and a hash of its bytes: what a refusal
@@ -119,6 +165,21 @@ fn a_restore_puts_the_backup_in_place_and_keeps_the_project_beside_it() {
         ["cave.stalx", "cave.stalx.backup", "cave.stalx.pre-restore"],
         "no staged copy is left behind"
     );
+}
+
+/// The restored file opens: it is the backup's project.
+#[test]
+fn the_restored_project_opens_as_the_backup() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+
+    state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
+
+    let opened = state();
+    opened.do_load_project_full(project.clone()).unwrap();
+    assert_eq!(opened.get_project_state().unwrap().name, "Older");
 }
 
 /// F5: restoring the safety copy undoes the restore instead of overwriting the
@@ -254,6 +315,15 @@ fn damage_a_page(path: &Path) {
     std::fs::write(path, bytes).unwrap();
 }
 
+/// The version 2 bytes of [`survey`] with its placement removed: the piece has
+/// no anchor, so the survey breaks an invariant (the load refuses it).
+fn invalid_v2_bytes() -> Vec<u8> {
+    let text = String::from_utf8(v2_bytes("Damaged")).unwrap();
+    let from = text.find("\"placements\":[").unwrap();
+    let to = from + text[from..].find("],\n").unwrap() + 3;
+    format!("{}{}", &text[..from], &text[to..]).into_bytes()
+}
+
 /// A backup that would not open as a project is refused before anything is
 /// written: restoring it would only bring the recovery dialog back (F2's
 /// empty file, a torn `.tmp`, a damaged copy, anything else).
@@ -272,13 +342,15 @@ fn a_backup_that_does_not_open_is_refused() {
         std::fs::remove_file(&path).unwrap();
         bytes
     };
-    let damaged = {
-        let path = project_file(dir.path(), "damaged.stalx", "Damaged");
+    let damaged_sqlite = {
+        let path = legacy_file(dir.path(), "damaged.stalx", "Damaged");
         damage_a_page(&path);
         let bytes = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         bytes
     };
+    let complete = v2_bytes("Torn");
+    let torn = complete[..complete.len() / 2].to_vec();
     let cases = [
         (Vec::new(), "is empty"),
         (
@@ -286,7 +358,15 @@ fn a_backup_that_does_not_open_is_refused() {
             "is not a Stalagmight project",
         ),
         (not_a_project, "is not a Stalagmight project"),
-        (damaged, "is damaged too: it fails the same integrity check"),
+        (
+            damaged_sqlite,
+            "is damaged too: it fails the same integrity check",
+        ),
+        (
+            invalid_v2_bytes(),
+            "is damaged too: it fails the same integrity check",
+        ),
+        (torn, "is incomplete: the save that wrote it never finished"),
     ];
     for (contents, what) in cases {
         std::fs::write(&backup, &contents).unwrap();
@@ -306,14 +386,56 @@ fn a_backup_that_does_not_open_is_refused() {
     }
 }
 
-/// An armed journal or a WAL with frames holds committed changes the file
-/// alone does not, beside the backup, the project or the safety copy a restore
-/// would replace (and might have to put back): refused, nothing changed.
+/// A legacy SQLite backup (an old `.backup`, or the pre-upgrade original) is
+/// restored over a version 2 project: the next open converts it again.
 #[test]
-fn unfinished_changes_beside_any_of_the_files_are_refused() {
+fn a_legacy_backup_restores_over_a_version_2_project() {
     let dir = TempDir::new().unwrap();
-    let (project, backup) = cave(&dir);
-    project_file(dir.path(), "cave.stalx.pre-restore", "Kept");
+    let project = project_file(dir.path(), "cave.stalx", "Current");
+    let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
+    let before = std::fs::read(&project).unwrap();
+
+    state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
+
+    assert_eq!(
+        stalx_v2::sniff(&std::fs::read(&project).unwrap()),
+        Format::Legacy
+    );
+    assert_eq!(label(&project), "Older");
+    assert_eq!(std::fs::read(pre_restore_path(&project)).unwrap(), before);
+    let opened = state();
+    opened.do_load_project_full(project.clone()).unwrap();
+    assert_eq!(opened.get_project_state().unwrap().name, "Older");
+}
+
+/// The temp a version 2 save writes through, complete (the rename never
+/// happened), is a backup like any other.
+#[test]
+fn a_complete_save_temp_is_restored() {
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("cave.stalx");
+    std::fs::write(&project, invalid_v2_bytes()).unwrap();
+    let temp = project_file(dir.path(), "cave.stalx.tmp", "Saved");
+
+    state()
+        .restore_project_from_backup(&project, &temp)
+        .unwrap();
+
+    assert_eq!(label(&project), "Saved");
+}
+
+/// An armed journal or a WAL with frames holds committed changes the file
+/// alone does not, beside the SQLite backup, the project or the safety copy a
+/// restore would replace (and might have to put back): refused, nothing
+/// changed.
+#[test]
+fn unfinished_changes_beside_any_of_the_sqlite_files_are_refused() {
+    let dir = TempDir::new().unwrap();
+    let project = legacy_file(dir.path(), "cave.stalx", "Current");
+    let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
+    legacy_file(dir.path(), "cave.stalx.pre-restore", "Kept");
     let mut armed = JOURNAL_MAGIC.to_vec();
     armed.resize(512, 0);
     let cases = [
@@ -363,6 +485,29 @@ fn unfinished_changes_beside_any_of_the_files_are_refused() {
     }
 }
 
+/// Beside a version 2 file a journal belongs to no database: it is debris,
+/// moved away when the name is replaced, never a reason to refuse, and it
+/// never ends up beside a restored SQLite file.
+#[test]
+fn a_journal_beside_a_version_2_file_is_debris() {
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), "cave.stalx", "Current");
+    let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
+    let mut armed = JOURNAL_MAGIC.to_vec();
+    armed.resize(512, 0);
+    std::fs::write(dir.path().join("cave.stalx-journal"), &armed).unwrap();
+
+    state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
+
+    assert_eq!(
+        names(dir.path()),
+        ["cave.stalx", "cave.stalx.backup", "cave.stalx.pre-restore"]
+    );
+    assert_eq!(label(&project), "Older");
+}
+
 /// A backup reached through a link has its sidecars beside the file the link
 /// names, and that is where an unfinished journal is looked for.
 #[cfg(unix)]
@@ -371,7 +516,7 @@ fn a_linked_backup_is_checked_beside_the_file_it_names() {
     let dir = TempDir::new().unwrap();
     let project = project_file(dir.path(), "cave.stalx", "Current");
     std::fs::create_dir(dir.path().join("elsewhere")).unwrap();
-    let real = project_file(&dir.path().join("elsewhere"), "old.stalx", "Older");
+    let real = legacy_file(&dir.path().join("elsewhere"), "old.stalx", "Older");
     let mut armed = JOURNAL_MAGIC.to_vec();
     armed.resize(512, 0);
     std::fs::write(dir.path().join("elsewhere/old.stalx-journal"), armed).unwrap();
@@ -453,20 +598,22 @@ fn armed_journal_of(db: &Path) -> Vec<u8> {
 }
 
 /// SQLite finds a sidecar by name, so a stale journal beside a name the restore
-/// replaces would replay into the new file. An armed one (here a genuine one,
-/// which the control shows does replay) is refused; debris beside the project
-/// and the safety copy is moved away, and the new files open intact.
+/// replaces would replay into the new file. An armed one beside a SQLite file
+/// (here a genuine one, which the control shows does replay) is refused;
+/// debris beside the project and the safety copy is moved away, and the new
+/// files open intact.
 #[test]
 fn stale_sidecars_never_reach_the_restored_files() {
     let dir = TempDir::new().unwrap();
-    let (project, backup) = cave(&dir);
-    let safety = project_file(dir.path(), "cave.stalx.pre-restore", "Old safety copy");
-    let stranger = project_file(dir.path(), "stranger.stalx", "Stranger");
+    let project = legacy_file(dir.path(), "cave.stalx", "Current");
+    let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
+    let safety = legacy_file(dir.path(), "cave.stalx.pre-restore", "Old safety copy");
+    let stranger = legacy_file(dir.path(), "stranger.stalx", "Stranger");
     let journal = armed_journal_of(&stranger);
     std::fs::remove_file(&stranger).unwrap();
 
     // Control: this journal really does replay into a file it lands beside.
-    let control = project_file(dir.path(), "control.stalx", "Control");
+    let control = legacy_file(dir.path(), "control.stalx", "Control");
     std::fs::write(dir.path().join("control.stalx-journal"), &journal).unwrap();
     let replayed = Database::open_existing(&control).map(|_| label(&control));
     assert_ne!(
@@ -592,12 +739,13 @@ fn a_failed_first_restore_leaves_no_safety_copy_behind() {
     assert!(!pre_restore_path(&project).exists());
 }
 
-/// A backup in WAL mode (as a file from elsewhere may be) restores, and
+/// A SQLite backup in WAL mode (as a file from elsewhere may be) restores, and
 /// checking it leaves no `-wal`/`-shm` behind under the staged copy's name.
 #[test]
 fn a_wal_mode_backup_leaves_no_sidecars_behind() {
     let dir = TempDir::new().unwrap();
-    let (project, backup) = cave(&dir);
+    let project = project_file(dir.path(), "cave.stalx", "Current");
+    let backup = legacy_file(dir.path(), "cave.stalx.backup", "Older");
     {
         let conn = rusqlite::Connection::open(&backup).unwrap();
         let mode: String = conn
@@ -753,4 +901,127 @@ fn a_missing_project_takes_the_backups_permissions() {
 
     let mode = std::fs::metadata(&project).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o604);
+}
+
+// --- list_project_backups -------------------------------------------------
+
+fn offered(path: &Path) -> Vec<String> {
+    let mut found: Vec<String> = AppState::list_project_backups(path)
+        .into_iter()
+        .map(|b| {
+            Path::new(&b.path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// Beside the project: both formats, a complete temp; never the project
+/// itself (under a `.backup` name of its own), its safety copy, a sidecar, an
+/// empty or foreign file, or a torn temp.
+#[test]
+fn the_dialog_offers_restorable_files_beside_the_project_only() {
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), "cave.backup.stalx", "Current");
+    project_file(dir.path(), "cave.backup.stalx.backup", "Older");
+    legacy_file(dir.path(), "cave.backup.stalx.backup.1", "Oldest");
+    project_file(dir.path(), "cave.backup.stalx.tmp", "Saved");
+    project_file(dir.path(), "cave.backup.stalx.pre-restore", "Kept");
+    let complete = v2_bytes("Torn");
+    std::fs::write(
+        dir.path().join("cave.backup.stalx.backup.2"),
+        &complete[..complete.len() - 8],
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("cave.backup.stalx.backup.3"), b"").unwrap();
+    std::fs::write(dir.path().join("cave.backup.stalx.backup.4"), b"notes").unwrap();
+    std::fs::write(dir.path().join("cave.backup.stalx-journal"), [0u8; 512]).unwrap();
+    std::fs::write(dir.path().join("cave.backup.stalx.backup-wal"), [1u8; 64]).unwrap();
+
+    assert_eq!(
+        offered(&project),
+        [
+            "cave.backup.stalx.backup",
+            "cave.backup.stalx.backup.1",
+            "cave.backup.stalx.tmp"
+        ]
+    );
+}
+
+/// The SQLite original the first version 2 save kept in the app-data backups
+/// folder is offered for that project, and only for it: a project whose name
+/// only starts the same (`<stem>.old`) is not offered it.
+#[test]
+fn the_dialog_offers_the_pre_upgrade_original_from_the_backups_folder() {
+    crate::app_dirs::init_for_test();
+    let folder = super::project_io::upgrade_backup_dir().unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    let stem = format!("restore-list-{}", uuid::Uuid::new_v4());
+    let original = legacy_file(
+        &folder,
+        &format!("{stem}.20261120T101112.123456789Z.pre-v2.stalx"),
+        "Original",
+    );
+    let other = legacy_file(
+        &folder,
+        &format!("{stem}.old.20261120T101112.123456789Z.pre-v2.stalx"),
+        "Other",
+    );
+    let sidecar = folder.join(format!(
+        "{stem}.20261120T101112.123456789Z.pre-v2.stalx-journal"
+    ));
+    std::fs::write(&sidecar, [0u8; 512]).unwrap();
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), &format!("{stem}.stalx"), "Current");
+    let other_project = project_file(dir.path(), &format!("{stem}.old.stalx"), "Other");
+
+    let listed = offered(&project);
+    let listed_other = offered(&other_project);
+    for leftover in [&original, &other, &sidecar] {
+        std::fs::remove_file(leftover).unwrap();
+    }
+
+    assert_eq!(
+        listed,
+        [original.file_name().unwrap().to_string_lossy().into_owned()]
+    );
+    assert_eq!(
+        listed_other,
+        [other.file_name().unwrap().to_string_lossy().into_owned()]
+    );
+}
+
+/// The pre-upgrade original is restorable: the project goes back to the old
+/// format (its next save upgrades it again).
+#[test]
+fn the_pre_upgrade_original_is_offered_and_restores() {
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let stem = format!("restore-upgrade-{}", uuid::Uuid::new_v4());
+    let path = legacy_file(dir.path(), &format!("{stem}.stalx"), "Legacy");
+    let original = std::fs::read(&path).unwrap();
+    let state = state();
+    state.do_load_project_full(path.clone()).unwrap();
+    assert!(state.save_project(None).success);
+    assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
+    assert!(state.close_project().success);
+
+    let backups = AppState::list_project_backups(&path);
+    let kept = backups
+        .iter()
+        .find(|b| std::fs::read(&b.path).ok().as_deref() == Some(original.as_slice()))
+        .expect("the original is offered");
+    let message = state
+        .restore_project_from_backup(&path, Path::new(&kept.path))
+        .unwrap();
+
+    assert!(message.starts_with("Restored from "), "{message}");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    for backup in &backups {
+        let _ = std::fs::remove_file(&backup.path);
+    }
 }
