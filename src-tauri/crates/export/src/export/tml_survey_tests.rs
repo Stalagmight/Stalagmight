@@ -296,3 +296,41 @@ fn a_simple_survey_matches_the_legacy_document_byte_for_byte() {
         String::from_utf8(theirs).unwrap()
     );
 }
+
+/// A migrated rigid tie (`Tie`, e.g. a cycle-closing merge) is a loop like
+/// any closure: it is written as a CLOSURE row (the legacy exporter dropped
+/// a cycle-closing merge silently).
+#[test]
+fn a_tie_closure_is_written_as_a_closure_row() {
+    let mut cave = cave();
+    cave.project.push_closure(
+        cave.t[1],
+        None,
+        cave.n[1],
+        None,
+        crate::models::survey::ClosureStrategy::Tie,
+    );
+    assert!(cave.project.validate().is_empty());
+    let rows = rows(&cave.project);
+    let ties: Vec<&super::ExportShot> = rows
+        .iter()
+        .filter(|r| r.shot_type == "CLOSURE" && r.from_id == id(cave.t[1]))
+        .collect();
+    assert_eq!(ties.len(), 1);
+    assert_eq!(ties[0].closure_to_id, id(cave.n[1]));
+}
+
+/// Two datums on one station (a merge of two placed pieces): the first holds
+/// the node, the second cannot be carried and is reported unwritten.
+#[test]
+fn a_second_datum_on_one_station_is_reported_unwritten() {
+    let mut cave = cave();
+    let station = cave.t[0];
+    cave.project
+        .datums
+        .push(ZeroDatum::new(station, gps_at(1.0, 1.0)));
+    assert!(cave.project.validate().is_empty());
+    let (xml, notes) = build_xml(&cave.project, &SHORT, TmlProfile::User).unwrap();
+    assert_eq!(notes, vec!["gps-anchors-not-written".to_string()]);
+    assert!(!xml.is_empty());
+}
