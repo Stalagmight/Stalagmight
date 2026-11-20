@@ -22,11 +22,16 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::Connection;
+#[cfg(feature = "writer")]
+use rusqlite::{params, Transaction};
 
-use crate::models::{Project, StationId, StationKey};
+#[cfg(feature = "writer")]
+use crate::models::Project;
+use crate::models::{StationId, StationKey};
 
 use super::shot_credits::{extended_code, is_schema_error};
+#[cfg(feature = "writer")]
 use super::write::station_rows;
 
 const TABLE: &str = "station_ids";
@@ -45,6 +50,7 @@ pub(super) const CREATE_STATION_IDS: &str = "CREATE TABLE IF NOT EXISTS station_
 
 /// Write every station's id (orphans skipped, as for the station texts) in
 /// station order, and the counter. The caller has emptied the table.
+#[cfg(feature = "writer")]
 pub(super) fn write_station_ids(tx: &Transaction<'_>, project: &Project) -> Result<()> {
     let mut insert = tx.prepare_cached(
         "INSERT OR REPLACE INTO station_ids (section_id, station_index, station_id) \

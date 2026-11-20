@@ -1,6 +1,8 @@
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::params;
+#[cfg(feature = "writer")]
+use rusqlite::Connection;
 use std::collections::HashMap;
 
 use super::{Database, ResolvedWarning};
@@ -94,22 +96,6 @@ fn coerce_id(value: rusqlite::types::ValueRef<'_>) -> Option<u32> {
 }
 
 impl Database {
-    /// Load resolved warnings from database
-    pub fn load_resolved_warnings(&self) -> Result<Vec<ResolvedWarning>> {
-        // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='resolved_warnings'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
-
-        if !table_exists {
-            return Ok(Vec::new());
-        }
-
-        self.read_resolved_warnings("resolved_comment", "shot_uuid")
-    }
-
     /// [#517] Read `resolved_warnings` taking whatever shape the file actually
     /// has, rather than the shape this build writes.
     ///
@@ -269,106 +255,6 @@ impl Database {
         Ok(resolved)
     }
 
-    /// Save a resolved warning to database.
-    ///
-    /// Suppression is keyed by the shot's stable `shot_uuid` (issue #57). To
-    /// keep a single row per suppressed `(shot, warning_code)`, we first delete
-    /// any prior row for the same identity (the UUID when present, else the
-    /// legacy `(line_id, shot_id)` position), then insert the fresh record.
-    /// Falls back to the legacy position key when the shot has no UUID. Legacy
-    /// NULL-uuid rows are upgraded to the UUID key by the load-time backfill
-    /// (`backfill_resolved_warning_uuids`), not here.
-    pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
-        // The legacy UNIQUE(line_id, shot_id, warning_code) keys rows by
-        // POSITION, but a UUID-keyed ignore's real identity is its shot_uuid. A
-        // plain INSERT OR REPLACE would, on a positional collision, delete a
-        // DIFFERENT live shot's by-UUID ignore that occupies that slot - e.g. after
-        // a save remapped rows to sequence positions while the open project still
-        // uses pre-save shot ids - silently losing it (issue #57 / Codex). Use a
-        // conditional upsert that only ever overwrites the SAME shot's row (or
-        // upgrades a legacy NULL-uuid row at that position), never a different
-        // shot's UUID-keyed row. `excluded` is the row we tried to insert.
-        //
-        // The dedup-delete + insert run in ONE transaction: if the insert is
-        // refused (the slot is held by a different shot), dropping the transaction
-        // rolls the delete back too, so this shot's OWN prior ignore is preserved
-        // rather than dropped on the way to refusing (issue #57 / Codex).
-        let tx = self.conn.unchecked_transaction()?;
-        Self::delete_matching_resolved(&tx, warning)?;
-        let affected = tx.execute(
-            "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(section_id, shot_id, warning_code) DO UPDATE SET \
-                 resolved_at = excluded.resolved_at, \
-                 resolved_comment = excluded.resolved_comment, \
-                 shot_uuid = excluded.shot_uuid \
-             WHERE resolved_warnings.shot_uuid IS NULL \
-                OR resolved_warnings.shot_uuid = excluded.shot_uuid",
-            params![
-                warning.line_id,
-                warning.shot_id,
-                warning.warning_code,
-                super::stored_times::to_stored(warning.resolved_at),
-                warning.resolved_comment,
-                warning.shot_uuid,
-            ],
-        )?;
-        if affected == 0 {
-            // The positional slot is held by a DIFFERENT shot's UUID-keyed ignore
-            // (a stale position from a prior save, before the ids re-sync on
-            // reload). Roll back (drop without commit) so neither ignore is lost,
-            // and surface the failure so the caller can prompt a reload + retry.
-            anyhow::bail!(
-                "could not record this ignore: its position is held by another shot's ignore - reload the project and try again"
-            );
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Every shot UUID the on-disk `shots` table holds for `line_id`. Lets the
-    /// resolve path recognise a shot the load renamed (its live id is DERIVED from
-    /// one of these, the same on every open) as being as durable as a stored one.
-    pub fn line_shot_uuids(&self, line_id: u32) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT uuid FROM shots WHERE section_id = ?1 AND uuid IS NOT NULL")?;
-        let rows = stmt.query_map(params![line_id], |row| row.get::<_, String>(0))?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-    }
-
-    /// Whether the file holds a shot with no uuid: a pre-v6 file not saved
-    /// since, whose shots get a fresh uuid on every load until a save writes
-    /// them. In any other file a shot's uuid, once minted, is the one the next
-    /// save writes.
-    pub fn holds_shots_without_uuid(&self) -> Result<bool> {
-        let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid IS NULL OR uuid = '')",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(exists)
-    }
-
-    /// Whether `uuid` is already stored in the on-disk `shots` table FOR `line_id`. A pre-v6
-    /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
-    /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
-    /// minted) - the resolve path keeps those ignores position-keyed instead (issue #57 / Codex).
-    ///
-    /// Scoped by line for the same reason `delete_matching_resolved` scopes its UUID branch:
-    /// a file saved before shot UUIDs were project-wide unique can hold the same id in two
-    /// lines, and the load renames one copy. An unscoped `EXISTS` would answer "persisted"
-    /// because the OTHER line's copy is on disk, and the caller would then key an ignore by
-    /// a UUID that is in-memory-only for the line it actually belongs to.
-    pub fn shot_uuid_is_persisted(&self, line_id: u32, uuid: &str) -> Result<bool> {
-        let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1 AND section_id = ?2)",
-            params![uuid, line_id],
-            |row| row.get(0),
-        )?;
-        Ok(exists)
-    }
-
     /// Delete any resolved-warning rows matching `warning`. When a `shot_uuid`
     /// is present we match its own (line_id, uuid) row, plus any *legacy*
     /// NULL-uuid row at the same `(line_id, shot_id)` - but NEVER a *different*
@@ -382,6 +268,7 @@ impl Database {
     /// suppression of that same shot even on a load path that did not run the
     /// backfill. When no UUID is supplied (a legacy row), match purely by
     /// position. Shared by save (dedup) and unresolve (clear).
+    #[cfg(feature = "writer")]
     fn delete_matching_resolved(conn: &Connection, warning: &ResolvedWarning) -> Result<()> {
         if let Some(uuid) = warning.shot_uuid.as_deref() {
             conn.execute(
@@ -438,29 +325,8 @@ impl Database {
         Ok(to_fix.len())
     }
 
-    /// Delete a resolved warning from database (un-ignore). Matches by UUID when
-    /// `shot_uuid` is provided (the normal case), else by the legacy position.
-    pub fn delete_resolved_warning(
-        &self,
-        line_id: u32,
-        shot_id: u32,
-        warning_code: &str,
-        shot_uuid: Option<&str>,
-    ) -> Result<()> {
-        Self::delete_matching_resolved(
-            &self.conn,
-            &ResolvedWarning {
-                line_id,
-                shot_id,
-                warning_code: warning_code.to_string(),
-                resolved_at: Utc::now(),
-                resolved_comment: None,
-                shot_uuid: shot_uuid.map(str::to_string),
-            },
-        )
-    }
-
     /// Save multiple resolved warnings to database in a single transaction
+    #[cfg(feature = "writer")]
     pub fn save_resolved_warnings_bulk(&self, warnings: &[ResolvedWarning]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         for warning in warnings {

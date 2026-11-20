@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::OptionalExtension;
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
@@ -13,191 +13,6 @@ use super::station_texts::StationTextTable;
 use super::Database;
 
 impl Database {
-    /// Load a project from the database
-    /// Load only the metadata needed to populate `ProjectMetadata` - no
-    /// per-shot deserialization. Uses SQL COUNT/SUM aggregates and a
-    /// single small read of `zero_datums` for GPS info. This replaces the
-    /// "load entire project just to drop everything but metadata" path
-    /// used by `list_recent_projects`, which was responsible for the
-    /// multi-second freeze when returning to the global view with a
-    /// large project in the recent list.
-    pub fn load_metadata(
-        &self,
-        file_path: std::path::PathBuf,
-    ) -> Result<crate::models::ProjectMetadata> {
-        use crate::models::{GpsBounds, GpsCoordinates, Project, ProjectMetadata};
-        use std::cmp::Ordering;
-        use std::time::Instant;
-        let start = Instant::now();
-
-        // Tiny project header read.
-        let (name, location, modified_at_raw): (String, Option<String>, String) = self
-            .conn
-            .query_row(
-                "SELECT name, location, modified_at FROM project LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .context("Failed to read project metadata header")?;
-        let t_header = start.elapsed();
-
-        let modified_at = super::stored_times::parse_stored(&modified_at_raw)
-            .context("Failed to parse modified_at")?;
-
-        // Aggregate-only queries.
-        let line_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
-            .unwrap_or(0);
-        let t_lines = start.elapsed();
-        let shot_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
-            .unwrap_or(0);
-        let t_shot_count = start.elapsed();
-        // Surveyed length, the same rule as `Line::stats`: Reference shots
-        // (kind 2) repeat passage already surveyed and are left out (#689).
-        // Only an INTEGER-stored 0 or 1 counts, because the loader reads every
-        // other stored value as Reference (`ShotKind::from_u8`), including a
-        // non-INTEGER cell: the table is not STRICT, so a crafted file can
-        // store `'1'` or `1.0`, which `IN (0, 1)` alone would match through
-        // column affinity while the loader rejects it.
-        //
-        // A file not yet opened since the shot-kind backfill (#27) shows an
-        // upper bound, not the opened figure: a pre-v13 file has no `kind`
-        // column (`open_for_metadata` runs no migration), and a v13+ file can
-        // still carry `pending_kind_classification`. Either way the migration
-        // seeds every virtual shot as Jump, which counts, and the first open
-        // runs the classifier, which may demote some to Reference and re-saves
-        // the result. Until then summing every seeded shot is the best figure.
-        // COALESCE so an empty shots table returns 0.0 instead of NULL.
-        let has_kind = self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
-        let length_sql = if has_kind {
-            "SELECT COALESCE(SUM(length), 0.0) FROM shots \
-             WHERE typeof(kind) = 'integer' AND kind IN (0, 1)"
-        } else {
-            "SELECT COALESCE(SUM(length), 0.0) FROM shots"
-        };
-        let total_length: f64 = self
-            .conn
-            .query_row(length_sql, [], |row| row.get(0))
-            .unwrap_or(0.0);
-        let t_sum_length = start.elapsed();
-
-        // GPS info: zero_datums is small (typically 1-10 rows) so we read
-        // it in full and reuse the existing dateline-aware bounds logic.
-        let mut zero_datums: Vec<GpsCoordinates> = Vec::new();
-        if let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT latitude, longitude, depth_reference FROM zero_datums")
-        {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, f64>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                ))
-            }) {
-                for r in rows.flatten() {
-                    // Skip rows that don't validate (matches load_project behavior).
-                    if let Ok(gps) = GpsCoordinates::new(r.0, r.1, r.2) {
-                        zero_datums.push(gps);
-                    }
-                }
-            }
-        }
-
-        let (gps_center, gps_bounds) = if zero_datums.is_empty() {
-            (None, None)
-        } else {
-            // Positional on purpose, and not the frame rule
-            // (`Project::frame_datum`, the first datum that RESOLVES): this reads
-            // GPS columns out of the file for a project-list pin, with no lines
-            // and no station refs loaded, so there is nothing here that could
-            // resolve and nothing that reads LOCAL metres against it. The
-            // divergence the frame rule exists to prevent - coordinates laid out
-            // against one datum and interpreted against another - cannot arise
-            // where no coordinate is involved.
-            let first = &zero_datums[0];
-            let center = Some((first.longitude, first.latitude));
-
-            let mut south = f64::INFINITY;
-            let mut north = f64::NEG_INFINITY;
-            let mut longitudes = Vec::with_capacity(zero_datums.len());
-            for gps in &zero_datums {
-                south = south.min(gps.latitude);
-                north = north.max(gps.latitude);
-                longitudes.push(gps.longitude);
-            }
-            let (west, east) = Project::compute_longitude_bounds(&longitudes);
-            // Avoid f64 NaN propagation if there was only one (already handled by helper).
-            let south = if south.is_finite() { south } else { 0.0 };
-            let north = if north.is_finite() { north } else { 0.0 };
-            let _ = Ordering::Equal; // silence the import if compute_longitude_bounds is inlined
-            (
-                center,
-                Some(GpsBounds {
-                    north,
-                    south,
-                    east,
-                    west,
-                }),
-            )
-        };
-
-        let t_gps = start.elapsed();
-
-        // station_count = shot_count + line_count per Project::stats().
-        let station_count = (shot_count as usize) + (line_count as usize);
-
-        // Trace where the time went, in ms, so we can spot which query
-        // is the bottleneck. Debug-level - fires for every recent
-        // project on every metadata refresh, so default releases skip
-        // it.  Enable with `RUST_LOG=stalagmight_lib=debug` when you
-        // need to see it.
-        tracing::debug!(
-            path = ?file_path,
-            shots = shot_count,
-            header_ms = t_header.as_micros() as f64 / 1000.0,
-            lines_ms = (t_lines - t_header).as_micros() as f64 / 1000.0,
-            shotcount_ms = (t_shot_count - t_lines).as_micros() as f64 / 1000.0,
-            sumlength_ms = (t_sum_length - t_shot_count).as_micros() as f64 / 1000.0,
-            gps_ms = (t_gps - t_sum_length).as_micros() as f64 / 1000.0,
-            total_ms = t_gps.as_micros() as f64 / 1000.0,
-            "load_metadata timings"
-        );
-
-        // The linked SpeleoDB project UUID (#201), so the recents/GlobalView list can
-        // match this entry against a single lock scan. The `speleo_link` row is a
-        // singleton (`CHECK(id = 1)`) with a NOT NULL project_id, so this doubles as
-        // the SpeleoDB-remote probe (#189, D-B14). `.ok()` tolerates a missing table
-        // on a read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
-        // no migration, so a pre-v9 file simply has no table here) → None.
-        let speleodb_project_id: Option<String> = self
-            .conn
-            .query_row("SELECT project_id FROM speleo_link WHERE id = 1", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .ok();
-
-        // Derived SpeleoDB-remote flag: true iff the singleton link row exists.
-        let is_remote: bool = speleodb_project_id.is_some();
-
-        Ok(ProjectMetadata {
-            name,
-            location,
-            file_path,
-            modified_at,
-            line_count: line_count as usize,
-            total_length,
-            station_count,
-            gps_center,
-            gps_bounds,
-            is_remote,
-            speleodb_project_id,
-        })
-    }
-
     pub fn load_project(&self) -> Result<Project> {
         tracing::debug!("Loading project from database");
 
@@ -1251,21 +1066,6 @@ impl Database {
             .is_some_and(|v| v == "1")
     }
 
-    /// Clear the flag set by the v12->v13 migration once the classification has
-    /// run, so it never runs a second time. Classification is import-time only
-    /// by design (#27 q14): re-running it later could flip a kind under the user.
-    ///
-    /// Only correct once the reclassified kinds are durably on disk - see
-    /// [`Self::persist_backfilled_shot_kinds`], which is the only caller that
-    /// should ever pair a non-empty backfill with this.
-    pub fn clear_pending_kind_classification(&self) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
-            [],
-        )?;
-        Ok(())
-    }
-
     /// Shots whose stored `kind` this build does not recognise (#27).
     ///
     /// There is no `CHECK` constraint on the column, so a corrupt byte, a manual
@@ -1344,52 +1144,6 @@ impl Database {
             .conn
             .execute("UPDATE shots SET kind = 2 WHERE kind NOT IN (0, 1, 2)", [])?;
         Ok(repaired)
-    }
-
-    /// Write the one-shot #27 backfill's verdicts straight to disk and clear the
-    /// pending flag, both in one transaction.
-    ///
-    /// The backfill runs on load and mutates only the in-memory `Project`.
-    /// Clearing the flag on its own (the first cut) destroyed the retry guard
-    /// while the result was still volatile: open a migrated project, close it
-    /// without editing, and the kinds were never written but the flag was gone -
-    /// so every later open kept the migration's Jump seed and non-swimmable ties
-    /// stayed counted as swum in gas, penetration and the ruler. Persisting here
-    /// makes the backfill durable without needing a user-visible save; pairing
-    /// it with the DELETE in one transaction means a crash mid-way leaves the
-    /// flag set and the (idempotent) pass simply repeats.
-    ///
-    /// (The in-memory pass does still `touch()` the project, so `modified_at`
-    /// moves on an open the user did not edit. That timestamp is not persisted
-    /// by this write, and the frontend keeps `isDirty: false` after load, so no
-    /// save is provoked.)
-    ///
-    /// Rows are addressed by `(line_id, sequence_order)` - the same tuple the
-    /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
-    /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
-    /// while the in-memory `Shot::id` is synthesised on load as
-    /// `line_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
-    /// silently writes the wrong rows in the first line and matches nothing
-    /// at all in the rest (the v7->v8 migration converts between the same two
-    /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
-    /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
-    /// memory only, so it would persist against a transient identity.
-    pub fn persist_backfilled_shot_kinds(&self, kinds: &[(LineId, u32, ShotKind)]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
-            )?;
-            for (line_id, seq, kind) in kinds {
-                stmt.execute(params![i32::from(kind.as_u8()), *line_id, *seq])?;
-            }
-        }
-        tx.execute(
-            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
-            [],
-        )?;
-        tx.commit()?;
-        Ok(())
     }
 
     pub fn load_project_validation(

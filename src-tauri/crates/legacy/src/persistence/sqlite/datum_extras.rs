@@ -68,17 +68,20 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::Connection;
+#[cfg(feature = "writer")]
+use rusqlite::{params, OptionalExtension, Transaction};
 
-use crate::models::{
-    validate_gps_accuracy, DatumRole, GpsCoordinates, Line, Project, StationKey, ZeroDatum,
-};
+use crate::models::{validate_gps_accuracy, GpsCoordinates, Line, StationKey, ZeroDatum};
+#[cfg(feature = "writer")]
+use crate::models::{DatumRole, Project};
 
 use super::shot_credits::{extended_code, is_schema_error};
 
 /// DDL shared by `init_schema` and `save_project`. No foreign key: every save
 /// recreates the table whole, and the read path checks each row against the
 /// file instead.
+#[cfg(feature = "writer")]
 pub(super) const CREATE_DATUM_EXTRAS: &str = "
     CREATE TABLE IF NOT EXISTS zero_datum_extras (
         position INTEGER PRIMARY KEY,
@@ -97,11 +100,13 @@ pub(super) const CREATE_DATUM_EXTRAS: &str = "
 
 /// Run by `save_project` before [`CREATE_DATUM_EXTRAS`]: every save rewrites
 /// the table whole, and recreating it also replaces a table of another shape.
+#[cfg(feature = "writer")]
 pub(super) const RECREATE_DATUM_EXTRAS: &str = "DROP TABLE IF EXISTS zero_datum_extras;";
 
 /// Write `zero_datums` (placement datums only) and `zero_datum_extras`. Runs
 /// after the shots are written, so each row's `shot_uuid` is the uuid the file
 /// holds, including one this save minted.
+#[cfg(feature = "writer")]
 pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Result<()> {
     // (station, datum, is a fix), in list order, dangling datums left out.
     let mut saved = Vec::with_capacity(project.zero_datums.len());
@@ -175,6 +180,7 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
 /// fix, or a datum with a stored accuracy or entrance answer (dangling datums are not saved, so
 /// they do not count). That is exactly what an older build drops when it
 /// saves the file, which is why the save reports it (#741).
+#[cfg(feature = "writer")]
 pub fn holds_datum_extras(project: &Project) -> bool {
     project
         .zero_datums

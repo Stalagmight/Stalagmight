@@ -41,7 +41,9 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::Connection;
+#[cfg(feature = "writer")]
+use rusqlite::{params, Transaction};
 
 use crate::models::{LineId, Project, Section, SectionId, MAX_SECTION_ID};
 
@@ -64,6 +66,7 @@ pub(super) const MAX_CAVE_SECTION_LINE_ROWS: usize = 100_000;
 /// Run by `save_project` inside its transaction, after the lines are written:
 /// both tables are rewritten whole, so they are recreated rather than emptied
 /// (which also replaces a table of another shape).
+#[cfg(feature = "writer")]
 pub(super) const RECREATE_CAVE_SECTION_TABLES: &str = "
     DROP TABLE IF EXISTS cave_section_lines;
     DROP TABLE IF EXISTS cave_sections;
@@ -81,6 +84,7 @@ pub(super) const RECREATE_CAVE_SECTION_TABLES: &str = "
 
 /// Write `project`'s Sections and memberships. A membership naming a
 /// Section the project does not hold is not written (it reads as ungrouped).
+#[cfg(feature = "writer")]
 pub(super) fn write_cave_sections(tx: &Transaction<'_>, project: &Project) -> Result<()> {
     tx.execute_batch(RECREATE_CAVE_SECTION_TABLES)?;
     let mut insert_section = tx.prepare_cached(

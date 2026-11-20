@@ -51,6 +51,7 @@ impl StationTextTable {
         }
     }
 
+    #[cfg(feature = "writer")]
     pub(super) fn insert_sql(self) -> &'static str {
         match self {
             Self::Comments => {

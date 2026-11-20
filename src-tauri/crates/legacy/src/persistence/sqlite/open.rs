@@ -2,10 +2,13 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
 
-use super::{Database, SCHEMA_VERSION};
+use super::Database;
+#[cfg(feature = "writer")]
+use super::SCHEMA_VERSION;
 
 impl Database {
     /// Open or create a database at the given path
+    #[cfg(feature = "writer")]
     pub fn open(path: &Path) -> Result<Self> {
         // Per-open chatter is debug-only - `open` is called for every
         // project create / save-as / import / recent-list refresh.
@@ -55,24 +58,6 @@ impl Database {
         tracing::debug!("Schema initialized");
 
         Ok(db)
-    }
-
-    /// Open an existing database (does not create if missing)
-    pub fn open_existing(path: &Path) -> Result<Self> {
-        // Verbose open-time logging is debug-only - it fires on every
-        // project load and every recent-projects metadata read, which
-        // adds up.  The error paths still log at error/warn.
-        tracing::debug!("Opening existing database at: {:?}", path);
-
-        if !path.exists() {
-            tracing::error!("File does not exist: {:?}", path);
-            anyhow::bail!("File does not exist");
-        }
-
-        // Open in read-only mode first to check if it's valid
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .context("Failed to open database - file may not be a valid SQLite database")?;
-        Self::finish_open_existing(conn, false)
     }
 
     /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
@@ -214,132 +199,6 @@ impl Database {
         Ok(self)
     }
 
-    /// Refuse the file at `path` if its schema could run SQL the file chose
-    /// ([`super::check_schema`]), without opening it as a project. For files
-    /// that arrive from elsewhere before anything else touches them, e.g. a
-    /// SpeleoDB download about to replace the local cache.
-    pub fn check_schema_at(path: &Path) -> Result<()> {
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .with_context(|| format!("open {} to check its schema", path.display()))?;
-        super::check_schema(&conn)
-    }
-
-    /// Refuse the file at `path` with [`super::NewerSchema`] if a newer schema
-    /// wrote it (#649), without opening it as a project. For a file about to be
-    /// installed or rewritten wholesale (a SpeleoDB download about to replace
-    /// the local cache, a project about to be repaired or restored over), where
-    /// the openers' own refusal would come after the damage.
-    ///
-    /// Only that refusal is an `Err`, which is why the error type is
-    /// [`super::NewerSchema`] itself. A file that cannot be opened or read, or
-    /// whose schema [`super::check_schema`] refuses, returns `Ok`: it may be
-    /// exactly the corrupt file being repaired, and the caller's own path
-    /// reports what is wrong with it.
-    pub fn check_not_newer_at(path: &Path) -> std::result::Result<(), super::NewerSchema> {
-        let Ok(conn) =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            return Ok(());
-        };
-        if super::check_schema(&conn).is_err() {
-            return Ok(());
-        }
-        super::newer_schema::check_not_newer(&conn)
-    }
-
-    /// Open a database for read-only metadata extraction only.
-    ///
-    /// Skips the per-file integrity check, foreign-key validation, schema
-    /// migration, and project-data presence check that `open_existing` /
-    /// `open_readonly` run. Those are appropriate when actually loading
-    /// project data; for the recent-projects listing they add hundreds of
-    /// milliseconds per file (PRAGMA quick_check walks every page). The
-    /// metadata reads below are pure SELECTs and will fail with a clear
-    /// error if the schema is missing - that's enough validation for the
-    /// purpose. If the user later opens this project, the full open path
-    /// runs its checks then.
-    pub fn open_for_metadata(path: &Path) -> Result<Self> {
-        if !path.exists() {
-            anyhow::bail!("File does not exist: {}", path.display());
-        }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only for metadata")?;
-        super::check_schema(&conn)?;
-        Ok(Self { conn })
-    }
-
-    /// [`Self::open_for_metadata`] with WRITE access, for the one question a
-    /// read-only connection cannot answer: what is in a file whose last write
-    /// was interrupted.
-    ///
-    /// A hot rollback journal (a kill, a power loss) fails a read-only open with
-    /// `SQLITE_READONLY_ROLLBACK` because rolling it back is a write. This opens
-    /// read-write so SQLite performs that recovery on the first read - and does
-    /// nothing else: no integrity check, no project-data check, no foreign-key
-    /// validation and, above all, NO `ensure_schema_version`. That last one is
-    /// the point. The caller (`core::state::speleodb_foreign`, in the root
-    /// crate) uses this to decide whether a file may be opened AT ALL, and may well
-    /// refuse it; running the load path's migrations there would rewrite - and
-    /// in the v15 case discard undo/redo history from - a file the user is
-    /// about to be told they cannot open, before they have answered the prompt.
-    ///
-    /// Rolling the journal back is itself a write, and an unavoidable one: it is
-    /// the only way to see the committed contents, and it is exactly what the
-    /// next ordinary open would do anyway. Everything beyond it is avoidable,
-    /// so this does none of it.
-    ///
-    /// Do NOT reach for this to load project data. It is `open_for_metadata`'s
-    /// sibling, with `open_for_metadata`'s caveats: the schema is whatever the
-    /// file has, and a missing table surfaces as a failed SELECT.
-    pub fn open_for_metadata_recovering(path: &Path) -> Result<Self> {
-        if !path.exists() {
-            anyhow::bail!("File does not exist: {}", path.display());
-        }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .context("Failed to open database read-write for metadata")?;
-        super::check_schema(&conn)?;
-        Ok(Self { conn })
-    }
-
-    /// Open an existing database in read-only mode.
-    /// Does not create if missing, does not run migrations.
-    /// Used for lazy loading survey geometry without modifying files.
-    pub fn open_readonly(path: &Path) -> Result<Self> {
-        tracing::debug!("Opening database read-only at: {:?}", path);
-
-        if !path.exists() {
-            anyhow::bail!("File does not exist: {}", path.display());
-        }
-
-        // Validate it's a Stalagmight project file by extension
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if extension != "stalx" {
-            anyhow::bail!("Not a Stalagmight project file: {}", path.display());
-        }
-
-        // Open in read-only mode - no writes possible
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only")?;
-        super::check_schema(&conn)?;
-        // This build would read a newer file with only the columns it knows (#649).
-        super::newer_schema::check_not_newer(&conn)?;
-
-        let db = Self { conn };
-        db.enable_foreign_keys()?;
-
-        // Run quick integrity check before reading any data (SPEC 14.4)
-        db.validate_integrity()
-            .context("Database file may be corrupted")?;
-
-        // Verify project data exists
-        if !db.has_project_data()? {
-            anyhow::bail!("File does not contain a valid Stalagmight project");
-        }
-
-        db.validate_foreign_keys()?;
-        Ok(db)
-    }
-
     /// Check if the database has valid project data
     pub fn has_project_data(&self) -> Result<bool> {
         // First check if project table exists
@@ -360,15 +219,5 @@ impl Database {
             .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))?;
 
         Ok(count > 0)
-    }
-
-    /// Create an in-memory database (for testing)
-    pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory().context("Failed to create in-memory database")?;
-        let db = Self { conn };
-        db.enable_foreign_keys()?;
-        db.init_schema()?;
-        db.set_user_version(SCHEMA_VERSION)?;
-        Ok(db)
     }
 }

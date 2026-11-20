@@ -5,7 +5,9 @@ use rusqlite::{params, Connection, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
+#[cfg(feature = "writer")]
 use super::datum_extras::CREATE_DATUM_EXTRAS;
+#[cfg(feature = "writer")]
 use super::shot_credits::CREATE_CREDIT_TABLES;
 use super::station_ids::CREATE_STATION_IDS;
 use super::station_texts::CREATE_STATION_NAMES;
@@ -1397,6 +1399,7 @@ impl Database {
     }
 
     /// Initialize the database schema
+    #[cfg(feature = "writer")]
     pub(super) fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r"

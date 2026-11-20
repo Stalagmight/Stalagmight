@@ -83,13 +83,16 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::NaiveDate;
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::Connection;
+#[cfg(feature = "writer")]
+use rusqlite::{params, Transaction};
 
 use crate::models::{dedupe_people, Person, SurveyCredit, MAX_PEOPLE_PER_ROLE};
 
 /// DDL for both tables, shared by `init_schema` and `save_project` (which runs
 /// it inside its transaction, as it does for `station_names`, so a v18 file
 /// opened through the fast path cannot fail the DELETE).
+#[cfg(feature = "writer")]
 pub(super) const CREATE_CREDIT_TABLES: &str = "
     CREATE TABLE IF NOT EXISTS credit_people (
         id INTEGER PRIMARY KEY,
@@ -114,6 +117,7 @@ pub(super) const CREATE_CREDIT_TABLES: &str = "
 /// Run by `save_project` in place of a DELETE: every save rewrites both tables
 /// whole, and recreating them also replaces the shape an unreleased build of
 /// this feature wrote (rows keyed by uuid alone).
+#[cfg(feature = "writer")]
 pub(super) const RECREATE_CREDIT_TABLES: &str = "
     DROP TABLE IF EXISTS shot_credits;
     DROP TABLE IF EXISTS credit_people;
@@ -130,6 +134,7 @@ pub(super) type CreditKey = (u32, String);
 
 /// Write one row per `((line, uuid), credit)`, interning people. The caller
 /// passes only the shots that need a row, each key once.
+#[cfg(feature = "writer")]
 pub(super) fn write_credit_rows(
     tx: &Transaction<'_>,
     rows: &[(CreditKey, SurveyCredit)],
@@ -174,6 +179,7 @@ pub(super) fn write_credit_rows(
 }
 
 /// Record, per line, the legacy pair this save wrote into `lines`.
+#[cfg(feature = "writer")]
 pub(super) fn write_recorded_legacy(
     tx: &Transaction<'_>,
     line_id: u32,

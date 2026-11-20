@@ -19,34 +19,6 @@ impl Database {
         Ok(())
     }
 
-    /// Run full PRAGMA integrity_check for on-demand deep validation.
-    /// This is slower than quick_check but also verifies index consistency.
-    /// Returns a list of error messages, or empty vec if database is healthy.
-    pub fn full_integrity_check(&self) -> Result<Vec<String>> {
-        tracing::info!("Running PRAGMA integrity_check (full)");
-        let mut stmt = self.conn.prepare("PRAGMA integrity_check")?;
-        let mut rows = stmt.query([])?;
-        let mut errors = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            let msg: String = row.get(0)?;
-            if msg != "ok" {
-                errors.push(msg);
-            }
-        }
-
-        if errors.is_empty() {
-            tracing::info!("Full integrity check passed");
-        } else {
-            tracing::error!(
-                error_count = errors.len(),
-                "Full integrity check found errors"
-            );
-        }
-
-        Ok(errors)
-    }
-
     /// Verify there are no foreign key violations.
     pub(super) fn validate_foreign_keys(&self) -> Result<()> {
         let mut stmt = self.conn.prepare("PRAGMA foreign_key_check")?;

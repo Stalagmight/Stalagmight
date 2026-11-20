@@ -41,6 +41,7 @@ pub(super) fn normalized(at: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// `at` as the RFC 3339 text the save writes, [`normalized`] first.
+#[cfg(feature = "writer")]
 pub(super) fn to_stored(at: DateTime<Utc>) -> String {
     normalized(at).to_rfc3339()
 }

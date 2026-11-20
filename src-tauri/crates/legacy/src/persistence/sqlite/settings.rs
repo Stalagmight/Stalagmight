@@ -1,10 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(feature = "writer")]
 use rusqlite::params;
-use rusqlite::types::ValueRef;
 use std::collections::HashMap;
 
-use super::schema_guard::declares_virtual_table;
-use super::{format_blob_placeholder, Database, RawTableData, MAX_RAW_PAGE_ROWS};
+use super::Database;
 
 impl Database {
     /// Upsert or clear the SpeleoDB hand-off link (`speleo_link`, schema v9)
@@ -18,6 +17,7 @@ impl Database {
     /// freshness verdict + reset last_verify_at) is a DOCUMENTED NO-OP until the
     /// #202 piggyback path consumes it. base_commit_sha is captured ONCE on pull
     /// and NEVER mutated by #189 (a later Sync/Release issue re-stamps it).
+    #[cfg(feature = "writer")]
     pub fn save_speleo_link(&self, link: Option<&crate::models::SpeleoLink>) -> Result<()> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS speleo_link (
@@ -85,6 +85,7 @@ impl Database {
     /// Its own table rather than a column on `speleo_undo_chain`, because the two have
     /// different lifetimes: a forward edit clears the chain pointer, and must NOT clear
     /// this - outliving the edit is the entire point of it.
+    #[cfg(feature = "writer")]
     pub fn save_speleo_undo_watermark(&self, inherited_through: Option<&str>) -> Result<()> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
@@ -140,6 +141,7 @@ impl Database {
     /// in `PUSH_SNAPSHOT_LOCAL_TABLES`, so it never rides to the server. A restore stamps
     /// BASE at the server tip (so a later push lands forward, which is what we want), and
     /// that is precisely why BASE cannot double as this pointer.
+    #[cfg(feature = "writer")]
     pub fn save_speleo_undo_chain(&self, unwound_from_sha: Option<&str>) -> Result<()> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS speleo_undo_chain (
@@ -186,74 +188,6 @@ impl Database {
         }
     }
 
-    /// Flip the SpeleoDB dirty bit and refresh `last_edit_at` in a SINGLE targeted
-    /// `UPDATE`, without loading + re-serialising the whole link. Returns `true` when
-    /// a remote-link row was updated (`false` = local-only project: no row, or no
-    /// `speleo_link` table at all - both are a no-op).
-    ///
-    /// Hot path: called on EVERY accepted remote edit, so it avoids the per-edit
-    /// `SELECT` + `CREATE TABLE IF NOT EXISTS` + full upsert that load+save did (#197
-    /// review): the common (linked) case is exactly one `UPDATE`, zero added cost.
-    /// Schema init/migrate is supposed to guarantee `speleo_link` exists, but in
-    /// practice a never-linked DB can be missing it (#484), so `table_exists` is
-    /// consulted ONLY after the `UPDATE` fails, to tell that once-per-session missing
-    /// table apart from a genuinely unexpected persistence error - the former is a
-    /// silent no-op (and no more per-edit WARN log noise), the latter still
-    /// propagates. This never touches `base_commit_sha`/`endpoint`/`project_id`, so it
-    /// cannot disturb the BASE-advance invariant or the immutable hand-off identity.
-    pub fn touch_speleo_link_dirty(&self, last_edit_at: &str) -> Result<bool> {
-        match self.conn.execute(
-            "UPDATE speleo_link SET has_unpushed_edits = 1, last_edit_at = ?1 WHERE id = 1",
-            params![last_edit_at],
-        ) {
-            Ok(rows) => Ok(rows > 0),
-            Err(e) => {
-                if self.table_exists("speleo_link")? {
-                    Err(e.into())
-                } else {
-                    Ok(false)
-                }
-            }
-        }
-    }
-
-    /// Change the per-project undo policy and record the change as forward work in one
-    /// transaction. Clearing the chain pointer is part of the same commit: leaving it
-    /// behind would make the UI classify this real edit as a disposable Unwind step.
-    pub fn set_speleo_undo_mode_and_mark_forward_edit(
-        &self,
-        mode: crate::models::UndoMode,
-        last_edit_at: &str,
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        let rows = tx.execute(
-            "UPDATE speleo_link
-             SET undo_mode = ?1, has_unpushed_edits = 1, last_edit_at = ?2
-             WHERE id = 1",
-            params![mode.as_db_str(), last_edit_at],
-        )?;
-        if rows == 0 {
-            anyhow::bail!("No SpeleoDB link row to update");
-        }
-        tx.execute("DELETE FROM speleo_undo_chain", [])?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Rename the project's display name without rewriting the whole project.
-    /// A targeted `UPDATE` on the single `project` row; leaves `modified_at`
-    /// untouched so a rename doesn't reorder the recent list by edit time.
-    pub fn save_project_name(&self, name: &str) -> Result<()> {
-        let affected = self
-            .conn
-            .execute("UPDATE project SET name = ?1 WHERE id = 1", params![name])
-            .context("Failed to update project name")?;
-        if affected == 0 {
-            anyhow::bail!("No project row to rename");
-        }
-        Ok(())
-    }
-
     /// Load all display settings from database
     pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
         let mut stmt = self
@@ -272,108 +206,12 @@ impl Database {
     }
 
     /// Save a display setting to database
+    #[cfg(feature = "writer")]
     pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO display_settings (key, value) VALUES (?1, ?2)",
             params![key, value],
         )?;
         Ok(())
-    }
-
-    /// Get a single display setting from database
-    pub fn get_display_setting(&self, key: &str) -> Result<Option<String>> {
-        let result = self.conn.query_row(
-            "SELECT value FROM display_settings WHERE key = ?1",
-            params![key],
-            |row| row.get(0),
-        );
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// List the ordinary tables in the database, excluding sqlite-internal ones.
-    ///
-    /// Virtual tables are left out: a `.stalx` can come from anyone, and touching
-    /// a virtual table runs its module's code (FTS5, RTREE) over the file's own
-    /// data. Classified from `sqlite_master` alone (#608): it cannot be shadowed
-    /// (`sqlite_` names are reserved) and reading it connects nothing, unlike
-    /// `pragma_table_list`, which a file can shadow with its own table or view
-    /// and which prepares every virtual table it reports. Shadow tables are plain
-    /// b-trees, so they stay listed.
-    pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name, rootpage, sql FROM sqlite_master \
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
-
-        let mut names = Vec::new();
-        for row in rows {
-            let (name, rootpage, sql) = row?;
-            if rootpage != 0 && !declares_virtual_table(sql.as_deref().unwrap_or("")) {
-                names.push(name);
-            }
-        }
-        Ok(names)
-    }
-
-    /// Read a page of rows from a raw table, with every value stringified
-    /// (NULL → `"NULL"`, blobs → a size placeholder like `<blob 4.2 KB>`).
-    ///
-    /// Injection guard: `table` must be an exact member of
-    /// [`Self::list_raw_table_names`]; the identifier is double-quoted and
-    /// LIMIT/OFFSET are bound parameters. `limit` is clamped to
-    /// [`MAX_RAW_PAGE_ROWS`].
-    pub fn read_raw_table(&self, table: &str, limit: u32, offset: u32) -> Result<RawTableData> {
-        let known = self.list_raw_table_names()?;
-        if !known.iter().any(|name| name == table) {
-            anyhow::bail!("Unknown table: {table}");
-        }
-        let limit = limit.min(MAX_RAW_PAGE_ROWS);
-        let ident = format!("\"{}\"", table.replace('"', "\"\""));
-
-        let total_rows: u32 =
-            self.conn
-                .query_row(&format!("SELECT COUNT(*) FROM {ident}"), [], |row| {
-                    row.get(0)
-                })?;
-
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
-        let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
-        let column_count = columns.len();
-        let mapped = stmt.query_map(params![limit, offset], |row| {
-            let mut values = Vec::with_capacity(column_count);
-            for i in 0..column_count {
-                values.push(match row.get_ref(i)? {
-                    ValueRef::Null => "NULL".to_string(),
-                    ValueRef::Integer(v) => v.to_string(),
-                    ValueRef::Real(v) => v.to_string(),
-                    ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
-                    ValueRef::Blob(b) => format_blob_placeholder(b.len()),
-                });
-            }
-            Ok(values)
-        })?;
-
-        let mut rows = Vec::new();
-        for row in mapped {
-            rows.push(row?);
-        }
-        Ok(RawTableData {
-            columns,
-            rows,
-            total_rows,
-        })
     }
 }
