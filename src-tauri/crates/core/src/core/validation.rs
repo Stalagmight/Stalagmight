@@ -365,12 +365,12 @@ fn geometry(shot: &Shot) -> ShotData {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "tests assert on known-present warnings; a failed expect fails the test"
+)]
 mod tests {
-    #![expect(
-        clippy::expect_used,
-        reason = "tests assert on known-present warnings; a failed expect fails the test"
-    )]
     use super::*;
     use crate::models::GpsCoordinates;
 
