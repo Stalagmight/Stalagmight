@@ -26,7 +26,7 @@ import { holdQuitDuring } from '../../utils/quitAfterWork';
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
  * `dialogData.mode`:
- * - **release** (default): `speleodb_done` - render + VACUUM snapshot + push +
+ * - **release** (default): `speleodb_done` - render + snapshot of the `.stalx` + push +
  *   release the lock, returning to read-only.
  * - **push** (T2d, fix 8): `speleodb_push` - the same push WITHOUT releasing the
  *   lock, so editing continues.

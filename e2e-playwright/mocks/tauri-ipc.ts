@@ -5718,12 +5718,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
             const lineId = (args?.lineId as number | undefined) ?? 1;
+            // The station graph's preview (plan W6): the removed slot leaves the
+            // junction it shared with another line, and what cannot happen any
+            // more (replacement merges, re-wired closures, a skipped re-wire)
+            // comes back empty.
             return {
               removed_station: { line_id: lineId, station_index: 0 },
               removed_merges: [
                 {
                   station_a: { line_id: lineId, station_index: 0 },
-                  station_b: { line_id: lineId, station_index: 1 },
+                  station_b: { line_id: lineId + 1, station_index: 0 },
                 },
               ],
               removed_closures: [
@@ -5737,7 +5741,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               replacement_closure_updates: [],
               closure_to_merge: [],
               merge_rewire_skipped: false,
-              closure_rewire_skipped: true,
+              closure_rewire_skipped: false,
               shift_blocked: false,
               shift_blocked_reasons: [],
             };
@@ -5747,21 +5751,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true, line_ids: [] };
 
-          case 'split_line_preview': {
-            // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
-            // moves and removes nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the
-            // warning (a half that moves, closures the split removes).
-            const win = window as unknown as Record<string, unknown>;
-            return (
-              win.__MOCK_SPLIT_PREVIEW__ ?? {
-                closures_to_merges: 0,
-                moved_side: null,
-                moved_m: 0,
-                removed_closures: [],
-                removed_already_one_point: [],
-              }
-            );
-          }
+          case 'split_line_preview':
+            // Still registered, but the frontend no longer asks: on the station
+            // graph the halves share the split station, so a split moves,
+            // merges and removes nothing (plan W6) - the answer is always empty.
+            return {
+              closures_to_merges: 0,
+              moved_side: null,
+              moved_m: 0,
+              removed_closures: [],
+              removed_already_one_point: [],
+            };
 
           case 'split_line': {
             console.log('[Mock IPC] split_line called with:', args);
