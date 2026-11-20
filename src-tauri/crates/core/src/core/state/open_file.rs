@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use crate::models::SpeleoLink;
-use crate::persistence::migrate::{LegacyParity, MigratedExtras, NameChange, Verification};
+use crate::persistence::migrate::{
+    LegacyParity, MigratedExtras, MigrationReport, NameChange, Verification,
+};
 use crate::persistence::stalx_v2::{
     write_atomic, Extras, Fingerprint, Guard, History, IgnoredWarning, LocalSync, SpeleoDbLink,
     WriteError,
@@ -71,28 +73,36 @@ pub(crate) struct ConversionNotice {
     /// The slots whose name changed, in slot order (survey content: shown,
     /// never logged).
     pub(crate) names_changed: Vec<NameChange>,
+    /// Merged stations whose members' different comments were joined into
+    /// one (each line now shows both).
+    pub(crate) comments_joined: usize,
 }
 
 /// How many name changes the notice spells out before "and N more".
 const NAMES_LISTED: usize = 5;
 
 impl ConversionNotice {
-    /// [`Self::of`] plus the names the conversion changed: a notice also
-    /// when nothing moved but a line now shows another name.
+    /// [`Self::of`] plus what else a line shows differently: the names the
+    /// conversion changed and the comments it joined. A notice also when
+    /// nothing moved but something visible changed (review finding UX-1).
     pub(crate) fn of_migration(
-        verification: &Verification,
+        report: &MigrationReport,
         names_changed: &[NameChange],
     ) -> Option<Self> {
-        match Self::of(verification) {
+        let names_changed = names_changed.to_vec();
+        let comments_joined = report.comments_joined;
+        match Self::of(&report.verification) {
             Some(notice) => Some(Self {
-                names_changed: names_changed.to_vec(),
+                names_changed,
+                comments_joined,
                 ..notice
             }),
-            None => (!names_changed.is_empty()).then(|| Self {
+            None => (!names_changed.is_empty() || comments_joined > 0).then_some(Self {
                 slots_moved: 0,
                 max_displacement_m: 0.0,
                 unexplained: 0,
-                names_changed: names_changed.to_vec(),
+                names_changed,
+                comments_joined,
             }),
         }
     }
@@ -105,6 +115,7 @@ impl ConversionNotice {
             max_displacement_m: moved.max_displacement_m,
             unexplained,
             names_changed: Vec::new(),
+            comments_joined: 0,
         })
     }
 
@@ -118,6 +129,11 @@ impl ConversionNotice {
         }
         if !self.names_changed.is_empty() {
             parts.push(self.names_part());
+        }
+        match self.comments_joined {
+            0 => {}
+            1 => parts.push("a merged station's two comments were joined".to_string()),
+            n => parts.push(format!("the comments of {n} merged stations were joined")),
         }
         format!(
             "Converted from the old file format; {}; \
@@ -215,12 +231,12 @@ impl FileState {
     pub(crate) fn from_migrated(
         migrated: MigratedExtras,
         fingerprint: Option<Fingerprint>,
-        verification: &Verification,
+        report: &MigrationReport,
     ) -> Self {
         let mut state = Self {
             fingerprint,
             origin: FileOrigin::Legacy,
-            conversion: ConversionNotice::of_migration(verification, &migrated.names_changed),
+            conversion: ConversionNotice::of_migration(report, &migrated.names_changed),
             legacy_parity: Some(migrated.legacy_parity),
             ..Self::default()
         };

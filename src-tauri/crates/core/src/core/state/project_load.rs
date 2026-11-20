@@ -241,11 +241,7 @@ impl AppState {
                 project.file_path = Some(path.to_path_buf());
                 let mut extras = migrated.extras;
                 let unrecognised_shot_kinds = std::mem::take(&mut extras.unrecognised_shot_kinds);
-                let file = FileState::from_migrated(
-                    extras,
-                    Some(fingerprint),
-                    &migrated.report.verification,
-                );
+                let file = FileState::from_migrated(extras, Some(fingerprint), &migrated.report);
                 Ok(Opened {
                     project,
                     file,

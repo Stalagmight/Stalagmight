@@ -208,7 +208,7 @@ impl AppState {
                     "speleodb: migrated a legacy revision in memory; the cache gets version 2"
                 );
                 conversion = ConversionNotice::of_migration(
-                    &migrated.report.verification,
+                    &migrated.report,
                     &migrated.extras.names_changed,
                 );
                 let mut project = migrated.project;

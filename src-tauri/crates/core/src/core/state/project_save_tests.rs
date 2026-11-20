@@ -895,6 +895,50 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     );
 }
 
+/// Review finding UX-1: a conversion that moved nothing still says what each
+/// line now shows differently: here C's start reads B's station's name, and
+/// the two members' comments are one station's comment now.
+#[test]
+fn a_conversion_that_joined_comments_says_so() {
+    use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let flat = |azimuth: f64| ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length: 10.0,
+        ..ShotData::default()
+    };
+    let mut p = Legacy::new("Comments".to_string(), None);
+    let mut add = |shots: Vec<ShotData>| {
+        p.add_line(old::LineData {
+            shots: shots.iter().map(frozen).collect(),
+            quality: 1.0,
+            ..Default::default()
+        })
+        .id
+    };
+    let b = add(vec![flat(0.0), flat(0.0)]);
+    let c = add(vec![flat(90.0)]);
+    p.merge_stations(slot(c, 0), slot(b, 1)).unwrap();
+    for (sr, text) in [(slot(b, 1), "sump"), (slot(c, 0), "low air")] {
+        let key = p.key_for_ref(sr).unwrap();
+        p.station_comments.insert(key, text.to_string());
+    }
+    let path = dir.path().join("comments.stalx");
+    write_legacy_file(&path, &p);
+    let state = AppState::new().unwrap();
+    let opened = state.execute(Command::OpenProject { path });
+    assert!(opened.success, "{:?}", opened.error);
+    let notice = state.take_conversion_notice().expect("a notice");
+    assert!(!notice.contains("moved"), "{notice}");
+    assert!(notice.contains("1 station name changed"), "{notice}");
+    assert!(
+        notice.contains("a merged station's two comments were joined"),
+        "{notice}"
+    );
+}
+
 /// A 0.6.0 file whose merge of C onto B the migration moves (`drift`: C's
 /// line offset drifted 5 m and a dangling merge row names A, the cascade's
 /// seed), or the same survey clean.
