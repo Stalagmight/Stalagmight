@@ -187,7 +187,9 @@ left out when unset.
 
 A cache so a project list can show a file without parsing the survey. The
 writer always recomputes it; a reader that has parsed the survey must ignore
-it.
+it. A `summary` that is not an object holds nothing: Stalagmight ignores it,
+leaves it out of a local-only rewrite or a rename (section 12), and writes a
+new one on the next save.
 
 | Key | Type | Meaning |
 |---|---|---|

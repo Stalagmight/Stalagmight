@@ -224,3 +224,30 @@ fn a_rule_broken_under_an_unknown_feature_is_newer_not_damaged() {
         Err(super::DecodeError::Invalid { .. })
     ));
 }
+
+/// A summary that is not an object (a third-party writer's `null`) opens,
+/// and the rewrites that edit it leave it out instead of failing: a display
+/// toggle, a sync-state change and a Recents rename all still work (review
+/// finding C-file-format-5). Injection: writing such a summary through
+/// `replace_keys` again fails both rewrites with "expected an object".
+#[test]
+fn a_summary_that_is_not_an_object_never_blocks_a_rewrite() {
+    let (p, extras) = example();
+    let text = text_of(&encode(&p, &extras, Mode::Normal).unwrap()).to_string();
+    let at = text.find("\"summary\":").unwrap();
+    let end = at + text[at..].find(",\n").unwrap();
+    let nulled = format!("{}\"summary\":null{}", &text[..at], &text[end..]);
+    let decoded = open(&nulled);
+    assert!(decoded.read_only().is_none());
+
+    let rewritten = rewrite_local(nulled.as_bytes(), &decoded.extras).unwrap();
+    assert!(!text_of(&rewritten).contains("\"summary\""));
+    let again = decode(&rewritten, &DecodeOptions::default()).unwrap();
+    assert_eq!(again.project, decoded.project);
+    assert_eq!(again.extras.local, decoded.extras.local);
+
+    let renamed = super::rename_project(nulled.as_bytes(), "Renamed").unwrap();
+    assert!(!text_of(&renamed).contains("\"summary\""));
+    let again = decode(&renamed, &DecodeOptions::default()).unwrap();
+    assert_eq!(again.project.name, "Renamed");
+}
