@@ -11,223 +11,144 @@ It is opt-in, validates both email/password and token authentication, visibly sk
 incomplete credentials, and deletes only projects created by the run. Deterministic
 workspace validation must set `SPELEODB_API_TEST_ENABLED=false`.
 
-## The undo fuzz gate (Rust tier)
+## The Rust fuzz and property gates
 
-`src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
-directly against `AppState`, as ordinary tests. It gates CI, alongside the
-metamorphic, file-format, crash-timing, adversarial and concurrency gates below;
-the agent harness never runs there. `open_undo_bugs_tests.rs` is no longer
-`#[ignore]`d - every bug it pinned is fixed, so its tests now run as regression
-guards on every CI run.
+Every gate below runs with the default Rust suite (`cargo test --workspace`), is
+deterministic (an integer-only PRNG, a fresh `AppState` and temp dir per run,
+results merged in seed order), and has an `#[ignore]`d wide run for sweeps and
+for choosing gate seeds. Each module's header is the reference for its oracles
+and knobs; this page says what each one is for and how to run it. The agent
+harness never runs in CI.
+
+All of them run on the station-graph model and the `.stalx` version 2 file.
+There are **no tolerances and no known-bug classifiers** left in them: the
+changeset engine restores a state to the bit, so the undo oracles compare the
+canonical v2 bytes (`stalx_v2::encode`, `modified_at` masked, id counters
+allowed to stand higher after an undo, plan 11.4). A gate failure prints the
+seed and the test that replays it. A known bug is pinned by an `#[ignore]`d test
+that fails until it is fixed (the `#[ignore]` goes with the fix); the farm-style
+windows below are how the wide runs are split.
+
+| Knob | Used by |
+|---|---|
+| `STALAGMIGHT_FUZZ_SEED_START`, `STALAGMIGHT_FUZZ_SEEDS`, `STALAGMIGHT_FUZZ_THREADS` | the migration, decode and saving fuzzers (rolling windows) |
+| `STALAGMIGHT_RUST_FUZZ_*` | the undo fuzzer |
+| `STALAGMIGHT_RUST_META_*`, `STALAGMIGHT_RUST_FORMAT_*`, `STALAGMIGHT_RUST_CRASH_*`, `STALAGMIGHT_RUST_ADV_*`, `STALAGMIGHT_RUST_CONC_*` | metamorphic, file-format, crash-timing, adversarial, concurrency |
+| `STALAGMIGHT_DATUM_FUZZ_*` | the multi-datum command-chain fuzzer |
+| `STALAGMIGHT_RUST_MIGRATE_*`, `STALAGMIGHT_RUST_WIRE_*` | the migration property gate, the wire-equivalence sweep |
+| `STALAGMIGHT_MIGRATION_CORPUS`, `STALAGMIGHT_CORPUS_FILE`, `STALAGMIGHT_FUZZ_WALKS` | the corpus modes (real files, below) |
+| `FZ706_*` | the #706 file-churn fuzz (app crate) |
+
+### The undo fuzz gate
+
+`src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` (with
+`fuzz_extended_tests.rs`, `fuzz_reload_tests.rs`, `fuzz_corrupt_tests.rs`)
+drives random `AppState` commands - every command family, the recipes (split
+shot, delete and split, range deletes, Split Line Here, Combine Lines, create
+and merge, imports, Add .stalx) and batches - interleaved with undo, redo,
+multi-step jumps and save/close/reopen crossings. After every move it checks:
+`validate()` is empty; at every recorded depth the canonical v2 bytes are the
+bytes recorded there; session shot ids are exact in the session and sound
+after a reopen; the counters never go down; the memoised raw layout and
+Computed View are the fresh ones; every `UndoHistoryItem` on both stacks is the
+one recorded when its entry was pushed, through a save and a reopen; after a
+reopen every kept entry steps onto the state it leads to; a refused command, a
+refused batch, an undo past the floor or a step through a tampered entry
+changes nothing; a jump of N lands where N single steps do.
 
 ```bash
-# The gate. Runs with the default suite; ~10 s for all four tests.
+# The gates (in-memory, persistence, multi-crossing, legacy origin, combined).
 cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib fuzz_undo
 
-# See the classified known-bug counts (they are printed, not asserted).
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_undo -- --nocapture --test-threads=1
-```
-
-Four gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
-save/close/reopen per seed), `_gate_multi_crossing` (three), and
-`_gate_combined` (below).
-
-**Five oracles per run.** Four compare what a history move DID - the project
-snapshot per depth, every cross-line merge, the app's own integrity verdict,
-and the adjusted geometry the map draws. The fifth compares what the entry SAYS:
-the `UndoHistoryItem` rows `get_undo_stack` returns, which are the history
-dropdown. It runs in two halves - the entry-intrinsic triple
-(`timestamp|commandType|description`) is pinned per depth for the life of a run,
-and the whole item including `previewData` is compared across every save/reload
-crossing. `previewData` is left out of the first half on purpose: it resolves
-line NAMES against the live project (see
-[Undo/Redo](undo-redo.md#name-resolution)), so it is stable exactly
-where the project is.
-
-**Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
-MATRIX in its header: for every finding on
-[issue 413](https://github.com/Stalagmight/Stalagmight/issues/413), the mode,
-seed and move count under which this tier used to reach and classify it, and the
-fix that closed it - every finding is FIXED now, `CLASSIFIERS` is empty, and
-each row's sweep reaches nothing at all.
-Four environment flags switch the modes on, and the gate uses none of them
-because each one CONSTRUCTS a known defect:
-
-| flag | what it adds | the findings it exists for |
-|---|---|---|
-| `STALAGMIGHT_RUST_FUZZ_JUMPS=1` | multi-step `undo_to`/`redo_to` jumps | 7 |
-| `STALAGMIGHT_RUST_FUZZ_CLOSURES=1` | a real loop closure in the starting project | 6, 14 |
-| `STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1` | shot ids that diverge from positional order, with every id-bearing entry contiguous on top, before the save | 8, 12, 13 |
-| `STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES=1` | two closures with the first one removed, and an orphaned closure built just before the save | 4, 10 |
-| `STALAGMIGHT_RUST_FUZZ_CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one | 8, 13 - without any constructed mode |
-
-So, for example, findings 8 and 12 in twelve moves:
-
-```bash
-STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 STALAGMIGHT_RUST_FUZZ_SEEDS=1 \
-  STALAGMIGHT_RUST_FUZZ_ITERATIONS=12 \
+# Per-seed status, used to choose GATE_SEEDS.
+STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
   cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
-```
 
-Every seed prints one summary line per mode; with `CLASSIFIERS` empty a clean
-run reaches nothing, so any `classified hits: ...` entry is a NEW open bug or
-float dust past tolerance rather than a known finding.
-
-**Long horizon.** Thousands of moves per seed, past the app's own
-`undo_history_limit`, so three things nothing shorter reaches get exercised: the
-FIFO trim and the sliding window it creates, float dust that ACCUMULATES past
-tolerance over dozens of visits to the same depth (classified as its own
-finding rather than reported as a fresh regression, then re-baselined), and id
-allocators / collection growth over a long run.
-
-```bash
+# Thousands of moves past the history limit (the FIFO window slides).
 STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
   cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib undo_redo_fuzz_horizon -- --ignored --nocapture
-```
 
-The mode changes the move mix while it is CLIMBING (85/8/7 mutate/undo/redo, and
-no jumps) for a measured reason: at the ordinary mix the depth random-walks
-around 25 and never reaches the limit at all, because every jump lands the
-cursor near the floor and the next mutation truncates everything above it.
-
-**Drawn config.** `STALAGMIGHT_RUST_FUZZ_CONFIG=1` fuzzes the app as well as the
-moves: each seed draws its own `undo_history_limit` (1, 2, 3, 5, 8, 13, 20, 40,
-100 = the app's default, and `iterations + 1` = unreachable) from a SECOND
-generator seeded `seed ^ CONFIG_STREAM`, so no existing stream moves and every
-repro above still reproduces. At a limit of 1 every push trims, which is the
-sliding window under maximum pressure at 60 moves instead of 10,000.
-
-```bash
-STALAGMIGHT_RUST_FUZZ_CONFIG=1 STALAGMIGHT_RUST_FUZZ_SEEDS=32 \
-  STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
-  cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
-```
-
-The drawn value is printed at the end of every summary line and of every failure
-payload (`..., undo_history_limit=3`) - a seed alone is not a repro once the same
-moves can run against differently configured apps. `undo_persist_limit` is
-deliberately NOT drawn: it is read from the config struct at save time and
-`save_project` writes that struct back out through `Config::save()`, so a drawn
-value would outlive the moves that drew it.
-
-**Config isolation is on by default, and these modules ask for it anyway.**
-`AppState::new()` LOADS the global config and every save reaches
-`note_recent_project` -> `Config::save()`, which WRITES it. `Config::config_path()`
-resolves PER THREAD under test (see [Config isolation](#config-isolation) below),
-so every test in the nine fuzz/property modules is off the real
-`~/.config/stalagmight/config.toml` and off every sibling's file whether it says
-so or not; they still open with `let _config = crate::test_helpers::isolated_config();`
-because that gives the whole test ONE dir whose path it can name. To check that
-nothing in a module resolves the config through the ENVIRONMENT (which is what a
-missed `real_config_resolution` would look like), point the config dir at a temp
-dir and assert nothing was written:
-
-```bash
-XDG_CONFIG_HOME=$(mktemp -d) \
-  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  -- core::state::metamorphic_undo_tests
-# then: find "$XDG_CONFIG_HOME" -type f   -> must be empty
-```
-
-**Combined.** `STALAGMIGHT_RUST_FUZZ_COMBINED=1` turns on horizon, closures,
-closure shapes, jumps, three crossings and the drawn config at once - the
-interactions rather than the modes. It is what `undo_redo_fuzz_gate_combined`
-runs (seeds 15 and 21 x 300 moves, ~1.8 s, in the same band as the other gates),
-and re-mining that gate's seeds means running the survey over the regime:
-
-```bash
-STALAGMIGHT_RUST_FUZZ_COMBINED=1 STALAGMIGHT_RUST_FUZZ_SEEDS=40 \
-  STALAGMIGHT_RUST_FUZZ_ITERATIONS=300 \
-  cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
-```
-
-Two facts that combining exposed, both fixed only for the combined regime so no
-existing seed moves (the module header has the detail): a horizon run could
-never draw a jump, because its climb test compares a difference the FIFO trim
-pins below the cap; and a horizon run could never cross the save boundary,
-because the crossing guard measured DEPTHS against a limit that counts ENTRIES.
-
-**Soak.** Same engine, no iteration budget, and with the features the gate
-leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
-constructed shapes) because each reaches open findings:
-
-```bash
+# Soak: no iteration budget, every optional feature.
 STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
   cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
-**All three sweeps run their seeds in parallel.** The soak, the survey and the
-horizon run spread their seeds over a worker pool; the three CI gates do not
-(they are seconds, and libtest is already running them alongside every other
-test in the binary). Measured at 32 seeds x 300 moves x 2 modes: 13.9 s at one
-worker, 3.7 s at four, 2.7 s at eight.
+The gate tests are `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
+crossing per seed), `_gate_multi_crossing`, `_gate_legacy_origin` (each run
+starts from a seeded 0.6.0 survey written by the frozen 0.6.0 save and opened
+through the migration) and `_gate_combined`. Knobs (prefix
+`STALAGMIGHT_RUST_FUZZ_`; every name is kept, the farm drives them):
 
-| knob | effect |
+| env | what it does |
 |---|---|
-| `STALAGMIGHT_RUST_FUZZ_THREADS=n` | n workers |
-| unset | `available_parallelism` less one core, never more workers than there are runs |
-| `STALAGMIGHT_RUST_FUZZ_THREADS=1` | the sequential run, on the same code path |
+| `SEEDS=n`, `SEED_START=s` | the sweep's seeds (`s..s+n`) |
+| `ITERATIONS=n` | moves per run |
+| `THREADS=n` | sweep workers; the output does not depend on it (merged in seed order) |
+| `TRACE=1`, `VERBOSE=1` | stream every move (one worker unless `THREADS` says otherwise); print whole failure payloads |
+| `JUMPS=1` | multi-step `undo_to` / `redo_to`, each checked against N single steps |
+| `CLOSURES=1`, `CLOSURE_SHAPES=1` | a genuine loop in the starting project; two closures and an orphan shape at the first crossing |
+| `DIVERGENCE=1` | session ids out of positional order before a crossing |
+| `HORIZON=1`, `PERSISTENCE=1` | thousands of moves past the history limit; cross as well |
+| `CROSSINGS=n`, `SAVES=1`, `TRIM_CROSSINGS=1` | crossings per persistence run; saves in place; cross even when the save keeps only the newest `undo_persist_limit` entries |
+| `CONFIG=1` | draw `undo_history_limit` from a ladder (a second generator, so no stream moves); printed in every summary and failure |
+| `COMBINED=1` | horizon, closures, closure shapes, jumps, three crossings and a drawn limit at once |
+| `LEGACY_ORIGIN=1`, `LARGE=1`, `EXTENDED=1` | start from a migrated legacy project; from long lists; more of the rare actions |
+| `FORMAT_CORRUPT=1` | damage one persisted history entry before a reopen (`fuzz_corrupt_tests.rs`) |
 
-A run is a pure function of `(seed, plan)` - integer-only PRNG in the `Fuzzer`,
-an `AppState` per run, a `TempDir` per persistence run - and the results are
-merged in SEED order, so **the printed output is byte-identical at any thread
-count**, including the per-seed summary lines, the clean list, the failure
-buckets and the classified totals. Two things follow:
-
-- The `oracle-us` triple in each summary line is WALL time and inflates under
-  contention. Measure the oracle cost at `THREADS=1`.
-- A panicking seed is caught, attributed to its seed and mode, and re-raised
-  after every other seed has finished, so one bad seed no longer costs a soak
-  the rest of its evidence.
-
-**The red tests.** None are left: every bug they pinned is fixed, so none is
-`#[ignore]`d any more. The 49 reductions in `open_undo_bugs_tests.rs` and the
-two seed-pinned tests in the fuzz module
-(`finding_14_no_insert_leaves_a_merge_out_of_alignment`,
-`bug_7_a_jump_is_n_single_steps`) all run as regression guards on every CI run.
-A new red test still goes in `#[ignore]`d, and the `#[ignore]` is deleted when
-its bug is fixed.
+**Minimizing a failure.** `fuzz_shrink` (`fuzz_shrink_tests.rs`) records a run's
+move stream and runs signature-matched ddmin over it: remove a chunk, replay the
+rest through the same engine and oracles, keep the candidate only if it still
+fails THE SAME WAY. A move names everything by what survives a reload (lines by
+id, shots by uuid, stations by Station ID plus the slot's line, closures by
+id), so a move whose target was shrunk away is skipped, not fatal.
 
 ```bash
-# libtest takes several filters and ORs them; a shell-regex filter matches
-# nothing, since cargo's own filter is a plain substring.
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib -- open_undo_bugs finding_14 bug_7
+STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_shrink -- --ignored --nocapture
+
+STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_replay -- --ignored --nocapture
 ```
 
-## The metamorphic gate (Rust tier)
+`SHRINK=<seed>` records and shrinks that seed under the same knobs the sweeps
+read (so a seed is shrunk under exactly the environment that found it),
+`SHRINK=<path.json>` shrinks a trace file further, `SHRINK_TARGET` names the
+failure to keep, `SHRINK_OUT` picks where the minimized trace goes,
+`SHRINK_PROBES` caps the probe budget.
 
-`src-tauri/crates/core/src/core/state/metamorphic_undo_tests.rs` asks a question the
+**Regression guards.** `open_undo_bugs_tests.rs` holds a reduction of every
+#413 finding, #469 and #557 whose user-visible property still applies,
+rewritten on the changeset engine, and none is `#[ignore]`d. The cases that
+pinned deleted machinery (gauge pairs, the old datum undo arm, line offsets as
+stored values, per-line stored `created_at`) are retired with their reasons in
+the module. `undo_pipeline_tests.rs` and `undo_after_reopen_tests.rs` cover the
+pipeline and the dropped-history banner; `undo_size_gate_tests.rs` the
+pipeline's share of each entry.
+
+### The metamorphic gate
+
+`src-tauri/crates/core/src/core/state/metamorphic_undo_tests.rs` asks what the
 roundtrip fuzzer structurally cannot: do two DIFFERENT ways of asking for the
-same edit agree? The roundtrip oracle compares a state against itself at an
-earlier moment, so a defect that is faithfully undone is invisible to it - and
-the delete/split family is full of places where that can happen, because each
-entry point is its own hand-written implementation of an operation another entry
-point also implements.
-
-It builds one project, saves it, loads it into TWO `AppState`s (which is what
-makes a strict comparison possible at all - `Shot::uuid` is a v4 uuid, so two
-independently-built projects share no identity), drives each down one route, and
-compares them on five oracles: the roundtrip fuzzer's four STATE oracles,
-re-used as free functions so the two engines cannot disagree about what a
-difference is, plus the id ALLOCATORS. (The fuzzer's fifth, entry content, is
-not among them: it compares one `AppState`'s stacks against what that same app
-said earlier, so there is no second route to compare it across.)
+same edit agree? It builds one survey, saves it as a v2 file and opens it into
+two `AppState`s (asserting they start equal, which also checks that the loader
+is a function of the file), drives each down one route, and compares the
+canonical survey, the integrity verdict, the Computed View and the id
+allocators - on the results, and again after both are fully unwound, where
+each unwound twin must be its own starting state. A failed batch must be a
+strict no-op while the same commands run singly apply up to the failure. The
+one documented divergence is the atomic range delete across a junction (#413
+finding 22, resolved as intended).
 
 ```bash
-# The gate. Runs with the default suite; ~11 s.
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib metamorphic
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib metamorphic
 
-# The sweep, and the tool for re-choosing the metamorphic GATE_SEEDS.
 STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
   cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib metamorphic_fuzz -- --ignored --nocapture
@@ -241,72 +162,52 @@ STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
 | `STALAGMIGHT_RUST_META_CLOSURES` | put a real loop closure in the base project |
 | `STALAGMIGHT_RUST_META_VERBOSE` | print every divergence, not just the seed summary |
 
-Seven pairs, and every one of them is promised somewhere - two in the code's own
-doc comments, in the word "generalizes". `a-failed-batch-is-a-no-op` is the odd
-one out and asserts a DIFFERENCE: a failed batch must be a strict no-op while
-the same commands run singly apply up to the failure.
+### The file-format gate
 
-Every pair is checked twice - on the states the two routes produce, and on the
-states they UNWIND to. The second is where undo's per-entry-point special cases
-live. It compares the two unwound twins to each other rather than to the
-baseline, because findings 1, 2, 3 and 5 are all "an unwind does not return to
-where it started"; the baseline distance is measured and printed instead of
-asserted, so a regression in it shows up in the summary diff without being a
-false failure today.
+`src-tauri/crates/core/src/core/state/format_property_tests.rs` checks the file
+at the AppState level; the codec's own properties are the persistence crate's
+`stalx_v2/format_v2_*_tests.rs` (round trip, canonical form, gating, hostile
+input, limits, modes, diff locality, salvage, crash) and are not duplicated.
 
-It found finding 22 on its first run. The classified-hit ids it prints follow
-the same delete-when-fixed contract the roundtrip classifiers do, and `EXPLAINS`
-is empty now: its last entry,
-`observation-split-routes-disagree-on-station-comment-keys`, was triaged out as
-this engine's own sort-before-mask rather than a defect in either route (see
-`resort_set_like`), so nothing is explained away any more.
-
-## The file-format gate (Rust tier)
-
-`src-tauri/crates/core/src/core/state/format_property_tests.rs` is the only thing that
-looks at the `.stalx` itself. Byte-comparison is the wrong instrument for a
-SQLite database (page allocation, freelists, the change counter), so the
-comparison is on the database's LOGICAL content: every user table, every row,
-sorted, with the save's own wall clock masked by value shape.
+- save, open fresh, save: three generations of identical BYTES, no mask; a
+  re-save of an unchanged project rewrites the same bytes;
+- the open is a function of the file (several opens give the same survey,
+  verdict, Computed View, allocators and history);
+- the guard: a same-size flip, a truncation, another valid project or a delete
+  refuses the plain save and the local-only save with `EXTERNALLY_MODIFIED`;
+  Overwrite works; a touch or a same-bytes rewrite is no change;
+- unknown content: tier 2 survives a local-only save, an edit and a save
+  verbatim; tier 3 is dropped; tier 1 opens read-only (edit, undo and save
+  refused, the local-only save works and does not rewrite the body);
+- legacy degradations (no gauge columns, an ancient `user_version`,
+  disagreeing version markers, no undo tables, no station names or ids) open
+  through the frozen reader, and the first save upgrades them to a v2 file that
+  reopens as the same survey.
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib format_
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib format_
 
 STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
   cargo test --manifest-path src-tauri/Cargo.toml \
   -p stalagmight-core --lib format_property_sweep -- --ignored --nocapture
 ```
 
-Three properties: save -> load -> save is a fixpoint (finding 23, fixed - the
-classifier is deleted and the check records zero classified hits); the loader is
-a function of the file (four loads per seed, green); and the
-documented legacy fallbacks work, tested by writing a current file and
-degrading it with SQL - dropping the gauge columns `read.rs`'s
-`has_gauge_columns` probe expects to be missing, winding `PRAGMA user_version`
-back, desynchronising the two version markers, and dropping the undo tables.
-No fixture is involved: every degraded file is built from a fresh one.
+### The crash-timing gate
 
-The fixpoint property still does not assert that the drift settles - and there
-is no drift left to settle: the re-roll that made "settles after one cycle" hold
-four times and fail four over eight gate runs was root-caused to a `HashMap` in
-`UndoData::previous_offsets`, which now serializes in key order, so no
-generation-1-to-2 pair differs at all. What it asserts is that no save/load
-cycle changes ANYTHING in the file's logical content: finding 23 is fixed,
-`is_finding_23` is deleted, and the "except bounded float dust" clause is gone.
-
-## The crash-timing gate (Rust tier)
-
-`src-tauri/crates/core/src/core/state/crash_property_tests.rs` tests the save pipeline's
-central promise - "a temp file with atomic rename to prevent data loss on crash
-or power failure" ([Saving](saving.md)) - by simulating a kill at each of its
-boundaries. Nothing else does: the file-format engine above is the only other
-thing that looks at a `.stalx`, and it only ever looks at files a save
-FINISHED writing.
+`src-tauri/crates/core/src/core/state/crash_property_tests.rs` tests the save's
+central promise ([Saving](saving.md#atomic-save-temp-file--rename)) by building
+the exact files a kill at each step would leave, rather than racing a signal:
+the destination alone, the temp torn at six cut points, the whole temp before
+the rename, the renamed file; and the legacy upgrade interrupted at each step
+(before the backup, the copy taken, the sidecars moved, the temp written,
+renamed), on a clean original and on one an old build left with a hot journal.
+Oracles: no panic; the destination opens as EXACTLY the old or the new survey;
+the next save succeeds and leaves no `.tmp`; a torn temp never decodes and is
+never offered by the Recovery dialog, a complete one is offered and restores as
+the interrupted save; never a JSON file beside an armed journal or a WAL.
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib crash_property
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib crash_property
 
 STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
   STALAGMIGHT_RUST_CRASH_EXTRA=12 \
@@ -314,44 +215,22 @@ STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
   -p stalagmight-core --lib crash_property_sweep -- --ignored --nocapture
 ```
 
-The crash is SIMULATED by constructing the exact files a kill would leave -
-a truncated `<stem>.stalx.tmp` at six byte prefixes, a complete one waiting for
-a rename that never came, one caught mid-transaction with its hot rollback
-journal, the post-rename states, and a destination caught mid-transaction -
-rather than by racing a signal. `rename(2)` is atomic and the temp is a private
-file, so the reachable set is small, enumerable and copyable, which is what
-makes this deterministic and CI-fast. Both reference files are written by the
-real pipeline.
+`an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole` is an
+`#[ignore]`d known bug: an upgrade killed between its sidecar move and the
+rename leaves a hot-journal original without its journal.
 
-The oracle: no panic, the destination is EXACTLY the old file or EXACTLY the
-new one (never a blend, and the engine names which it must be, because every
-pre-rename state leaves the destination byte-intact), it opens, and it can be
-saved again leaving no staging file behind. That last step is what walks the
-next save into the orphaned-journal hazard `project_io.rs:846` creates: the
-leftover-temp cleanup removes the temp but not its `-journal`, so the next save
-builds a fresh temp database at that name straight on top of a hot journal.
-That one is measured benign - the save succeeds and SQLite discards the stale
-journal, so it does not accumulate - and the engine fails if anything disarms
-the hazard before the recovery save reaches it.
+### The adversarial gate
 
-Green over 60 seeds / 720 states. The one thing it measures rather than
-asserts is what a TORN temp does when opened directly (the recovery UI lists
-`.tmp` files as restore candidates; since #720 `restore_from_backup` refuses
-one that does not open as a project, and before that it validated nothing):
-306 refused, 11-13 loaded as the interrupted save, 41-43 loaded with
-the survey intact and the undo history gone. That last split is the one number
-that moves between runs, and it moves for finding 21's reason - `HashMap` order
-in the writer decides which row a fixed byte offset cuts through. The 306 does
-not move, and neither does any total.
-
-## The adversarial gate (Rust tier)
-
-`src-tauri/crates/core/src/core/state/adversarial_tests.rs` fuzzes the command layer's
-VALIDATION, which every other generator here avoids by construction.
+`src-tauri/crates/core/src/core/state/adversarial_tests.rs` fuzzes the command
+layer's VALIDATION with hostile ids, slot indices, floats, strings and shots
+over 26 move kinds (the recipes and the topology commands included, and a
+`Batch` whose second sub-command is hostile). Three invariants: a rejected
+command is a PERFECT no-op on every oracle, the unsaved-changes flag included;
+an accepted command leaves a valid survey; no command ever panics (every move
+runs inside `catch_unwind`, the panic site recorded by a hook).
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib adversarial
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib adversarial
 
 STALAGMIGHT_RUST_ADV_SEEDS=200 STALAGMIGHT_RUST_ADV_MOVES=400 \
   STALAGMIGHT_RUST_ADV_CLOSURES=1 \
@@ -359,28 +238,19 @@ STALAGMIGHT_RUST_ADV_SEEDS=200 STALAGMIGHT_RUST_ADV_MOVES=400 \
   -p stalagmight-core --lib adversarial_sweep -- --ignored --nocapture
 ```
 
-Two invariants: a rejected command is a PERFECT no-op (all five oracles, not
-just the stacks), and no command ever panics. The second is why every move runs
-inside `catch_unwind` - and why the classifier matches a panic's LOCATION
-rather than its message, since "attempt to add with overflow" says nothing
-about where and a text matcher would swallow every future overflow anywhere in
-the app.
+### The concurrency gate
 
-Draws are weighted towards the hand-written `execute_*` entry points, which do
-their own argument checking after taking the project lock. Measured at 60 seeds
-x 300 moves: 10 696 calls, 9 331 rejected, zero no-op violations.
-
-## The concurrency gate (Rust tier)
-
-`src-tauri/crates/core/src/core/state/concurrency_tests.rs` drives ONE `AppState` from
-several threads. `AppState`'s `command_lock` exists to serialize
-execute/undo/redo, and [Undo/Redo](undo-redo.md) documents a lock ordering
-discipline underneath it; nothing exercised either, because every other engine
-here is single-threaded.
+`src-tauri/crates/core/src/core/state/concurrency_tests.rs` drives ONE
+`AppState` from several threads, the paths that skip `command_lock` included
+(display toggles, which are local-only durable saves; full loads; the reads),
+plus saves, opens, jumps and the derived views. Oracles: liveness (a whole-run
+deadline plus a no-progress window), no panic, no poisoned mutex (`project`,
+`file`, `undo_stack`, `derived`, `command_lock`), a coherent derived cache (the
+memoised views equal a fresh computation), a guard that describes the file on
+disk, and a whole history that steps end to end afterwards.
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib concurrency
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib concurrency
 
 STALAGMIGHT_RUST_CONC_SEEDS=40 STALAGMIGHT_RUST_CONC_THREADS=8 \
   STALAGMIGHT_RUST_CONC_OPS=2000 \
@@ -388,41 +258,125 @@ STALAGMIGHT_RUST_CONC_SEEDS=40 STALAGMIGHT_RUST_CONC_THREADS=8 \
   -p stalagmight-core --lib concurrency_soak -- --ignored --nocapture
 ```
 
-Inputs are seeded per thread so a failing run replays in what each thread
-ASKED for; the interleaving is not reproducible and no assertion depends on it.
-The four oracles are liveness (a whole-run deadline plus a no-progress window),
-no panic, no poisoned mutex, and a post-run consistency walk.
+Two regression tests pin races the soak found:
+`a_display_toggle_racing_undo_never_writes_a_history_that_does_not_fit_the_body`
+(`STALAGMIGHT_RUST_CONC_ROUNDS`, default 40) and
+`a_full_load_racing_edits_never_leaves_a_stale_derived_cache`
+(`STALAGMIGHT_RUST_CONC_LOADS`, default 300; 20000 reproduces the race on a
+build without the fix). The deadline is generous on purpose: Windows and macOS
+hand mutexes over differently from Linux. Poll `JoinHandle::is_finished` rather
+than a progress counter, which reads a worker that panicked as one that is
+stuck.
 
-The deadline is generous on purpose - Windows and macOS hand mutexes over
-differently from Linux and a tight bound turns a slow CI box into a bug report.
-A real deadlock never finishes; the gate finishes in about two seconds.
+### The multi-datum fuzzer
 
-One trap, recorded because it cost a flaky run: waiting on a progress COUNTER
-reads a worker that panicked as one that is stuck, so a known assert gets
-reported as a deadlock. Poll `JoinHandle::is_finished` instead, and cross-check
-that every unwound worker was seen by the panic hook.
+`src-tauri/crates/core/src/core/state/multi_datum_fuzz_tests.rs` (with
+`multi_datum_steps_fuzz.rs`) runs chains of datum commands, merges of placed
+pieces, detaches, splits, moves and reopens, and checks plan 4.3 after every
+step: every placement datum exactly at `gps_to_local(GPS, frame) + correction`,
+no correction on a fix and none below the epsilon, a frame change that
+translates every station by one vector, undo, redo and reopen exact to the bit.
+The 13 pinned replay strings run in the gate.
 
-## Corpus guidance, and why it is not wired into anything
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib multi_datum
+
+STALAGMIGHT_DATUM_FUZZ_SEEDS=2000 STALAGMIGHT_DATUM_FUZZ_STEPS=30 \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  datum_command_chains_keep_every_invariant -- --nocapture
+
+STALAGMIGHT_DATUM_FUZZ_REPLAY="seed;op;op;..." \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  replay_a_datum_chain -- --ignored --nocapture
+```
+
+### Migration and the v2 decoder
+
+The legacy SQLite format is read only through the frozen 0.6.0 reader
+(`crates/legacy`), and these suites hold the conversion to the 0.6.0 app's own
+answers:
+
+| Suite (persistence crate unless noted) | What |
+|---|---|
+| `migrate/migrate_property_tests.rs` | 48 generated legacy projects (`test_support::random_case`, written by the legacy crate's `writer`): total station map, every slot raw and Computed View within tolerance or in a declared class, measurements bit-identical, `save(migrate(x))` canonical and reopen-identical. `STALAGMIGHT_RUST_MIGRATE_SEEDS` / `_FIRST_SEED` |
+| `migrate/migrate_v2_roundtrip_tests.rs`, `migrate_fixture_tests.rs` | the same seeds and the two tracked fixtures through encode, decode and the fixpoint |
+| `migrate/wire_equivalence_tests.rs` | the IPC payloads of the migrated project against 0.6.0's own, field by field, every difference in a named class; `wire_equivalence_sweep` with `STALAGMIGHT_RUST_WIRE_SEEDS` prints the classes |
+| `migrate/migrate_fuzz_tests.rs` | hostile legacy projects (merge chains and cycles, merges onto closure ends, several datums per piece and per merged station, hand moves, drifted offsets, odd names, unknown tables and columns, persisted undo rows, extreme values, both 0.6.0 file shapes): the migration succeeds or refuses with a typed reason, then the property gate's checks, the legacy bytes refused by the v2 decoder, the v2 file a byte fixpoint, the wire classes, and a `legacy_origin` undo walk. `migration_fuzz_window` (CI), `migration_fuzz_wide` (2,000 seeds), `migration_fuzz_explain` (one seed; `STALAGMIGHT_FUZZ_NO_EXTREMES`, `_HUGE`, `_DEGENERATE_LSQ` switch the pinned degenerate cases on) |
+| `stalx_v2/decode_fuzz_tests.rs` | 23 mutation operators on encoder output (truncation at every row boundary, duplicate and reordered members, NaN and out-of-range numbers, deep nesting, huge strings, versions, `requires`, bad uuids, dangling references, forest violations, BOM, history floods): probe, sniff, decode and salvage never panic and finish in bounded time, every refusal is typed, anything accepted validates and re-encodes canonically. `decode_fuzz_window` (CI), `decode_fuzz_wide` |
+| core `state/transition_fuzz_tests.rs` | AppState-level saving fuzz from every origin (v2, v2 linked, v2 with unknown members, the tracked legacy fixtures, a new project): commands, undo and redo mixed with save and reopen (a byte fixpoint, the stacks redo and undo after it), display toggles and sync-state changes (only `local` changes on disk), external changes (refused, then overwritten), Save a Copy; `read_only_files_are_never_written`. `saving_fuzz_window` (CI), `saving_fuzz_wide` |
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib migrate
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib decode_fuzz
+
+STALAGMIGHT_FUZZ_SEED_START=0 STALAGMIGHT_FUZZ_SEEDS=2000 STALAGMIGHT_FUZZ_THREADS=3 \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib \
+  migration_fuzz_wide -- --ignored --nocapture
+```
+
+**Corpus modes (real files).** `migrate_corpus` (persistence),
+`migration_fuzz_corpus` (persistence) and `transition_fuzz_corpus` (core) run
+on every `*.stalx` under `STALAGMIGHT_MIGRATION_CORPUS=<dir>`, a folder of real
+old-format files that never leaves the machine it is on. They open each file
+as the app does, check the migration against the frozen reader, run
+`STALAGMIGHT_FUZZ_WALKS` seeded edit sequences with undo-all / redo-all
+exactness and save/reopen fixpoints, and print ONLY file-name hashes, counts,
+classes and seed repros - never a file name, a station name, a coordinate or a
+failure's text, which can quote the file. `STALAGMIGHT_CORPUS_FILE=<hash>`
+reruns one file. All three are `#[ignore]`d and need the env var.
+
+### The #706 file-churn fuzz (app crate)
+
+`src-tauri/src/commands/mmap_fault_fuzz_tests.rs` churns the open project's
+file under the app: edit, save, Save As, reopen, close, exports, restore,
+repair, salvage, merge, create, delete, list backups, and external unlink,
+rename, replace and truncate. The SQLite mmap hazard it was written for (#706)
+does not exist on version 2 (no live handle, no mapping), so its hazard mode
+(`FZ706_HAZARD=1`) is now expected to pass; its oracles are the #720 restore
+contract, an in-memory survey that never changes across a step that must not
+touch it (`new-drift`), and a save that says ok holding the survey
+(`new-overwrite`). Knobs `FZ706_FIRST`, `FZ706_SEEDS`, `FZ706_STEPS`,
+`FZ706_FOCUS`, `FZ706_MUTE` keep their names.
+
+### The characterisation goldens (K)
+
+`src-tauri/crates/core/src/core/state/characterization_dump_tests.rs` runs 18
+synthetic scenarios (junction merges, loop and snap closures, two entrances,
+free-piece moves, reverses, Split Line Here, combines, deletes at junctions and
+of ranges, unmerges, frame changes, Add .stalx, a 1,000-cell paste, renames,
+credit edits) through `AppState` commands and dumps after every step the
+command result, the history items, the per-slot stations, the Computed View
+and report, closures and datum roles, the wire project, the warnings, every
+preview, and the final exports. `every_characterisation_scenario_does_what_it_expects`
+runs them as a gate (a step that does not succeed or refuse as 0.6.0 did, a
+panic, or a full undo/redo round trip that does not come back identical). The
+dump itself is `#[ignore]`d:
+
+```bash
+STALAGMIGHT_CHAR_OUT=<dir> \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  characterization_dump -- --ignored --nocapture
+
+node scripts/dev/compare-characterization.mjs <old-dir> <new-dir> --summary --canon
+```
+
+`v0` is the dump of the 0.6.0 model, `v1` that of the station-graph core.
+`--canon` compares what the switch re-derives in canonical form (merge pairs as
+sets, Ariane ids renumbered); every remaining difference must be a declared
+change (plan 12.2 and its Deviations sections). `STALAGMIGHT_CHAR_ONLY=name,...`
+limits the run to some scenarios.
+
+### Corpus guidance, and why it is not wired into anything
 
 `fuzz_corpus_sweep` (`#[ignore]`d) measures whether remembering the shapes a
-sweep reaches lets later runs reach more of them. `topology_signature` is a
-twelve-feature integer fingerprint of a project's shape, and a corpus entry is
-just `(seed, move-count)` - which is all it needs to be, since every run in
-that module is a pure function of its seed.
-
-**The answer is no.** At 80 runs x 60 moves each way: unguided reaches 78
-distinct signatures, guided 73, with identical classifier id sets. 78 of 80
-unguided runs are already distinct, so the corpus admits nearly everything and
-guidance just spends half the budget replaying. The mechanism is kept, and
-deliberately not wired into any gate; the test's own doc comment carries the
-numbers and the two changes that would make it pay.
-
-**The second answer is also no.** One of those two changes - admission keyed on
-a RARE structural bit rather than on whole-signature novelty - was then measured
-in full: `fuzz_rarity_sweep` and `fuzz_rarity_carryover`
-(`src-tauri/crates/core/src/core/state/fuzz_rarity_tests.rs`, both `#[ignore]`d), six
-repetitions of 80 runs x 60 moves per arm across four admission predicates and
-two regimes.
+sweep reaches lets later runs reach more of them; `fuzz_rarity_sweep` and
+`fuzz_rarity_carryover` (`src-tauri/crates/core/src/core/state/fuzz_rarity_tests.rs`,
+both `#[ignore]`d) measured admission keyed on a RARE structural bit. On the old
+engine both answers were no: guidance reached nothing unguided runs did not,
+and counted in wall time it was no faster, because a continuation inherits a
+bigger project and every oracle canonicalizes the whole project. The mechanisms
+are kept and deliberately not wired into a gate; the module docs carry the
+numbers.
 
 ```bash
 STALAGMIGHT_RUST_FUZZ_THREADS=8 STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET=80 \
@@ -431,124 +385,22 @@ STALAGMIGHT_RUST_FUZZ_THREADS=8 STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET=80 \
   -p stalagmight-core --lib fuzz_rarity_sweep -- --ignored --nocapture
 ```
 
-Three things came out of it, and the third is the one to remember:
-
-- Keyed on a finished run's END state, admission is barely faithful: a corpus
-  entry replays `(seed, n)` as n mutations, the admitted run had also undone and
-  redone, and 8 of 9 entries (plain regime) deliver a state carrying none of the
-  bits they were admitted for. `fuzz_rarity_carryover` measures exactly that.
-- Keyed on the prologue's own trajectory, which is exact, guidance reaches the
-  regime's rare classified findings 41% sooner **counted in runs**, 17% sooner
-  **counted in moves**, and no sooner at all **counted in wall time**.
-- A run is not a unit of compute. A continuation inherits a bigger project, so it
-  draws more moves, and each move costs more because every oracle canonicalizes
-  the whole project (2.87 ms per move against 2.34). Score a fuzzing heuristic
-  per run and you pay it for being expensive; the first experiment handed
-  guidance an 80% compute subsidy without noticing.
-
-Both write-ups stay next to each other; neither mechanism is wired into a gate.
-
-**Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
-propagating it, so one bad seed does not hide the twenty after it, and prints
-which seeds are clean plus what the rest failed on. Re-run it as findings are
-fixed and widen `GATE_SEEDS`:
+**Config isolation.** `AppState::new()` LOADS the global config and every save
+reaches `note_recent_project` -> `Config::save()`, which WRITES it.
+`Config::config_path()` resolves PER THREAD under test (see
+[Config isolation](#config-isolation) below), so every fuzz and property module
+is off the real `~/.config/stalagmight/config.toml` whether it says so or not;
+they still open with `let _config = crate::test_helpers::isolated_config();`
+because that gives the whole test ONE dir whose path it can name. To check that
+nothing resolves the config through the ENVIRONMENT, point the config dir at a
+temp dir and assert nothing was written:
 
 ```bash
-STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
-  cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
+XDG_CONFIG_HOME=$(mktemp -d) \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  -- core::state::metamorphic_undo_tests
+# then: find "$XDG_CONFIG_HOME" -type f   -> must be empty
 ```
-
-`COMBINED_SEEDS` is chosen the same way, from the same tool under `COMBINED=1`,
-with one extra criterion: between them the pair has to exercise the regime's
-three structural properties (it trimmed, it crossed more than once, it jumped).
-The old `COMBINED_CLASSIFIED` id-set pin is inverted - the gate now asserts the
-regime reaches nothing.
-
-**Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
-happens, including the line the classifier writes when a hit is explained - which
-matters, because a classified hit RESYNCS the model and can arm a cascade, so a
-later failure that looks spontaneous usually is not (that is exactly how finding
-15 came to be filed as its own defect). Tracing pins the sweeps to ONE worker
-unless `STALAGMIGHT_RUST_FUZZ_THREADS` says otherwise: a dozen seeds
-interleaving their moves into one stdout is not a move log.
-`STALAGMIGHT_RUST_FUZZ_VERBOSE=1` prints the whole panic payload per seed in the
-survey, and every differing path rather than the first eight.
-
-The app also has assertions of its own - `debug_assert_merge_alignment` is
-`#[cfg(test)]`, so it exists ONLY in this tier. The fuzzer catches that one
-specifically, checks the message is that assert at one of the call sites finding
-14 names, records it as a classified hit and stops the run (the unwind poisoned
-the project mutex, so nothing after it would be measuring the app). Any other
-panic is re-raised verbatim.
-
-Runs are deterministic: the same seed replays identically, forever, on every
-platform (integer-only PRNG, and no float is used to make a decision).
-
-**Minimizing a failure.** A failing seed is a repro in the sense that it fails
-and in no other sense - nobody reads 200 moves and says which three are the bug.
-`fuzz_shrink` (`fuzz_shrink_tests.rs`) records the run's move stream, then runs
-SIGNATURE-MATCHED ddmin over it: remove a chunk, replay the rest through the same
-engine and the same four oracles, keep the candidate only if it still fails THE
-SAME WAY, halve the chunk when nothing more can go.
-
-```bash
-# Record seed 1 under divergence mode, shrink for one named finding.
-STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
-  STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
-  STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \
-  cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_shrink -- --ignored --nocapture
-
-# Replay the minimized trace it wrote, and ASSERT the same failure comes back.
-STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
-  cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib fuzz_replay -- --ignored --nocapture
-```
-
-The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
-`PERSISTENCE`, `JUMPS`, `CLOSURES`, `DIVERGENCE`, `CLOSURE_SHAPES`, `CROSSINGS`,
-`HORIZON`, `CONFIG`, `COMBINED`), so a seed that failed under a sweep is shrunk
-under exactly the environment that found it. `SHRINK_TARGET` is optional - the default is whatever
-failure the recorded run produced. `SHRINK=<path.json>` shrinks a trace file
-further instead of a seed, `SHRINK_OUT` picks where the minimized trace is
-written (default: a temp path, printed at the end), and `SHRINK_PROBES` caps the
-probe budget (default 2000).
-
-| what is being shrunk | what "the same failure" means |
-|---|---|
-| a KNOWN finding (the run completes, the hit is counted) | the finding id is in the candidate's `classified hits` |
-| anything else (the run panics) | `failure_signature` matches: the headline plus the first differing snapshot path, every run of digits collapsed to `#` |
-
-Signature matching is the whole discipline: a candidate that fails DIFFERENTLY -
-another finding, another panic, or not at all - is rejected, so the minimum is a
-repro of the failure that was asked about rather than of whatever the search
-drifted onto. Measured, on this branch:
-
-| repro | before | after | probes |
-|---|---|---|---|
-| `finding-8-stale-id-deletes-the-wrong-shot` (divergence, seed 1 x 200) | 199 moves | 0 moves - the constructed prologue and the closing walk ARE the repro | 15 |
-| the open seed-10 observation (persistence, `CROSSINGS=3`, seed 10 x 60) | 59 moves | 3 moves | 105 |
-| an unclassified `section_offsets` panic (persistence, `CROSSINGS=3`, seed 1 x 120) | 122 moves | 5 moves | 98 |
-
-Two things the mechanism guarantees, and one it does not:
-
-- A move whose target was shrunk away is SKIPPED with a note rather than fatal
-  (the trace names shots by `Shot::uuid`, which survives both the loader's
-  renumbering and the allocator; lines and closures by id, mapped through what
-  each move created). Replay has to be a total function or a candidate that kills
-  the harness looks exactly like one that reproduces the bug.
-- Probes in a ddmin round run in PARALLEL on the same worker pool the sweeps use
-  and the first reproducing complement IN INDEX ORDER is accepted, so the result
-  does not depend on `STALAGMIGHT_RUST_FUZZ_THREADS`.
-- It does not shrink the PLAN or the values inside a move. A mode is on or off,
-  and the shot data a move carries is replayed verbatim.
-
-Seven tests gate the machinery on every CI run: recording does not change what a
-run does, a FULL trace replays to exactly the run it was recorded from, the
-ddmin schedule reaches the known minimum of a synthetic predicate, the shrinker
-minimizes an injected failure, and three signature-matching tests pin what "the
-same failure" means.
 
 ## Commands
 
@@ -628,14 +480,23 @@ a featureless run filters them out. The telemetry member's `build.rs` also
 #### Running one crate
 
 The backend is a cargo workspace: the `stalagmight` app package at `src-tauri/`
-plus eight members under `src-tauri/crates/` (`stalagmight-models`,
-`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`, and `stalx-reader`).
+plus ten members under `src-tauri/crates/` (`stalagmight-models`,
+`-telemetry`, `-parsers`, `-legacy`, `-persistence`, `-export`, `-speleodb`,
+`-core`, `stalx-reader`, and the parked `-legacy-fidelity`).
 Select one with `-p` for fast iteration:
 
 ```bash
 # The fuzz / metamorphic / crash / adversarial / concurrency engines all live
 # in stalagmight-core (crates/core/src/core/state/):
 cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo
+
+# The survey model, its changeset engine and the wire projection:
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-models --lib survey::
+
+# The v2 codec and the legacy migration (the legacy crate's test writer is a
+# dev-dependency feature, so nothing has to be passed):
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib stalx_v2
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib migrate
 
 # A member without the telemetry feature needs neither the feature nor
 # TELEMETRY_ENDPOINT:
@@ -1057,6 +918,34 @@ derive station depth from the seeded shot `depth_in`/`depth_out`, even though
 the stored *shots* carry them. Any e2e reading a station `z` or a depth readout
 sees `0` regardless of the seed. Assert that a depth row *renders*; pin the depth
 math in a Rust unit test.
+
+### The mock's junction model
+
+The mock mirrors the station graph the backend now has, and the
+mock-contract test (`src/test/__tests__/mockContract.test.ts`) checks the shape
+as well as the names:
+
+- **Junctions** come from the union of the stored merge pairs: `merged_with` is
+  transitive, a junction's slots share one Station ID, name and comment (the
+  first slot in line order is the representative), and `station_merges` goes
+  out as star pairs from the first slot, with `merged_at = created_at`. There is
+  no fake auto-merge.
+- **Unmerge means detach**: `unmerge_stations` detaches the slot's own line,
+  `unmerge_station_pair` the partner's, and any two slots of one station are a
+  pair. A rename is checked on every line through the junction. Split Line Here
+  records the halves' shared station as a merge.
+- **The shape check**: for every identity-bearing command, each `StationRef`,
+  `closure_id` or `line_id` parameter the Rust command takes must be read by its
+  mock case under the camelCase key, and every mock station literal carries the
+  required `Station` fields with `id` and `merged_with` taken from the junction.
+- **File status hooks**: `__MOCK_SET_EXTERNALLY_MODIFIED__(true)` makes the next
+  saves refuse with `EXTERNALLY_MODIFIED`, `__MOCK_SET_READ_ONLY_REASON__(text)`
+  opens the file read-only, `__MOCK_SET_CONVERSION_NOTICE__(text)` queues a
+  conversion notice, `__MOCK_GET_SAVE_CALLS__()` returns the save calls. The
+  mock answers `save_project_overwriting`, `take_conversion_notice`,
+  `has_unsaved_changes`, `project_read_only_reason`, `resolve_warning` and
+  `unresolve_warning`.
+- The binary load envelope is version 9 (no `line_offsets`).
 
 ### Common mock scenarios
 
@@ -1516,14 +1405,31 @@ raced those three tests before this change and still does. The cure there is a
 config root injected rather than an env var mutated, which is a bigger change
 than #522.
 
+### Project files in tests
+
+A project is a `.stalx` version 2 file, so a test builds its survey with the
+model's construction API (`models::survey` `build.rs`: `add_line`,
+`set_placement`, `push_datum`, `push_closure`, or the commands themselves),
+writes it with `stalx_v2::encode` into a `TempDir`, and opens it through
+`AppState` like the app does. The core's test kits do this
+(`state/topology_kit.rs`, `split_combine_kit.rs`, `stalx_v2_fixtures.rs`,
+`synthetic_stalx_tests.rs`, `robustness_kit.rs`). A file is compared by its
+canonical bytes; nothing needs masking but `modified_at`.
+
+A test that needs an OLD file writes it at run time with the frozen 0.6.0 save
+(`stalagmight-legacy`'s `writer` feature, `write_v18`, both 0.6.0 file shapes),
+or copies a tracked old-format fixture from `e2e/fixtures/` into a temp dir, and
+opens it through the migration. Never commit a generated file.
+
 ### In-memory SQLite
 
 ```rust
 let conn = rusqlite::Connection::open_in_memory()?;
 ```
 
-Used by the tile cache, the `.plnx` dive-plan store, and the project database
-(`src-tauri/crates/persistence/src/persistence/sqlite/open.rs`).
+Used by the tile cache and the `.plnx` dive-plan store. The project file is not
+SQLite any more; only the frozen legacy reader (`crates/legacy`) and the cheap
+legacy link read (`persistence/legacy_link.rs`) open old project files.
 
 ### Fixture files
 
@@ -1555,16 +1461,19 @@ The self-hosted CI runner executes tests as **uid 0 with `CAP_DAC_OVERRIDE`**,
 so a `chmod 0444` directory does *not* produce `EACCES` and a permissions-based
 inducer silently passes. Use uid-independent inducers instead:
 
-- **Generic "cannot save":** point `file_path` at a **missing parent directory**
-  so `Database::open(temp)` fails.
-- **The permission-denied humanization branch:** squat a **directory at the
-  `.stalx.tmp` path** (parent present) so SQLite cannot open it and returns
-  "unable to open database file", which `is_permission_denied` in
-  `core/loading.rs` classifies as permission denied.
+- **Generic "cannot save":** point `file_path` at a **missing parent directory**:
+  the save refuses with `FS_PATH_NOT_FOUND` before it writes anything.
+- **A failing write:** squat a **directory at the `<file>.tmp` path** (parent
+  present): `write_atomic` cannot remove or create its temp, the save fails at
+  its first step, and the file is untouched.
+- **A changed file:** rewrite the project file behind the app (other bytes, or
+  truncate it, or delete it): the guard refuses with `EXTERNALLY_MODIFIED`.
 
-Do not squat the final `.stalx` path: with `path=None` and no open database,
-`save_project` swaps in `next_available_project_path` and the save succeeds
-under a new name.
+A permission-denied test that needs a real `EACCES` (a `0o000` folder) skips
+itself when it can still create a file there, which is what a root runner
+does. Do not squat the final `.stalx` path of a project never written: its
+first implicit save moves to `next_available_project_path` and succeeds under a
+new name.
 
 The three tests that own this path, all in
 `src-tauri/src/commands/command_tests.rs`:
@@ -1575,10 +1484,13 @@ warns and leaves no phantom recent-projects entry), and
 
 ### Registering a new mutation entry point
 
-`MUTATION_ENTRYPOINTS` in `src-tauri/crates/core/src/core/state/tests.rs` is a
-hand-maintained tripwire. Any `execute_*` method that bypasses the generic
-`execute()` must be added there, or the read-only edit-gate test will not cover
-it.
+`MUTATION_ENTRYPOINTS` (in the core `state` test suite; `git grep
+MUTATION_ENTRYPOINTS`) is a hand-maintained tripwire. Any recipe that bypasses
+the generic `execute()` must call `guard_mutation(..)` and be added there, or
+the read-only edit-gate test will not cover it. The recorded hash-tracking
+edits (`track_imported_file`, `track_line_hashes`) are such entry points.
+`speleodb_edit_gate_tests.rs` and `speleodb_session.rs` carry the sibling
+tripwires (every gate site, the slot commits, the BASE advances).
 
 ### Telemetry registry
 
@@ -1648,6 +1560,18 @@ e2e/
 The harness looks for the debug binary under `$CARGO_TARGET_DIR` (default
 `~/.cargo_build`) and refuses stale builds via `.e2e-build-marker`.
 
+On the station graph the harness's oracles are strict across a save and a
+reload: the attribution families for what a save healed or a reload re-derived
+(`SAVE_HEALING_MUTATIONS`, `RELOAD_RESOLVED_GEOMETRY` in
+`e2e/agent/lib/projectSnapshot.ts`) are empty, because a version 2 save never
+heals and a load is pure. `fuzzOracleCore` adds the junction invariants (a line
+passes a Station ID once and names each station once; slots that share an id
+share its name and comment and list exactly each other in `merged_with`; each
+`station_merges` pair is two slots of one station). `fixtures.ts` handles both
+file formats without `node:sqlite`: a legacy fixture is left untouched (the app
+drops a migrated file's history on open), and for a version 2 file its
+`history` member is removed with every other byte kept.
+
 ## Fixtures
 
 Shared between the Rust tests and the E2E tiers, in `e2e/fixtures/` - see
@@ -1658,6 +1582,13 @@ under `e2e-playwright/fixtures/`.
 The real Tauri backend parses these for real under the agent harness and in the
 Rust tests. Playwright's mock does **not** read them - it returns simulated
 line data.
+
+The tracked `.stalx` files there are old-format (SQLite) projects: the
+migration suites, the legacy-origin fuzz modes and the old-fixture journeys read
+them. Always copy one into a temp dir before opening it through `AppState`: the
+first save upgrades it to version 2 (and keeps the original in the app-data
+backups folder). A version 2 file is never a fixture: tests write it at run
+time.
 
 When adding one: prefer real device data (anonymized if needed), or synthetic
 data for a specific edge case, and record what it is for in the fixtures README.

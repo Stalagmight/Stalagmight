@@ -160,7 +160,7 @@ matches its project by the `created_at` instant).
 The format gates pin this: `persistence/stalx_v2/format_v2_canonical_tests.rs`
 and `format_v2_roundtrip_tests.rs` on the codec, and the AppState-level
 file-format gate (`core/state/format_property_tests.rs`, see
-[Testing Recipes](testing-recipes.md#the-file-format-gate-rust-tier)) on save,
+[Testing Recipes](testing-recipes.md#the-file-format-gate)) on save,
 open and save again.
 
 ### Frontend (`saveProject` in `projectSaveActions.ts`)
