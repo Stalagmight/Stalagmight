@@ -126,7 +126,6 @@ mod concurrency_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::print_stdout,
     reason = "a property sweep's summary IS its output, and a failed setup step is the point"
 )]
