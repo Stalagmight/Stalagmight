@@ -19,8 +19,9 @@ fn shot(length: f64) -> ShotData {
     }
 }
 
-/// A one-section config. `length` 0.0 makes a section `create_section` refuses
-/// ("has zero length"), the shape a bad row in any importer produces.
+/// A one-section config whose second shot has `length`. A NaN makes a section
+/// `create_section` refuses; a zero or negative one imports as a 1 mm tie
+/// (#818).
 fn section(index: u32, name: &str, length: f64, placement: ImportPlacement) -> ImportSectionConfig {
     ImportSectionConfig {
         reverse: false,
@@ -93,7 +94,7 @@ fn a_refused_section_costs_only_itself() {
         &state,
         vec![
             section(0, "Good", 5.0, ImportPlacement::Origin),
-            section(1, "Bad", 0.0, ImportPlacement::Origin),
+            section(1, "Bad", f64::NAN, ImportPlacement::Origin),
             section(2, "Also good", 3.0, ImportPlacement::Origin),
         ],
         Vec::new(),
@@ -110,7 +111,7 @@ fn a_refused_section_costs_only_itself() {
     assert_eq!(receipt.shot_count, 4);
     assert_eq!(
         problems(&result),
-        ["Section \"Bad\" was not imported: Shot 2 has zero length"],
+        ["Section \"Bad\" was not imported: Section has a shot with a non-finite (NaN/inf) value"],
         "the refused section gets its own receipt line, apart from the warnings"
     );
     assert!(
@@ -126,7 +127,7 @@ fn a_section_joining_a_refused_one_imports_on_its_own() {
     let result = import(
         &state,
         vec![
-            section(0, "Bad", 0.0, ImportPlacement::Origin),
+            section(0, "Bad", f64::NAN, ImportPlacement::Origin),
             section(
                 1,
                 "Branch",
@@ -154,7 +155,7 @@ fn a_section_joining_a_refused_one_imports_on_its_own() {
     assert_eq!(
         problems(&result),
         [
-            "Section \"Bad\" was not imported: Shot 2 has zero length",
+            "Section \"Bad\" was not imported: Section has a shot with a non-finite (NaN/inf) value",
             "Section \"Branch\" was imported on its own: the section it joins was not imported",
         ]
     );
@@ -225,8 +226,8 @@ fn every_section_refused_fails_and_names_each() {
     let result = import(
         &state,
         vec![
-            section(0, "First bad", 0.0, ImportPlacement::Origin),
-            section(1, "Second bad", -1.0, ImportPlacement::Origin),
+            section(0, "First bad", f64::NAN, ImportPlacement::Origin),
+            section(1, "Second bad", f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
@@ -247,7 +248,7 @@ fn one_undo_removes_a_partial_import_and_redo_restores_it() {
         &state,
         vec![
             section(0, "Good", 5.0, ImportPlacement::Origin),
-            section(1, "Bad", 0.0, ImportPlacement::Origin),
+            section(1, "Bad", f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
@@ -260,22 +261,71 @@ fn one_undo_removes_a_partial_import_and_redo_restores_it() {
 }
 
 #[test]
-fn a_refused_section_names_its_shot_by_position_only() {
-    // The refused section never gets the id `create_section` would have given
-    // it, so "Shot <id>:2" pointed at whichever section landed next.
+fn a_refused_shot_is_named_by_its_position_only() {
+    // `create_section` names a shot it refuses by its position: the section
+    // id it would have had is never assigned (and went to the next section
+    // to land), so "Shot <id>:2" pointed at the wrong section.
+    let state = new_state();
+    let result = state.execute(Command::CreateSection {
+        name: Some("Bad".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![shot(10.0), shot(0.0)],
+    });
+    assert!(!result.success);
+    assert_eq!(result.error.as_deref(), Some("Shot 2 has zero length"));
+}
+
+/// #818: every importer funnels through the import loop, which gives a shot
+/// with no length (zero, or negative after a correction) the coincident-tie
+/// length instead of letting `create_section` refuse its whole section. One
+/// receipt line counts them. A non-finite length is still refused.
+#[test]
+fn a_shot_with_no_length_imports_as_a_coincident_tie() {
     let state = new_state();
     let result = import(
         &state,
         vec![
-            section(0, "Good", 5.0, ImportPlacement::Origin),
-            section(1, "Bad", 0.0, ImportPlacement::Origin),
+            section(0, "Zero", 0.0, ImportPlacement::Origin),
+            section(1, "Negative", -2.0, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
-    assert_eq!(
-        problems(&result)[0],
-        "Section \"Bad\" was not imported: Shot 2 has zero length"
+    assert!(result.success, "{:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(names(&project), ["Zero", "Negative"]);
+    for s in &project.sections {
+        let tie = s.shots[1].length - crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
+        assert!(tie.abs() < 1e-12, "{}", s.shots[1].length);
+    }
+    let receipt = receipt(&result);
+    assert!(problems(&result).is_empty(), "{:?}", problems(&result));
+    assert!(
+        receipt
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("2 shots with no length were given a negligible")),
+        "{:?}",
+        receipt.warnings
     );
+}
+
+/// The DMP wizard's all-or-nothing route gets the same tie: a MNemo shot of
+/// length 0 no longer fails the whole wizard import (#818).
+#[test]
+fn the_all_or_nothing_route_ties_a_shot_with_no_length() {
+    let state = new_state();
+    let result = state.execute_import_sections_all_or_nothing(
+        vec![section(0, "Zero", 0.0, ImportPlacement::Origin)],
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(names(&state.get_project_state().unwrap()), ["Zero"]);
 }
 
 #[test]
@@ -325,7 +375,7 @@ fn a_partial_import_records_no_section_hashes() {
     let result = state.execute_import_sections(
         vec![
             section(0, "Good", 5.0, ImportPlacement::Origin),
-            section(1, "Bad", 0.0, ImportPlacement::Origin),
+            section(1, "Bad", f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
         None,
@@ -346,7 +396,7 @@ fn a_partial_import_records_no_section_hashes() {
 #[test]
 fn the_all_or_nothing_route_rolls_back_on_a_refused_or_unconnected_section() {
     for bad in [
-        section(1, "Bad", 0.0, ImportPlacement::Origin),
+        section(1, "Bad", f64::NAN, ImportPlacement::Origin),
         section(
             1,
             "Bad",
@@ -526,5 +576,25 @@ fn the_unconnected_warning_sanitises_the_section_name() {
         message.chars().count() < 1_000,
         "{} chars",
         message.chars().count()
+    );
+}
+
+/// A tie in a section that is then refused for another reason (here a NaN)
+/// never landed, so the receipt does not count it.
+#[test]
+fn a_refused_sections_ties_are_not_counted() {
+    let state = new_state();
+    let mut bad = section(0, "Bad", 0.0, ImportPlacement::Origin);
+    bad.shots.push(shot(f64::NAN));
+    let result = import(
+        &state,
+        vec![bad, section(1, "Good", 5.0, ImportPlacement::Origin)],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let warnings = &receipt(&result).warnings;
+    assert!(
+        !warnings.iter().any(|w| w.contains("with no length")),
+        "{warnings:?}"
     );
 }

@@ -155,6 +155,28 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
     expect(screen.getByText('1 survey - 1 shot - Naharon')).toBeInTheDocument();
   });
 
+  // #818: a shot with no length lands (as a 1 mm tie), so only the excluded
+  // shots come off the count; the zero-length ones are not subtracted.
+  it('counts Compass shots with no length as landing', () => {
+    dialogData.compassFile = {
+      survey_count: 2,
+      shot_count: 5,
+      excluded_shot_count: 1,
+      invalid_shot_counts: {
+        non_excluded_corrected: 2,
+        non_excluded_uncorrected: 2,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
+      cave_name: '',
+    };
+    dialogData.importType = 'compass';
+
+    render(<NewProjectForImportDialog />);
+
+    expect(screen.getByText('2 surveys - 4 shots')).toBeInTheDocument();
+  });
+
   it('pluralizes the Compass summary (surveys_other) with no cave name', () => {
     dialogData.compassFile = {
       survey_count: 2,
