@@ -709,3 +709,83 @@ fn the_entrance_answer_round_trips_through_serde_and_is_absent_by_default() {
     assert_eq!(back[1].entrance, Some(true));
     assert_eq!(back[0].entrance, None);
 }
+
+// ----- datum identity across a command (today's `datum_placement_tests`) ---
+
+#[test]
+fn removing_a_placement_datum_whose_twin_fix_shares_its_gps_places_the_fix() {
+    // E is the frame. S is placed at S:0 by GPS `twin`, and S:2 carries a fix
+    // with the very same GPS (40 m off). Removing the placement datum
+    // promotes the twin fix, which puts S:2 on that GPS.
+    let mut p = project();
+    let e = free_line(&mut p, [0.0, 0.0], run(0.0, 1, 20.0));
+    ok(p.set_datum_at(StationRef::new(e, 0), origin(), None));
+    let s = free_line(&mut p, [500.0, 0.0], run(0.0, 2, 20.0));
+    let twin = gps_at(100.0, 0.0);
+    ok(p.set_datum_at(StationRef::new(s, 0), twin, None));
+    ok(p.set_datum_at(StationRef::new(s, 2), twin, None));
+    assert_eq!(roles(&p)[2], Some(DatumRole::GpsFix));
+    let out = ok(p.remove_datum(1));
+    assert_valid(&p);
+    assert_eq!(out.anchors.placed_on_gps, vec![1]);
+    near(
+        xy(&p, at(&p, s, 2)),
+        gps_local(&p, &twin),
+        1e-9,
+        "S:2 on the twin GPS",
+    );
+}
+
+#[test]
+fn a_frame_gps_copied_from_a_fix_on_its_spot_moves_every_piece_once() {
+    // A is the frame on the origin. P is a piece of its own placed at P:0 by a
+    // copy of the frame's GPS; Q hangs off P:0 (a junction) with a fix,
+    // attached via Q, 30 m east of the survey (two placed pieces merged
+    // leave this). The frame then takes the fix's GPS: the frame correction
+    // alone moves P and Q 30 m west, once.
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(0.0, 2, 20.0));
+    ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
+    let pl = free_line(&mut p, [500.0, 0.0], run(0.0, 2, 20.0));
+    ok(p.set_datum_at(StationRef::new(pl, 0), origin(), None));
+    let p0 = at(&p, pl, 0);
+    let q = branch(&mut p, p0, run(90.0, 2, 20.0));
+    let fix = gps_at(30.0, 0.0);
+    p.datums.push(ZeroDatum {
+        via: Some(q),
+        ..ZeroDatum::new(p0, fix)
+    });
+    assert_valid(&p);
+    assert_eq!(
+        roles(&p),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix)
+        ]
+    );
+    near(xy(&p, p0), [0.0, 0.0], 1e-9, "P:0 on the origin");
+
+    ok(p.set_datum_at(StationRef::new(a, 0), fix, None));
+    assert_valid(&p);
+    near(
+        xy(&p, at(&p, a, 0)),
+        [0.0, 0.0],
+        1e-9,
+        "the frame stays on the origin",
+    );
+    let (ex, ey) = gps_to_local(&origin(), &fix);
+    near(
+        xy(&p, p0),
+        [ex, ey],
+        1e-6,
+        "P:0 on its own GPS in the new frame",
+    );
+    near(
+        xy(&p, at(&p, q, 2)),
+        [ex + 40.0, ey],
+        1e-6,
+        "Q rides with P, moved once",
+    );
+    assert_placements_on_their_gps(&p, "frame GPS copied from a fix");
+}
