@@ -96,11 +96,13 @@ pub fn encode_with_report(
             },
         ),
     }
+    // The history this mode writes (before a push's byte cut): an ignore of a
+    // shot it can bring back is kept (5.13).
+    let (undo, redo) = history_for(mode, extras, &mut report.history)?;
     let mut body = Vec::with_capacity(estimate(project));
-    report.ignores_dropped = write_body(&mut body, project, extras)?;
+    report.ignores_dropped = write_body(&mut body, project, extras, &[undo, redo])?;
     const END: &[u8] = b"\"end\":true}\n";
 
-    let (undo, redo) = history_for(mode, extras, &mut report.history)?;
     let undo = match mode {
         Mode::ForPush(PushOptions { byte_cap, .. }) => {
             let base = head.len() + body.len() + END.len();
@@ -321,7 +323,12 @@ pub(super) fn write_local(out: &mut Vec<u8>, local: &LocalState) {
 
 /// Write the survey members (sections through imports) and the preserved
 /// unknown top-level members. Returns how many ignores were left out.
-fn write_body(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Result<usize, EncodeError> {
+fn write_body(
+    out: &mut Vec<u8>,
+    project: &Project,
+    extras: &Extras,
+    history: &[&[RawJson]],
+) -> Result<usize, EncodeError> {
     records(out, "sections", &project.sections, |out, section| {
         let mut o = Obj::open(out);
         small(o.key("id"), u64::from(section.id));
@@ -389,7 +396,7 @@ fn write_body(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Result<u
         o.close();
         Ok(())
     })?;
-    let (ignores, dropped) = canonical_ignores(project, &extras.ignored_warnings);
+    let (ignores, dropped) = canonical_ignores(project, &extras.ignored_warnings, history);
     records(out, "ignored_warnings", &ignores, |out, warning| {
         let mut o = Obj::open(out);
         string(o.key("shot"), &warning.shot);
@@ -429,15 +436,15 @@ fn write_body(out: &mut Vec<u8>, project: &Project, extras: &Extras) -> Result<u
     Ok(dropped)
 }
 
-/// The ignores the file holds: those naming a shot of the project, sorted by
-/// (shot, code, time, comment), one per (shot, code).
+/// The ignores the file holds: those naming a shot of the project or one
+/// `history` can bring back ([`super::ignores`]), sorted by (shot, code,
+/// time, comment), one per (shot, code).
 pub(super) fn canonical_ignores<'a>(
     project: &Project,
     ignores: &'a [IgnoredWarning],
+    history: &[&[RawJson]],
 ) -> (Vec<&'a IgnoredWarning>, usize) {
-    let uuids = project.shot_uuids();
-    let mut kept: Vec<&IgnoredWarning> =
-        ignores.iter().filter(|w| uuids.contains(&w.shot)).collect();
+    let mut kept = super::ignores::reachable(project, ignores, history);
     kept.sort();
     kept.dedup_by(|b, a| a.shot == b.shot && a.code == b.code);
     let dropped = ignores.len() - kept.len();

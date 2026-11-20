@@ -380,6 +380,57 @@ fn ignores_ride_the_save_and_come_back_on_reopen() {
     assert!(again.load_resolved_warnings().unwrap().is_empty());
 }
 
+/// F-command-parity-2: an ignore on a shot an undo or redo step can bring
+/// back rides the save, so undoing (or redoing) after a reopen does not bring
+/// the warning back, as within a session.
+#[test]
+fn an_ignore_on_a_shot_the_history_can_bring_back_survives_a_reopen() {
+    let (p, main) = checked_line();
+    let short_uuid = uuid_of(&p, main, 1);
+    let o = open(&p, &Extras::default());
+    ignore(&o.state, &only(&o.state, "SHORT_SHOT")).unwrap();
+    // The ignored Main shot goes with its line: only an undo brings it back.
+    let deleted = o.state.execute(Command::DeleteLine { line_id: main });
+    assert!(deleted.success, "{:?}", deleted.error);
+    // A line a recorded step created, with its own short shot, ignored, then
+    // that step undone: only a redo brings the shot back.
+    let created = o.state.execute(Command::CreateLine {
+        name: Some("Side".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#123456".to_string(),
+        direction: None,
+        shots: vec![shot(90.0, 4.0), shot(90.0, 0.2)],
+        cave_section_id: None,
+    });
+    assert!(created.success, "{:?}", created.error);
+    let side_short = only(&o.state, "SHORT_SHOT");
+    let side_uuid = side_short.shot_uuid.clone().unwrap();
+    ignore(&o.state, &side_short).unwrap();
+    assert!(o.state.undo().success);
+    save(&o.state);
+    drop(o.state);
+
+    let reopened = open_file(&o.path);
+    assert_eq!(reopened.load_resolved_warnings().unwrap().len(), 2);
+    assert!(reopened.undo().success);
+    let short = only(&reopened, "SHORT_SHOT");
+    assert_eq!(short.shot_uuid.as_deref(), Some(short_uuid.as_str()));
+    assert!(
+        short.is_resolved,
+        "undoing the delete brought the warning back"
+    );
+    // Redo the delete, then the create.
+    assert!(reopened.redo().success);
+    assert!(reopened.redo().success);
+    let side_short = only(&reopened, "SHORT_SHOT");
+    assert_eq!(side_short.shot_uuid.as_deref(), Some(side_uuid.as_str()));
+    assert!(
+        side_short.is_resolved,
+        "redoing the create brought the warning back"
+    );
+}
+
 #[test]
 fn the_load_result_reads_the_opened_files_ignores() {
     // Two files of the same survey (same shot uuids), one holding an ignore:

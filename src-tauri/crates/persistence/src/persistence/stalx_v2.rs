@@ -28,6 +28,7 @@ mod decode_meta;
 mod decode_records;
 mod encode;
 mod error;
+mod ignores;
 mod local;
 mod probe;
 mod salvage;

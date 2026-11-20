@@ -403,8 +403,14 @@ they are derived.
 ### 5.13 `ignored_warnings`
 
 Validation warnings the user dismissed, sorted by shot then code, one per
-(shot, code) pair. An entry for a shot the project no longer has is dropped
-by readers and writers.
+(shot, code) pair. An entry is kept while the survey has its shot, or while
+an entry of the file's `history` (section 7) holds the shot's uuid as a JSON
+string: an undo or redo step can bring that shot back with its uuid (a
+deleted shot on a delete's undo side, a created one on a create's redo side),
+and its ignore comes back with it. Any other entry names a shot nothing can
+bring back and is dropped by readers and writers. A writer judges by the
+history it writes, so a push (no redo, maybe no undo) can drop an entry the
+local file keeps.
 
 | Key | Type | Meaning |
 |---|---|---|

@@ -111,6 +111,9 @@ never recorded; only the sanitized file name is in the label.
 `CloseProject`, `CreateProject`, `MergeProjects`. Display toggles, SpeleoDB
 state and Ignore / Unignore of a warning are not undo steps either (the
 ignores ride the next save as survey content, but are not in the history).
+An ignore keyed by a shot the survey no longer has stays in the file while a
+saved undo or redo step can bring that shot back (file-format.md 5.13), so an
+undo after a reopen finds it, as within the session.
 
 ### Undo, redo, jumps
 
