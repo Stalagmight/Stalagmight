@@ -173,12 +173,21 @@ impl Fuzzer {
                 );
             }
             self.outcome.coverage.kept_corrupted += 1;
-            // The damaged entry fits nothing: a step through it refuses.
+            // The damaged entry fits nothing: a step through it refuses. A
+            // walled entry rides every later save as it was read, so a second
+            // `line-hash` damage of it flips the same bit back (the first
+            // `"h"` of the entry, xor 1): it fits again.
             if let Some(depth) = corruption.depth(self.cursor, undo_kept, redo_kept) {
-                self.walls.insert(depth);
-                self.note(format!(
-                    "  ^ a step through the entry into depth {depth} must refuse"
-                ));
+                if self.walls.remove(&depth) {
+                    self.note(format!(
+                        "  ^ the entry into depth {depth} was damaged twice: it is whole again"
+                    ));
+                } else {
+                    self.walls.insert(depth);
+                    self.note(format!(
+                        "  ^ a step through the entry into depth {depth} must refuse"
+                    ));
+                }
             }
         }
         self.expect_stacks("reload");
