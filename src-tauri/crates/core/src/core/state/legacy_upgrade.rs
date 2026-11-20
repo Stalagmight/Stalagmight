@@ -2,7 +2,8 @@
 //! the original is made whole, kept in the app-data backups folder, and only
 //! then replaced. Every write over a legacy file goes through [`upgrade`]: the
 //! first save of an opened one, a Recents rename and a SpeleoDB link strip of
-//! a closed one.
+//! a closed one, and a Save As or Save a Copy onto one (the 0.6.0 file it
+//! replaces is kept like any other original).
 //!
 //! A legacy file is not always one file (`persistence::legacy_settle`). Beside
 //! a file an old build was killed writing sits a HOT `-journal`, and only the

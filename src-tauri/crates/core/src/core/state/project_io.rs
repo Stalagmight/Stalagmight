@@ -419,9 +419,14 @@ impl AppState {
             (OnDisk::Checked, false, _) => Guard::Overwrite,
         };
         // The first write over a legacy file makes the original whole and keeps
-        // it in the backups folder before the rename (`legacy_upgrade`).
+        // it in the backups folder before the rename (`legacy_upgrade`). So
+        // does a Save As (or Save a Copy) over ANOTHER legacy file: the JSON
+        // file must never land beside that file's SQLite sidecars, which an old
+        // build would roll into it (review finding D-migration-upgrade-10), and
+        // the 0.6.0 file it replaces is kept in Recovery like any upgraded one.
         let upgrade = !detached && to_open_file && file.origin == FileOrigin::Legacy;
-        let written = if upgrade {
+        let over_legacy = !to_open_file && holds_legacy_file(&target);
+        let written = if upgrade || over_legacy {
             legacy_upgrade::upgrade(&target, &bytes, guard)
                 .map_err(|failure| (failure.error, failure.settled))
         } else {
@@ -430,7 +435,7 @@ impl AppState {
         let fingerprint = match written {
             Ok(fp) => fp,
             Err((error, settled)) => {
-                if let Some(settled) = settled {
+                if let (Some(settled), true) = (settled, to_open_file) {
                     // The original was settled in place (same survey, other
                     // bytes): the next save's guard expects what is there now.
                     file.fingerprint = Some(settled);
@@ -481,6 +486,7 @@ impl AppState {
             path = ?target,
             bytes = bytes.len(),
             upgraded = upgrade,
+            replaced_legacy = over_legacy,
             purpose = "persist project",
             "Saved project"
         );
@@ -568,6 +574,19 @@ impl AppState {
     pub(super) fn open_project_path(&self) -> Option<PathBuf> {
         self.open_file_path()
     }
+}
+
+/// Whether `path` holds a legacy (SQLite) `.stalx`, read from its first bytes.
+/// Anything unreadable or absent is not one.
+fn holds_legacy_file(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = Vec::with_capacity(64);
+    std::fs::File::open(path)
+        .and_then(|file| file.take(64).read_to_end(&mut head))
+        .is_ok_and(|_| {
+            crate::persistence::stalx_v2::sniff(&head)
+                == crate::persistence::stalx_v2::Format::Legacy
+        })
 }
 
 pub(super) fn same_file(a: &Path, b: &Path) -> bool {

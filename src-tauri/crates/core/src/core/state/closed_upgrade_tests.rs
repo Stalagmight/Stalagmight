@@ -1,8 +1,10 @@
-//! Writes that upgrade a legacy file while it is closed (a Recents rename, a
-//! SpeleoDB link strip) owe what the upgrading save does: the conversion
-//! notice reaches the next open of the file (review finding
-//! D-migration-upgrade-4). The dive-plan half is in `dive_plan_tests.rs`
-//! (`mod legacy`), beside its 0.6.0 pin fixture. Synthetic files only.
+//! Writes that upgrade a legacy file other than the open project's first
+//! save. A Recents rename or a SpeleoDB link strip of a closed file owes what
+//! the upgrading save does: the conversion notice reaches the next open of the
+//! file (review finding D-migration-upgrade-4; the dive-plan half is in
+//! `dive_plan_tests.rs`, `mod legacy`, beside its 0.6.0 pin fixture). A Save
+//! As onto another legacy file goes through the upgrade too
+//! (D-migration-upgrade-10). Synthetic files only.
 
 use std::path::Path;
 
@@ -138,6 +140,96 @@ fn a_legacy_file_back_at_the_path_drops_the_closed_upgrade_notice() {
 
         assert_eq!(notice_of_open(&state, &path), None);
         assert!(state.close_project().success);
+        forget_backups(&stem);
+    });
+}
+
+/// Save As onto ANOTHER 0.6.0 file, one an old build was killed writing (a
+/// hot journal beside it), writes the version 2 file through the upgrade: the
+/// journal is gone, so no old build can roll it into the JSON file, and the
+/// whole 0.6.0 survey it replaced (journal rolled back) is kept in Recovery
+/// (review finding D-migration-upgrade-10). Injection: write an explicit
+/// destination with `write_atomic` alone, as before, and the journal stays
+/// beside the JSON file.
+#[test]
+fn save_as_over_another_legacy_file_leaves_no_sidecar_and_keeps_it() {
+    use super::legacy_upgrade::settled_bytes;
+    use super::legacy_upgrade_tests::mid_transaction;
+    use super::robustness_kit::{open_fresh, write_legacy, Rng};
+    use super::speleodb_sidecars::sidecar_path;
+    use crate::core::Command;
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("save-as-over-legacy");
+        let source = dir.path().join(format!("{stem}-source.stalx"));
+        write_legacy(&source, &mut Rng::new(31), "Source");
+        let scratch = dir.path().join(format!("{stem}-scratch.stalx"));
+        write_legacy(&scratch, &mut Rng::new(32), "Destination");
+        let (main, journal) = mid_transaction(&std::fs::read(&scratch).unwrap()).unwrap();
+        let dest = dir.path().join(format!("{stem}.stalx"));
+        std::fs::write(&dest, &main).unwrap();
+        std::fs::write(sidecar_path(&dest, "-journal"), &journal).unwrap();
+        let whole = settled_bytes(&main, &dest).unwrap();
+
+        let state = open_fresh(&source).unwrap();
+        let saved = state.execute(Command::SaveProject {
+            path: Some(dest.clone()),
+        });
+        assert!(saved.success, "{:?}", saved.error);
+        assert!(is_v2(&dest), "the destination holds version 2");
+        for suffix in ["-journal", "-wal", "-shm"] {
+            assert!(
+                !sidecar_path(&dest, suffix).exists(),
+                "no {suffix} beside the JSON file"
+            );
+        }
+        assert!(!is_v2(&source), "the source is untouched");
+        let kept = AppState::list_project_backups(&dest)
+            .into_iter()
+            .filter(|b| b.path.ends_with(".pre-v2.stalx"))
+            .map(|b| std::fs::read(b.path).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kept, vec![whole], "the replaced survey, whole, in Recovery");
+        forget_backups(&stem);
+    });
+}
+
+/// Save As onto a plain (unlinked, settled) 0.6.0 file also keeps it.
+#[test]
+fn save_as_over_a_plain_legacy_file_keeps_it_in_recovery() {
+    use super::robustness_kit::{open_fresh, write_legacy, Rng};
+    use crate::core::Command;
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("save-as-over-plain-legacy");
+        let source = dir.path().join(format!("{stem}-source.stalx"));
+        write_legacy(&source, &mut Rng::new(41), "Source");
+        let dest = dir.path().join(format!("{stem}.stalx"));
+        write_legacy(&dest, &mut Rng::new(42), "Destination");
+        let replaced = std::fs::read(&dest).unwrap();
+
+        let state = open_fresh(&source).unwrap();
+        assert!(
+            state
+                .execute(Command::SaveProject {
+                    path: Some(dest.clone()),
+                })
+                .success
+        );
+        assert!(is_v2(&dest));
+        let kept = AppState::list_project_backups(&dest)
+            .into_iter()
+            .filter(|b| b.path.ends_with(".pre-v2.stalx"))
+            .count();
+        assert_eq!(kept, 1);
+        let backups = AppState::list_project_backups(&dest);
+        assert!(backups
+            .iter()
+            .any(|b| std::fs::read(&b.path).ok().as_deref() == Some(replaced.as_slice())));
         forget_backups(&stem);
     });
 }
