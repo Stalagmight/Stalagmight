@@ -1264,6 +1264,7 @@
       "title": "Importing DMP",
       "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",
       "bodyView": "Switch to the Raw Data View for import since the Closures Computed View is read-only.",
+      "bodyFile": "This project was made with a newer version of Stalagmight, so it is open read-only and a DMP cannot be added to it. Update Stalagmight to import into it.",
       "switchToSurvey": "Switch to Survey",
       "switchToMeasured": "Switch to Raw Data View",
       "stayInPlan": "Stay in Plan",

@@ -15,7 +15,11 @@ import { DialogWrapper } from './DialogWrapper';
  * whatever is read-only (mode, and/or view) and CONTINUES the import of the
  * already-picked file; "Stay in ..." abandons it.
  *
- * The one cause no local switch can fix - a missing SpeleoDB write lock -
+ * A file made with a newer Stalagmight (`cause: 'file'`, plan 6.4) is
+ * read-only whatever the mode or view, so that prompt explains why and offers
+ * no switch: a switch would re-route into the same guard and reopen it.
+ *
+ * The other cause no local switch can fix - a missing SpeleoDB write lock -
  * keeps the plain error dialog (see routeOpenedFile's guard).
  */
 export default function ImportBlockedDialog() {
@@ -27,7 +31,7 @@ export default function ImportBlockedDialog() {
 
   const rawPath = dialogData.path;
   const path = typeof rawPath === 'string' ? rawPath : null;
-  const cause = dialogData.cause === 'view' ? 'view' : 'mode';
+  const cause = dialogData.cause === 'view' || dialogData.cause === 'file' ? dialogData.cause : 'mode';
 
   const handleSwitch = useCallback(() => {
     // Completing (not cancelling) keeps the entry-point telemetry source alive
@@ -57,7 +61,9 @@ export default function ImportBlockedDialog() {
   }, [closeDialog]);
 
   const stayLabel =
-    cause === 'view'
+    cause === 'file'
+      ? t('common.actions.close')
+      : cause === 'view'
       ? t('dialogs.importBlocked.stayInAdjusted')
       : appMode === 'export'
         ? t('dialogs.importBlocked.stayInExport')
@@ -67,7 +73,11 @@ export default function ImportBlockedDialog() {
       ? t('dialogs.importBlocked.switchToMeasured')
       : t('dialogs.importBlocked.switchToSurvey');
   const body =
-    cause === 'view' ? t('dialogs.importBlocked.bodyView') : t('dialogs.importBlocked.body');
+    cause === 'file'
+      ? t('dialogs.importBlocked.bodyFile')
+      : cause === 'view'
+        ? t('dialogs.importBlocked.bodyView')
+        : t('dialogs.importBlocked.body');
 
   return (
     <DialogWrapper
@@ -82,9 +92,11 @@ export default function ImportBlockedDialog() {
           <Button onClick={handleStay} data-testid="import-blocked-stay">
             {stayLabel}
           </Button>
-          <Button variant="primary" onClick={handleSwitch} data-testid="import-blocked-switch">
-            {switchLabel}
-          </Button>
+          {cause !== 'file' && (
+            <Button variant="primary" onClick={handleSwitch} data-testid="import-blocked-switch">
+              {switchLabel}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>
