@@ -36,7 +36,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseLineDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditLineDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, LineAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitLineDialog, SplitLineHereDialog, MnemoImportDialog, CombineLinesDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, AddOrOpenProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseLineDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditLineDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, SaveConflictDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, LineAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitLineDialog, SplitLineHereDialog, MnemoImportDialog, CombineLinesDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, AddOrOpenProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -64,6 +64,10 @@ function App() {
   const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
   const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
+  const fileReadOnlyReason = useProjectStore((s) => s.fileReadOnlyReason);
+  const conversionNotice = useProjectStore((s) => s.conversionNotice);
+  const checkFileStatus = useProjectStore((s) => s.checkFileStatus);
+  const dismissConversionNotice = useProjectStore((s) => s.dismissConversionNotice);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -264,8 +268,11 @@ function App() {
   useEffect(() => {
     if (project?.file_path && !loading.isLoading) {
       void checkHistoryDiscarded();
+      // The file's own status (`.stalx` v2): read-only because a newer
+      // Stalagmight made it, and the old-format conversion notice (taken once).
+      void checkFileStatus();
     }
-  }, [project?.file_path, loading.isLoading, checkHistoryDiscarded]);
+  }, [project?.file_path, loading.isLoading, checkHistoryDiscarded, checkFileStatus]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
   useEffect(() => {
@@ -654,6 +661,58 @@ function App() {
         </div>
       )}
 
+      {/* Read-only file banner (`.stalx` v2, plan 6.4): the file was made with a
+          newer Stalagmight (a feature or survey field this build does not know),
+          so edits, undo and saves are refused and the editing controls are
+          gated (useEditingBlocked). An ongoing condition with nothing to do
+          here but update, so a banner with no button and no dismiss: it stays
+          as long as the project is open, like the reason. */}
+      {fileReadOnlyReason !== null && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="read-only-file-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.readOnlyFile.lead')}{' '}
+            <span className="text-text-secondary font-normal">{t('banners.readOnlyFile.detail')}</span>
+          </span>
+          <span
+            className="text-text-secondary text-xs truncate max-w-[40%]"
+            title={fileReadOnlyReason}
+            data-testid="read-only-file-reason"
+          >
+            {t('banners.readOnlyFile.reasonLabel')}: {fileReadOnlyReason}
+          </span>
+        </div>
+      )}
+
+      {/* Conversion notice (plan 7.2.10): an old-format (SQLite) file opened
+          with stations in other places than the old version showed them. The
+          backend hands the sentence over once; the banner stays until
+          dismissed, and the next save writes the converted file. */}
+      {conversionNotice !== null && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="conversion-notice-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.conversion.lead')}{' '}
+            <span className="text-text-secondary font-normal" data-testid="conversion-notice-text">
+              {conversionNotice} {t('banners.conversion.detail')}
+            </span>
+          </span>
+          <button
+            onClick={dismissConversionNotice}
+            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+            data-testid="conversion-notice-dismiss-button"
+          >
+            {t('banners.conversion.dismiss')}
+          </button>
+        </div>
+      )}
+
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
           changes are not on disk" condition is banner-class, not modal and not a
           repeating toast). When saving is integrity-blocked the integrity banner
@@ -1031,6 +1090,7 @@ function App() {
       {activeDialog === 'import-blocked' && <ImportBlockedDialog />}
       {activeDialog === 'save-permission' && <SavePermissionDialog />}
       {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
+      {activeDialog === 'save-conflict' && <SaveConflictDialog />}
       {activeDialog === 'delete-project' && <DeleteProjectDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
       {activeDialog === 'line-adjust' && <LineAdjustDialog />}

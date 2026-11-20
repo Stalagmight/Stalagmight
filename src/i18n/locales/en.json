@@ -1192,7 +1192,23 @@
       "title": "Save Failed",
       "detachTitle": "Detach Failed",
       "pathNotFound": "Stalagmight couldn't save there - the folder no longer exists or the drive is not connected. Choose another location and try again.",
-      "pathTooLong": "Stalagmight couldn't save there - the full path is too long for the system to open. Save to a shorter folder path, or use a shorter file name."
+      "pathTooLong": "Stalagmight couldn't save there - the full path is too long for the system to open. Save to a shorter folder path, or use a shorter file name.",
+      "readOnlyFile": "This project was made with a newer version of Stalagmight, so this version opened it read-only and cannot save it. Update Stalagmight to edit and save it."
+    },
+    "saveConflict": {
+      "title": "The project file changed on disk",
+      "thisFile": "the project file",
+      "lead": "Another program changed {{fileName}} after Stalagmight opened it. Saving now would replace that program's changes with yours.",
+      "unsaved": "Your unsaved changes are still here. Choose which version to keep:",
+      "overwrite": "Keep my version",
+      "overwriteDetail": "Save your changes over the file. The other program's changes are lost.",
+      "saveAs": "Save as a new file...",
+      "saveAsDetail": "Keep both: your version goes to a new file and the changed file is left as it is.",
+      "reload": "Use the file's version",
+      "reloadDetail": "Open the file as it is now. Your unsaved changes are lost.",
+      "cancel": "Decide later",
+      "working": "Saving...",
+      "failed": "That did not work: {{error}}"
     },
     "importFailure": {
       "commandTitle": "Import Errors",
@@ -2761,8 +2777,20 @@
       "permissionDenied": "Folder access denied - check Privacy & Security settings.",
       "pathNotFound": "Save folder unavailable - it was moved, or its drive is not connected.",
       "pathTooLong": "Save path too long - save to a shorter path.",
+      "externallyModified": "The project file was changed by another program. Choose whether to keep your version or the file's.",
+      "readOnlyFile": "This project was made with a newer Stalagmight and is open read-only.",
       "genericFailure": "Failed to save project",
       "saveNow": "Save now",
+      "dismiss": "Dismiss"
+    },
+    "readOnlyFile": {
+      "lead": "This project was made with a newer version of Stalagmight.",
+      "detail": "It is open read-only: you can view, measure and export it, but edits and saves are turned off so nothing this version does not understand is lost. Update Stalagmight to edit it.",
+      "reasonLabel": "Why"
+    },
+    "conversion": {
+      "lead": "This project was converted from the old file format.",
+      "detail": "The original file is kept in Recovery. The conversion is saved the next time you save.",
       "dismiss": "Dismiss"
     },
     "historyDiscarded": {

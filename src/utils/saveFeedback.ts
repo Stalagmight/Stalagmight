@@ -30,6 +30,12 @@ import type { ToastKind } from '../store/uiStore';
  *     SQLite's "Failed to open database".
  *  4. Anything else (a real I/O error) - show the error dialog as before.
  *
+ * Ahead of all four: a file another program changed since it was opened
+ * (`EXTERNALLY_MODIFIED`, the `.stalx` v2 guard) opens the save prompt, where the
+ * user keeps their version, saves it as a new file, or takes the file's. A
+ * read-only file (made with a newer Stalagmight) gets the error dialog, reworded,
+ * and never Review & Repair.
+ *
  * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
  * failure, so it is current by the time this runs. On an IPC-transport reject
  * that re-check never ran, so `integritySaveBlocked` may be stale - pass
@@ -48,14 +54,20 @@ export function surfaceSaveFailure(
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
+  const kind = classifySaveError(error);
+  // The file changed on disk (plan 6.5's guard): the user decides which version
+  // to keep, in the save prompt. Not an error, and not Review & Repair's.
+  if (kind === 'externally-modified') {
+    openDialog('save-conflict', { error });
+    return;
+  }
   const routesToIntegrity =
-    !opts?.skipIntegrityRouting && classifySaveError(error) !== 'ignores-unreadable';
+    !opts?.skipIntegrityRouting && kind !== 'ignores-unreadable' && kind !== 'read-only-file';
   if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
     useProjectStore.getState().openIntegrityDialog();
     return;
   }
   if (!error) return;
-  const kind = classifySaveError(error);
   // Already surfaced by `saveProject` through the folder-access guidance dialog.
   if (kind === 'permission') return;
   openDialog('error', {
@@ -76,6 +88,8 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':
       return i18n.t('dialogs.saveFailure.pathTooLong');
+    case 'read-only-file':
+      return i18n.t('dialogs.saveFailure.readOnlyFile');
     // Already a full sentence from the backend; only its routing marker comes off.
     case 'ignores-unreadable':
       return stripSaveErrorMarker(error, IGNORES_UNREADABLE);
@@ -122,6 +136,10 @@ export function autosaveFailureMessage(error?: string | null): string {
       return i18n.t('banners.autosave.pathNotFound');
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
+    case 'externally-modified':
+      return i18n.t('banners.autosave.externallyModified');
+    case 'read-only-file':
+      return i18n.t('banners.autosave.readOnlyFile');
     case 'ignores-unreadable':
       return stripSaveErrorMarker(error ?? '', IGNORES_UNREADABLE);
     default:

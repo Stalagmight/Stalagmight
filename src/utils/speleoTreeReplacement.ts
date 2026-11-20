@@ -8,6 +8,7 @@ import {
 import { useUIStore } from '../store/uiStore';
 import { runTreeReplacement } from './projectTransition';
 import { HISTORY_BANNER_CLEARED } from '../store/projectHistoryBannerActions';
+import { FILE_STATUS_CLEARED } from '../store/projectFileStatusActions';
 
 /**
  * Reconcile every frontend store after the backend replaces the open survey tree in place.
@@ -65,8 +66,11 @@ export async function applySpeleoTreeReplacement(
     // project - the reply then corrects it, but the flash is the same wrong claim the
     // banner exists to avoid making.
     if (treeReplaced) {
-      useProjectStore.setState({ ...HISTORY_BANNER_CLEARED });
+      useProjectStore.setState({ ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED });
       void useProjectStore.getState().checkHistoryDiscarded();
+      // The new bytes may be a version 2 file a newer Stalagmight wrote, or an
+      // old-format revision the backend converted: ask about them as a load does.
+      void useProjectStore.getState().checkFileStatus();
     }
     await useSpeleoStore.getState().refreshLinkStatus();
     if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;

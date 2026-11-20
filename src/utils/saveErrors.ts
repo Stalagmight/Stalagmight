@@ -36,12 +36,30 @@ export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
  */
 export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
 
+/**
+ * Marker for a save the external-modification guard refused (`.stalx` v2, plan
+ * 6.5): the file on disk is not what the app last read or wrote, so another
+ * program changed it. Mirrors `EXTERNALLY_MODIFIED_CODE` in
+ * `src-tauri/crates/core/src/core/state/open_file.rs`. Routed to the save
+ * prompt (reload / overwrite / save as), never to a bare error.
+ */
+export const EXTERNALLY_MODIFIED = 'EXTERNALLY_MODIFIED';
+
+/**
+ * Marker for a save refused because the project is open read-only: the file
+ * was made with a newer Stalagmight (plan 6.4). Mirrors `READ_ONLY_FILE_CODE`
+ * (same file). Edits and undo carry it too.
+ */
+export const READ_ONLY_FILE = 'READ_ONLY_FILE';
+
 /** What a failed save's `CommandResult.error` says went wrong. */
 export type SaveErrorKind =
   | 'permission'
   | 'path-not-found'
   | 'path-too-long'
   | 'ignores-unreadable'
+  | 'externally-modified'
+  | 'read-only-file'
   | 'other';
 
 /**
@@ -55,6 +73,8 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(FS_PATH_NOT_FOUND)) return 'path-not-found';
   if (error.startsWith(FS_PATH_TOO_LONG)) return 'path-too-long';
   if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
+  if (error.startsWith(EXTERNALLY_MODIFIED)) return 'externally-modified';
+  if (error.startsWith(READ_ONLY_FILE)) return 'read-only-file';
   return 'other';
 }
 

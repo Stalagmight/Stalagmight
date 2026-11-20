@@ -19,6 +19,7 @@ export { default as EditLineDialog } from './EditLineDialog';
 export { default as EditShotDialog } from './EditShotDialog';
 export { default as EditStationDialog } from './EditStationDialog';
 export { default as UnmergeStationsDialog } from './UnmergeStationsDialog';
+export { default as SaveConflictDialog } from './SaveConflictDialog';
 export { default as RemoveClosureDialog } from './RemoveClosureDialog';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';

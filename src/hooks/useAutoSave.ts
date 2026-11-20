@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
+import { classifySaveError, type SaveErrorKind } from '../utils/saveErrors';
 
 export type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
@@ -17,6 +18,11 @@ export interface AutoSaveState {
  * timer.  Manual saves (isDirty going false externally) cancel the timer and
  * briefly show "Saved".
  */
+/** Save failures that pause auto-save until the user resolves them. */
+function isPausingFailure(kind: SaveErrorKind | null): boolean {
+  return kind === 'externally-modified' || kind === 'read-only-file';
+}
+
 export function useAutoSave(): AutoSaveState {
   const [status, setStatus] = useState<AutoSaveStatus>('idle');
   const [countdown, setCountdown] = useState(0);
@@ -86,6 +92,18 @@ export function useAutoSave(): AutoSaveState {
         pausedRef.current &&
         prevState.integritySaveBlocked &&
         !state.integritySaveBlocked
+      ) {
+        pausedRef.current = false;
+      }
+      // ...or once the failure that paused it is gone: a file another program
+      // changed (the `.stalx` v2 guard, resolved in the save prompt) or a
+      // read-only file. A save that lands clears `autosaveFailureKind`, and so
+      // does dismissing the banner (the next edit then tries again and, if the
+      // file is still changed, brings the banner back).
+      if (
+        pausedRef.current &&
+        isPausingFailure(prevState.autosaveFailureKind) &&
+        !isPausingFailure(state.autosaveFailureKind)
       ) {
         pausedRef.current = false;
       }
@@ -181,6 +199,11 @@ export function useAutoSave(): AutoSaveState {
             // failure branch of saveProject awaits checkProjectIntegrity, so this
             // flag is fresh here.)
             if (useProjectStore.getState().integritySaveBlocked) {
+              pausedRef.current = true;
+            }
+            // The same for a file another program changed, or a read-only
+            // one: retrying would fail the same way until the user decides.
+            if (isPausingFailure(classifySaveError(result.error))) {
               pausedRef.current = true;
             }
             if (flashRef.current) {
