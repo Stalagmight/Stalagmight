@@ -29,6 +29,7 @@ import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
 import { useColorScaleStore } from './colorScaleStore';
 import { displaySettingStorageKey } from './displaySettingKeys';
+import { syncDirtyAfterLocalSave } from './localStateDirty';
 import { createSectionsViewSlice, type SectionsViewSlice } from './sectionsViewSlice';
 
 // Import tool utilities for internal use and re-export for convenience
@@ -1850,7 +1851,7 @@ export const useUIStore = create<UIStore>((set) => ({
       'save_display_setting',
       { key, value: String(spacing) },
       { purpose: 'persist display setting', fields: { key } }
-    ).catch((e) => {
+    ).then(syncDirtyAfterLocalSave, (e) => {
       console.warn('Failed to save grid spacing:', e);
     });
   },
@@ -1861,6 +1862,7 @@ export const useUIStore = create<UIStore>((set) => ({
         purpose: 'persist display setting',
         fields: { key: storageKey },
       });
+      await syncDirtyAfterLocalSave();
     } catch (e) {
       console.warn('Failed to save display setting:', e);
     }
@@ -2002,7 +2004,7 @@ export const useUIStore = create<UIStore>((set) => ({
       'save_display_setting',
       { key, value: mode },
       { purpose: 'persist display setting', fields: { key } }
-    ).catch((e) => {
+    ).then(syncDirtyAfterLocalSave, (e) => {
       console.warn('Failed to save geometry mode:', e);
     });
   },

@@ -359,9 +359,16 @@ the original. On write-protected media the upgrade is refused with
 The Recovery dialog lists the kept originals with the project's own backups
 (`list_project_backups`), and Restore puts one back. The save itself is
 silent; the conversion notice (above) was shown at open when the conversion
-moved anything. Until that first save nothing is written to a legacy file:
-display toggles and SpeleoDB state changes wait in memory (`local_pending`)
-and ride the upgrading save.
+moved anything. Until that first save nothing is written to a legacy file
+(but the hot-journal rollback of [What an open writes](#what-an-open-writes)):
+display toggles and SpeleoDB state changes wait in memory (`local_pending`),
+ride the upgrading save, and count as unsaved changes until then (see
+[Unsaved changes](#unsaved-changes)). One exception is written at once: a
+SpeleoDB unlink (`persist_local_state_upgrading`) upgrades the file, with the
+survey it holds on disk (migrated again; the session's unsaved edits stay
+unsaved) and the session's local state, the original kept like any other.
+Save as an unmanaged file opens the detached copy right after the unlink, so
+a pending unlink would be lost and the cache copy left linked.
 
 Other writes to a closed legacy file upgrade it the same way, with the same
 backup: a Recents rename (`set_project_name_for_path`) and the removal of a
@@ -398,20 +405,26 @@ unsaved.
 While the survey has unsaved changes, a local-only save writes the history the
 file last held, never the in-memory stacks (they describe a body the file does
 not have). It works on read-only files. On a legacy file or a project never
-saved it only marks `local_pending`; the next real save writes it. A caller
+saved it only marks `local_pending`; the next real save writes it (a legacy
+file's counts as unsaved; a SpeleoDB unlink upgrades it at once, above). A caller
 that already holds the `project` guard uses `persist_local_state_at`
 (`Mutex` is not reentrant).
 
 ## Unsaved changes
 
-`FileState.dirty` is the backend's "changes no save has written":
-`AppState::has_unsaved_changes()` (IPC `has_unsaved_changes`). It is set by
-every recorded edit, by undo and redo, and by an Ignore or Unignore of a
-warning (ignored warnings are survey content: they ride the next save, and
-"Don't save" discards them). It is not set by display toggles or SpeleoDB
-state changes, which are durable at once. A save clears it. The frontend keeps
-its own `isDirty` for the indicator and the close guard, and asks the backend
-after an Ignore.
+`AppState::has_unsaved_changes()` (IPC `has_unsaved_changes`) is the
+backend's "changes no save has written": `FileState.dirty`, set by every
+recorded edit, by undo and redo, and by an Ignore or Unignore of a warning
+(ignored warnings are survey content: they ride the next save, and "Don't
+save" discards them); and, on a legacy file not yet upgraded, the local state
+waiting for the upgrading save (`local_pending`: a display toggle, SpeleoDB
+bookkeeping), which 0.6.0 wrote in place at once and which "Don't save" now
+discards. Display toggles and SpeleoDB state changes of a version 2 file are
+durable at once and set nothing. A save clears both. The frontend keeps its
+own `isDirty` for the indicator, autosave and the close, switch and quit
+prompts, and asks the backend after an Ignore and after a display toggle
+(`localStateDirty.ts`), so a toggle on a legacy file makes the close prompt
+ask.
 
 ## Failure classification
 

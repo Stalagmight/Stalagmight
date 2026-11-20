@@ -6,6 +6,7 @@
  * collapse state is session-only.
  */
 import { invokeIpc } from '../utils/ipc';
+import { syncDirtyAfterLocalSave } from './localStateDirty';
 import type { LineId } from '../types/project';
 
 /** The display_settings key (and the store field) of the hidden Sections. */
@@ -70,7 +71,7 @@ function saveHiddenSections(ids: readonly number[]): void {
     'save_display_setting',
     { key: HIDDEN_SECTIONS_SETTING, value: JSON.stringify(ids) },
     { purpose: 'persist display setting', fields: { key: HIDDEN_SECTIONS_SETTING } },
-  ).catch((e) => {
+  ).then(syncDirtyAfterLocalSave, (e) => {
     console.warn('Failed to save hidden sections:', e);
   });
 }

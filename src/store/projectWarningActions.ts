@@ -3,6 +3,7 @@ import { invokeIpc } from '../utils/ipc';
 import type { ProjectWarning } from '../types/commands';
 import { useSpeleoStore } from './speleoStore';
 import type { ProjectStore } from './projectStore';
+import { registerLocalStateDirtySink } from './localStateDirty';
 
 /**
  * The validation warnings and their ignores (resolve / unresolve).
@@ -44,6 +45,15 @@ export function createProjectWarningActions(
       if ((get().project?.created_at ?? null) === issuedFor) set({ isDirty: true });
     }
   };
+
+  // The same backend flag decides after a display toggle, which a 0.6.0 file
+  // keeps in memory until its upgrading save (`localStateDirty.ts`).
+  registerLocalStateDirtySink({
+    current: () => get().project?.created_at ?? null,
+    markUnsaved: (issuedFor) => {
+      if ((get().project?.created_at ?? null) === issuedFor) set({ isDirty: true });
+    },
+  });
 
   return {
     refreshWarnings: async () => {

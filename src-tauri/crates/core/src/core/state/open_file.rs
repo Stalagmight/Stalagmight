@@ -13,7 +13,9 @@
 //!   on read-only projects and unknown `requires`. It is never used on a
 //!   legacy (SQLite) file not yet upgraded, nor on a project never saved:
 //!   there the change waits in memory for the first real save
-//!   (`local_pending`).
+//!   (`local_pending`), and on a legacy file it counts as unsaved
+//!   ([`AppState::has_unsaved_changes`]); only a SpeleoDB unlink upgrades a
+//!   legacy file at once ([`AppState::persist_local_state_upgrading`]).
 //!
 //! Lock order: `project` -> `file` -> `undo_stack` (`file` takes the place
 //! `database` had). Nothing is taken while `file` is held except
@@ -505,9 +507,102 @@ impl AppState {
         self.with_file(|file| file.conversion.take().map(|n| n.message()))
     }
 
-    /// Whether the open project has changes no save has written yet.
+    /// Whether the open project has changes no save has written yet: survey
+    /// edits, ignores, and on a legacy (SQLite) file not yet upgraded the
+    /// local state that waits for the upgrading save (display toggles,
+    /// SpeleoDB bookkeeping, `local_pending`). Those were written in place at
+    /// once by 0.6.0; here only a save writes them, so "Don't save" on close
+    /// discards them and the close prompt must ask (review finding
+    /// D-migration-upgrade-5).
     pub fn has_unsaved_changes(&self) -> bool {
-        self.with_file(|file| file.dirty)
+        self.with_file(|file| file.dirty || file.origin == FileOrigin::Legacy && file.local_pending)
+    }
+
+    /// A local-only save that must be durable at once on a legacy (SQLite)
+    /// file too: a SpeleoDB unlink, which a following open of another file
+    /// would otherwise lose (the frontend's Save as unmanaged file closes the
+    /// cache copy right after it; review finding D-migration-upgrade-5). On a
+    /// legacy-origin project the file is upgraded first, as stripping a
+    /// closed copy's link upgrades it (plan N11): the survey AS IT IS ON DISK
+    /// (migrated again; the session's unsaved edits and ignores stay unsaved)
+    /// with the session's local state, the original kept in Recovery, the
+    /// `.plnx` pins rewritten. Anything else is
+    /// [`Self::persist_local_state`].
+    pub(crate) fn persist_local_state_upgrading(&self) -> Result<(), LocalSaveError> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = guard.as_ref().and_then(|p| p.file_path.clone());
+        let legacy = self.with_file(|f| f.origin == FileOrigin::Legacy && f.fingerprint.is_some());
+        let result = match (path, legacy) {
+            (Some(path), true) => self.upgrade_legacy_on_disk(&path),
+            (path, _) => self.persist_local_state_with(path, false),
+        };
+        drop(guard);
+        result
+    }
+
+    /// [`Self::persist_local_state_upgrading`]'s upgrade; the caller holds the
+    /// `project` guard.
+    fn upgrade_legacy_on_disk(&self, path: &Path) -> Result<(), LocalSaveError> {
+        let config = self.get_config();
+        let migrated =
+            crate::persistence::migrate::migrate_path_for_app(path, &config.closure_adjustment)
+                .map_err(|e| {
+                    LocalSaveError::Io(format!("could not read {}: {e}", path.display()))
+                })?;
+        let mut project = migrated.project;
+        if !migrated.extras.validation_stored {
+            project.settings.validation = config.validation;
+        }
+        let parity = migrated.extras.legacy_parity.clone();
+        let on_disk =
+            FileState::from_migrated(migrated.extras, None, &migrated.report.verification);
+        let mut file = self
+            .file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(expected) = file.fingerprint.clone() else {
+            return Ok(());
+        };
+        let mut extras = on_disk.extras;
+        extras.speleodb.clone_from(&file.extras.speleodb);
+        extras.local = file.extras.local.clone();
+        extras.generator = super::project_io::generator();
+        let bytes = crate::persistence::stalx_v2::encode(
+            &project,
+            &extras,
+            crate::persistence::stalx_v2::Mode::Normal,
+        )
+        .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
+        match super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(&expected)) {
+            Ok(fingerprint) => {
+                file.fingerprint = Some(fingerprint);
+                file.origin = FileOrigin::V2;
+                file.saved_history = History::default();
+                file.history_unread = false;
+                file.local_pending = false;
+            }
+            Err(failure) => {
+                if let Some(settled) = failure.settled {
+                    file.fingerprint = Some(settled);
+                }
+                return Err(match failure.error {
+                    super::legacy_upgrade::UpgradeError::Write(e) => write_error(&e),
+                    other => LocalSaveError::Io(other.to_string()),
+                });
+            }
+        }
+        drop(file);
+        tracing::info!(
+            path = ?path,
+            purpose = "make a SpeleoDB unlink durable on a legacy file",
+            "Upgraded a legacy project's file to write its local state"
+        );
+        self.finish_closed_upgrade(path, &project, Some(&parity), None);
+        self.with_file(|file| file.legacy_parity = None);
+        Ok(())
     }
 
     /// Why the open file is read-only ("made with a newer Stalagmight", plan

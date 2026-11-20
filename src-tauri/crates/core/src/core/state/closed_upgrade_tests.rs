@@ -233,3 +233,88 @@ fn save_as_over_a_plain_legacy_file_keeps_it_in_recovery() {
         forget_backups(&stem);
     });
 }
+
+// ----- local state of an open legacy project (D-migration-upgrade-5) ---------
+
+/// A display toggle on an open 0.6.0 project waits for the upgrading save
+/// (0.6.0 wrote it in place; this build writes a legacy file only by
+/// upgrading it), so until then the project HAS unsaved changes: the close
+/// prompt asks, the save writes it. Injection: answer `has_unsaved_changes`
+/// from `dirty` alone, as before, and the toggle is lost on a close nothing
+/// asked about.
+#[test]
+fn a_display_toggle_on_a_legacy_project_is_unsaved_until_the_upgrading_save() {
+    use super::robustness_kit::{open_fresh, write_legacy, Rng};
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-toggle");
+        let path = dir.path().join(format!("{stem}.stalx"));
+        write_legacy(&path, &mut Rng::new(21), "Toggle");
+        let state = open_fresh(&path).unwrap();
+        assert!(!state.has_unsaved_changes());
+
+        state.save_display_setting("showGrid", "true").unwrap();
+        assert!(!is_v2(&path), "a toggle does not convert the file");
+        assert!(state.has_unsaved_changes(), "the close prompt must ask");
+
+        assert!(state.save_project(None).success);
+        assert!(!state.has_unsaved_changes());
+        assert!(state.close_project().success);
+        let reopened = open_fresh(&path).unwrap();
+        assert_eq!(
+            reopened.get_display_setting("showGrid").unwrap().as_deref(),
+            Some("true")
+        );
+        forget_backups(&stem);
+    });
+}
+
+/// A SpeleoDB unlink of an open 0.6.0 copy is durable at once, as it was in
+/// 0.6.0 (and as stripping a closed copy's link is, plan N11): the file is
+/// upgraded with the survey it holds on disk, never the session's unsaved
+/// edits, and the original kept in Recovery. Save as an unmanaged file
+/// relies on it: it opens the detached copy right after the unlink, which
+/// used to drop the pending unlink and leave the cache copy linked.
+/// Injection: write the unlink with `persist_local_state`, as before.
+#[test]
+fn an_unlink_of_an_open_legacy_copy_is_written_at_once() {
+    use super::stalx_fixtures::{decoded, legacy_linked_project, link_on_disk};
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-unlink");
+        let path = legacy_linked_project(&dir.path().join(format!("{stem}.stalx")), Some(&link()));
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path.clone()).success);
+        assert!(state.speleo_link().is_some());
+        // An unsaved edit of the session.
+        {
+            let mut project = state.project.lock().unwrap();
+            "Edited".clone_into(&mut project.as_mut().unwrap().name);
+        }
+        state.with_file(|file| file.dirty = true);
+
+        state.speleodb_unlink().unwrap();
+
+        assert!(is_v2(&path), "the unlink upgraded the file");
+        assert_eq!(link_on_disk(&path), None, "without the link");
+        assert_eq!(
+            decoded(&path).project.name,
+            "Legacy",
+            "the survey on disk, not the unsaved edit"
+        );
+        assert!(state.has_unsaved_changes(), "the edit is still unsaved");
+        let kept = AppState::list_project_backups(&path)
+            .into_iter()
+            .filter(|b| b.path.ends_with(".pre-v2.stalx"))
+            .count();
+        assert_eq!(kept, 1, "the 0.6.0 original is kept");
+        assert!(state.close_project().success);
+        assert!(state.open_project(path.clone()).success);
+        assert!(state.speleo_link().is_none());
+        forget_backups(&stem);
+    });
+}
