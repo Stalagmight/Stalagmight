@@ -160,7 +160,8 @@ regions). Read the comment blocks in those two files plus
   made with a newer Stalagmight opens read-only with a banner naming the reason
   (`read-only-file-banner`, no button: there is nothing to do here but update);
   a refused save is worded for it. An old
-  file whose conversion moved stations shows the one-time conversion notice
+  file whose conversion moved stations, changed a depth or could not place a
+  station shows the one-time conversion notice
   (`conversion-notice-banner`, "the original is kept": Recent Projects, right-click, Restore an earlier copy) until
   dismissed. The history-discarded banner (`history-discarded-banner`) is
   unchanged: it also covers an old file's history, which the conversion drops.

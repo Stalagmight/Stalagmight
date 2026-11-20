@@ -743,7 +743,9 @@ with its reason, is the plan's "Status (final)" section:
   export draws one comment and one star per station.
 - **The file is JSON.** An old SQLite file opens as before and is upgraded on
   its first save, its original kept (Recent Projects: right-click the project, Restore an earlier copy); its undo history is not kept.
-  A file with moved stations shows a one-time conversion notice. A file made
+  A file whose conversion moved stations, changed a depth or could not place
+  a station shows a one-time conversion notice (a closed file upgraded by a
+  Recents rename or a link strip shows it at its next open). A file made
   with a newer Stalagmight opens read-only. A save refuses a file another
   program changed since it was opened and asks which version to keep. An older
   Stalagmight cannot open a file this version saved, and SpeleoDB pushes send
@@ -2847,7 +2849,15 @@ always keeps the damaged original first, as the next free
   at it (a managed copy is marked unpushed). Every repair is listed. A file
   nothing can rebuild is left as it is; a sound file has nothing to do. Refused
   while the file is open, or for a file made with a newer version.
-- **Legacy SQLite**: 0.6.0's repair of the database in place.
+- **Legacy SQLite**: 0.6.0's repair of the database in place (REINDEX,
+  VACUUM), run only on a file the open refuses for damage. A file that opens
+  is not touched ("Nothing to repair"), nor is one this version cannot
+  convert although 0.6.0 opens it: that file is not damaged, its open reports
+  `CANNOT_CONVERT` ("This file needs converting ..., and this version cannot
+  convert it: <reason>") instead of offering this dialog, and the repair says
+  so if asked. After the repair the open is tried again: the result is
+  "succeeded" only when the project then opens; otherwise it says why it
+  still cannot be opened.
 
 Export Salvageable Data writes the repaired project as version 2 JSON (with
 the counts and the repairs as warnings) for a version 2 file, and the legacy
