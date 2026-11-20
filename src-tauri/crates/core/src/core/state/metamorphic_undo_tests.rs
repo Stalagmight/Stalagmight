@@ -787,7 +787,7 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) {
     }
     if closures {
         let targets = read_targets(state);
-        for _ in 0..1 + rng.below(2) {
+        for _ in 0..=rng.below(2) {
             let (Some(&a), Some(&b)) = (pick(rng, &targets.slots), pick(rng, &targets.slots))
             else {
                 break;
@@ -831,7 +831,7 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
     }
     match rng.below(6) {
         0 => {
-            let shots: Vec<ShotData> = (0..1 + rng.below(3)).map(|_| random_shot(rng)).collect();
+            let shots: Vec<ShotData> = (0..=rng.below(3)).map(|_| random_shot(rng)).collect();
             let color = *pick(rng, COLORS).unwrap_or(&"#000000");
             let name = format!("pre-{}", 1000 + rng.below(9000));
             state.execute(create_line_command(name, color, shots));
@@ -1731,7 +1731,7 @@ fn pair_move_out_and_back_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Co
 /// one `CreateShot` append per shot: same shot count, values, order, station
 /// names, allocators, placement (uuids masked: both routes mint them).
 fn pair_create_with_shots_vs_appends(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
-    let shots: Vec<ShotData> = (0..1 + rng.below(3)).map(|_| random_shot(rng)).collect();
+    let shots: Vec<ShotData> = (0..=rng.below(3)).map(|_| random_shot(rng)).collect();
     let name = format!("pair-{}", 1000 + rng.below(9000));
     let color = *pick(rng, COLORS).unwrap_or(&"#000000");
     let bulk = twins

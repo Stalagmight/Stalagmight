@@ -499,7 +499,7 @@ fn lifecycle_commands_record_no_entry_and_edits_record_one() {
     assert!(state.execute(Command::SaveProject { path: None }).success);
     assert!(state.execute(Command::CloseProject).success);
     assert!(state.get_undo_stack().is_empty(), "CloseProject drops it");
-    let r = state.execute(Command::OpenProject { path: path.clone() });
+    let r = state.execute(Command::OpenProject { path });
     assert!(r.success);
     assert_eq!(
         state.get_undo_stack().len(),
@@ -1472,7 +1472,7 @@ fn set_length(state: &AppState, line_id: LineId, shot_id: ShotId, length: f64) {
 
 fn set_live_length(state: &AppState, line_id: LineId, index: usize, length: f64) {
     tamper(state, |p| {
-        p.line_mut(line_id).unwrap().shots[index].length = length
+        p.line_mut(line_id).unwrap().shots[index].length = length;
     });
 }
 

@@ -23,7 +23,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 
@@ -578,9 +577,7 @@ fn the_banner_clears_on_the_next_clean_open() {
     });
     let state = open(&path);
     assert!(state.history_discarded());
-    let r = state.execute(Command::OpenProject {
-        path: clean.clone(),
-    });
+    let r = state.execute(Command::OpenProject { path: clean });
     assert!(r.success);
     assert!(!state.history_discarded(), "a clean open clears the banner");
     assert!(!state.history_discarded_from_earlier_version());

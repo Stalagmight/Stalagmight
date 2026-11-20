@@ -68,7 +68,7 @@ fn open_with(lines: usize, long: Option<usize>) -> Gate {
     let bytes = stalx_v2::encode(&g.project, &Extras::default(), Mode::Normal).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     let state = AppState::new().unwrap();
-    let r = state.execute(Command::OpenProject { path: path.clone() });
+    let r = state.execute(Command::OpenProject { path });
     assert!(r.success, "open the gate survey: {:?}", r.error);
     assert!(state.get_undo_stack().is_empty());
     Gate {

@@ -36,7 +36,6 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 
@@ -443,7 +442,10 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
         "the undo restored the shot it changed, and only that one"
     );
     assert!(reopened.redo().success);
-    assert_eq!(shot_lengths(&reopened, line_id)[0], 42.5);
+    assert_eq!(
+        shot_lengths(&reopened, line_id)[0].to_bits(),
+        42.5f64.to_bits()
+    );
 }
 
 /// A line that has had a shot deleted has handed out more ids than it holds
