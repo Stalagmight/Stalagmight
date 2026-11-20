@@ -45,8 +45,7 @@
 //! itself, run on a copy: the preview is the same code as the command.
 
 use crate::{
-    CombineJoinKind, CombineStationRenames, KeptMovesReason, LineEnd, LineId, StationId,
-    StationRef,
+    CombineJoinKind, CombineStationRenames, KeptMovesReason, LineEnd, LineId, StationId, StationRef,
 };
 
 use super::super::{ClosureId, LoopClosure};

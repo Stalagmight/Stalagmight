@@ -179,8 +179,8 @@ impl Project {
             ));
         }
         let budget = crate::FEATURE_ID_STRIDE.saturating_sub(1) as usize;
-        let total = self.line(k).map_or(0, |l| l.shots.len())
-            + self.line(o).map_or(0, |l| l.shots.len());
+        let total =
+            self.line(k).map_or(0, |l| l.shots.len()) + self.line(o).map_or(0, |l| l.shots.len());
         (total > budget)
             .then(|| format!("The combined line would have {total} shots (at most {budget})"))
     }
@@ -247,11 +247,7 @@ impl Project {
                 kept_hand_wins: true,
             });
         }
-        let shift = if moving == o {
-            gap
-        } else {
-            [-gap[0], -gap[1]]
-        };
+        let shift = if moving == o { gap } else { [-gap[0], -gap[1]] };
         Ok(Decision {
             join: *join,
             moving,
@@ -272,7 +268,11 @@ impl Project {
                 "a missing line".to_string()
             }
         };
-        format!("Lines {} and {} cannot be combined", name(kept), name(other))
+        format!(
+            "Lines {} and {} cannot be combined",
+            name(kept),
+            name(other)
+        )
     }
 
     /// Step 1 with steps 2, 3 and 6 for each candidate: the moving line, its
@@ -313,7 +313,8 @@ impl Project {
                 continue;
             }
             let mut trial = self.trial(join, m);
-            let join_station = (join.kept_station == join.other_station).then_some(join.kept_station);
+            let join_station =
+                (join.kept_station == join.other_station).then_some(join.kept_station);
             let parts = trial.scratch.datum_held_parts(m, &placements, join_station);
             for (station, toward) in parts {
                 if trial.scratch.detach_line_from(m, station).is_ok() {
@@ -406,7 +407,12 @@ impl Project {
         };
         // Step 6: a station both lines pass besides the join.
         let chain_m: Vec<StationId> = self.line_stations(m).unwrap_or(&[]).to_vec();
-        let on_f: BTreeSet<StationId> = self.line_stations(f).unwrap_or(&[]).iter().copied().collect();
+        let on_f: BTreeSet<StationId> = self
+            .line_stations(f)
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+            .collect();
         for s in chain_m {
             let is_join = join.kept_station == join.other_station && s == join.kept_station;
             if !on_f.contains(&s) || is_join {

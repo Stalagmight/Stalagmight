@@ -29,19 +29,36 @@ fn a_split_at_a_station_shares_it_and_moves_nothing() {
     let at1 = st(&p, l, 4);
     add_datum(&mut p, at1, gps(10.0, 20.0));
     p.datums[0].via = Some(l);
-    p.line_mut(l).unwrap().hand_moves.insert(k, [0.0, 0.0, 0.25]);
+    p.line_mut(l)
+        .unwrap()
+        .hand_moves
+        .insert(k, [0.0, 0.0, 0.25]);
     let tip = st(&p, branch, 1);
-    p.push_closure(tip, Some(branch), st(&p, l, 4), Some(l), ClosureStrategy::Batch);
+    p.push_closure(
+        tip,
+        Some(branch),
+        st(&p, l, 4),
+        Some(l),
+        ClosureStrategy::Batch,
+    );
     assert_valid(&p);
     let before = p.raw_positions();
     let preview = p
-        .preview_split_line(l, SplitAt::Station { station_index: 2 }, &options("Front", "Back"))
+        .preview_split_line(
+            l,
+            SplitAt::Station { station_index: 2 },
+            &options("Front", "Back"),
+        )
         .unwrap();
     assert_eq!(preview.station, Some(k));
     assert_eq!((preview.shots_a, preview.shots_b), (2, 2));
     assert!(preview.hand_move_copied);
     assert!(preview.promoted_closures.is_empty());
-    let second = ok(p.split_line(l, SplitAt::Station { station_index: 2 }, &options("Front", "Back")));
+    let second = ok(p.split_line(
+        l,
+        SplitAt::Station { station_index: 2 },
+        &options("Front", "Back"),
+    ));
     assert_eq!(second, preview.new_line);
     assert_eq!(p.line_stations(l).unwrap().last(), Some(&k));
     assert_eq!(p.line_stations(second).unwrap()[0], k);
@@ -68,7 +85,14 @@ fn a_split_inside_a_shot_inserts_the_shared_station_or_snaps_to_an_end() {
     let l = line(&mut p, "Main", run("m", 90.0, 10.0, 3));
     let before = p.raw_positions();
     let id = shot_id(&p, l, 1);
-    let second = ok(p.split_line(l, SplitAt::Shot { shot_id: id, distance: 4.0 }, &options("A", "B")));
+    let second = ok(p.split_line(
+        l,
+        SplitAt::Shot {
+            shot_id: id,
+            distance: 4.0,
+        },
+        &options("A", "B"),
+    ));
     assert_eq!(p.line(l).unwrap().shots.len(), 2);
     assert_eq!(p.line(second).unwrap().shots.len(), 2);
     let shared = st(&p, second, 0);
@@ -78,7 +102,14 @@ fn a_split_inside_a_shot_inserts_the_shared_station_or_snaps_to_an_end() {
     let mut q = empty();
     let m = line(&mut q, "Main", run("m", 90.0, 10.0, 3));
     let id = shot_id(&q, m, 1);
-    let second = ok(q.split_line(m, SplitAt::Shot { shot_id: id, distance: 0.005 }, &options("A", "B")));
+    let second = ok(q.split_line(
+        m,
+        SplitAt::Shot {
+            shot_id: id,
+            distance: 0.005,
+        },
+        &options("A", "B"),
+    ));
     assert_eq!(st(&q, second, 0), st(&q, m, 1));
     assert_eq!(q.line(m).unwrap().shots.len(), 1);
 }
@@ -89,16 +120,38 @@ fn a_split_refuses_as_today() {
     let l = line(&mut p, "Main", run("m", 90.0, 10.0, 3));
     let _other = line(&mut p, "Other", run("o", 0.0, 1.0, 1));
     let end = refused(p.split_line(l, SplitAt::Station { station_index: 3 }, &options("A", "B")));
-    assert_eq!(end, "Station 3 is the first or last station of Main; split at a station in the middle");
+    assert_eq!(
+        end,
+        "Station 3 is the first or last station of Main; split at a station in the middle"
+    );
     let first = refused(p.split_line(l, SplitAt::Station { station_index: 0 }, &options("A", "B")));
-    assert!(first.starts_with("Station 0 is the first or last"), "{first}");
-    let nameless = refused(p.split_line(l, SplitAt::Station { station_index: 1 }, &options(" ", "B")));
+    assert!(
+        first.starts_with("Station 0 is the first or last"),
+        "{first}"
+    );
+    let nameless =
+        refused(p.split_line(l, SplitAt::Station { station_index: 1 }, &options(" ", "B")));
     assert_eq!(nameless, "Each half of a split needs a name");
-    let taken = refused(p.split_line(l, SplitAt::Station { station_index: 1 }, &options("Other", "B")));
+    let taken = refused(p.split_line(
+        l,
+        SplitAt::Station { station_index: 1 },
+        &options("Other", "B"),
+    ));
     assert_eq!(taken, "A line named \"Other\" already exists");
     let id = shot_id(&p, l, 0);
-    let outside = refused(p.split_line(l, SplitAt::Shot { shot_id: id, distance: 11.0 }, &options("A", "B")));
+    let outside = refused(p.split_line(
+        l,
+        SplitAt::Shot {
+            shot_id: id,
+            distance: 11.0,
+        },
+        &options("A", "B"),
+    ));
     assert_eq!(outside, "Distance 11 is outside the shot (0 to 10 m)");
     // Keeping the line's own name on a half is fine.
-    ok(p.split_line(l, SplitAt::Station { station_index: 1 }, &options("Main", "Main 2")));
+    ok(p.split_line(
+        l,
+        SplitAt::Station { station_index: 1 },
+        &options("Main", "Main 2"),
+    ));
 }

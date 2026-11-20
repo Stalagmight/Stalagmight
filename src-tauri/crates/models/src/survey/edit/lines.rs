@@ -25,9 +25,7 @@ use crate::{
     SurveyCredit, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 
-use super::super::{
-    EditContext, Line, LineMeta, LoopClosure, Project, StartAt, ZeroDatum,
-};
+use super::super::{EditContext, Line, LineMeta, LoopClosure, Project, StartAt, ZeroDatum};
 use super::shots::{max_shots_per_line, stored_credit};
 use super::{EditError, Edited, Epilogue};
 
@@ -195,7 +193,11 @@ impl Project {
     /// Why `name` cannot name a line (other than `replacing`), if it cannot:
     /// empty, a forbidden character, or another line's (today's words).
     /// Returns it trimmed.
-    pub fn validate_line_name(&self, name: &str, replacing: &[LineId]) -> Result<String, EditError> {
+    pub fn validate_line_name(
+        &self,
+        name: &str,
+        replacing: &[LineId],
+    ) -> Result<String, EditError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(EditError::refused("A line name cannot be empty"));
@@ -223,7 +225,9 @@ impl Project {
     ) -> Result<Edited<()>, EditError> {
         self.line_or_refuse(line)?;
         let name = match &updates.name {
-            Some(name) => Some(self.validate_line_name(name.as_deref().unwrap_or_default(), &[line])?),
+            Some(name) => {
+                Some(self.validate_line_name(name.as_deref().unwrap_or_default(), &[line])?)
+            }
             None => None,
         };
         self.apply_edit(|p| {

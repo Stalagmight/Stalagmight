@@ -9,8 +9,7 @@ use crate::{
 use super::super::test_helpers::{gps, meta};
 use super::super::{ClosureStrategy, Project, StartAt};
 use super::edit_test_helpers::{
-    add_datum, assert_valid, empty, line, line_at, line_from, names, near, ok, refused, run, st,
-    xy,
+    add_datum, assert_valid, empty, line, line_at, line_from, names, near, ok, refused, run, st, xy,
 };
 use super::{TornTieKind, TornTieReason};
 
@@ -49,7 +48,7 @@ fn a_merged_join_concatenates_the_chains_and_moves_nothing() {
     let report = ok(p.combine_lines(a, b, &options("AB")));
     assert_eq!(report.moving_line, None);
     assert!(p.line(b).is_none());
-    let mut expected = ca.clone();
+    let mut expected = ca;
     expected.extend(&cb[1..]);
     assert_eq!(chain(&p, a), expected);
     assert_eq!(p.line(a).unwrap().name.as_deref(), Some("AB"));
@@ -76,7 +75,12 @@ fn side_by_side_free_pieces_join_and_the_other_side_moves_by_the_residual() {
     let report = ok(p.combine_lines(a, b, &options("AB")));
     assert_eq!(report.moved_lines, vec![b]);
     let after = p.raw_positions();
-    near(xy(&after, b1), [xy(&before, b1)[0] - 0.0004, 5.0], TOL, "B moved");
+    near(
+        xy(&after, b1),
+        [xy(&before, b1)[0] - 0.0004, 5.0],
+        TOL,
+        "B moved",
+    );
     near(xy(&after, b2), [20.0, 10.0], TOL, "B moved");
     near(xy(&after, st(&p, a, 0)), [0.0, 0.0], TOL, "A stays");
     assert_eq!(p.placements.len(), 1);
@@ -188,7 +192,12 @@ fn a_closure_inside_one_piece_tears_the_junction_nearest_the_moving_line() {
     let closure = p.closures[0];
     assert_eq!(closure.strategy, ClosureStrategy::Batch);
     assert_eq!((closure.a, closure.b), (s0, new_end));
-    near(xy(&after, new_end), [0.0, -0.5], TOL, "torn end moved with B");
+    near(
+        xy(&after, new_end),
+        [0.0, -0.5],
+        TOL,
+        "torn end moved with B",
+    );
     assert_valid(&p);
 }
 
@@ -263,7 +272,10 @@ fn the_joined_station_keeps_the_kept_name_id_and_picked_comment() {
     let mut opts = options("AB");
     opts.comment_pick = CombinePick::Both;
     ok(both.combine_lines(a, b, &opts));
-    assert_eq!(both.station(a2).unwrap().comment.as_deref(), Some("kept\nother"));
+    assert_eq!(
+        both.station(a2).unwrap().comment.as_deref(),
+        Some("kept\nother")
+    );
     assert!(both.station(b0).is_none());
     opts.comment_pick = CombinePick::Other;
     ok(p.combine_lines(a, b, &opts));
@@ -279,7 +291,12 @@ fn a_branch_at_the_join_stays_attached_and_end_to_end_reverses_the_other_line() 
     let a = line(&mut p, "A", run("a", 90.0, 10.0, 2));
     let a2 = st(&p, a, 2);
     // B ends on A's end: end to end.
-    let b0 = ok(p.create_line(meta("B"), StartAt::New, run("b", 270.0, 10.0, 2), Some([40.0, 0.0])));
+    let b0 = ok(p.create_line(
+        meta("B"),
+        StartAt::New,
+        run("b", 270.0, 10.0, 2),
+        Some([40.0, 0.0]),
+    ));
     let b_end = st(&p, b0, 2);
     let branch = line_from(&mut p, "Branch", b_end, run("x", 0.0, 3.0, 1));
     let before = p.raw_positions();
@@ -293,7 +310,12 @@ fn a_branch_at_the_join_stays_attached_and_end_to_end_reverses_the_other_line() 
     let combined = chain(&p, a);
     assert_eq!(combined[2], a2);
     assert_eq!(p.line_stations(branch).unwrap()[0], a2);
-    near(xy(&p.raw_positions(), *combined.last().unwrap()), [40.0, 0.0], TOL, "far end");
+    near(
+        xy(&p.raw_positions(), *combined.last().unwrap()),
+        [40.0, 0.0],
+        TOL,
+        "far end",
+    );
     assert_valid(&p);
 }
 
@@ -313,5 +335,8 @@ fn the_station_query_offers_each_partner_ending_at_the_point() {
     let all = p.combine_candidates_at_point(crate::StationRef::new(a, 1));
     assert_eq!(all.len(), 3);
     let one = p.combine_candidate_joining(b, a, None).unwrap();
-    assert_eq!((one.line_a, one.end_a, one.end_b), (a, LineEnd::End, LineEnd::Start));
+    assert_eq!(
+        (one.line_a, one.end_a, one.end_b),
+        (a, LineEnd::End, LineEnd::Start)
+    );
 }

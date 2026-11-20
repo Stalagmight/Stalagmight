@@ -25,8 +25,8 @@
 
 use crate::{CombinePick, LineId, StationId};
 
-use super::EditError;
 use super::super::{LoopClosure, Project, StationAlias};
+use super::EditError;
 
 /// How a fold settles the two stations' comments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

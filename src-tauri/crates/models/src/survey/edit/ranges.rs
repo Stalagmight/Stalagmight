@@ -361,7 +361,12 @@ impl Project {
     /// Datum and closure-end `via` hints that name `from` on a station now
     /// on line `to` (and no longer on `from`) name `to`: they follow their
     /// station to the line it moved to.
-    pub(super) fn repoint_vias(&mut self, from: LineId, to: LineId, stations: &BTreeSet<StationId>) {
+    pub(super) fn repoint_vias(
+        &mut self,
+        from: LineId,
+        to: LineId,
+        stations: &BTreeSet<StationId>,
+    ) {
         let topology = self.topology_arc();
         let moved = |s: StationId| stations.contains(&s) && topology.slot_on(s, from).is_none();
         for datum in &mut self.datums {

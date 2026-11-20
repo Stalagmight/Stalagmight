@@ -10,8 +10,8 @@ use crate::{
 use super::super::test_helpers::gps;
 use super::super::{ClosureStrategy, Project};
 use super::edit_test_helpers::{
-    add_datum, assert_still, assert_valid, empty, flat_u, line, line_from, names, near, ok, refused, run,
-    shot_id, shot_u, st, xy,
+    add_datum, assert_still, assert_valid, empty, flat_u, line, line_from, names, near, ok,
+    refused, run, shot_id, shot_u, st, xy,
 };
 use super::{EditError, ShotPlace};
 
@@ -44,18 +44,31 @@ fn insert_after_a_mid_shot_uses_the_mid_rule_and_moves_the_tail() {
     let (mut p, l) = east3();
     let before = p.raw_positions();
     let (s2, s3) = (st(&p, l, 2), st(&p, l, 3));
-    let created = ok(p.create_shot(l, flat_u(90.0, 5.0, "ins"), ShotPlace::After(shot_id(&p, l, 0))));
+    let created = ok(p.create_shot(
+        l,
+        flat_u(90.0, 5.0, "ins"),
+        ShotPlace::After(shot_id(&p, l, 0)),
+    ));
     assert_eq!(created.index, 1);
     assert_eq!(names(&p, l), ["0", "1", "1a", "2", "3"]);
     let after = p.raw_positions();
     near(xy(&after, st(&p, l, 0)), [0.0, 0.0], TOL, "start stays");
     near(xy(&after, created.station), [15.0, 0.0], TOL, "new station");
-    near(xy(&after, s2), [xy(&before, s2)[0] + 5.0, 0.0], TOL, "tail moved");
+    near(
+        xy(&after, s2),
+        [xy(&before, s2)[0] + 5.0, 0.0],
+        TOL,
+        "tail moved",
+    );
     near(xy(&after, s3), [35.0, 0.0], TOL, "tail moved");
     // Inserting before a mid shot is the same insertion as after the one
     // before it.
     let mut q = east3().0;
-    let c2 = ok(q.create_shot(l, flat_u(90.0, 5.0, "ins"), ShotPlace::Before(shot_id(&q, l, 1))));
+    let c2 = ok(q.create_shot(
+        l,
+        flat_u(90.0, 5.0, "ins"),
+        ShotPlace::Before(shot_id(&q, l, 1)),
+    ));
     assert_eq!(c2.index, 1);
     assert_eq!(names(&q, l), names(&p, l));
     assert_eq!(q.raw_positions().slots(&q), after.slots(&p));
@@ -76,7 +89,11 @@ fn prepend_names_by_the_prepend_rule_and_keeps_the_old_start_still() {
     near(xy(&after, created.station), [-4.0, 0.0], TOL, "new start");
     // Before the first shot is a prepend too.
     let mut q = east3().0;
-    let c = ok(q.create_shot(l, flat_u(90.0, 4.0, "pre"), ShotPlace::Before(shot_id(&q, l, 0))));
+    let c = ok(q.create_shot(
+        l,
+        flat_u(90.0, 4.0, "pre"),
+        ShotPlace::Before(shot_id(&q, l, 0)),
+    ));
     assert_eq!(st(&q, l, 0), c.station);
 }
 
@@ -86,12 +103,18 @@ fn creating_a_shot_refuses_as_today() {
     let zero = refused(p.append_shot(l, flat_u(90.0, 0.0, "z")));
     assert_eq!(zero, "The new shot in line \"Main\" has zero length");
     let negative = refused(p.append_shot(l, flat_u(90.0, -2.0, "n")));
-    assert_eq!(negative, "The new shot in line \"Main\" has negative length: -2.0m");
+    assert_eq!(
+        negative,
+        "The new shot in line \"Main\" has negative length: -2.0m"
+    );
     let nan = refused(p.append_shot(l, flat_u(f64::NAN, 2.0, "x")));
     assert_eq!(nan, "Shot has a non-finite (NaN/inf) value");
     let taken = refused(p.append_shot(l, flat_u(90.0, 2.0, "m-0")));
     assert!(taken.contains("m-0"), "{taken}");
-    assert_eq!(refused(p.append_shot(99, flat_u(90.0, 2.0, "y"))), crate::LINE_GONE);
+    assert_eq!(
+        refused(p.append_shot(99, flat_u(90.0, 2.0, "y"))),
+        crate::LINE_GONE
+    );
     let gone = refused(p.create_shot(l, flat_u(90.0, 2.0, "y"), ShotPlace::After(12345)));
     assert_eq!(gone, crate::SHOT_GONE);
     // Nothing changed.
@@ -106,7 +129,11 @@ fn a_new_shot_takes_its_neighbours_credit_and_a_first_shot_the_legacy_one() {
         ..flat_u(90.0, 10.0, "a")
     };
     let l = line(&mut p, "Main", vec![credited, flat_u(90.0, 10.0, "b")]);
-    let c = ok(p.create_shot(l, flat_u(90.0, 1.0, "c"), ShotPlace::After(shot_id(&p, l, 0))));
+    let c = ok(p.create_shot(
+        l,
+        flat_u(90.0, 1.0, "c"),
+        ShotPlace::After(shot_id(&p, l, 0)),
+    ));
     let shot = &p.line(l).unwrap().shots[c.index];
     assert_eq!(shot.credit, p.line(l).unwrap().shots[0].credit);
     let pre = ok(p.prepend_shot(l, flat_u(90.0, 1.0, "d")));
@@ -143,7 +170,11 @@ fn an_insert_on_a_datum_held_tail_keeps_the_tail_and_moves_the_head() {
     assert_valid(&p);
     let before = p.raw_positions();
     let s0 = st(&p, l, 0);
-    ok(p.create_shot(l, flat_u(90.0, 5.0, "ins"), ShotPlace::After(shot_id(&p, l, 0))));
+    ok(p.create_shot(
+        l,
+        flat_u(90.0, 5.0, "ins"),
+        ShotPlace::After(shot_id(&p, l, 0)),
+    ));
     let after = p.raw_positions();
     near(xy(&after, s3), xy(&before, s3), TOL, "datum station stays");
     near(
@@ -169,7 +200,12 @@ fn a_geometry_update_keeps_the_lines_start_and_a_comment_moves_nothing() {
     ));
     let after = p.raw_positions();
     near(xy(&after, st(&p, l, 0)), [0.0, 0.0], TOL, "start stays");
-    near(xy(&after, s3), [xy(&before, s3)[0] + 2.0, 0.0], TOL, "end moves");
+    near(
+        xy(&after, s3),
+        [xy(&before, s3)[0] + 2.0, 0.0],
+        TOL,
+        "end moves",
+    );
 
     let snapshot = p.clone();
     ok(p.update_shot(
@@ -216,7 +252,10 @@ fn updates_refuse_as_today() {
         },
     ));
     assert_eq!(nan, "Shot update has a non-finite (NaN/inf) value");
-    assert_eq!(refused(p.update_shot(l, 7777, &ShotUpdates::default())), crate::SHOT_GONE);
+    assert_eq!(
+        refused(p.update_shot(l, 7777, &ShotUpdates::default())),
+        crate::SHOT_GONE
+    );
 }
 
 #[test]
@@ -249,7 +288,12 @@ fn delete_first_mid_and_last_shot_remove_one_station_each() {
     assert_eq!(p.line_stations(l).unwrap(), [s1, s2, s4]);
     let after = p.raw_positions();
     near(xy(&after, s1), xy(&before, s1), TOL, "head stays");
-    near(xy(&after, s4), [xy(&before, s4)[0] - 10.0, 0.0], TOL, "tail closes the gap");
+    near(
+        xy(&after, s4),
+        [xy(&before, s4)[0] - 10.0, 0.0],
+        TOL,
+        "tail closes the gap",
+    );
     // Last shot.
     let gone = ok(p.delete_shot(l, shot_id(&p, l, 1)));
     assert_eq!(gone.station, s4);
@@ -327,7 +371,9 @@ fn a_mid_delete_in_a_loop_or_between_two_datums_is_refused() {
         text,
         "This shot is part of a loop (the two sides are already connected). Use split instead."
     );
-    let preview = looped.preview_delete_shot(l, shot_id(&looped, l, 1)).unwrap();
+    let preview = looped
+        .preview_delete_shot(l, shot_id(&looped, l, 1))
+        .unwrap();
     assert!(preview.shift_blocked);
 
     // Both sides held: a placement datum on the head, and the tail reaches
@@ -380,7 +426,10 @@ fn split_at_distance_inserts_a_mid_station_and_keeps_positions() {
     let short = refused(p.split_shot_at_distance(l, id, 0.005, None));
     assert_eq!(short, "Both sides of the split must be at least 0.01m long");
     let outside = refused(p.split_shot_at_distance(l, id, 50.0, None));
-    assert!(outside.starts_with("Distance must be strictly between 0"), "{outside}");
+    assert!(
+        outside.starts_with("Distance must be strictly between 0"),
+        "{outside}"
+    );
 }
 
 #[test]
@@ -398,10 +447,7 @@ fn the_new_station_gets_a_fresh_id_and_ids_are_never_reused() {
 fn a_refused_edit_leaves_the_project_as_it_was() {
     let (mut p, l) = east3();
     let snapshot = p.clone();
-    assert!(matches!(
-        p.delete_shot(l, 4242),
-        Err(EditError::Refused(_))
-    ));
+    assert!(matches!(p.delete_shot(l, 4242), Err(EditError::Refused(_))));
     assert_eq!(p, snapshot);
     let slot = StationRef::new(l, 0);
     assert_eq!(p.station_at(slot), snapshot.station_at(slot));

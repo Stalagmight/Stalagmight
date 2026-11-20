@@ -30,7 +30,12 @@ fn a_new_line_starts_a_piece_at_its_placement_and_is_seed_named() {
     near(xy(&positions, st(&p, l, 2)), [5.0, 17.0], TOL, "end");
     // A second line without a placement starts at the origin.
     let m = line(&mut p, "Second", run("s", 90.0, 1.0, 1));
-    near(xy(&p.raw_positions(), st(&p, m, 0)), [0.0, 0.0], TOL, "origin");
+    near(
+        xy(&p.raw_positions(), st(&p, m, 0)),
+        [0.0, 0.0],
+        TOL,
+        "origin",
+    );
     assert_valid(&p);
 }
 
@@ -47,7 +52,12 @@ fn a_line_from_a_station_makes_a_junction_and_moves_nothing() {
     // The new line's stations avoid the start's name on it.
     assert_eq!(names(&p, b), ["2", "1", "2a", "3"]);
     assert_still(&before, &p.raw_positions(), TOL, &[]);
-    near(xy(&p.raw_positions(), st(&p, b, 3)), [10.0, 15.0], TOL, "branch end");
+    near(
+        xy(&p.raw_positions(), st(&p, b, 3)),
+        [10.0, 15.0],
+        TOL,
+        "branch end",
+    );
     assert_eq!(p.placements.len(), 1);
     assert_valid(&p);
 }
@@ -62,13 +72,12 @@ fn creating_a_line_refuses_as_today() {
         None,
     ));
     assert_eq!(zero, "Shot Main: 1 \u{2192} 2 has zero length");
-    let negative = refused(p.create_line(
-        meta("  "),
-        StartAt::New,
-        vec![flat_u(0.0, -1.5, "a")],
-        None,
-    ));
-    assert_eq!(negative, "Shot New line: 0 \u{2192} 1 has negative length: -1.5m");
+    let negative =
+        refused(p.create_line(meta("  "), StartAt::New, vec![flat_u(0.0, -1.5, "a")], None));
+    assert_eq!(
+        negative,
+        "Shot New line: 0 \u{2192} 1 has negative length: -1.5m"
+    );
     let nan = refused(p.create_line(
         meta("X"),
         StartAt::New,
@@ -195,7 +204,12 @@ fn a_new_azimuth_reference_turns_the_line_about_its_start() {
     ));
     let positions = p.raw_positions();
     near(xy(&positions, st(&p, a, 0)), [0.0, 0.0], TOL, "start stays");
-    near(xy(&positions, st(&p, a, 1)), [10.0, 0.0], 1e-9, "end turned east");
+    near(
+        xy(&positions, st(&p, a, 1)),
+        [10.0, 0.0],
+        1e-9,
+        "end turned east",
+    );
 }
 
 #[test]

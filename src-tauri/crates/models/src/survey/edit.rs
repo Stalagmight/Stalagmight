@@ -59,52 +59,11 @@ mod split;
 
 #[cfg(test)]
 #[expect(
-    clippy::panic,
-    reason = "test helpers: a refused edit is a broken test setup"
-)]
-mod edit_test_helpers;
-#[cfg(test)]
-#[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
-mod shots_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
-)]
-mod lines_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
-)]
-mod ranges_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
-)]
-mod reverse_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
-)]
-mod split_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
-)]
-mod combine_tests;
+mod combine_port_closure_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -118,14 +77,54 @@ mod combine_port_lines_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
-mod combine_port_closure_tests;
+mod combine_port_misc_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_tests;
+#[cfg(test)]
+mod edit_fuzz_tests;
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    reason = "test helpers: a refused edit is a broken test setup"
+)]
+mod edit_test_helpers;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
-mod combine_port_misc_tests;
+mod lines_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod ranges_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod reverse_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod shots_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod split_tests;
 
 pub use combine::{
     CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,

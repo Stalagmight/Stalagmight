@@ -248,7 +248,9 @@ impl Project {
                 positions.z(join.kept_station),
                 positions.z(join.other_station),
             ) {
-                (Some(x), Some(y)) => Some((x - y).abs()).filter(|gap| *gap > COMBINE_DEPTH_NOTICE_M),
+                (Some(x), Some(y)) => {
+                    Some((x - y).abs()).filter(|gap| *gap > COMBINE_DEPTH_NOTICE_M)
+                }
                 _ => None,
             }
         };
@@ -302,20 +304,17 @@ impl Project {
         self.line(s1)?;
         self.line(s2)?;
         let positions = self.raw_positions();
-        let gap = |join: &CombineJoin| {
-            match (
-                self.chain_position(&positions, join.kept, join.kept_station),
-                self.chain_position(&positions, join.other, join.other_station),
-            ) {
-                (Some(x), Some(y)) => distance(x, y),
-                _ => f64::INFINITY,
-            }
+        let gap = |join: &CombineJoin| match (
+            self.chain_position(&positions, join.kept, join.kept_station),
+            self.chain_position(&positions, join.other, join.other_station),
+        ) {
+            (Some(x), Some(y)) => distance(x, y),
+            _ => f64::INFINITY,
         };
         let mut best: Option<(CombineJoin, Touch)> = None;
         for &end_a in self.joinable_ends(s1) {
             for &end_b in self.joinable_ends(s2) {
-                let Some((join, touch)) =
-                    self.pairing_touch(&positions, (s1, end_a), (s2, end_b))
+                let Some((join, touch)) = self.pairing_touch(&positions, (s1, end_a), (s2, end_b))
                 else {
                     continue;
                 };
@@ -333,26 +332,25 @@ impl Project {
                 }
             }
         }
-        let (join, touch) = match best {
-            Some(found) => found,
-            None => {
-                let join = CombineJoin {
-                    kept: s1,
-                    other: s2,
-                    kept_end: LineEnd::End,
-                    other_end: LineEnd::Start,
-                    kept_station: end_station(self, s1, LineEnd::End)?,
-                    other_station: end_station(self, s2, LineEnd::Start)?,
-                    kind: CombineJoinKind::CoLocated,
-                };
-                let reason = format!(
-                    "{} and {} do not meet at an end station: merge or close a loop between two \
+        let (join, touch) = if let Some(found) = best {
+            found
+        } else {
+            let join = CombineJoin {
+                kept: s1,
+                other: s2,
+                kept_end: LineEnd::End,
+                other_end: LineEnd::Start,
+                kept_station: end_station(self, s1, LineEnd::End)?,
+                other_station: end_station(self, s2, LineEnd::Start)?,
+                kind: CombineJoinKind::CoLocated,
+            };
+            let reason = format!(
+                "{} and {} do not meet at an end station: merge or close a loop between two \
                      of their ends first",
-                    self.line_label_of(s1),
-                    self.line_label_of(s2)
-                );
-                (join, Touch::refused(reason))
-            }
+                self.line_label_of(s1),
+                self.line_label_of(s2)
+            );
+            (join, Touch::refused(reason))
         };
         self.candidate_for(&positions, join, touch)
     }
@@ -375,26 +373,26 @@ impl Project {
         self.line(kept)?;
         self.line(other)?;
         let positions = self.raw_positions();
-        let (join, touch) = match self.pairing_touch(&positions, (kept, ends.kept), (other, ends.other))
+        let (join, touch) = if let Some(found) =
+            self.pairing_touch(&positions, (kept, ends.kept), (other, ends.other))
         {
-            Some(found) => found,
-            None => {
-                let join = CombineJoin {
-                    kept,
-                    other,
-                    kept_end: ends.kept,
-                    other_end: ends.other,
-                    kept_station: end_station(self, kept, ends.kept)?,
-                    other_station: end_station(self, other, ends.other)?,
-                    kind: CombineJoinKind::CoLocated,
-                };
-                let reason = format!(
-                    "{} and {} do not meet at those ends",
-                    self.line_label_of(kept),
-                    self.line_label_of(other)
-                );
-                (join, Touch::refused(reason))
-            }
+            found
+        } else {
+            let join = CombineJoin {
+                kept,
+                other,
+                kept_end: ends.kept,
+                other_end: ends.other,
+                kept_station: end_station(self, kept, ends.kept)?,
+                other_station: end_station(self, other, ends.other)?,
+                kind: CombineJoinKind::CoLocated,
+            };
+            let reason = format!(
+                "{} and {} do not meet at those ends",
+                self.line_label_of(kept),
+                self.line_label_of(other)
+            );
+            (join, Touch::refused(reason))
         };
         self.candidate_for(&positions, join, touch)
     }
@@ -594,15 +592,19 @@ impl Project {
         };
         if other_ends.len() > MAX_COMBINE_PARTNERS {
             let count = other_ends.len() + 1;
-            let Some((join, mut touch)) = other_ends.iter().find_map(|&o| {
-                self.pairing_touch(&positions, (line.id, end), shotless_start(o))
-            }) else {
+            let Some((join, mut touch)) = other_ends
+                .iter()
+                .find_map(|&o| self.pairing_touch(&positions, (line.id, end), shotless_start(o)))
+            else {
                 return Vec::new();
             };
             touch.blocked = Some(format!(
                 "{count} line ends meet here: select the two to combine in the Sections panel"
             ));
-            return self.candidate_for(&positions, join, touch).into_iter().collect();
+            return self
+                .candidate_for(&positions, join, touch)
+                .into_iter()
+                .collect();
         }
         if other_ends.is_empty() {
             let Some(&other) = through.first() else {
@@ -618,7 +620,10 @@ impl Project {
                 kind: CombineJoinKind::Merged,
             };
             let touch = Touch::refused("Merged to the middle of another line".to_string());
-            return self.candidate_for(&positions, join, touch).into_iter().collect();
+            return self
+                .candidate_for(&positions, join, touch)
+                .into_iter()
+                .collect();
         }
         let mut touching: Vec<(CombineJoin, Touch)> = other_ends
             .iter()
@@ -638,14 +643,12 @@ impl Project {
                 }
             }
         }
-        let gap = |join: &CombineJoin| {
-            match (
-                self.chain_position(&positions, join.kept, join.kept_station),
-                self.chain_position(&positions, join.other, join.other_station),
-            ) {
-                (Some(x), Some(y)) => distance(x, y),
-                _ => f64::INFINITY,
-            }
+        let gap = |join: &CombineJoin| match (
+            self.chain_position(&positions, join.kept, join.kept_station),
+            self.chain_position(&positions, join.other, join.other_station),
+        ) {
+            (Some(x), Some(y)) => distance(x, y),
+            _ => f64::INFINITY,
         };
         let mut best: Vec<(CombineJoin, Touch)> = Vec::new();
         for (join, touch) in touching {
@@ -654,7 +657,9 @@ impl Project {
                 rank(join.kind)
                     .cmp(&rank(b.kind))
                     .then_with(|| gap(&join).total_cmp(&gap(b)))
-                    .then_with(|| (join.kept_end == join.other_end).cmp(&(b.kept_end == b.other_end)))
+                    .then_with(|| {
+                        (join.kept_end == join.other_end).cmp(&(b.kept_end == b.other_end))
+                    })
                     .is_lt()
             };
             match best

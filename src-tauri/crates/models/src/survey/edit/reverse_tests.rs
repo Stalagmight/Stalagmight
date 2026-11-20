@@ -16,7 +16,15 @@ fn a_reverse_flips_the_chain_and_every_shot_and_moves_nothing() {
     a.pitch_out = Some(5.0);
     a.left = Some(1.0);
     a.right = Some(2.0);
-    let l = line(&mut p, "Main", vec![a, shot_u(100.0, 7.0, 3.0, 2.0, "b"), shot_u(200.0, 4.0, 2.0, 6.0, "c")]);
+    let l = line(
+        &mut p,
+        "Main",
+        vec![
+            a,
+            shot_u(100.0, 7.0, 3.0, 2.0, "b"),
+            shot_u(200.0, 4.0, 2.0, 6.0, "c"),
+        ],
+    );
     let before = p.raw_positions();
     let chain: Vec<u32> = p.line_stations(l).unwrap().to_vec();
     let ids: Vec<u32> = p.line(l).unwrap().shots.iter().map(|s| s.id).collect();

@@ -255,9 +255,7 @@ impl Project {
         place: ShotPlace,
     ) -> Result<CreatedShot, EditError> {
         if !data.all_finite() {
-            return Err(EditError::refused(
-                "Shot has a non-finite (NaN/inf) value",
-            ));
+            return Err(EditError::refused("Shot has a non-finite (NaN/inf) value"));
         }
         if let Some(refusal) = self.shot_insert_refusal(line) {
             return Err(EditError::Refused(refusal));
@@ -558,7 +556,11 @@ impl Project {
 
     /// The mutation of a delete: take shot `index` and its station off
     /// `line`, and delete that station if no other line has it.
-    fn remove_shot_station(&mut self, line: LineId, index: usize) -> Result<DeletedShot, EditError> {
+    fn remove_shot_station(
+        &mut self,
+        line: LineId,
+        index: usize,
+    ) -> Result<DeletedShot, EditError> {
         let Some(l) = self.line_mut(line) else {
             return Err(EditError::line_gone());
         };

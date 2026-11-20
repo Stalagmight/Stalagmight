@@ -5,7 +5,7 @@
 use crate::{LineId, ShotData, ShotId, StationId};
 
 use super::super::test_helpers::{flat, meta, project, shot};
-use super::super::{LineMeta, Project, RawPositions, StartAt};
+use super::super::{Project, RawPositions, StartAt};
 use super::{EditError, Edited};
 
 /// A flat shot with a fixed uuid.
@@ -94,17 +94,15 @@ pub(super) fn merge(p: &mut Project, moving: StationId, stationary: StationId) {
     let ctx = super::super::EditContext::merge(stationary, moving).with_renamed(moving, stationary);
     p.settle_anchors(&before, &ctx);
     let violations = p.validate();
-    assert!(violations.is_empty(), "merge left an invalid model: {violations:?}");
+    assert!(
+        violations.is_empty(),
+        "merge left an invalid model: {violations:?}"
+    );
 }
 
 /// An empty project.
 pub(super) fn empty() -> Project {
     project()
-}
-
-/// Line metadata with a name.
-pub(super) fn named(name: &str) -> LineMeta {
-    meta(name)
 }
 
 /// The session id of shot `index` of `line`.
@@ -149,7 +147,12 @@ pub(super) fn near(a: [f64; 2], b: [f64; 2], tol: f64, what: &str) {
 
 /// Every station present in both states sits where it was (within `tol`),
 /// except `except`.
-pub(super) fn assert_still(before: &RawPositions, after: &RawPositions, tol: f64, except: &[StationId]) {
+pub(super) fn assert_still(
+    before: &RawPositions,
+    after: &RawPositions,
+    tol: f64,
+    except: &[StationId],
+) {
     for (s, [x, y, _]) in after.iter() {
         if except.contains(&s) {
             continue;

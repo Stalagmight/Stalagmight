@@ -16,8 +16,7 @@ use super::super::lines::absorb_legacy_credit;
 use super::super::EditError;
 use super::plan::{moving_side, Decision, DUST_M};
 use super::{
-    CombineReport, JoinedMove, RemovedClosure, ReplacedClosure, TornTie, TornTieKind,
-    TornTieReason,
+    CombineReport, JoinedMove, RemovedClosure, ReplacedClosure, TornTie, TornTieKind, TornTieReason,
 };
 
 /// Positions agree within this when the facts compare moves (metres): well
@@ -118,7 +117,8 @@ impl Project {
             .iter()
             .filter(|c| {
                 c.strategy == ClosureStrategy::Tie
-                    && gap_of(&p0, c).is_some_and(|g| g < super::super::super::ALIGNMENT_TOLERANCE_M)
+                    && gap_of(&p0, c)
+                        .is_some_and(|g| g < super::super::super::ALIGNMENT_TOLERANCE_M)
             })
             .map(|c| c.id)
             .collect();
@@ -193,7 +193,11 @@ impl Project {
         // what hangs off it; the lines at the join station are on neither
         // (they stay with the joined station), and a closure end AT the join
         // station belongs to the side its `via` names.
-        let (jm, jf) = if decision.moving == o { (jo, jk) } else { (jk, jo) };
+        let (jm, jf) = if decision.moving == o {
+            (jo, jk)
+        } else {
+            (jk, jo)
+        };
         let merged_now = jm == jf;
         let fixed_line = if decision.moving == o { k } else { o };
         let (moving_side, _) = moving_side(self, decision.moving, jm, merged_now);
@@ -241,13 +245,15 @@ impl Project {
             if !snaps_before.contains(&closure.id) {
                 continue;
             }
-            let (a, b) = (side_of(closure.a, closure.a_via), side_of(closure.b, closure.b_via));
+            let (a, b) = (
+                side_of(closure.a, closure.a_via),
+                side_of(closure.b, closure.b_via),
+            );
             let crosses = crossing(closure);
             let pulled = decision.shifting && (a == Side::Moving) != (b == Side::Moving);
             if crosses || pulled {
                 closure.strategy = ClosureStrategy::Batch;
-                let reason = if held_parts.contains(&closure.a) || held_parts.contains(&closure.b)
-                {
+                let reason = if held_parts.contains(&closure.a) || held_parts.contains(&closure.b) {
                     TornTieReason::ZeroDatum
                 } else if crosses {
                     TornTieReason::Loop
@@ -482,7 +488,7 @@ impl Project {
         }
         joined_lines.sort_unstable();
         let dropped_station = if decision.kept_hand_wins { jo } else { jk };
-        let moved_with_joined_station = (!joined_lines.is_empty()).then(|| JoinedMove {
+        let moved_with_joined_station = (!joined_lines.is_empty()).then_some(JoinedMove {
             station: if dropped_station == jo {
                 join.other_station
             } else {

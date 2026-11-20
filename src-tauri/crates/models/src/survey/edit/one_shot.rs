@@ -122,9 +122,9 @@ impl Project {
     /// snap, a legacy tie)?
     fn solve_ties(&self, positions: &RawPositions, closure: &LoopClosure) -> bool {
         match closure.strategy {
-            ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted | ClosureStrategy::Tie => {
-                true
-            }
+            ClosureStrategy::Batch
+            | ClosureStrategy::LeastSquaresWeighted
+            | ClosureStrategy::Tie => true,
             ClosureStrategy::Move => self.closure_is_aligned(positions, closure),
             ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution => false,
         }
