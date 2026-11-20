@@ -2352,6 +2352,7 @@
       "open": "Open project",
       "zoom": "Zoom to system",
       "showInFolder": "Show in folder",
+      "restoreBackup": "Restore an earlier copy…",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "remove": "Remove from recent",
       "removeMultiple": "Remove {{countFormatted}} from recent",
@@ -2803,7 +2804,7 @@
     },
     "conversion": {
       "lead": "This project was converted from the old file format.",
-      "detail": "The original file is kept in Recovery. The conversion is saved the next time you save.",
+      "detail": "The conversion is saved the next time you save, and the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.",
       "dismiss": "Dismiss"
     },
     "historyDiscarded": {

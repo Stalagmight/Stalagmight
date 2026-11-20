@@ -742,7 +742,7 @@ with its reason, is the plan's "Status (final)" section:
   junctions; Ariane ids are Station IDs, stable across exports; the image
   export draws one comment and one star per station.
 - **The file is JSON.** An old SQLite file opens as before and is upgraded on
-  its first save, its original kept in Recovery; its undo history is not kept.
+  its first save, its original kept (Recent Projects: right-click the project, Restore an earlier copy); its undo history is not kept.
   A file with moved stations shows a one-time conversion notice. A file made
   with a newer Stalagmight opens read-only. A save refuses a file another
   program changed since it was opened and asks which version to keep. An older

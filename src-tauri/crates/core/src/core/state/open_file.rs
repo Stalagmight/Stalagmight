@@ -82,7 +82,7 @@ impl ConversionNotice {
     pub(crate) fn message(&self) -> String {
         format!(
             "Converted from the old file format; {} stations moved by up to {:.2} m; \
-             the original is kept in Recovery.",
+             the original is kept (Recent Projects: right-click, Restore an earlier copy).",
             self.slots_moved, self.max_displacement_m
         )
     }

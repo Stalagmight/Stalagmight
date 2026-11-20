@@ -43,7 +43,7 @@ describe('checkFileStatus', () => {
   });
 
   it('keeps the conversion notice a second (StrictMode) check cannot take again', async () => {
-    let notice: string | null = 'Converted from the old file format; 3 stations moved by up to 0.42 m; the original is kept in Recovery.';
+    let notice: string | null = 'Converted from the old file format; 3 stations moved by up to 0.42 m; the original is kept (Recent Projects: right-click, Restore an earlier copy).';
     ipc.mockImplementation(async (command: string) => {
       if (command !== 'take_conversion_notice') return null;
       const taken = notice;

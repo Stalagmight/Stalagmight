@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -28,8 +28,11 @@ export default function CorruptionRecoveryDialog() {
 
   const filePath = dialogData.corruptPath as string;
   const errorMessage = (dialogData.errorMessage as string) ?? 'The project file is damaged and cannot be opened normally.';
+  // Opened from Recent Projects for a file that opens fine: only the restore,
+  // straight to the list of backups.
+  const restoreOnly = dialogData.mode === 'restore';
 
-  const [step, setStep] = useState<Step>('choose');
+  const [step, setStep] = useState<Step>(restoreOnly ? 'listing-backups' : 'choose');
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [result, setResult] = useState<ResultInfo | null>(null);
   const [busy, setBusy] = useState(false);
@@ -124,6 +127,14 @@ export default function CorruptionRecoveryDialog() {
     }
   }, [filePath]);
 
+  // Restore-only: list the backups once, on open.
+  const listedOnOpen = useRef(false);
+  useEffect(() => {
+    if (!restoreOnly || listedOnOpen.current) return;
+    listedOnOpen.current = true;
+    void handleListBackups();
+  }, [restoreOnly, handleListBackups]);
+
   // ── Export Salvageable Data ─────────────────────────────────────
   const handleSalvage = useCallback(async () => {
     setStep('salvaging');
@@ -193,8 +204,13 @@ export default function CorruptionRecoveryDialog() {
   // ── Result: go back to choose ───────────────────────────────────
   const handleBackToChoose = useCallback(() => {
     setResult(null);
+    if (restoreOnly) {
+      // Nothing else to choose for a file that opens fine.
+      closeDialog();
+      return;
+    }
     setStep('choose');
-  }, []);
+  }, [restoreOnly, closeDialog]);
 
   // ── Render ──────────────────────────────────────────────────────
   const renderContent = () => {
@@ -316,7 +332,7 @@ export default function CorruptionRecoveryDialog() {
           </h3>
           <p className="text-text-secondary whitespace-pre-wrap">{result.message}</p>
           <div className="flex justify-end gap-2 pt-4 border-t border-border">
-            {!result.success && (
+            {!result.success && !restoreOnly && (
               <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">Try Another Option</Button>
             )}
             {result.canReopen ? (
@@ -334,7 +350,7 @@ export default function CorruptionRecoveryDialog() {
 
   return (
     <DialogWrapper
-      title="File Corruption Detected"
+      title={restoreOnly ? 'Restore an Earlier Copy' : 'File Corruption Detected'}
       onClose={closeDialog}
       size="lg"
       data-testid="corruption-recovery-dialog"

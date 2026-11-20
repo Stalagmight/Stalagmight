@@ -120,7 +120,7 @@ test.describe('.stalx v2 file status', () => {
   test('an old-format file the conversion moved says so once, until dismissed', async ({ page }) => {
     await page.evaluate(() =>
       (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__(
-        'Converted from the old file format; 4 stations moved by up to 0.42 m; the original is kept in Recovery.'
+        'Converted from the old file format; 4 stations moved by up to 0.42 m; the original is kept (Recent Projects: right-click, Restore an earlier copy).'
       )
     );
     await createProject(page, 'Old Format');
