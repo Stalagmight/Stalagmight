@@ -86,7 +86,7 @@ fn project_warnings(
     all.extend(gps_gap_warnings(project, raw, &ignored));
     all.extend(closure_across_one_shot_warnings(project, raw));
     all.extend(adjustment_failure_warnings(project, failures, &ignored));
-    // Stable: ties keep line list order, then the order of the kinds above.
+    // Stable: the rows of one shot keep the order of the kinds above.
     all.sort_by(|a, b| {
         let severity_order = |s: WarningSeverity| match s {
             WarningSeverity::Error => 0,
