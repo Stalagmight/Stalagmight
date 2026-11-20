@@ -414,7 +414,7 @@ impl LineBuilder {
     /// `reassign_repeated_shot_uuids` did: the project keeps its ids, the
     /// newcomer yields).
     fn claim_uuid(
-        &mut self,
+        &self,
         line: LineId,
         uuid: Option<String>,
         seen: &mut HashSet<String>,
@@ -829,20 +829,19 @@ fn assign_sections_by_name(
         if name.is_empty() {
             continue;
         }
-        let section = match by_name.get(&name) {
-            Some(&id) => id,
-            None => {
-                let id = project.mint_section_id().map_err(|e| e.to_string())?;
-                let color = SECTION_PALETTE[project.sections.len() % SECTION_PALETTE.len()];
-                project.sections.push(Section {
-                    id,
-                    name: name.clone(),
-                    color: color.to_string(),
-                });
-                by_name.insert(name, id);
-                made.push(id);
-                id
-            }
+        let section = if let Some(&id) = by_name.get(&name) {
+            id
+        } else {
+            let id = project.mint_section_id().map_err(|e| e.to_string())?;
+            let color = SECTION_PALETTE[project.sections.len() % SECTION_PALETTE.len()];
+            project.sections.push(Section {
+                id,
+                name: name.clone(),
+                color: color.to_string(),
+            });
+            by_name.insert(name, id);
+            made.push(id);
+            id
         };
         assigned.insert(line, section);
     }

@@ -151,7 +151,9 @@ mod fuzz_undo_tests;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stderr,
-    reason = "test module: panics on a failed assumption are the point; the profiler prints"
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, bit-exact float \
+              equality is what it checks, and the profiler prints"
 )]
 mod import_commands_tests;
 #[cfg(test)]

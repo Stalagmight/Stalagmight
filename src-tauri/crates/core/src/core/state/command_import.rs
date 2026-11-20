@@ -274,11 +274,10 @@ impl AppState {
                     }
                 }
                 project.settle_anchors(&before, &ctx);
-                let target_text = project
-                    .topology()
-                    .station_at(target_station)
-                    .map(|s| project.station_text(s, Some(target_station.line_id)))
-                    .unwrap_or_else(|| "a station".to_string());
+                let target_text = project.topology().station_at(target_station).map_or_else(
+                    || "a station".to_string(),
+                    |s| project.station_text(s, Some(target_station.line_id)),
+                );
                 record.label = history_text(&format!(
                     "Create line {} at {target_text}",
                     quoted_line(project, built.id)

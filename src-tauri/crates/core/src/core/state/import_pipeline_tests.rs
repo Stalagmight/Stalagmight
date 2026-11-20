@@ -245,10 +245,7 @@ fn end_to_end_import_respects_datum_invariants() {
             Vec::new(),
             VirtualShotMode::Auto,
         );
-        let datums = state
-            .get_project_state()
-            .map(|p| p.datums.len())
-            .unwrap_or(0);
+        let datums = state.get_project_state().map_or(0, |p| p.datums.len());
         (result.success, result.error, datums)
     };
 

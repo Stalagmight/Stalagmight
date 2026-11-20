@@ -1198,7 +1198,7 @@ fn test_import_tracking_idempotent() {
     let state = new_state();
     let hash = "deadbeef".to_string();
     state.track_imported_file(hash.clone());
-    state.track_imported_file(hash.clone());
+    state.track_imported_file(hash);
     let p = project(&state);
     assert_eq!(
         p.imported_file_hashes
@@ -1227,7 +1227,7 @@ fn test_line_hash_tracking_batch() {
         state.check_line_hashes(&hashes).unwrap(),
         vec![true, false, true]
     );
-    state.track_line_hashes(hashes.clone());
+    state.track_line_hashes(hashes);
     let p = project(&state);
     assert_eq!(
         p.imported_line_hashes

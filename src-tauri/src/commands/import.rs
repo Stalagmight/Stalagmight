@@ -1076,6 +1076,62 @@ mod receipt_tests {
         assert!(result.import_receipt.is_none());
     }
 
+    /// #92: a project created with its first save deferred is written by its
+    /// first import (the `finalize_deferred_import` every import IPC runs),
+    /// with the import's own entry in the file's history.
+    #[test]
+    fn the_first_import_of_a_deferred_project_writes_it() {
+        use crate::models::{ImportLineConfig, ImportPlacement};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("deferred.stalx");
+        let state = AppState::new().expect("state");
+        let mut project = crate::models::survey::Project::new("Deferred", None);
+        project.file_path = Some(path.clone());
+        state.set_project_for_tests(project);
+        state.set_initial_save_deferred_for_tests(true);
+
+        let line = ImportLineConfig {
+            line_index: 0,
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            surveyors: None,
+            explorers: None,
+            override_date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                length: 5.0,
+                ..ShotData::default()
+            }],
+            placement: ImportPlacement::Origin,
+            station_comments: Vec::new(),
+            station_names: Vec::new(),
+            reverse: false,
+            azimuth_reference: None,
+            cave_section: None,
+        };
+        let imported = state.execute_import_lines(
+            vec![line],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        let result = finalize_deferred_import(&state, imported);
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(path.exists(), "the deferred save wrote the project");
+        assert!(!state.initial_save_deferred());
+
+        let reopened = AppState::new().expect("state");
+        assert!(reopened.execute(Command::OpenProject { path }).success);
+        assert_eq!(reopened.get_undo_stack().len(), 1, "the import's entry");
+    }
+
     #[test]
     fn compass_unit_conversion_note_covers_feet_mixed_and_metric() {
         assert_eq!(
