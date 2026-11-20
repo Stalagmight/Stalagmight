@@ -4842,8 +4842,8 @@ dependencies = [
 name = "stalx-reader"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "rusqlite",
+ "stalagmight-legacy",
  "stalagmight-models",
  "stalagmight-persistence",
  "tempfile",

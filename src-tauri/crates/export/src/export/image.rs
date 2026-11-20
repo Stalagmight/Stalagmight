@@ -52,6 +52,7 @@ use super::color_scale::{depth_color, distance_color, ExportColorScale, Resolved
 use super::image_labels::STATION_NAME_LABEL_MAX_CHARS;
 use super::image_labels::{point_representatives, station_name_label};
 use super::image_scope;
+use super::image_sketch::{LegacyMeasure, Measure, Sketch, SketchLine};
 use crate::models::{LineId, Project, StationRef};
 
 /// Output image format.
@@ -206,17 +207,30 @@ pub(super) fn depth_gradient_color(
 /// to match `MapCanvas` even though only non-reference shots are drawn). Falls
 /// back to `(0, 50)` when non-finite.
 pub(super) fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
+    depth_extent(
+        stations.iter().map(|s| s.coordinates.z),
+        project
+            .lines
+            .iter()
+            .flat_map(|line| line.shots.iter().map(|s| (s.depth_in, s.depth_out))),
+    )
+}
+
+/// [`depth_range`] over station depths and shot depth readings (either
+/// model).
+pub(super) fn depth_extent(
+    station_z: impl IntoIterator<Item = f64>,
+    shot_depths: impl IntoIterator<Item = (f64, f64)>,
+) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
-    for s in stations {
-        min = min.min(s.coordinates.z);
-        max = max.max(s.coordinates.z);
+    for z in station_z {
+        min = min.min(z);
+        max = max.max(z);
     }
-    for line in &project.lines {
-        for shot in &line.shots {
-            min = min.min(shot.depth_in).min(shot.depth_out);
-            max = max.max(shot.depth_in).max(shot.depth_out);
-        }
+    for (depth_in, depth_out) in shot_depths {
+        min = min.min(depth_in).min(depth_out);
+        max = max.max(depth_in).max(depth_out);
     }
     if min.is_finite() && max.is_finite() {
         (min.min(max), max.max(min))
@@ -445,10 +459,10 @@ fn export_svg(
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
-    let svg = generate_svg_string_with_stations(project, options, stations)?;
-    write_atomic(path, |w| Ok(w.write_all(svg.as_bytes())?)).context("Failed to write SVG file")?;
-    tracing::info!(path = ?path, "Exported SVG");
-    Ok(())
+    write_svg(
+        &generate_svg_string_with_stations(project, options, stations)?,
+        path,
+    )
 }
 
 /// Maximum dimension for PNG export to prevent out-of-memory errors.
@@ -461,16 +475,55 @@ fn export_png(
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
+    check_dpi(options)?;
+    write_png(
+        &generate_svg_string_with_stations(project, options, stations)?,
+        path,
+        options,
+    )
+}
+
+/// Export project as PDF via svg2pdf.
+fn export_pdf(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
+    write_pdf(
+        &generate_svg_string_with_stations(project, options, stations)?,
+        path,
+    )
+}
+
+/// Write a rendered map to `path` in `options.format`. Shared by both models.
+pub(super) fn write_image(svg: &str, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    match options.format {
+        ImageFormat::Svg => write_svg(svg, path),
+        ImageFormat::Png => write_png(svg, path, options),
+        ImageFormat::Pdf => write_pdf(svg, path),
+    }
+}
+
+fn check_dpi(options: &ExportImageOptions) -> Result<()> {
     if options.dpi == 0 {
         anyhow::bail!("DPI must be at least 1");
     }
+    Ok(())
+}
 
-    let svg_content = generate_svg_string_with_stations(project, options, stations)?;
+fn write_svg(svg: &str, path: &Path) -> Result<()> {
+    write_atomic(path, |w| Ok(w.write_all(svg.as_bytes())?)).context("Failed to write SVG file")?;
+    tracing::info!(path = ?path, "Exported SVG");
+    Ok(())
+}
 
+fn write_png(svg_content: &str, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    check_dpi(options)?;
     let mut opt = Options::default();
     opt.fontdb_mut().load_system_fonts();
     let tree =
-        Tree::from_str(&svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
+        Tree::from_str(svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
 
     let size = tree.size();
     let scale = options.dpi as f32 / 72.0;
@@ -496,18 +549,10 @@ fn export_png(
     Ok(())
 }
 
-/// Export project as PDF via svg2pdf.
-fn export_pdf(
-    project: &Project,
-    path: &Path,
-    options: &ExportImageOptions,
-    stations: Vec<crate::models::Station>,
-) -> Result<()> {
-    let svg_content = generate_svg_string_with_stations(project, options, stations)?;
-
+fn write_pdf(svg_content: &str, path: &Path) -> Result<()> {
     let mut opt = Options::default();
     opt.fontdb_mut().load_system_fonts();
-    let tree = Tree::from_str(&svg_content, &opt).context("Failed to parse SVG")?;
+    let tree = Tree::from_str(svg_content, &opt).context("Failed to parse SVG")?;
 
     let pdf = svg2pdf::to_pdf(
         &tree,
@@ -592,26 +637,43 @@ pub fn generate_svg_string_with_stations(
     // The hidden Sections' lines are left out (`image_scope`).
     match image_scope::without_hidden_lines(project, options.hidden_line_ids.as_deref(), &stations)
     {
-        None => Ok(render_svg(project, None, options, stations)),
-        Some((drawn, shown)) => Ok(render_svg(
-            &drawn,
-            Some((project, &stations)),
-            options,
-            shown,
-        )),
+        None => {
+            let measure = LegacyMeasure {
+                drawn: project,
+                whole: None,
+            };
+            Ok(render_svg(
+                Sketch::from_legacy(project, stations),
+                &measure,
+                options,
+            ))
+        }
+        Some((drawn, shown)) => {
+            let measure = LegacyMeasure {
+                drawn: &drawn,
+                whole: Some((project, &stations)),
+            };
+            Ok(render_svg(
+                Sketch::from_legacy(&drawn, shown),
+                &measure,
+                options,
+            ))
+        }
     }
 }
 
-/// [`generate_svg_string_with_stations`] for the lines it draws: `project`
-/// and `stations` hold only what is drawn, and `whole` the whole survey
-/// (project and every station) when that is more, to measure distances
-/// along (`None` = `project` is the whole survey).
-fn render_svg(
-    project: &Project,
-    whole: image_scope::Whole<'_>,
+/// Draw `sketch` (what is drawn, from either model; `image_sketch`), with the
+/// distances `measure` takes along the whole survey.
+pub(super) fn render_svg(
+    sketch: Sketch,
+    measure: &dyn Measure,
     options: &ExportImageOptions,
-    stations: Vec<crate::models::Station>,
 ) -> String {
+    let Sketch {
+        lines,
+        stations,
+        colocated,
+    } = sketch;
     // ---- Bounds and scale ---------------------------------------------------
     // Bounds come from *rendered* geometry only - endpoints of non-reference
     // shots plus zero-datum stations. Reference shots aren't drawn, so a
@@ -633,7 +695,7 @@ fn render_svg(
         *mny = mny.min(c.y);
         *mxy = mxy.max(c.y);
     };
-    for line in &project.lines {
+    for line in &lines {
         for (i, shot) in line.shots.iter().enumerate() {
             if shot.kind.is_virtual() {
                 continue;
@@ -733,34 +795,16 @@ fn render_svg(
     let mut uf = UnionFind::new(stations.len());
 
     // Merges and aligned closures collapse colocated stations into one node.
-    for merge in &project.station_merges {
-        if let (Some(a_sr), Some(b_sr)) = (
-            project.resolve_key(&merge.station_a),
-            project.resolve_key(&merge.station_b),
-        ) {
-            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                uf.union(a, b);
-            }
-        }
-    }
-    for closure in &project.loop_closures {
-        if !closure.is_aligned {
-            continue;
-        }
-        if let (Some(a_sr), Some(b_sr)) = (
-            project.resolve_key(&closure.station_a),
-            project.resolve_key(&closure.station_b),
-        ) {
-            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                uf.union(a, b);
-            }
+    for &(a_sr, b_sr) in &colocated {
+        if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+            uf.union(a, b);
         }
     }
 
     // Non-reference shots inside each line connect their two endpoint
     // stations into the same segment.
     let mut has_non_ref_shot: HashSet<usize> = HashSet::new();
-    for line in &project.lines {
+    for line in &lines {
         for (i, shot) in line.shots.iter().enumerate() {
             let from = StationRef::new(line.id, i as u32);
             let to = StationRef::new(line.id, (i + 1) as u32);
@@ -826,7 +870,7 @@ fn render_svg(
             }
         }
     }
-    for line in &project.lines {
+    for line in &lines {
         for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
@@ -846,7 +890,7 @@ fn render_svg(
     // direct anchor-anchor ties straight away.
     let mut neighbors: HashMap<usize, HashSet<usize>> = HashMap::new();
     let mut cluster_segments: HashMap<usize, HashSet<usize>> = HashMap::new();
-    for line in &project.lines {
+    for line in &lines {
         for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
@@ -938,31 +982,13 @@ fn render_svg(
     // physical point, the other-segment(s) reachable across each
     // incident reference shot.
     let mut physical_uf = UnionFind::new(stations.len());
-    for merge in &project.station_merges {
-        if let (Some(a_sr), Some(b_sr)) = (
-            project.resolve_key(&merge.station_a),
-            project.resolve_key(&merge.station_b),
-        ) {
-            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                physical_uf.union(a, b);
-            }
-        }
-    }
-    for closure in &project.loop_closures {
-        if !closure.is_aligned {
-            continue;
-        }
-        if let (Some(a_sr), Some(b_sr)) = (
-            project.resolve_key(&closure.station_a),
-            project.resolve_key(&closure.station_b),
-        ) {
-            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                physical_uf.union(a, b);
-            }
+    for &(a_sr, b_sr) in &colocated {
+        if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+            physical_uf.union(a, b);
         }
     }
     let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
-    for line in &project.lines {
+    for line in &lines {
         for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
@@ -1041,12 +1067,17 @@ fn render_svg(
     } else {
         options.color_mode
     };
-    let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
+    let depth_rng = (mode == ColorMode::Depth).then(|| {
+        let shot_depths = lines
+            .iter()
+            .flat_map(|line| line.shots.iter().map(|s| (s.depth_in, s.depth_out)));
+        depth_extent(stations.iter().map(|s| s.coordinates.z), shot_depths)
+    });
     let depth_ramp = options.depth_ramp();
     let depth_scale = options.depth_scale.as_ref().map(ResolvedScale::new);
     let distance_scale = options.distance_scale.as_ref().map(ResolvedScale::new);
     let dist_field = (mode == ColorMode::Distance)
-        .then(|| image_scope::distance_field(project, whole, options.include_reference_legs));
+        .then(|| measure.distance_field(options.include_reference_legs));
     let _ = writeln!(
         svg,
         r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
@@ -1054,7 +1085,7 @@ fn render_svg(
     if matches!(mode, ColorMode::Depth | ColorMode::Distance) {
         // Per-shot gradient: mirror the live map's per-shot coloring. No junction
         // trimming here - the color variation carries the visual, not line breaks.
-        for line in &project.lines {
+        for line in &lines {
             for j in 0..line.shots.len() {
                 if line.shots[j].kind.is_virtual() {
                     continue;
@@ -1115,7 +1146,7 @@ fn render_svg(
             }
         }
     } else {
-        for line in &project.lines {
+        for line in &lines {
             // Per-line stroke override (computed once); `None` inherits the
             // group's black stroke for the monochrome path.
             let line_stroke = (mode == ColorMode::Line).then(|| sanitize_hex_color(&line.color));
@@ -1281,18 +1312,13 @@ fn render_svg(
     // halo for readability and dodge collisions by trying eight placement
     // offsets before giving up. A datum on a hidden line still measures the
     // drawn ones.
-    let has_datum = image_scope::has_datum(!zero_datum_indices.is_empty(), whole);
+    let has_datum = measure.has_datum(!zero_datum_indices.is_empty());
     if options.show_penetration_labels && has_datum {
         // Use the project's shared along-cave penetration computation -
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        let pen_dist = image_scope::penetration_distances(
-            project,
-            whole,
-            &stations,
-            options.include_reference_legs,
-        );
+        let pen_dist = measure.penetration_distances(&stations, options.include_reference_legs);
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -1358,7 +1384,7 @@ fn render_svg(
                 // itself. Fallback placements rotate around the primary
                 // in 45° steps and are only reached when another label
                 // (or the zero-datum star) is already occupying the spot.
-                let primary = label_open_space_angle(si, &stations, project, &station_index);
+                let primary = label_open_space_angle(si, &stations, &lines, &station_index);
                 let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
                 let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
                 candidate_angles.push(primary);
@@ -1408,33 +1434,15 @@ fn render_svg(
     let show_station_names = options.show_station_names && !options.show_station_labels;
     if options.show_station_labels || show_station_names || options.show_station_comments {
         let mut point_uf = UnionFind::new(n);
-        for merge in &project.station_merges {
-            if let (Some(a_sr), Some(b_sr)) = (
-                project.resolve_key(&merge.station_a),
-                project.resolve_key(&merge.station_b),
-            ) {
-                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                    point_uf.union(a, b);
-                }
-            }
-        }
-        for closure in &project.loop_closures {
-            if !closure.is_aligned {
-                continue;
-            }
-            if let (Some(a_sr), Some(b_sr)) = (
-                project.resolve_key(&closure.station_a),
-                project.resolve_key(&closure.station_b),
-            ) {
-                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
-                    point_uf.union(a, b);
-                }
+        for &(a_sr, b_sr) in &colocated {
+            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                point_uf.union(a, b);
             }
         }
 
         // Degree per physical point (non-reference shot endpoints).
         let mut degree: HashMap<usize, u32> = HashMap::new();
-        for line in &project.lines {
+        for line in &lines {
             for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
@@ -1490,7 +1498,7 @@ fn render_svg(
                 }
             };
             let rep = point_representatives(
-                project,
+                &lines,
                 &stations,
                 |i| point_uf.find(i),
                 |i| !show_station_names || names[i].is_some(),
@@ -1520,7 +1528,7 @@ fn render_svg(
                     let sy = -stations[si].coordinates.y;
                     let text_w = char_w * text.chars().count() as f64;
                     let text_h = label_size;
-                    let primary = label_open_space_angle(si, &stations, project, &station_index);
+                    let primary = label_open_space_angle(si, &stations, &lines, &station_index);
                     let offsets = radial_offsets(primary, quarter_turn, offset);
                     if let Some((lx, ly, bb)) =
                         place_near(sx, sy, &offsets, text_w, text_h, &placed)
@@ -1554,7 +1562,7 @@ fn render_svg(
                 let sy = -stations[i].coordinates.y;
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let primary = label_open_space_angle(i, &stations, project, &station_index);
+                let primary = label_open_space_angle(i, &stations, &lines, &station_index);
                 let offsets = radial_offsets(primary, quarter_turn, offset);
                 if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
                     if !opened {
@@ -1590,7 +1598,7 @@ fn render_svg(
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for line in &project.lines {
+        for line in &lines {
             let mut seen: HashSet<StationRef> = HashSet::new();
             let mut sum_x = 0.0;
             let mut sum_y = 0.0;
@@ -1695,7 +1703,7 @@ fn render_svg(
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for line in &project.lines {
+        for line in &lines {
             for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
@@ -1747,7 +1755,7 @@ fn render_svg(
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for line in &project.lines {
+        for line in &lines {
             for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
@@ -1874,7 +1882,7 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
 fn label_open_space_angle(
     station_idx: usize,
     stations: &[crate::models::Station],
-    project: &Project,
+    lines: &[SketchLine],
     station_index: &HashMap<StationRef, usize>,
 ) -> f64 {
     let si_pos = stations[station_idx].coordinates;
@@ -1888,7 +1896,7 @@ fn label_open_space_angle(
             dirs.push(dy.atan2(dx));
         }
     };
-    for line in &project.lines {
+    for line in lines {
         for (i, shot) in line.shots.iter().enumerate() {
             if shot.kind.is_virtual() {
                 continue;

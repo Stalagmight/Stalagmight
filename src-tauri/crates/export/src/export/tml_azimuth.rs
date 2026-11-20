@@ -55,12 +55,20 @@ pub(super) enum AzimuthExport {
 
 impl AzimuthExport {
     pub(super) fn decide(project: &Project) -> Self {
-        let references: Vec<AzimuthReference> = project
-            .lines
-            .iter()
-            .filter(|line| !line.shots.is_empty())
-            .map(|line| project.azimuth_reference_for(line))
-            .collect();
+        Self::decide_from(
+            project
+                .lines
+                .iter()
+                .filter(|line| !line.shots.is_empty())
+                .map(|line| project.azimuth_reference_for(line)),
+        )
+    }
+
+    /// [`Self::decide`] over the resolved references of the lines that have
+    /// shots, in any order (the decision does not depend on it). Shared by
+    /// both models.
+    pub(super) fn decide_from(references: impl IntoIterator<Item = AzimuthReference>) -> Self {
+        let references: Vec<AzimuthReference> = references.into_iter().collect();
 
         // A line with no correction on record cannot be rotated anywhere.
         let any_unknown = references
@@ -165,8 +173,14 @@ impl AzimuthExport {
     /// out. Identity except on the mixed path, so an ordinary export is
     /// byte-for-byte what it always was.
     pub(super) fn emit_reference(self, project: &Project, line: &Line) -> AzimuthReference {
+        self.emit(project.azimuth_reference_for(line))
+    }
+
+    /// [`Self::emit_reference`] for a line whose resolved reference is
+    /// `reference` (either model).
+    pub(super) fn emit(self, reference: AzimuthReference) -> AzimuthReference {
         match self {
-            AzimuthExport::MixedToTrue => project.azimuth_reference_for(line),
+            AzimuthExport::MixedToTrue => reference,
             _ => AzimuthReference::default(),
         }
     }

@@ -1043,6 +1043,28 @@ impl Script {
     fn finish(mut self) -> Vec<String> {
         self.roundtrip();
         query_exports(&self.state, &mut self.rec);
+        // Stream X: the final state as a 0.6.0 file plus the uuid book, so the
+        // station-graph exporters can be run on its migration and masked alike.
+        if let Ok(dir) = std::env::var("STALAGMIGHT_CHAR_SAVE") {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).expect("create the save directory");
+            let saved = self.state.execute(Command::SaveProject {
+                path: Some(dir.join(format!("{}.stalx", self.rec.scenario))),
+            });
+            assert!(saved.success, "save the final state: {:?}", saved.error);
+            let book: BTreeMap<String, usize> = self.rec.uuids.ids.clone();
+            let config = self.state.get_config();
+            let meta = json!({
+                "uuids": book,
+                "include_reference_legs": config.gas.include_reference_legs,
+                "closure_adjustment": to_value(&config.closure_adjustment),
+            });
+            std::fs::write(
+                dir.join(format!("{}.uuids.json", self.rec.scenario)),
+                serde_json::to_string_pretty(&meta).expect("serialize the uuid book"),
+            )
+            .expect("write the uuid book");
+        }
         let steps = Value::Array(std::mem::take(&mut self.rec.steps));
         self.rec.write_value("steps.json", steps, false);
         self.rec.mismatches

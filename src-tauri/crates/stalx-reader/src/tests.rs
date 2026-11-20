@@ -1,3 +1,7 @@
+//! The SQLite (pre-version-2) path. Inputs are synthetic projects built with
+//! the frozen 0.6.0 model and written by its own save (`stalagmight-legacy`'s
+//! test-only `writer`), so they are exactly what an old build wrote.
+
 #![expect(clippy::unwrap_used, reason = "test assertions")]
 #![expect(
     clippy::float_cmp,
@@ -6,17 +10,24 @@
 
 use std::path::{Path, PathBuf};
 
-use stalagmight_models::station::{GpsCoordinates, LoopClosure as ModelClosure, StationRef};
-use stalagmight_models::{
+use stalagmight_legacy::models::station::{
+    GpsCoordinates, LoopClosure as ModelClosure, StationRef,
+};
+use stalagmight_legacy::models::{
     ClosureStrategy, LineData, Project, ShotData, ShotKind as ModelShotKind, SurveyDirection,
 };
-use stalagmight_persistence::persistence::Database;
+use stalagmight_legacy::persistence::Database;
 use tempfile::TempDir;
 
 use super::{
-    read_bytes, read_file, read_file_with, CountLimits, Direction, InvalidKind, Limit, ReadError,
-    ReadOptions, ShotKind, StationId, SUPPORTED_SCHEMA_VERSION,
+    read_bytes, read_file, read_file_with, CountLimits, Direction, FileFormat, InvalidKind, Limit,
+    ReadError, ReadOptions, ShotKind, StationId, Survey, SUPPORTED_SCHEMA_VERSION,
 };
+
+/// The namespace the readers derive missing shot uuids in (the legacy
+/// crate's, shared with this crate's earlier releases).
+const DERIVED_UUID_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x6f1d_2c3e_8b4a_4e57_9c1d_5a7e_0b3f_2d91);
 
 thread_local! {
     /// Runs right after the load inside every read on this thread: stands in for
@@ -26,11 +37,11 @@ thread_local! {
 }
 
 /// Install an [`AFTER_LOAD`] hook for the rest of this test's thread.
-fn after_load(hook: impl Fn() + 'static) {
+pub(super) fn after_load(hook: impl Fn() + 'static) {
     AFTER_LOAD.with(|slot| *slot.borrow_mut() = Box::new(hook));
 }
 
-fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
+pub(super) fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
     match err {
         ReadError::Invalid { kind, .. } => Some(*kind),
         _ => None,
@@ -61,7 +72,7 @@ fn descending(name: &str, sign: f64, count: usize) -> LineData {
     }
 }
 
-fn save(dir: &TempDir, project: &Project) -> PathBuf {
+pub(super) fn save(dir: &TempDir, project: &Project) -> PathBuf {
     let path = dir.path().join("synthetic.stalx");
     Database::open(&path)
         .unwrap()
@@ -78,7 +89,7 @@ fn set_user_version(path: &Path, version: i32) {
 }
 
 /// Two sections, one merge, one datum, one closure, one comment, two names.
-fn full_project() -> Project {
+pub(super) fn full_project() -> Project {
     let mut project = Project::new("Synthetic".to_string(), Some("Nowhere".to_string()));
     project.add_line(descending("Main", 1.0, 4));
     let mut side = descending("Side", 1.0, 2);
@@ -121,6 +132,32 @@ fn full_project() -> Project {
     project
 }
 
+/// The name the survey gives position `at`.
+pub(super) fn name_at(survey: &Survey, at: StationId) -> String {
+    survey
+        .station_names
+        .iter()
+        .find(|n| n.station == at)
+        .map(|n| n.name.clone())
+        .unwrap_or_default()
+}
+
+/// Station names are unique among the stations of every section.
+pub(super) fn assert_names_unique_per_section(survey: &Survey) {
+    for section in &survey.sections {
+        let mut names: Vec<&str> = survey
+            .station_names
+            .iter()
+            .filter(|n| n.station.section_id == section.id)
+            .map(|n| n.name.as_str())
+            .collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "section {}: {names:?}", section.id);
+    }
+}
+
 #[test]
 fn reads_every_part_of_a_current_file() {
     let dir = TempDir::new().unwrap();
@@ -128,6 +165,9 @@ fn reads_every_part_of_a_current_file() {
 
     let survey = read_file(&path).unwrap();
 
+    assert_eq!(survey.format, FileFormat::Sqlite);
+    assert_eq!(survey.format_version, 1);
+    assert_eq!(survey.newer_content, None);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
     assert_eq!(survey.name, "Synthetic");
     assert_eq!(survey.location.as_deref(), Some("Nowhere"));
@@ -150,38 +190,49 @@ fn reads_every_part_of_a_current_file() {
         section_id: section,
         index,
     };
+    // The merge is one junction station now: one Station ID on both sections,
+    // listed as a pair of positions.
     assert_eq!(survey.station_merges.len(), 1);
     assert_eq!(survey.station_merges[0].a, id(main.id, 2));
     assert_eq!(survey.station_merges[0].b, id(side.id, 0));
+    assert_eq!(main.station_ids.len(), 5);
+    assert_eq!(side.station_ids.len(), 3);
+    assert_eq!(side.station_ids[0], main.station_ids[2]);
+    let mut every: Vec<u32> = main
+        .station_ids
+        .iter()
+        .chain(&side.station_ids)
+        .copied()
+        .collect();
+    every.sort_unstable();
+    every.dedup();
+    assert_eq!(
+        every.len(),
+        7,
+        "seven stations, one of them on both sections"
+    );
     assert_eq!(survey.zero_datums.len(), 1);
     assert_eq!(survey.zero_datums[0].station, id(main.id, 0));
     assert_eq!(survey.zero_datums[0].latitude, 20.5);
     assert_eq!(survey.loop_closures.len(), 1);
     assert_eq!(survey.loop_closures[0].id, 7);
     assert_eq!(survey.loop_closures[0].b, id(side.id, 2));
+    assert!(!survey.loop_closures[0].tie);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.station_comments[0].station, id(main.id, 4));
     assert_eq!(survey.station_comments[0].text, "lead");
-    let names: Vec<_> = survey
-        .station_names
-        .iter()
-        .map(|n| (n.station, n.name.as_str()))
-        .collect();
-    // Every station has a name once the survey is read (an unnamed one is
-    // seeded from its index, as the app does on open).
+    // Every position has a name once the survey is read (an unnamed station
+    // is seeded from its index, as the app does on open). The junction keeps
+    // Main's "2", made unique on Side (whose own station 2 is "2") by the
+    // conversion's letter suffix, and has that one name on both sections.
+    let name = |at: StationId| name_at(&survey, at);
     assert_eq!(
-        names,
-        [
-            (id(main.id, 0), "0"),
-            (id(main.id, 1), "1"),
-            (id(main.id, 2), "2"),
-            (id(main.id, 3), "3"),
-            (id(main.id, 4), "17"),
-            (id(side.id, 0), "0"),
-            (id(side.id, 1), "1"),
-            (id(side.id, 2), "2"),
-        ]
+        [0, 1, 2, 3, 4].map(|i| name(id(main.id, i))),
+        ["0", "1", "2a", "3", "17"]
     );
+    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2a", "1", "2"]);
+    assert_eq!(survey.station_names.len(), 8);
+    assert_names_unique_per_section(&survey);
     assert_eq!(survey.unresolved_references, 0);
     assert!(survey.stations.is_none(), "positions are opt-in");
 }
@@ -245,9 +296,11 @@ fn an_oversized_input_is_refused_before_it_is_read() {
 
 #[test]
 fn bytes_that_are_not_a_stalx_are_invalid() {
-    // An empty file is a valid empty SQLite database, so it fails as "no project".
+    // Neither format: an empty file has no SQLite header (SQLite would take it
+    // as an empty database, but it holds no project either way).
     for (bytes, want) in [
-        (b"".as_slice(), InvalidKind::NoProjectData),
+        (b"".as_slice(), InvalidKind::NotSqlite),
+        (b"{\"format\":\"other\"}".as_slice(), InvalidKind::NotSqlite),
         (b"not a database".as_slice(), InvalidKind::NotSqlite),
         (&[0u8; 4096], InvalidKind::NotSqlite),
     ] {
@@ -398,11 +451,16 @@ fn an_expired_deadline_interrupts_a_long_statement() {
            INSERT INTO filler SELECT x FROM n;",
     );
 
-    let err =
-        Database::open_existing_untrusted(&path, i32::MAX, std::time::Duration::from_nanos(1))
-            .map(|_| ())
-            .map_err(super::invalid)
-            .unwrap_err();
+    let open = stalagmight_legacy::OpenOptions {
+        sqlite_deadline: std::time::Duration::from_nanos(1),
+        with_adjusted: false,
+        ..Default::default()
+    };
+    let interrupted = stalagmight_legacy::open_path(&path, &open).unwrap_err();
+    // The frozen open reports an interrupt as text only; it still classifies
+    // as the deadline when the read's own clock has time left.
+    let later = std::time::Instant::now() + std::time::Duration::from_mins(1);
+    let err = super::sqlite::legacy_error(interrupted, later);
 
     assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
 }
@@ -415,11 +473,17 @@ fn a_file_without_station_names_reads_with_seeded_names() {
 
     let survey = read_file(&path).unwrap();
 
+    // One per position, seeded from the index; the junction has Main's,
+    // letter-suffixed against Side's own "2", on both sections.
     assert_eq!(survey.station_names.len(), 8);
-    assert!(survey
-        .station_names
-        .iter()
-        .all(|n| n.name == n.station.index.to_string()));
+    let (main, side) = (survey.sections[0].id, survey.sections[1].id);
+    let name = |section_id, index| name_at(&survey, StationId { section_id, index });
+    assert_eq!(
+        [0, 1, 2, 3, 4].map(|i| name(main, i)),
+        ["0", "1", "2a", "3", "4"]
+    );
+    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2a", "1", "2"]);
+    assert_names_unique_per_section(&survey);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
 }
@@ -693,7 +757,7 @@ fn project_with_a_fix() -> (Project, u32) {
     let mut project = full_project();
     let loose = project.add_line(descending("Loose", 1.0, 2)).id;
     project.ensure_shot_uuids();
-    let datum = |project: &Project, index, lat| stalagmight_models::ZeroDatum {
+    let datum = |project: &Project, index, lat| stalagmight_legacy::models::ZeroDatum {
         station_ref: project.key_for_ref(StationRef::new(loose, index)).unwrap(),
         gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
         accuracy_m: Some(3.0),
@@ -827,7 +891,7 @@ fn the_private_copy_goes_in_the_given_temp_dir_and_is_removed() {
 
 #[test]
 fn the_correction_source_tells_a_recorded_zero_from_nothing_recorded() {
-    use stalagmight_models::{AzimuthReference, CorrectionSource as Source};
+    use stalagmight_legacy::models::{AzimuthReference, CorrectionSource as Source};
 
     let dir = TempDir::new().unwrap();
     let survey = read_file(&save(&dir, &full_project())).unwrap();
@@ -928,7 +992,12 @@ fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
     let later = first.sections[1].id;
     let renamed: Vec<(String, bool)> = IDS
         .iter()
-        .map(|id| (stalagmight_models::reminted_shot_uuid(later, id), true))
+        .map(|id| {
+            (
+                stalagmight_legacy::models::reminted_shot_uuid(later, id),
+                true,
+            )
+        })
         .collect();
     assert_eq!(
         ids(1),
@@ -1087,11 +1156,8 @@ fn a_derived_uuid_steps_past_one_the_file_already_holds() {
             |r| r.get(0),
         )
         .unwrap();
-    let squat = uuid::Uuid::new_v5(
-        &super::DERIVED_UUID_NAMESPACE,
-        format!("{section}/1/").as_bytes(),
-    )
-    .to_string();
+    let squat =
+        uuid::Uuid::new_v5(&DERIVED_UUID_NAMESPACE, format!("{section}/1/").as_bytes()).to_string();
     conn.execute_batch(&format!(
         "UPDATE shots SET uuid = '{squat}'
            WHERE rowid = (SELECT rowid FROM shots ORDER BY section_id, sequence_order LIMIT 1);
@@ -1114,8 +1180,9 @@ fn a_derived_uuid_steps_past_one_the_file_already_holds() {
 #[test]
 fn station_positions_are_bit_exact_with_the_apps_own_open() {
     // A merge group, a datum, a loop closure and a loose section, read once by
-    // the reader and once the way the app opens a file; every position must be
-    // the same f64, not merely close.
+    // the reader and once the way the app opens an old file (the frozen 0.6.0
+    // open, then the conversion); every position must be the same f64, not
+    // merely close.
     let mut project = full_project();
     let template = project.station_merges.iter().next().cloned().unwrap();
     let hub = project
@@ -1126,7 +1193,7 @@ fn station_positions_are_bit_exact_with_the_apps_own_open() {
         let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
         project
             .station_merges
-            .push(stalagmight_models::station::StationMerge {
+            .push(stalagmight_legacy::models::station::StationMerge {
                 station_a: hub.clone(),
                 station_b: start,
                 merged_at: template.merged_at,
@@ -1139,33 +1206,51 @@ fn station_positions_are_bit_exact_with_the_apps_own_open() {
     std::fs::copy(&path, &app_copy).unwrap();
 
     let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
-    let mut app = Database::open_existing(&app_copy)
-        .unwrap()
-        .load_project()
-        .unwrap();
-    app.assign_closure_ids();
-    app.redrive_offsets_after_load();
-    let mut expected: Vec<(StationId, [u64; 3])> = app
-        .compute_station_coordinates()
+    // The app opens an old file through the same conversion: its
+    // station-graph positions must be the reader's, bit for bit.
+    let app = stalagmight_persistence::persistence::migrate::migrate_path(&app_copy).unwrap();
+    let raw = app.project.raw_positions();
+    let mut expected: Vec<(StationId, [u64; 3])> = raw
+        .slots(&app.project)
         .into_iter()
         .map(|s| {
-            let c = s.coordinates;
             (
-                StationId::from(s.station_ref),
-                [c.x.to_bits(), c.y.to_bits(), c.z.to_bits()],
+                StationId::from(s.slot),
+                [s.x.to_bits(), s.y.to_bits(), s.z.to_bits()],
             )
         })
         .collect();
     expected.sort_by_key(|(id, _)| *id);
-    let actual: Vec<(StationId, [u64; 3])> = survey
-        .stations
-        .unwrap()
+    let stations = survey.stations.unwrap();
+    let actual: Vec<(StationId, [u64; 3])> = stations
         .iter()
         .map(|p| (p.station, [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]))
         .collect();
 
     assert_eq!(actual.len(), expected.len());
     assert_eq!(actual, expected);
+
+    // And they agree with what 0.6.0 showed for the file (the conversion's
+    // own verification bound: a micrometre of offset-cascade dust per hop).
+    let legacy =
+        stalagmight_legacy::open_path(&app_copy, &stalagmight_legacy::OpenOptions::default())
+            .unwrap();
+    assert_eq!(legacy.raw_positions.len(), stations.len());
+    for p in &stations {
+        let slot = stalagmight_legacy::Slot {
+            line_id: p.station.section_id,
+            station_index: p.station.index,
+        };
+        let [x, y, z] = legacy.raw_positions[&slot];
+        assert!(
+            (x - p.x).abs() < 1e-5 && (y - p.y).abs() < 1e-5 && (z - p.z).abs() < 1e-9,
+            "{:?}: 0.6.0 ({x}, {y}, {z}) vs ({}, {}, {})",
+            p.station,
+            p.x,
+            p.y,
+            p.z
+        );
+    }
 }
 
 #[test]
@@ -1227,8 +1312,8 @@ fn schema_rows_retyped_in_another_case_are_refused() {
 #[test]
 fn shots_carry_their_survey_credit() {
     let mut project = full_project();
-    let person = |n: &str, e: Option<&str>| stalagmight_models::Person::new(n, e).unwrap();
-    project.lines[0].shots[0].set_credit(stalagmight_models::SurveyCredit {
+    let person = |n: &str, e: Option<&str>| stalagmight_legacy::models::Person::new(n, e).unwrap();
+    project.lines[0].shots[0].set_credit(stalagmight_legacy::models::SurveyCredit {
         surveyors: vec![person("Ann", Some("ann@example.org")), person("Bo", None)],
         explorers: vec![person("Ex", None)],
         date: "2024-04-05".parse().ok(),
@@ -1254,9 +1339,9 @@ fn shots_carry_their_survey_credit() {
 fn credit_rows_are_counted_against_their_own_caps() {
     let mut project = full_project();
     // An email: the legacy column cannot carry it, so every shot needs a row.
-    let explorer = stalagmight_models::Person::new("Ex", Some("ex@example.org")).unwrap();
+    let explorer = stalagmight_legacy::models::Person::new("Ex", Some("ex@example.org")).unwrap();
     for shot in &mut project.lines[0].shots {
-        shot.set_credit(stalagmight_models::SurveyCredit {
+        shot.set_credit(stalagmight_legacy::models::SurveyCredit {
             explorers: vec![explorer.clone()],
             ..Default::default()
         });
@@ -1328,7 +1413,7 @@ fn a_huge_legacy_surveyor_is_read_bounded_and_shared() {
     let main = &survey.sections[0];
     assert_eq!(
         main.shots[0].surveyors.len(),
-        stalagmight_models::MAX_PEOPLE_PER_ROLE
+        stalagmight_legacy::models::MAX_PEOPLE_PER_ROLE
     );
     assert!(main
         .shots
@@ -1383,4 +1468,36 @@ fn section_rows_are_counted_against_their_own_caps() {
         )
     )
     .is_ok());
+}
+
+/// A merge that closes a loop cannot be one station: the conversion keeps it
+/// as a rigid tie, listed with the closures and flagged.
+#[test]
+fn a_merge_that_closes_a_loop_reads_as_a_tie_closure() {
+    let mut project = full_project();
+    project.loop_closures.clear();
+    let (main, side) = (project.lines[0].id, project.lines[1].id);
+    let template = project.station_merges.iter().next().cloned().unwrap();
+    project
+        .station_merges
+        .push(stalagmight_legacy::models::station::StationMerge {
+            station_a: project.key_for_ref(StationRef::new(main, 4)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(side, 2)).unwrap(),
+            merged_at: template.merged_at,
+        });
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file(&path).unwrap();
+
+    let ties: Vec<_> = survey.loop_closures.iter().filter(|c| c.tie).collect();
+    assert_eq!(ties.len(), 1, "{:?}", survey.loop_closures);
+    let ends = [ties[0].a, ties[0].b];
+    let id = |section_id, index| StationId { section_id, index };
+    assert!(
+        ends.contains(&id(main, 4)) && ends.contains(&id(side, 2)),
+        "{ends:?}"
+    );
+    // The other merge is still the one junction.
+    assert_eq!(survey.station_merges.len(), 1);
 }

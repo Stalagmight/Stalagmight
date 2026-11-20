@@ -112,11 +112,26 @@ pub(super) struct DatumGps {
     /// Whether the project has a frame datum at all. Without one nothing
     /// resolves, and no datum is owed a START.
     has_frame: bool,
-    /// Indices in `zero_datums` whose GPS is on file.
+    /// Every datum's GPS, in the project's list order.
+    gps: Vec<GpsCoordinates>,
+    /// Indices in the datum list whose GPS is on file.
     written: HashSet<usize>,
     /// `(node id, datum index)` for each datum whose station is an ordinary
     /// row, still owed a START of its own.
     fixes: Vec<(i64, usize)>,
+}
+
+/// The datums as the GPS pass reads them, whichever model they come from.
+pub(super) struct DatumNodes {
+    /// Every datum's GPS, in the project's list order.
+    pub(super) gps: Vec<GpsCoordinates>,
+    /// Each datum's Ariane node (the row or START of its station); `None`
+    /// when it does not resolve or its station has no row.
+    pub(super) nodes: Vec<Option<i64>>,
+    /// The frame datum's index.
+    pub(super) frame: Option<usize>,
+    /// Where the raw survey puts the frame datum's station.
+    pub(super) frame_xy: Option<(f64, f64)>,
 }
 
 /// Stamp GPS on every START row, and work out which datums sit on ordinary
@@ -129,12 +144,77 @@ pub(super) fn stamp_starts(
     shots: &mut [ExportShot],
     profile: TmlProfile,
 ) -> DatumGps {
+    let nodes = project
+        .zero_datums
+        .iter()
+        .map(|datum| {
+            project
+                .resolve_key(&datum.station_ref)
+                .and_then(|sr| station_to_ariane.get(&(sr.line_id, sr.station_index)))
+                .copied()
+        })
+        .collect();
+    let frame_index = frame.and_then(|frame| {
+        project
+            .zero_datums
+            .iter()
+            .position(|d| std::ptr::eq(d, frame))
+    });
+    // Where the raw survey puts the frame's own station. Local `(0, 0)` is
+    // meant to be there, but a legacy project need not hold that, so every
+    // surveyed START is measured from it rather than from the origin.
+    let frame_xy = frame
+        .and_then(|frame| project.resolve_key(&frame.station_ref))
+        .and_then(|sr| project.compute_station_raw_xy(sr));
+    let input = DatumNodes {
+        gps: project.zero_datums.iter().map(|d| d.gps).collect(),
+        nodes,
+        frame: frame_index,
+        frame_xy,
+    };
+    // The station each START stands on. A merged station aliases onto the
+    // START's id too; the lowest key keeps the choice deterministic, and merged
+    // stations share one raw position anyway.
+    let start_ids: HashSet<i64> = shots
+        .iter()
+        .filter(|s| s.shot_type == "START")
+        .map(|s| s.id)
+        .collect();
+    let mut start_station: HashMap<i64, (LineId, u32)> = HashMap::new();
+    for (&key, &id) in station_to_ariane {
+        if start_ids.contains(&id) {
+            let held = start_station.entry(id).or_insert(key);
+            *held = (*held).min(key);
+        }
+    }
+    let start_xy = |start: i64| {
+        let &(line_id, station) = start_station.get(&start)?;
+        project.compute_station_raw_xy(StationRef::new(line_id, station))
+    };
+    stamp_starts_at(input, start_xy, shots, profile)
+}
+
+/// The GPS pass on any model: `start_xy` is the raw position of the station a
+/// START (by id) stands on.
+pub(super) fn stamp_starts_at(
+    input: DatumNodes,
+    start_xy: impl Fn(i64) -> Option<(f64, f64)>,
+    shots: &mut [ExportShot],
+    profile: TmlProfile,
+) -> DatumGps {
+    let DatumNodes {
+        gps: all_gps,
+        nodes,
+        frame,
+        frame_xy,
+    } = input;
     let mut gps = DatumGps {
         has_frame: frame.is_some(),
+        gps: all_gps,
         written: HashSet::new(),
         fixes: Vec::new(),
     };
-    let Some(frame) = frame else {
+    let Some(frame_index) = frame else {
         return gps;
     };
     let start_ids: HashSet<i64> = shots
@@ -145,19 +225,16 @@ pub(super) fn stamp_starts(
 
     let mut on_start: HashMap<i64, usize> = HashMap::new();
     let mut claimed: HashSet<i64> = HashSet::new();
-    for (index, datum) in project.zero_datums.iter().enumerate() {
+    for (index, (datum_gps, node)) in gps.gps.iter().zip(&nodes).enumerate() {
         // A GPS Ariane cannot place is unwritten, and claims no node: a
         // crafted file reaches here without `GpsCoordinates::new`'s checks.
-        if !is_placeable(&datum.gps) {
+        if !is_placeable(datum_gps) {
             continue;
         }
-        let node = project
-            .resolve_key(&datum.station_ref)
-            .and_then(|sr| station_to_ariane.get(&(sr.line_id, sr.station_index)));
         // Unwritten when it does not resolve, its station has no node, or an
         // earlier datum holds the node: two GPS positions for one point is a
         // conflict the file cannot carry.
-        let Some(&node) = node.filter(|node| claimed.insert(**node)) else {
+        let Some(node) = node.filter(|node| claimed.insert(*node)) else {
             continue;
         };
         if start_ids.contains(&node) {
@@ -167,44 +244,23 @@ pub(super) fn stamp_starts(
         }
     }
 
-    // The station each START stands on. A merged station aliases onto the
-    // START's id too; the lowest key keeps the choice deterministic, and merged
-    // stations share one raw position anyway.
-    let mut start_station: HashMap<i64, (LineId, u32)> = HashMap::new();
-    for (&key, &id) in station_to_ariane {
-        if start_ids.contains(&id) {
-            let held = start_station.entry(id).or_insert(key);
-            *held = (*held).min(key);
-        }
-    }
-
-    let frame_index = project
-        .zero_datums
-        .iter()
-        .position(|d| std::ptr::eq(d, frame));
     // A frame whose own GPS cannot be placed anchors nothing: its STARTs stay
     // at 0,0, as in a project with no datum, and the datums count unwritten.
-    let frame_gps = Some(&frame.gps).filter(|gps| is_placeable(gps));
-    // Where the raw survey puts the frame's own station. Local `(0, 0)` is
-    // meant to be there, but a legacy project need not hold that, so every
-    // surveyed START is measured from it rather than from the origin.
-    let frame_xy = project
-        .resolve_key(&frame.station_ref)
-        .and_then(|sr| project.compute_station_raw_xy(sr));
+    let frame_gps = gps.gps.get(frame_index).copied().filter(is_placeable);
     for shot in shots.iter_mut().filter(|s| s.shot_type == "START") {
         let (latitude, longitude) = if let Some(&index) = on_start.get(&shot.id) {
             gps.written.insert(index);
-            let own = &project.zero_datums[index].gps;
+            let own = &gps.gps[index];
             (own.latitude, own.longitude)
-        } else if let Some(surveyed) = frame_gps.zip(frame_xy).and_then(|(origin, from)| {
-            let &(line_id, station) = start_station.get(&shot.id)?;
-            surveyed_gps(project, origin, from, StationRef::new(line_id, station))
-        }) {
+        } else if let Some(surveyed) = frame_gps
+            .zip(frame_xy)
+            .and_then(|(origin, from)| surveyed_gps(&origin, from, start_xy(shot.id)?))
+        {
             surveyed
         } else if let Some(origin) = frame_gps {
             // Last resort, for a START whose station has no raw position: the
             // frame datum's coordinates, which are then on file through it.
-            gps.written.extend(frame_index);
+            gps.written.insert(frame_index);
             (origin.latitude, origin.longitude)
         } else {
             continue;
@@ -228,17 +284,15 @@ pub(super) fn stamp_starts(
     gps
 }
 
-/// Where the RAW survey puts `station`, as GPS: its raw offset from `frame_xy`
-/// (the frame datum station's raw position) placed against `origin` (that
-/// datum's GPS). Ariane runs its own loop solve, so the measurements are what
-/// it should start from.
+/// Where the RAW survey puts a station at raw `(x, y)`, as GPS: its offset
+/// from `frame_xy` (the frame datum station's raw position) placed against
+/// `origin` (that datum's GPS). Ariane runs its own loop solve, so the
+/// measurements are what it should start from.
 fn surveyed_gps(
-    project: &Project,
     origin: &GpsCoordinates,
     (frame_x, frame_y): (f64, f64),
-    station: StationRef,
+    (x, y): (f64, f64),
 ) -> Option<(f64, f64)> {
-    let (x, y) = project.compute_station_raw_xy(station)?;
     local_to_gps(x - frame_x, y - frame_y, origin)
         .filter(|&(latitude, longitude)| in_range(latitude, longitude))
 }
@@ -273,7 +327,6 @@ impl DatumGps {
     /// over closures the user never made.
     pub(super) fn append_fix_starts(
         mut self,
-        project: &Project,
         shots: &mut Vec<ExportShot>,
         mut next_id: i64,
     ) -> usize {
@@ -290,7 +343,7 @@ impl DatumGps {
         let index_by_id: HashMap<i64, usize> =
             shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
         for (node, index) in std::mem::take(&mut self.fixes) {
-            let gps = &project.zero_datums[index].gps;
+            let gps = self.gps[index];
             let Some(row) = index_by_id.get(&node).map(|&i| &shots[i]) else {
                 continue;
             };
@@ -320,10 +373,10 @@ impl DatumGps {
         if !self.has_frame {
             return 0;
         }
-        let unwritten = project.zero_datums.len() - self.written.len();
+        let unwritten = self.gps.len() - self.written.len();
         if unwritten > 0 {
             tracing::warn!(
-                datum_count = project.zero_datums.len(),
+                datum_count = self.gps.len(),
                 unwritten,
                 "Ariane stores GPS on START rows only; {unwritten} GPS anchor(s) were not \
                  written: a datum that no longer resolves, whose station has no row in this \

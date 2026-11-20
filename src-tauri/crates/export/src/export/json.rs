@@ -92,7 +92,7 @@ pub struct JsonShot {
     pub date: Option<String>,
 }
 
-fn names(people: &[Person]) -> Vec<String> {
+pub(crate) fn names(people: &[Person]) -> Vec<String> {
     people.iter().map(|p| p.name.clone()).collect()
 }
 
