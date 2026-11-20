@@ -38,8 +38,9 @@ interface CombinePlanNotesProps {
  * removed because as closures they would join the two ends of one shot
  * (#746), the closures replaced by a loop closure on the same two stations
  * that the Closures Computed View adjusts (#749), converted bearings, the
- * quality and manual offset the combined line keeps, shot identities that
- * are renewed, and lines that pass through the join. The user reads all of
+ * quality and manual offset the combined line keeps, and lines that pass
+ * through the join. (Shot identities are project-unique on the station graph,
+ * so none is renewed: `repeated_shot_ids` is always 0 and has no note.) The user reads all of
  * it before confirming; nothing here is a refusal.
  */
 export function CombinePlanNotes({
@@ -143,12 +144,6 @@ export function CombinePlanNotes({
         station: stationLabel(joined.station, true),
         distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
       }),
-    });
-  }
-  if (candidate.repeated_shot_ids > 0) {
-    notes.push({
-      key: 'repeated-ids',
-      text: t('dialogs.combineSections.repeatedIds', { other: otherName, kept: keptName, count: candidate.repeated_shot_ids }),
     });
   }
   if (candidate.passing_through.length > 0) {

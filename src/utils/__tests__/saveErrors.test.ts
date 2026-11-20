@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  EXTERNALLY_MODIFIED,
+  READ_ONLY_FILE,
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
   FS_PERMISSION_DENIED,
@@ -49,6 +51,9 @@ describe('classifySaveError', () => {
     expect(classifySaveError(`${IGNORES_UNREADABLE}: could not read the ignore list`)).toBe(
       'ignores-unreadable'
     );
+    // The `.stalx` v2 refusals (plan 6.4, 6.5).
+    expect(classifySaveError(`${EXTERNALLY_MODIFIED}: cave.stalx changed on disk`)).toBe('externally-modified');
+    expect(classifySaveError(`${READ_ONLY_FILE}: made with a newer Stalagmight`)).toBe('read-only-file');
   });
 
   // [#517] The marker exists to keep this refusal out of the Review & Repair

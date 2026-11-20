@@ -56,11 +56,8 @@ export default function EditStationDialog() {
   const stationId = stationRef ? labels.stationId(stationRef) : null;
 
   // The datum already stored on this station, if any: its role and accuracy.
-  const storedDatum = project?.zero_datums.find(
-    (d) =>
-      d.station_ref.line_id === stationRef?.line_id &&
-      d.station_ref.station_index === stationRef?.station_index
-  );
+  // On a junction it may be listed on another of the station's slots.
+  const storedDatum = stationRef ? labels.datumOf(project?.zero_datums, stationRef) : undefined;
   const storedAccuracy = storedDatum?.accuracy_m ?? DEFAULT_DATUM_ACCURACY_M;
 
   // Form state

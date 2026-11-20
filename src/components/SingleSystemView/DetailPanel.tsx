@@ -33,6 +33,7 @@ import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
+import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 export default function DetailPanel() {
@@ -603,7 +604,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
-  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const { project, stations, unmergeStationPair } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredLineId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredLineId: s.setHoveredLineId }))
   );
@@ -694,28 +695,15 @@ function StationDetail({ station }: { station: Station }) {
     triggerCenterOnStation(station.station_ref);
   };
 
-  const sameStationRef = (a: { line_id: number; station_index: number }, b: { line_id: number; station_index: number }): boolean => {
-    return a.line_id === b.line_id && a.station_index === b.station_index;
-  };
-
-  const isDirectMerge = (ref: { line_id: number; station_index: number }): boolean => {
-    return project?.station_merges.some((merge) => {
-      const direct = sameStationRef(merge.station_a, station.station_ref) && sameStationRef(merge.station_b, ref);
-      const reverse = sameStationRef(merge.station_a, ref) && sameStationRef(merge.station_b, station.station_ref);
-      return direct || reverse;
-    }) ?? false;
-  };
-
+  // A junction is ONE station several lines pass (plan 5.2), and any two of its
+  // slots are a pair: the pair form detaches the PARTNER's line, which is the
+  // row the user clicked.
   const handleUnmergeFromStation = async (ref: { line_id: number; station_index: number }) => {
     trackContextMenuAction('unmerge', 'detail-panel');
     const targetKey = `${ref.line_id}:${ref.station_index}`;
     setUnmergeTargetKey(targetKey);
     try {
-      if (isDirectMerge(ref)) {
-        await unmergeStationPair(station.station_ref, ref);
-      } else {
-        await unmergeStations(station.station_ref);
-      }
+      await unmergeStationPair(station.station_ref, ref);
     } finally {
       setUnmergeTargetKey(null);
     }
@@ -772,15 +760,17 @@ function StationDetail({ station }: { station: Station }) {
 
           {station.is_zero_datum && (
             <StationDatumDetail
-              datum={project?.zero_datums.find((d) => sameStationRef(d.station_ref, station.station_ref))}
+              datum={labels.datumOf(project?.zero_datums, station.station_ref)}
               gps={station.gps_coordinates}
               gpsPrecision={precision.gps}
             />
           )}
 
           {station.merged_with.length > 0 && (
-            <div className="pt-2 border-t border-border">
-              <span className="text-sm text-text-secondary">{t('detailPanel.station.mergedWith')}:</span>
+            <div className="pt-2 border-t border-border" data-testid="station-detail-merged-with">
+              <span className="text-sm text-text-secondary" title={t('detailPanel.station.mergedWithHint')}>
+                {t('detailPanel.station.mergedWith')}:
+              </span>
               <ul className="mt-1 space-y-1">
                 {station.merged_with.map((ref, i) => (
                   <li key={i} className="text-sm flex items-center justify-between gap-2">
@@ -804,8 +794,8 @@ function StationDetail({ station }: { station: Station }) {
                         void handleUnmergeFromStation(ref);
                       }}
                       className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Unmerge Stations"
-                      aria-label={`Unmerge station ${labels.station(ref, true)}`}
+                      title={t('detailPanel.station.detachLine', { line: labels.lineName(ref.line_id) })}
+                      aria-label={t('detailPanel.station.detachLine', { line: labels.lineName(ref.line_id) })}
                       data-testid={`detail-unmerge-${ref.line_id}-${ref.station_index}`}
                       disabled={editingBlocked || unmergeTargetKey === `${ref.line_id}:${ref.station_index}`}
                     >
@@ -883,6 +873,7 @@ function StationDetail({ station }: { station: Station }) {
                   onHoverEnd={() => setHoveredLineId(null)}
                 />
               </div>
+              <StationOtherLineShots mergedWith={station.merged_with} />
             </div>
           </div>
         </div>
