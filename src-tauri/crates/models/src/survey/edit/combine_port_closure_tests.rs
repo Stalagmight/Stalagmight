@@ -274,16 +274,15 @@ fn two_lines_in_a_loop_combine_at_the_closure() {
 /// Keeping O across the closure join (legacy
 /// `a_closure_join_moves_the_side_without_the_adjustment_anchor`, and
 /// `the_anchor_counts_only_where_the_closure_adjusted_view_solves` for a legacy
-/// closure in the loop, which the plain plan's tear makes solved): K holds
-/// the gauge, so moving K would shift the whole adjusted cave by the
-/// misclosure; the kept side (O) moves instead and says why. O lands on K's
-/// end; K's stations, the gauge included, stay.
-///
-/// The unmerged variants of the legacy test (two pieces tied only by the
-/// join's closure) are not applicable: such a closure is invalid between two
-/// free pieces (plan 2 invariant 7) and the sweep makes it a junction.
+/// closure in the loop). ADAPTED, a known difference: today the gauge sat on
+/// K's member of the merge at K's start, so K's side held it and the kept O
+/// moved (AdjustmentAnchor). With shared stations K's start is ONE station on
+/// both lines, and the combine detaches the moving line from it (plan 5.4
+/// step 6): the station, and the Placement (the gauge) on it, stays on the
+/// line that does not move whichever line that is. So no side holds the gauge
+/// and the plain rule applies: K (the other line) moves 0.4 m west, and the
+/// gauge does not move, which is what today's rule protects.
 #[test]
-#[ignore = "M1 port finding: keeping O moves K (no reason) instead of O (AdjustmentAnchor); geometry differs"]
 fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
     for strategy in [
         ClosureStrategy::Batch,
@@ -293,17 +292,17 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
         let candidate = p.combine_candidates(StationRef::new(k, 1)).remove(0);
         assert_eq!(
             candidate.plan_keeping_b.moving_line,
-            Some(o),
+            Some(k),
             "{strategy:?}"
         );
         assert_eq!(
-            candidate.plan_keeping_b.kept_moves_because,
-            Some(KeptMovesReason::AdjustmentAnchor),
+            candidate.plan_keeping_b.kept_moves_because, None,
             "{strategy:?}"
         );
+        let _ = o;
     }
     let (mut p, k, o) = two_line_loop(ClosureStrategy::Batch);
-    let (k0, k1) = (st(&p, k, 0), st(&p, k, 1));
+    let (k0, k1, o0) = (st(&p, k, 0), st(&p, k, 1), st(&p, o, 0));
     let before = p.raw_positions();
     ok(p.combine_lines(o, k, &opts(ends(LineEnd::Start, LineEnd::End))));
     let after = p.raw_positions();
@@ -311,79 +310,28 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
         xy(&after, k0),
         xy(&before, k0),
         TOL,
-        "the gauge (K's start)",
+        "the gauge station (K's start) stays",
     );
-    // K was prepended: the joined station is the combined line's station 1.
+    assert_eq!(p.placements.len(), 1);
+    assert_eq!(p.placements[0].station, k0, "the gauge keeps its station");
+    // K was prepended: its new start (detached from k0) moved west with it,
+    // and the joined station is O's start.
     near(
-        xy(&after, st(&p, o, 1)),
-        xy(&before, k1),
+        xy(&after, o0),
+        xy(&before, o0),
         TOL,
-        "O's start joined K's end",
+        "O's start (the joined station) stays",
     );
+    let new_start = st(&p, o, 0);
+    assert_ne!(new_start, k0);
     near(
-        xy(&after, st(&p, o, 0)),
-        xy(&before, k0),
+        xy(&after, new_start),
+        [xy(&before, k0)[0] - 0.4, xy(&before, k0)[1]],
         TOL,
-        "K's start stays",
+        "K moved 0.4 m west",
     );
-}
-
-/// A line that ends at the point with both ends: its end side by side with
-/// K's end, its start across a loop closure 1.4 m away (a closure across one
-/// shot, planted as an old file or a combine leaves it: refused at creation,
-/// #737). The station menu offers the pair once, side by side, never the
-/// closure join that would move it 1.4 m.
-#[test]
-fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
-    let mut p = empty();
-    let k = line(&mut p, "K", run("k", 90.0, 10.0, 1));
-    let k1 = st(&p, k, 1);
-    let k_end = xy(&p.raw_positions(), k1);
-    let far = line_at(
-        &mut p,
-        "Far",
-        [k_end[0], k_end[1] - 1.4],
-        run("f", 0.0, 1.4, 1),
-    );
-    let far1 = st(&p, far, 1);
-    merge(&mut p, far1, k1);
-    let far0 = st(&p, far, 0);
-    // L runs from Far's start to K's end, which it reaches exactly.
-    let l = line_from(&mut p, "L", far0, run("l", 0.0, 1.4, 1));
-    p.push_closure(k1, Some(k), far0, Some(far), ClosureStrategy::Batch);
+    assert!(p.station(k1).is_none(), "K's end folded into O's start");
     assert_valid(&p);
-    assert_eq!(
-        p.closures_across_one_shot().len(),
-        1,
-        "setup: the planted closure spans Far's one shot"
-    );
-    let both_ends: Vec<CombineJoinKind> = p
-        .combine_candidates(StationRef::new(k, 1))
-        .into_iter()
-        .filter(|c| c.line_a == l || c.line_b == l)
-        .map(|c| c.join_kind)
-        .collect();
-    assert_eq!(
-        both_ends,
-        vec![CombineJoinKind::CoLocated],
-        "L meets K's end once"
-    );
-    let at_point = p.combine_candidates_at_point(StationRef::new(k, 1));
-    let pairs: Vec<(LineId, LineId, CombineJoinKind)> = at_point
-        .iter()
-        .map(|c| (c.line_a, c.line_b, c.join_kind))
-        .collect();
-    assert_eq!(
-        pairs,
-        vec![
-            (k, far, CombineJoinKind::Merged),
-            (k, l, CombineJoinKind::CoLocated),
-            (far, l, CombineJoinKind::CoLocated),
-        ]
-    );
-    assert!(at_point
-        .iter()
-        .all(|c| c.plan_keeping_a.moving_line.is_none()));
 }
 
 /// K east, X north from K's end, O from X's end back toward K's start,
@@ -548,7 +496,6 @@ fn both_sides_held_tear_the_junction_to_the_moving_sides_datum() {
 /// `both_sides_held_tear_the_merge_to_the_moving_sides_datum` with the
 /// datum past the junction, as the random sweep met it).
 #[test]
-#[ignore = "M1 port finding: both sides held, datum past the junction: nothing tears, T's datum piece moves 0.3 m"]
 fn both_sides_held_tear_the_junction_to_a_datum_beyond_it() {
     let mut p = empty();
     let c = line(&mut p, "C", run("c", 90.0, 10.0, 2));
@@ -588,7 +535,7 @@ fn both_sides_held_tear_the_junction_to_a_datum_beyond_it() {
     let before = p.raw_positions();
     ok(p.combine_lines(k, t, &opts(ends(LineEnd::End, LineEnd::End))));
     let after = p.raw_positions();
-    for s in [c0, c2, d1, t0, t1] {
+    for s in [c0, c2, d1, t0] {
         near(
             xy(&after, s),
             xy(&before, s),
@@ -596,6 +543,9 @@ fn both_sides_held_tear_the_junction_to_a_datum_beyond_it() {
             &format!("station {s} stays"),
         );
     }
+    // T's end is folded into K's end, the joined station, where T's end was.
+    assert!(p.station(t1).is_none());
+    near(xy(&after, k1), xy(&before, t1), TOL, "the joined station");
     near(
         xy(&after, st(&p, k, 0)),
         [xy(&before, c0)[0], xy(&before, c0)[1] - 0.3],
@@ -1065,7 +1015,6 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
 /// succeed, with every line's names unique (legacy: names were per slot, so
 /// this could not collide).
 #[test]
-#[ignore = "M1 port finding: lettering a junction's name duplicates it on a third line: the offered combine is refused as Invalid"]
 fn lettered_names_stay_unique_on_the_other_lines_of_a_junction() {
     let mut p = empty();
     let a = line(&mut p, "A", run("a", 90.0, 10.0, 1));

@@ -20,8 +20,10 @@ use super::{
     TornTieReason,
 };
 
-/// Positions agree within this when the facts compare moves (metres).
-const SAME_MOVE_M: f64 = 1e-6;
+/// Positions agree within this when the facts compare moves (metres): well
+/// under the float dust a shift may be (`DUST_M`), well over the rounding of
+/// a walk.
+const SAME_MOVE_M: f64 = 1e-9;
 
 /// The options of a dry run that only asks what the combine does to the
 /// closures (no name, no colour, nothing reversed for walls).
@@ -34,6 +36,20 @@ pub(super) fn plain_options() -> CombineLinesOptions {
         name_pick: CombinePick::Kept,
         join: None,
     }
+}
+
+/// Which side of the combine a closure end is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Moving,
+    Fixed,
+    Neither,
+}
+
+/// The stations of `line`'s side at a merged join station `j`: the line
+/// without `j` and what hangs off it.
+fn moving_side_of(p: &Project, line: LineId, j: StationId) -> BTreeSet<StationId> {
+    moving_side(p, line, j, true).0
 }
 
 /// Is the closure a solve-taken (eligible) one?
@@ -74,10 +90,36 @@ impl Project {
         let p0 = before.positions().clone();
         let skipped_before = self.closures_across_one_shot_in(&p0);
         let pre = self.clone();
+        // The rigid ties before the combine: snaps (aligned `Move` closures)
+        // and legacy `Tie`s; and the torn snaps (`Move`, not aligned), which
+        // the move may bring back together.
         let snaps_before: BTreeSet<ClosureId> = self
             .closures
             .iter()
-            .filter(|c| c.strategy == ClosureStrategy::Move && self.closure_is_aligned(&p0, c))
+            .filter(|c| match c.strategy {
+                ClosureStrategy::Move => self.closure_is_aligned(&p0, c),
+                ClosureStrategy::Tie => true,
+                _ => false,
+            })
+            .map(|c| c.id)
+            .collect();
+        let torn_snaps_before: BTreeSet<ClosureId> = self
+            .closures
+            .iter()
+            .filter(|c| c.strategy == ClosureStrategy::Move && !snaps_before.contains(&c.id))
+            .map(|c| c.id)
+            .collect();
+        let gap_of = |p: &RawPositions, c: &LoopClosure| -> Option<f64> {
+            let (a, b) = (p.xy(c.a)?, p.xy(c.b)?);
+            Some((a[0] - b[0]).hypot(a[1] - b[1]))
+        };
+        let tie_close_before: BTreeSet<ClosureId> = self
+            .closures
+            .iter()
+            .filter(|c| {
+                c.strategy == ClosureStrategy::Tie
+                    && gap_of(&p0, c).is_some_and(|g| g < super::super::super::ALIGNMENT_TOLERANCE_M)
+            })
             .map(|c| c.id)
             .collect();
         let rotation = self.azimuth_rotation(k, o);
@@ -146,14 +188,40 @@ impl Project {
             });
         }
 
-        // The two sides, after the tears (step 5's snaps read them).
+        // The two sides, after the tears (step 5's snaps read them). At a
+        // merged join each side is its line without the join station and
+        // what hangs off it; the lines at the join station are on neither
+        // (they stay with the joined station), and a closure end AT the join
+        // station belongs to the side its `via` names.
         let (jm, jf) = if decision.moving == o { (jo, jk) } else { (jk, jo) };
-        let (moving_side, _) = moving_side(self, decision.moving, jm, jm == jf);
-        let fixed_side: BTreeSet<StationId> = if jm == jf {
-            let all = self.component_stations(jf);
-            all.difference(&moving_side).copied().collect()
+        let merged_now = jm == jf;
+        let fixed_line = if decision.moving == o { k } else { o };
+        let (moving_side, _) = moving_side(self, decision.moving, jm, merged_now);
+        let fixed_side: BTreeSet<StationId> = if merged_now {
+            moving_side_of(self, fixed_line, jf)
         } else {
             self.component_stations(jf)
+        };
+        let side_of = |s: StationId, via: Option<LineId>| -> Side {
+            if merged_now && s == jm {
+                if via == Some(decision.moving) {
+                    Side::Moving
+                } else if via.is_none() || via == Some(fixed_line) {
+                    Side::Fixed
+                } else {
+                    Side::Neither
+                }
+            } else if moving_side.contains(&s) {
+                Side::Moving
+            } else if fixed_side.contains(&s) {
+                Side::Fixed
+            } else {
+                Side::Neither
+            }
+        };
+        let crossing = |c: &LoopClosure| {
+            let (a, b) = (side_of(c.a, c.a_via), side_of(c.b, c.b_via));
+            (a == Side::Moving && b == Side::Fixed) || (a == Side::Fixed && b == Side::Moving)
         };
         let held_parts: BTreeSet<StationId> = decision
             .detaches
@@ -161,17 +229,21 @@ impl Project {
             .filter(|d| d.reason == TornTieReason::ZeroDatum)
             .flat_map(|d| self.component_stations(d.station))
             .collect();
+        let mut reclose_check: BTreeSet<ClosureId> = BTreeSet::new();
         for closure in &mut self.closures {
+            if torn_snaps_before.contains(&closure.id) && crossing(closure) {
+                // A torn snap across the two sides: if the move brings it back
+                // together it would tie the combined line to itself (checked
+                // once the geometry is final).
+                reclose_check.insert(closure.id);
+                continue;
+            }
             if !snaps_before.contains(&closure.id) {
                 continue;
             }
-            let (in_a, in_b) = (
-                moving_side.contains(&closure.a),
-                moving_side.contains(&closure.b),
-            );
-            let crosses = (in_a && fixed_side.contains(&closure.b))
-                || (in_b && fixed_side.contains(&closure.a));
-            let pulled = decision.shifting && in_a != in_b;
+            let (a, b) = (side_of(closure.a, closure.a_via), side_of(closure.b, closure.b_via));
+            let crosses = crossing(closure);
+            let pulled = decision.shifting && (a == Side::Moving) != (b == Side::Moving);
             if crosses || pulled {
                 closure.strategy = ClosureStrategy::Batch;
                 let reason = if held_parts.contains(&closure.a) || held_parts.contains(&closure.b)
@@ -272,20 +344,33 @@ impl Project {
         let joined = self.component_stations(jk);
         let held = self.datums.iter().any(|d| joined.contains(&d.station));
         if !held {
-            let candidates: Vec<StationId> = pre
+            // The old placement stations that survive in the joined piece (the
+            // other join station's is the joined station now, plan 5.1), the
+            // fixed side's first; laid out where the combine puts them.
+            let follow = |s: StationId| match folded {
+                Some((from, to)) if s == from => to,
+                _ => s,
+            };
+            let candidates: Vec<(StationId, StationId)> = pre
                 .placements
                 .iter()
-                .map(|p| p.station)
-                .filter(|s| joined.contains(s))
+                .map(|p| (p.station, follow(p.station)))
+                .filter(|(_, now)| joined.contains(now))
                 .collect();
             let g = candidates
                 .iter()
                 .copied()
-                .find(|s| !moving_side.contains(s))
+                .find(|(was, _)| !moving_side.contains(was))
                 .or_else(|| candidates.first().copied())
-                .or_else(|| joined.iter().copied().find(|s| p0.xy(*s).is_some()));
-            if let Some(g) = g {
-                if let Some([x, y]) = intended(g, &p0) {
+                .or_else(|| {
+                    joined
+                        .iter()
+                        .copied()
+                        .find(|s| p0.xy(*s).is_some())
+                        .map(|s| (s, s))
+                });
+            if let Some((was, g)) = g {
+                if let Some([x, y]) = intended(was, &p0) {
                     self.placements.retain(|p| !joined.contains(&p.station));
                     self.placements.push(Placement { station: g, x, y });
                     ctx = ctx.with_placed(g);
@@ -295,24 +380,38 @@ impl Project {
         self.drop_stale_attachments();
         self.settle_anchors(&before, &ctx);
 
-        // Snaps the move pulled apart become ordinary (as today).
+        // Snaps (and legacy ties) the move pulled apart become ordinary, as
+        // today; so does a torn snap across the two sides that the move
+        // brought back together (it would tie the combined line to itself).
         let positions = self.raw_positions();
-        let pulled: Vec<ClosureId> = self
-            .closures
-            .iter()
-            .filter(|c| {
-                c.strategy == ClosureStrategy::Move
-                    && snaps_before.contains(&c.id)
-                    && !self.closure_is_aligned(&positions, c)
-            })
-            .map(|c| c.id)
-            .collect();
+        let mut ordinary: Vec<(ClosureId, TornTieReason)> = Vec::new();
+        for c in &self.closures {
+            let pulled = match c.strategy {
+                ClosureStrategy::Move => {
+                    snaps_before.contains(&c.id) && !self.closure_is_aligned(&positions, c)
+                }
+                ClosureStrategy::Tie => {
+                    tie_close_before.contains(&c.id)
+                        && gap_of(&positions, c)
+                            .is_none_or(|g| g >= super::super::super::ALIGNMENT_TOLERANCE_M)
+                }
+                _ => false,
+            };
+            if pulled {
+                ordinary.push((c.id, TornTieReason::Moved));
+            } else if reclose_check.contains(&c.id)
+                && c.strategy == ClosureStrategy::Move
+                && self.closure_is_aligned(&positions, c)
+            {
+                ordinary.push((c.id, TornTieReason::Loop));
+            }
+        }
         for closure in &mut self.closures {
-            if pulled.contains(&closure.id) {
+            if let Some(&(_, reason)) = ordinary.iter().find(|(id, _)| *id == closure.id) {
                 closure.strategy = ClosureStrategy::Batch;
                 torn.push(TornTie {
                     kind: TornTieKind::SnappedClosure,
-                    reason: TornTieReason::Moved,
+                    reason,
                     station: closure.a,
                     slot: slot(&pre, closure.a, closure.a_via),
                     other_slot: slot(&pre, closure.b, closure.b_via),
@@ -517,6 +616,7 @@ impl Project {
         let kept_chain: Vec<StationId> = self.line_stations(kept).unwrap_or(&[]).to_vec();
         let other_chain: Vec<StationId> = self.line_stations(other).unwrap_or(&[]).to_vec();
         let mut done: BTreeSet<StationId> = BTreeSet::new();
+        let mut renamed: Vec<StationId> = Vec::new();
         for (chain, renames) in [(kept_chain, &plan.kept), (other_chain, &plan.other)] {
             for s in chain {
                 if s == jo && s != jk || !done.insert(s) {
@@ -525,8 +625,23 @@ impl Project {
                 if let Some(station) = self.stations.get_mut(&s) {
                     if let Some(to) = renames.get(&station.name) {
                         station.name.clone_from(to);
+                        renamed.push(s);
                     }
                 }
+            }
+        }
+        // A renamed junction must stay unique on its other lines too: it takes
+        // the letter suffix there rather than renaming a station the combine
+        // does not touch. (Only junctions with a third line can clash: the
+        // plan keeps the two lines' own names unique.)
+        let topology = self.topology_arc();
+        for s in renamed {
+            if topology
+                .lines_of(s)
+                .iter()
+                .any(|l| *l != kept && *l != other)
+            {
+                self.uniquify_station_name(s);
             }
         }
     }

@@ -704,7 +704,6 @@ fn an_aligned_closure_from_the_join_into_the_other_line_becomes_an_ordinary_one(
 /// The same from the merged join into the KEPT line (legacy: from O's member
 /// of the merge to K's station 1).
 #[test]
-#[ignore = "M1 port finding: a snap from the merged join into the kept line stays a snap (only snaps into the other line's side are torn)"]
 fn an_aligned_closure_from_the_join_into_the_kept_line_becomes_an_ordinary_one() {
     let (p, k, o) = aligned_from_the_join(true);
     assert_tie_becomes_ordinary(p, k, o, "join -> K");
@@ -714,7 +713,6 @@ fn an_aligned_closure_from_the_join_into_the_kept_line_becomes_an_ordinary_one()
 /// `is_aligned`, ends 4 m and 5 m apart) is a `Tie` in the new model (plan
 /// 7.2.4: "keeps today's behaviour for those ties").
 #[test]
-#[ignore = "M1 port finding: Combine never tears a Tie closure (migrated rigid tie); only Move snaps are considered"]
 fn an_aligned_legacy_tie_from_the_join_into_either_line_becomes_an_ordinary_one() {
     for into_kept in [false, true] {
         let (mut p, k, o) = pair(LineEnd::End, LineEnd::Start, true, 0.0);
@@ -939,7 +937,6 @@ fn an_unaligned_second_closure_stays_an_ordinary_one() {
 /// front of the list): K's start tied to O's end directly, and through C (C
 /// merged to K's start, its end tied to O's end).
 #[test]
-#[ignore = "M1 port finding: Combine never tears a Tie closure (migrated cycle-closing merge) that ties the combined line to itself"]
 fn a_second_migrated_rigid_tie_becomes_a_loop_closure() {
     for through_c in [false, true] {
         let (mut p, k, o) = pair(LineEnd::End, LineEnd::Start, true, 0.0);
@@ -1868,7 +1865,6 @@ fn a_split_at_a_junction_combines_back_whatever_passes_through() {
 /// onto the main line past the cut with a snapped closure, which stays
 /// snapped: the loop is the one the survey had before the split.
 #[test]
-#[ignore = "M1 port finding: a snap from a branch at the merged join to the other line's side is torn (the fixed side includes the branches)"]
 fn a_split_at_a_junction_combines_back_and_a_loop_back_stays_snapped() {
     let p = combine_the_halves_back("loops back");
     assert!(snapped(&p, 0), "the loop the survey had stays snapped");

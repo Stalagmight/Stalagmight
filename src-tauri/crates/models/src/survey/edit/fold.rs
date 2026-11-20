@@ -7,8 +7,8 @@
 //! - `retired` is replaced by `survivor` in every chain (`line.start`,
 //!   `shot.to`), every datum, every closure end and every hand-move key;
 //! - a closure whose two ends become the survivor is removed (#738);
-//! - a placement on `retired` is dropped (the caller's anchor settle gives
-//!   the merged piece its one placement);
+//! - a placement on `retired` is re-keyed to the survivor (plan 5.1; the
+//!   caller's anchor settle then gives the merged piece its one placement);
 //! - the survivor keeps its id and name; the retired id and name (and the
 //!   retired station's own aliases) become the survivor's aliases; the
 //!   comment follows the [`CommentRule`];
@@ -139,7 +139,9 @@ impl Project {
             }
         }
         self.closures = kept_closures;
-        self.placements.retain(|p| p.station != retired);
+        for placement in &mut self.placements {
+            swap(&mut placement.station);
+        }
 
         self.stations.remove(&retired);
         if let Some(station) = self.stations.get_mut(&survivor) {

@@ -231,6 +231,22 @@ impl Project {
             });
         }
         let (moving, detaches, because) = self.pick_moving_side(join)?;
+        // Today's "idle" plan: the other line was picked only to carry what
+        // sits at its join station (the joined station keeps the kept line's
+        // hand move), the chain gap is dust, and nothing else is there to
+        // carry: nothing moves after all.
+        if moving == o && !beyond_dust(gap) && !third(join.other_station) {
+            let trial = self.trial(join, o);
+            return Ok(Decision {
+                join: *join,
+                moving: o,
+                shifting: false,
+                shift: [0.0, 0.0],
+                kept_moves_because: None,
+                detaches: trial.detaches,
+                kept_hand_wins: true,
+            });
+        }
         let shift = if moving == o {
             gap
         } else {
@@ -351,17 +367,28 @@ impl Project {
             }
             let excluded = |l: LineId, _: usize| l == line;
             let part = &self.reach_without_shots(&[station], &excluded, false)[0];
-            if let Some(&toward) = others
-                .iter()
-                .find(|l| {
-                    topology
-                        .chain(**l)
-                        .is_some_and(|c| c.iter().any(|s| held.contains(s) && part.contains(s)))
-                })
-                .or_else(|| held.contains(&station).then(|| &others[0]))
-            {
-                out.push((station, Some(toward)));
+            if !held.iter().any(|s| part.contains(s)) {
+                continue;
             }
+            // The line the held part is reached along (the first one through
+            // the junction whose own chain reaches a held station, else the
+            // first one).
+            let toward = others
+                .iter()
+                .copied()
+                .find(|l| {
+                    let excluded = |x: LineId, _: usize| x == line;
+                    let from = topology
+                        .chain(*l)
+                        .and_then(|c| c.iter().copied().find(|s| *s != station));
+                    from.is_some_and(|from| {
+                        self.reach_without_shots(&[from], &excluded, false)[0]
+                            .iter()
+                            .any(|s| held.contains(s) && *s != station)
+                    })
+                })
+                .unwrap_or(others[0]);
+            out.push((station, Some(toward)));
         }
         out
     }
@@ -549,8 +576,8 @@ impl Project {
         let side = &trial.side;
         let positions = self.raw_positions();
         self.closures.iter().any(|c| {
-            c.strategy == ClosureStrategy::Move
-                && self.closure_is_aligned(&positions, c)
+            (c.strategy == ClosureStrategy::Tie
+                || (c.strategy == ClosureStrategy::Move && self.closure_is_aligned(&positions, c)))
                 && trial
                     .scratch
                     .closures

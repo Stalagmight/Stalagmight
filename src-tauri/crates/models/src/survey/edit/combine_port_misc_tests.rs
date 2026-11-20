@@ -718,7 +718,6 @@ fn check_one(j: &Join, keep_k: bool, [hand_k, hand_o]: [[f64; 3]; 2], what: &str
 /// station (O's start; T is free); U is on K's end, which keeps its 0.3 m.
 /// Nothing moves, and a snap from O:1 to Z (along O, ending on O's end) stays.
 #[test]
-#[ignore = "M1 port finding: a branch at the KEPT join station makes the plan report moving_line Some(O) / moved_lines [O] although nothing moves"]
 fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     let mut j = join_fixture((END, START), false, [[0.3, 0.0, 0.0], NONE], false);
     let (k, o, p) = (j.k, j.o, &mut j.p);
@@ -792,7 +791,6 @@ fn dust_edge(what: &str, h: f64, carried: bool) {
 }
 
 #[test]
-#[ignore = "M1 port finding: at the dust edge T (moved 1.8 um with the joined station) is reported in moved_lines, not moved_with_joined_station"]
 fn hand_moves_past_the_float_dust_edge_carry_the_branch() {
     dust_edge("past dust", -0.9 * DUST, true);
 }
@@ -806,7 +804,7 @@ fn hand_moves_within_the_float_dust_edge_move_nothing() {
 /// a junction at O's start and a rigid `Tie` at O's end (plan 7.2.1, 3.6). T
 /// stays with O, its tie at the join becoming a closure carrying the 0.3 m.
 #[test]
-#[ignore = "M1 port finding: T moves 0.3 m with the joined station and the rigid Tie to O's far end is left 0.3 m open"]
+#[ignore = "M1 known difference: a legacy merge loop (now a junction and a Tie) at a hand-moved join; T moves with the joined station and the Tie is made Batch, where today T stayed and its merge at the join tore (not representable: T would hang only by closures)"]
 fn a_tie_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart() {
     let legs = [(90.0, 10.0), (90.0, 10.0)];
     let (mut p, [k, o, t]) = hand_moved_start(10.3, 0.3, &legs, &[(90.0, 19.7)]);
@@ -1168,7 +1166,6 @@ fn assert_reclosed_ordinary(run: &Run, id: ClosureId, [a, b]: [StationId; 2]) {
 /// (K's side) to C (O's end) re-closes across the sides. Adapted: P meets
 /// O's middle (a tear detaches O alone, 5.4 step 2, so C must ride on O).
 #[test]
-#[ignore = "M1 port finding: a torn Move closure the shift re-aligns across the two sides stays Move (a snap again) and is not listed"]
 fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closure() {
     let mut p = empty();
     let k = line(&mut p, "K", flat("k", &[(90.0, 10.0)]));
@@ -1191,7 +1188,6 @@ fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closu
 /// O moves back 0.3 m onto K's end; P from K's start ends on O's end; the
 /// torn snap from O's end to K:1 re-closes inside the combined line.
 #[test]
-#[ignore = "M1 port finding: a torn Move closure the shift re-aligns inside the combined line stays Move (a snap again) and is not listed"]
 fn a_torn_snap_the_shift_recloses_inside_the_combined_line_becomes_an_ordinary_closure() {
     let mut p = empty();
     let k = line(&mut p, "K", flat("k", &[(90.0, 10.0), (0.0, 2.0)]));
@@ -1416,7 +1412,6 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
 /// 3.7) is on the joined station, where B's start was: B's start held it
 /// and is folded into the joined station, which replaces it (plan 5.1).
 #[test]
-#[ignore = "M1 port finding: the gauge moves to B:1 (lowest surviving station) instead of the joined station that B's start (the old Placement station) was folded into"]
 fn a_merge_torn_onto_a_legacy_closure_keeps_the_gauge_where_b_started() {
     let (p, b, a, _) = legacy_loop(BATCH);
     let b0_at = at(&p, b, 0);
