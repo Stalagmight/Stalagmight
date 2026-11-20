@@ -113,7 +113,7 @@ impl Project {
     /// Whether `station` is the first or the last station of `line`.
     pub fn is_line_end_on(&self, station: StationId, line: LineId) -> bool {
         self.line(line).is_some_and(|l| {
-            l.start == station || l.shots.last().map_or(false, |shot| shot.to == station)
+            l.start == station || l.shots.last().is_some_and(|shot| shot.to == station)
         })
     }
 

@@ -11,6 +11,8 @@
 //!   station tied to one by aligned closures, transitively (today's
 //!   frontend `computeImmovableStationKeys` over `merged_with` and aligned
 //!   `closures_with`); Move Station refuses them.
+//! - **Merge pairs** for the wire (plan 9.2): each junction's first slot
+//!   paired with its other slots.
 //! - **Co-located stations** of one station: its tie group
 //!   ([`super::TieGroups`]); a Move Station moves them together.
 //!
@@ -18,7 +20,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{LineId, StationId};
+use crate::{LineId, StationId, StationRef};
 
 use super::closures::find;
 use super::{Project, TieGroups};
@@ -87,13 +89,13 @@ impl Project {
         let mut index_of_root = vec![usize::MAX; n];
         let mut group_of = vec![0; n];
         let mut count = 0;
-        for d in 0..n {
+        for (d, slot) in group_of.iter_mut().enumerate() {
             let root = find(&mut parent, d);
             if index_of_root[root] == usize::MAX {
                 index_of_root[root] = count;
                 count += 1;
             }
-            group_of[d] = index_of_root[root];
+            *slot = index_of_root[root];
         }
         let mut lines: Vec<BTreeSet<LineId>> = vec![BTreeSet::new(); count];
         for line in self.lines() {
@@ -132,6 +134,20 @@ impl Project {
             }
         }
         out.into_iter().collect()
+    }
+
+    /// The wire's derived merge pairs (plan 9.2): for each junction, ascending
+    /// by station, its first slot paired with each of its other slots.
+    pub fn merge_pairs(&self) -> Vec<(StationRef, StationRef)> {
+        let topology = self.topology();
+        let mut out = Vec::new();
+        for &station in topology.stations() {
+            let slots = topology.slots_of(station);
+            if let Some((&first, rest)) = slots.split_first() {
+                out.extend(rest.iter().map(|&other| (first, other)));
+            }
+        }
+        out
     }
 
     /// Every station the Move Station tool refuses: datum stations and the

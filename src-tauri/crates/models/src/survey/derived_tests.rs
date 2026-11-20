@@ -254,3 +254,96 @@ fn a_datum_anchored_loop_freezes_its_shots_and_a_bridge_between_datums() {
         .collect();
     assert_eq!(frozen, expected);
 }
+
+/// The same survey with its line list shuffled.
+fn shuffled(p: &super::Project, seed: u64) -> super::Project {
+    let mut q = p.clone();
+    let mut rng = super::legacy_convert::Lcg(seed);
+    let lines = q.lines_mut();
+    for i in (1..lines.len()).rev() {
+        let j = rng.below(i + 1);
+        lines.swap(i, j);
+    }
+    q
+}
+
+#[test]
+fn derived_views_ignore_the_line_order_bit_for_bit() {
+    for (what, old) in surveys().into_iter().take(30) {
+        let conv = convert(&old);
+        let p = &conv.project;
+        let fingerprint = |q: &super::Project| {
+            let raw = q.raw_positions();
+            let aligned = q.closure_alignment(&raw);
+            let mut frozen: Vec<(LineId, u32)> = q
+                .frozen_shots(&aligned)
+                .iter()
+                .map(|f| (f.line_id, f.shot_index))
+                .collect();
+            frozen.sort_unstable();
+            let metrics: Vec<[u64; 5]> = q
+                .closures_metrics(&raw)
+                .iter()
+                .flatten()
+                .map(|m| {
+                    [
+                        m.path_length.to_bits(),
+                        m.misclosure_distance.to_bits(),
+                        m.error_percentage.to_bits(),
+                        m.horizontal_misclosure.to_bits(),
+                        m.vertical_misclosure.to_bits(),
+                    ]
+                })
+                .collect();
+            let field: Vec<u64> = q
+                .distance_field(&raw, None, false)
+                .iter()
+                .map(|(_, d)| d.to_bits())
+                .collect();
+            let pen: Vec<u64> = q
+                .penetration_distances(true)
+                .iter()
+                .map(|(_, d)| d.to_bits())
+                .collect();
+            let gaps: Vec<(usize, u64)> = q
+                .gps_fix_gaps()
+                .iter()
+                .map(|(d, g)| (*d, g.gap_m.to_bits()))
+                .collect();
+            let groups = q.rigid_groups(&aligned);
+            let anchored = q.anchored_lines(&groups);
+            let immovable = q.immovable_stations(&q.tie_groups(&aligned));
+            let skipped: Vec<(u64, (LineId, usize))> = q
+                .closures_across_one_shot_with(&aligned)
+                .iter()
+                .map(|c| (c.closure_id, c.collapsed_shot))
+                .collect();
+            let stats = q.survey_stats(&raw, false);
+            (
+                frozen,
+                metrics,
+                field,
+                pen,
+                gaps,
+                anchored,
+                immovable,
+                skipped,
+                stats.penetration_distance.to_bits(),
+                stats.max_depth.to_bits(),
+            )
+        };
+        let expected = fingerprint(p);
+        for seed in 1..4 {
+            assert_eq!(
+                fingerprint(&shuffled(p, seed)),
+                expected,
+                "{what}: seed {seed}"
+            );
+        }
+        // The merge pairs name each junction's slots.
+        for (a, b) in p.merge_pairs() {
+            assert_eq!(p.station_at(a), p.station_at(b));
+            assert_ne!(a, b);
+        }
+    }
+}

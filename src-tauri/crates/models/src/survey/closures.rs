@@ -201,13 +201,13 @@ impl Project {
         let mut group_of = vec![0; n];
         let mut members: Vec<Vec<StationId>> = Vec::new();
         let mut index_of_root: BTreeMap<usize, usize> = BTreeMap::new();
-        for d in 0..n {
+        for (d, slot) in group_of.iter_mut().enumerate() {
             let root = find(&mut parent, d);
             let g = *index_of_root.entry(root).or_insert_with(|| {
                 members.push(Vec::new());
                 members.len() - 1
             });
-            group_of[d] = g;
+            *slot = g;
             members[g].push(topology.stations()[d]);
         }
         TieGroups {

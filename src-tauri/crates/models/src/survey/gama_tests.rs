@@ -213,7 +213,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
         chain.extend((1..cols).map(|_| net.station()));
         row_chains.push(chain);
     }
-    let mut col_chains: Vec<Vec<StationId>> = vec![col0.clone()];
+    let mut col_chains: Vec<Vec<StationId>> = vec![col0];
     for &start in &row0[1..] {
         let mut chain = vec![start];
         chain.extend((1..rows).map(|_| net.station()));

@@ -304,7 +304,11 @@ impl Project {
                         .collect()
                 })
                 .unwrap_or_default(),
-            far_gps_fixes: self.far_gps_fixes().iter().map(|f| f.to_wire()).collect(),
+            far_gps_fixes: self
+                .far_gps_fixes()
+                .iter()
+                .map(super::FarFix::to_wire)
+                .collect(),
         }
     }
 

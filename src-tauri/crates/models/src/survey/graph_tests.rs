@@ -246,7 +246,11 @@ fn roles_entrances_and_gps_gaps_match_the_legacy_model() {
             assert_eq!(actual.exceeds_threshold, expected.exceeds_threshold);
             fixes += 1;
         }
-        let far: Vec<_> = p.far_gps_fixes().iter().map(|f| f.to_wire()).collect();
+        let far: Vec<_> = p
+            .far_gps_fixes()
+            .iter()
+            .map(super::FarFix::to_wire)
+            .collect();
         let old_far = old.far_gps_fixes();
         assert_eq!(far.len(), old_far.len());
         for (a, e) in far.iter().zip(&old_far) {
