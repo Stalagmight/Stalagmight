@@ -28,8 +28,9 @@ use crate::models::survey::{
     changeset, LineMeta, Project, RangeDeleteMode, ShotPlace, SplitOptions, StartAt,
 };
 use crate::models::{
-    CombineLinesOptions, CombinePick, DivePlanSnapshot, Diver, LineEnd, LineId, MarkedPoint,
-    PlanSegment, ShotData, ShotId, SplitAt, StationAnchor, StationId, StationKey, StationRef,
+    CombineLinesOptions, CombinePick, CylRole, Cylinder, DivePlanSnapshot, Diver, GasReachField,
+    LineEnd, LineId, MarkedPoint, PlanSegment, ShotData, ShotId, ShotKind, SplitAt, StationAnchor,
+    StationId, StationKey, StationRef, TankMaterial,
 };
 use crate::persistence::migrate::LegacyParity;
 use crate::persistence::plnx::PlnxStore;
@@ -1821,6 +1822,73 @@ fn a_short_segment_list_is_padded_rather_than_left_misaligned() {
     assert_eq!(resolved.segments[0].speed_m_per_min, Some(42.0));
     assert!(resolved.segments[0].on_scooter);
     assert!(resolved.segments[3].speed_m_per_min.is_none());
+}
+
+// ----- the gas engine behind a loaded plan ----------------------------------
+
+/// A loaded plan is "set the gas inputs and recompute": its refs go straight into
+/// `AppState::gas_reach_field` (the survey's gas engine, `compute_gas_reach_field`'s door),
+/// which honours the plan's `include_reference_legs` switch: a station reached only across a
+/// Reference tie is out of reach unless the plan opts in (#27).
+#[test]
+fn a_loaded_plan_computes_its_reach_field_and_honours_the_reference_leg_switch() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Gas", None);
+    let mut shots = turning(3);
+    shots[1].kind = ShotKind::Reference;
+    let line = free_line(&mut project, shots);
+    let state = saved_state(&dir, project);
+    let mut snapshot = empty_snapshot();
+    snapshot.origin = Some(slot(line, 0));
+    snapshot.diver = Diver::new(20.0, None).unwrap();
+    snapshot.cylinders = vec![Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap()];
+    let saved = state
+        .save_dive_plan(None, "Gas".to_string(), snapshot)
+        .unwrap();
+    let plan = state.load_dive_plan(saved.id).unwrap();
+    let s = &plan.snapshot;
+    let field = |config: &GasConfig| {
+        state
+            .gas_reach_field(
+                s.origin.as_ref(),
+                s.endpoint.as_ref(),
+                &s.waypoints,
+                &s.segments,
+                &s.diver,
+                &s.cylinders,
+                config,
+                &s.stage_drop_overrides,
+            )
+            .expect("a project is open")
+    };
+    let reachable = |f: &GasReachField, i: u32| {
+        f.station_refs
+            .iter()
+            .position(|r| *r == slot(line, i))
+            .map(|k| f.reachable[k])
+    };
+    assert!(!s.gas_config.include_reference_legs);
+    let excluded = field(&s.gas_config);
+    assert_eq!(reachable(&excluded, 1), Some(true));
+    assert_eq!(
+        reachable(&excluded, 2),
+        Some(false),
+        "beyond a Reference tie"
+    );
+    let included = field(&GasConfig {
+        include_reference_legs: true,
+        ..s.gas_config.clone()
+    });
+    assert_eq!(reachable(&included, 2), Some(true));
+    assert_eq!(reachable(&included, 3), Some(true));
 }
 
 // ----- the IPC pair (#310) --------------------------------------------------
