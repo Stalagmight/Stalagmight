@@ -721,7 +721,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 
 - **C1. How an undo entry is held.** The stack keeps the decoded `HistoryEntry` (its changeset carries the session shot ids of an in-session capture, so in-session steps give every shot its id back) AND its canonical text (`encode_entry`, computed once at push or read from the file). The byte budget counts the text, which is exactly what a save writes and a push carries, and a save copies it instead of re-encoding the history. A decoded entry (no session ids) is validated after its step and rolled back with the inverse step on a violation (U10).
 - **C2. No live database: `FileState`.** Everything the file holds besides the survey and the history (link identity, `local` sync state, unwind chain, watermark, display settings, ignored warnings, preserved members, `requires`, the read-only reason) lives in memory beside the guard fingerprint, the origin (new / v2 / legacy) and a dirty flag. The local-only durable save (6.5 mode 4) rewrites `speleodb`, `local` and `history` from it; while the survey has unsaved changes it writes the history the file last held, never the in-memory stacks (they would describe a body the file does not have). On a legacy or never-saved project it only marks `local_pending`; the first real save writes it.
-- **C3. The upgrade backup** is a COPY of the SQLite original at `<app data>/backups/<stem>.<UTC stamp>.pre-v2.stalx`, with any `-journal` / `-wal` / `-shm` sidecar MOVED beside it before the rename (R2 L19) and moved back if the write fails. `list_backups` does not list that folder yet (recovery package). Resolved in wave A: `list_project_backups` lists the originals beside the project's own backups (N12).
+- **C3. The upgrade backup** is a COPY of the SQLite original at `<app data>/backups/<stem>.<UTC stamp>.pre-v2.stalx`, with any `-journal` / `-wal` / `-shm` sidecar MOVED beside it before the rename (R2 L19) and moved back if the write fails (superseded by H1: a hot journal moved away from the unsettled original left it as another survey). `list_backups` does not list that folder yet (recovery package). Resolved in wave A: `list_project_backups` lists the originals beside the project's own backups (N12).
 - **C4. Conversion notice** whenever `verification.moved().slots > 0` or anything is unexplained (G4); `AppState::take_conversion_notice()` returns it once. The IPC and the banner are the frontend's.
 - **C5. Undo and redo stamp `modified_at`, bump the revision and mark the file dirty**; on a linked project they set the SpeleoDB dirty bit (not a forward edit: the Unwind position stays, as in 0.6.0).
 - **C6. Save a Copy** of a managed project is `Mode::DetachedCopy` when the explicit destination is not the open file (`unlinked_copy_path`); an explicit destination that IS the open file is a normal save (0.6.0 refused it).
@@ -797,3 +797,41 @@ read only by the frozen crate and the migration. Labels `Q1`...
   field, ruler and the gas differential (the gas golden tests stay, their
   fixtures built with the frozen model). `crates/legacy-fidelity` is deleted:
   its oracle, the live 0.6.0 app, no longer exists.
+
+## Deviations (wave C, D1: the legacy upgrade and Recovery)
+
+Wave B left one data-safety bug open (C17 bug 3): the upgrade moved an old
+build's hot journal away from the original before the version 2 rename, so a
+kill in that window left the original alone at the project's path, which opened
+as another survey, and Recovery refused the backup pair. Labels `H1`...
+
+- **H1. The upgrade settles the original before anything else** (replaces C3
+  and the "moved into the backups folder" of 7.2.10). Every write over a legacy
+  file (the first save, a Recents rename, a SpeleoDB link strip) goes through
+  `core::state::legacy_upgrade::upgrade`: check the guard; if a hot journal or
+  a WAL with frames is beside the original, fold them into a private copy
+  (`persistence::legacy_settle`, the frozen reader's own rule), stage it beside
+  the original, sync, check the guard again and rename it over the original;
+  remove every sidecar; keep the original in `backups/` through a hidden
+  synced file renamed to `<stem>.<UTC stamp>.pre-v2.stalx`; write version 2
+  guarded by what the original holds now. A kill between any two steps leaves
+  the survey the user had or the complete version 2 file at the project's path,
+  and never a JSON file beside an armed journal or a WAL. The kept original is
+  one self-contained SQLite file (its bytes may differ from the file on disk:
+  a journal rolled back, a WAL checkpointed; its survey does not). The original
+  at the project's path is rewritten by the settle before the write: when the
+  write then fails, the session's guard follows the settled bytes.
+- **H2. A failed upgrade keeps no backup while the original is still whole**,
+  so a save retried on a read-only folder does not fill the backups folder;
+  the next upgrade of a file removes what a killed one left (the hidden
+  settled copy, a partial backup).
+- **H3. Recovery restores a SQLite backup with its unfinished sidecars** (a
+  hot journal rolled back, a WAL read through, folded into the staged copy; the
+  backup and its sidecars are only read). #720 refused such a backup. A project
+  or a `.pre-restore` copy with unfinished sidecars is still refused: replacing
+  it would lose them.
+- **H4. Permissions.** Settling replaces the original by a rename, so it needs
+  only a writable folder, as the version 2 write does: a write-protected legacy
+  file in a writable folder upgrades and keeps its permission bits. On
+  write-protected media the upgrade is refused with `PERMISSION_DENIED` and
+  changes nothing.

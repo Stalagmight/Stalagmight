@@ -2808,12 +2808,15 @@ fails changes nothing:
   project itself; when the backup does not open as a project the way a load
   opens it (empty, not a project, damaged too, or a torn version 2 file: "is
   incomplete: the save that wrote it never finished"); when an armed journal or
-  a WAL with frames sits beside a SQLite backup, project or `.pre-restore` copy
-  (beside a version 2 file such sidecars are debris and are set aside); when
-  one of those files, or such a sidecar, is not a regular file; and when the
-  project or the backup was saved by a newer version.
+  a WAL with frames sits beside a SQLite project or `.pre-restore` copy (beside
+  a version 2 file such sidecars are debris and are set aside); when one of
+  those files, or such a sidecar, is not a regular file; and when the project
+  or the backup was saved by a newer version.
 - Otherwise the backup is copied beside the project and opened as a project
-  first. The previous `.pre-restore` copy is set aside, a copy of the project
+  first. A SQLite backup with an armed journal or a WAL with frames beside it
+  is copied with them folded in (rolled back, read through, as an open does),
+  so the restored file is the survey the pair opens as; the backup and its
+  sidecars are only read. The previous `.pre-restore` copy is set aside, a copy of the project
   replaces it, and the backup copy replaces the project, each by rename. If the
   last step fails, the previous `.pre-restore` copy goes back. On Unix the
   restored file keeps the project's permission bits.
@@ -3023,7 +3026,8 @@ same extension. They are read by the frozen 0.6.0 reader (`crates/legacy`: the
 schema migration chain up to v18, the side tables added without a version bump,
 the load pipeline) and converted in memory by `persistence::migrate`, which
 verifies every slot's position against 0.6.0's open; the first save writes
-version 2 over the file after keeping the original in the app-data
+version 2 over the file after making the original whole (an old build's hot
+journal rolled back, a WAL checkpointed) and keeping it in the app-data
 `backups/` folder ([saving.md](saving.md#upgrading-a-legacy-file)). The
 history of a legacy file is not kept. Only the frozen reader knows the SQLite
 schema; the app never writes one.

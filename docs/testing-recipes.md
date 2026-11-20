@@ -198,13 +198,24 @@ STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
 central promise ([Saving](saving.md#atomic-save-temp-file--rename)) by building
 the exact files a kill at each step would leave, rather than racing a signal:
 the destination alone, the temp torn at six cut points, the whole temp before
-the rename, the renamed file; and the legacy upgrade interrupted at each step
-(before the backup, the copy taken, the sidecars moved, the temp written,
-renamed), on a clean original and on one an old build left with a hot journal.
-Oracles: no panic; the destination opens as EXACTLY the old or the new survey;
-the next save succeeds and leaves no `.tmp`; a torn temp never decodes and is
-never offered by the Recovery dialog, a complete one is offered and restores as
-the interrupted save; never a JSON file beside an armed journal or a WAL.
+the rename, the renamed file. Oracles: no panic; the destination opens as
+EXACTLY the old or the new survey; the next save succeeds and leaves no `.tmp`;
+a torn temp never decodes and is never offered by the Recovery dialog, a
+complete one is offered and restores as the interrupted save.
+
+The gate and the sweep also run every state of the legacy upgrade
+(`legacy_upgrade_tests.rs`, [Saving](saving.md#upgrading-a-legacy-file)), on
+four originals: clean, with debris sidecars, with the hot journal of an old
+build killed mid-write, and in WAL mode with a commit never checkpointed. Two
+engines: the files a kill between two steps leaves, built by hand (the settled
+copy staged torn and whole, renamed over the original beside its old sidecars,
+the sidecars gone, the backup torn and kept, the temp torn and whole, renamed),
+and the real save killed after each step (`legacy_upgrade::KILL_AT`: the
+injected kill unwinds past every cleanup, as a kill would). Oracles: never a
+JSON file beside an armed journal or a WAL; the project's path opens as EXACTLY
+the survey the open showed or the upgraded one; the kept original opens as that
+survey, Recovery offers it (never a hidden staging file) and every offered
+backup restores; the next save leaves no sidecar and nothing hidden behind.
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib crash_property
@@ -215,9 +226,16 @@ STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
   -p stalagmight-core --lib crash_property_sweep -- --ignored --nocapture
 ```
 
-`an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole` is an
-`#[ignore]`d known bug: an upgrade killed between its sidecar move and the
-rename leaves a hot-journal original without its journal.
+```bash
+STALAGMIGHT_RUST_CRASH_SEEDS=40 \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib legacy_upgrade_sweep -- --ignored --nocapture
+```
+
+`an_upgrade_interrupted_after_its_sidecar_move_leaves_the_original_whole` pins
+the wave B bug on the real pipeline: an upgrade that moved a hot journal (or a
+WAL) away from the original before settling it left the original alone as
+another survey.
 
 ### The adversarial gate
 

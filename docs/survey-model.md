@@ -625,7 +625,8 @@ the model:
 Subsystems ported onto the model and the v2 file:
 
 - **Open, save, create** (`project_load.rs`, `project_io.rs`, `project_create.rs`):
-  sniff, decode or migrate, the guard, the legacy upgrade, the local-only save
+  sniff, decode or migrate, the guard, the legacy upgrade (`legacy_upgrade.rs`:
+  the original settled, kept, then replaced), the local-only save
   (`open_file.rs`).
 - **SpeleoDB**: pull, install and revision swaps decode or migrate the
   download in memory before anything is locked or written

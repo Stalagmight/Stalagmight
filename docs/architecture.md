@@ -241,7 +241,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 |------|---------|
 | `src-tauri/crates/core/src/core/command.rs` | Command enum and result types |
 | `src-tauri/crates/core/src/core/state/` | `AppState` (`app_state.rs`), the pipeline (`commands.rs`), the open file (`open_file.rs`), one module per command family |
-| `src-tauri/crates/core/src/core/state/project_io.rs`, `project_load.rs` | Save (and the legacy upgrade), open |
+| `src-tauri/crates/core/src/core/state/project_io.rs`, `project_load.rs`, `legacy_upgrade.rs` | Save, open, and the first write over a legacy file |
 | `src-tauri/crates/core/src/core/undo.rs`, `state/undo.rs` | The history stacks; undo, redo and the jumps |
 | `src-tauri/crates/models/src/survey.rs`, `survey/` | The station-graph survey model ([survey-model.md](survey-model.md)) |
 | `src-tauri/crates/models/src/survey/changeset.rs` | The undo engine: id-keyed changesets, history entries |
