@@ -131,6 +131,7 @@
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
@@ -2458,7 +2459,7 @@ impl Fuzzer {
     pub(super) fn finish(&mut self) {
         let summit = self.top;
         while self.cursor > self.reach_floor() {
-            if (self.cursor - self.floor) % TAMPER_EVERY == 0 {
+            if (self.cursor - self.floor).is_multiple_of(TAMPER_EVERY) {
                 self.probe_tamper(true);
             }
             if !self.step_history(true, 1) {
@@ -2468,7 +2469,7 @@ impl Fuzzer {
         self.probe_wall(true);
         self.probe_refusal(true);
         while self.cursor < summit.min(self.reach_top()) {
-            if (summit - self.cursor) % TAMPER_EVERY == 0 {
+            if (summit - self.cursor).is_multiple_of(TAMPER_EVERY) {
                 self.probe_tamper(false);
             }
             if !self.step_history(false, 1) {
@@ -2530,7 +2531,7 @@ impl Fuzzer {
     /// the last block (`fuzz_extended_tests.rs`).
     pub(super) fn draw_op(&mut self, targets: &Targets) -> Option<Op> {
         match self.rng.below(120) {
-            0..=8 => self.gen_create_line(targets),
+            0..=8 => Some(self.gen_create_line(targets)),
             9..=18 => self.gen_create_shot(targets),
             19..=30 => self.gen_update_shot(targets),
             31..=35 => self.gen_set_shot_kind(targets),
@@ -2572,7 +2573,7 @@ impl Fuzzer {
         (!targets.slots.is_empty()).then(|| targets.station_at(self.rng.below(targets.slots.len())))
     }
 
-    fn gen_create_line(&mut self, targets: &Targets) -> Option<Op> {
+    fn gen_create_line(&mut self, targets: &Targets) -> Op {
         let count = self.rng.below(4);
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(&mut self.rng)).collect();
         let null_metadata = self.rng.chance(30);
@@ -2583,14 +2584,14 @@ impl Fuzzer {
         };
         let section =
             (!targets.sections.is_empty() && self.rng.chance(25)).then(|| self.rng.below(8) as u32);
-        Some(Op::CreateLine {
+        Op::CreateLine {
             name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
             surveyor: (!null_metadata).then(|| "fuzz".to_string()),
             color: (*self.rng.pick(COLORS)).to_string(),
             direction,
             shots,
             section,
-        })
+        }
     }
 
     fn gen_create_shot(&mut self, targets: &Targets) -> Option<Op> {
@@ -4033,10 +4034,12 @@ pub(super) fn coverage_table<'a>(outcomes: impl IntoIterator<Item = &'a Outcome>
         "family", "applied", "pushed", "rejected", "no-op", "skipped"
     );
     for (kind, count) in &total {
-        out.push_str(&format!(
-            "  {kind:<28} {:>7} {:>7} {:>8} {:>6} {:>7}\n",
+        writeln!(
+            out,
+            "  {kind:<28} {:>7} {:>7} {:>8} {:>6} {:>7}",
             count.applied, count.pushed, count.rejected, count.noops, count.skipped
-        ));
+        )
+        .expect("a String takes any write");
     }
     out
 }
@@ -4404,7 +4407,7 @@ fn the_line_diff_says_when_it_hid_something() {
     let text = |count: usize, from: usize| -> Vec<u8> {
         let mut out = String::from("{\"format\":\"stalx\",\n\"stations\":[\n");
         for i in 0..count {
-            out.push_str(&format!("[{i},\"S{}\"],\n", i + from));
+            writeln!(out, "[{i},\"S{}\"],", i + from).expect("a String takes any write");
         }
         out.push_str("],\n\"end\":true}\n");
         out.into_bytes()
@@ -4505,7 +4508,7 @@ fn fuzz_seed_survey() {
     let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&(seed, persistence)| {
         run_fuzz(seed, Plan::from_env(iterations, persistence))
     });
-    let mut clean: Vec<u32> = seeds.clone();
+    let mut clean: Vec<u32> = seeds;
     let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     let mut outcomes = Vec::new();
     for (&(seed, persistence), outcome) in jobs.iter().zip(results) {

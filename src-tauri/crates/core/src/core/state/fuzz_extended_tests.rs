@@ -378,7 +378,7 @@ fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp
         }
         _ => {
             let target = pick_station(rng, targets)?;
-            let shots: Vec<ShotData> = (0..1 + rng.below(3)).map(|_| random_shot(rng)).collect();
+            let shots: Vec<ShotData> = (0..=rng.below(3)).map(|_| random_shot(rng)).collect();
             Some(ExtOp::CreateAndMerge {
                 at: rng.below(shots.len() + 1) as u32,
                 shots,
