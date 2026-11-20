@@ -33,8 +33,10 @@ use crate::{LineId, Section, StationId};
 
 mod anchors;
 mod build;
+mod graph;
 mod naming;
 mod positions;
+mod roles;
 mod topology;
 mod types;
 mod validate;
@@ -63,6 +65,19 @@ mod build_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod graph_tests;
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    reason = "test support: a refused conversion is a broken test setup"
+)]
+mod legacy_convert;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
@@ -83,10 +98,12 @@ mod validate_tests;
 
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
 pub use build::{BuildError, StaleAttachments, StartAt};
+pub use graph::{AlongLine, RulerPoint, StationDistances, StationPositions};
 pub use naming::NameConflict;
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,
 };
+pub use roles::{FarFix, GpsGapWarning};
 pub use topology::{Component, ShotLocation, ShotUuidIndex, Topology};
 pub use types::{
     ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, ProjectSettings,
