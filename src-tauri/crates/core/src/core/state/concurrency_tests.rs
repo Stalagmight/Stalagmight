@@ -1006,6 +1006,8 @@ fn a_display_toggle_racing_undo_never_writes_a_history_that_does_not_fit_the_bod
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib concurrency_soak -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_CONC_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "soak: minutes, not seconds - run deliberately with STALAGMIGHT_RUST_CONC_SEEDS/THREADS/OPS"]
 fn concurrency_soak() {
@@ -1024,7 +1026,7 @@ fn concurrency_soak() {
         .unwrap_or(800);
     let mut dirty = Vec::new();
     let mut completed = 0;
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_CONC_FIRST_SEED", seeds) {
         let outcome = run_concurrent(seed, threads, operations, 300);
         completed += outcome.operations;
         if !outcome.problems.is_empty() {

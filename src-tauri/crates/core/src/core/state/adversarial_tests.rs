@@ -735,6 +735,8 @@ fn the_adversarial_engine_is_deterministic() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib adversarial_sweep -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_ADV_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the adversarial GATE_SEEDS"]
 fn adversarial_sweep() {
@@ -752,7 +754,7 @@ fn adversarial_sweep() {
     let mut dirty = Vec::new();
     let mut kinds: BTreeMap<&'static str, usize> = BTreeMap::new();
     let (mut attempted, mut rejected, mut accepted) = (0, 0, 0);
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_ADV_FIRST_SEED", seeds) {
         let outcome = run_adversarial(seed, moves, closures);
         attempted += outcome.attempted;
         rejected += outcome.rejected;
