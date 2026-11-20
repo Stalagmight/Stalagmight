@@ -23,7 +23,6 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
     clippy::float_cmp,
     clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point; ids and \
@@ -192,11 +191,19 @@ fn hub_survey() -> (Opened, LineId, LineId, LineId) {
     let a = bare_line(&mut p, "Line A", north(2, 10.0));
     let (a0, a1, a2) = (st(&p, a, 0), st(&p, a, 1), st(&p, a, 2));
     p.push_datum(ZeroDatum::new(a2, origin()));
-    let b = line_from(&mut p, "Line B", a0, vec![shot(90.0, 15.0), shot(90.0, 25.0)]);
+    let b = line_from(
+        &mut p,
+        "Line B",
+        a0,
+        vec![shot(90.0, 15.0), shot(90.0, 25.0)],
+    );
     let c = line_from(&mut p, "Line C", a2, vec![shot(270.0, 12.0)]);
     let (b2, c1) = (st(&p, b, 2), st(&p, c, 1));
     p.push_closure(b2, Some(b), c1, Some(c), ClosureStrategy::Batch);
-    p.line_mut(a).unwrap().hand_moves.insert(a1, [1.0, 2.0, 3.0]);
+    p.line_mut(a)
+        .unwrap()
+        .hand_moves
+        .insert(a1, [1.0, 2.0, 3.0]);
     (open(&p), a, b, c)
 }
 
@@ -228,10 +235,18 @@ fn a_prepended_shot_shows_every_attachment_of_its_line_one_slot_along() {
         &stations_before[..],
         "the old stations are the same stations, one index along"
     );
-    assert_eq!(p.line(b).unwrap().start, stations_before[0], "B still starts on A's old start");
+    assert_eq!(
+        p.line(b).unwrap().start,
+        stations_before[0],
+        "B still starts on A's old start"
+    );
 
     assert_round_trip(&o.state, &before, "a prepended shot");
-    assert_eq!(shown(&o.state), after_shown, "the redo shows them along again");
+    assert_eq!(
+        shown(&o.state),
+        after_shown,
+        "the redo shows them along again"
+    );
     assert!(o.state.undo().success);
     assert_eq!(shown(&o.state), before_shown, "the undo shows them back");
 }
@@ -265,7 +280,12 @@ fn deleting_the_first_shot_at_a_junction_leaves_it_to_the_other_line() {
     let a = bare_line(&mut p, "Line A", vec![shot(0.0, 10.0), shot(0.0, 20.0)]);
     let (a0, a2) = (st(&p, a, 0), st(&p, a, 2));
     p.push_datum(ZeroDatum::new(a2, origin()));
-    let b = line_from(&mut p, "Line B", a0, vec![shot(90.0, 15.0), shot(90.0, 25.0)]);
+    let b = line_from(
+        &mut p,
+        "Line B",
+        a0,
+        vec![shot(90.0, 15.0), shot(90.0, 25.0)],
+    );
     let o = open(&p);
     let before_shown = shown(&o.state);
     assert_eq!(before_shown.merges, vec![(slot(a, 0), slot(b, 0))]);
@@ -314,7 +334,12 @@ fn deleting_the_first_shot_at_a_junction_leaves_it_to_the_other_line() {
 #[test]
 fn a_prepended_shot_starts_behind_the_old_start_and_moves_nothing() {
     let mut p = empty("Offset Test");
-    let a = free_line(&mut p, "Line A", [0.0, 0.0], vec![shot(0.0, 10.0), shot(0.0, 5.0)]);
+    let a = free_line(
+        &mut p,
+        "Line A",
+        [0.0, 0.0],
+        vec![shot(0.0, 10.0), shot(0.0, 5.0)],
+    );
     let a0 = st(&p, a, 0);
     let b = line_from(&mut p, "Line B", a0, vec![shot(90.0, 8.0)]);
     let o = open(&p);
@@ -362,7 +387,12 @@ fn a_prepended_shot_starts_behind_the_old_start_and_moves_nothing() {
 #[test]
 fn a_shot_inserted_inside_a_line_keeps_its_head_and_carries_its_tail() {
     let mut p = empty("No Offset Test");
-    let a = free_line(&mut p, "Line A", [4.0, 2.0], vec![shot(0.0, 10.0), shot(0.0, 5.0)]);
+    let a = free_line(
+        &mut p,
+        "Line A",
+        [4.0, 2.0],
+        vec![shot(0.0, 10.0), shot(0.0, 5.0)],
+    );
     let o = open(&p);
     let before_xy = raw_xy(&project(&o.state));
 
@@ -373,7 +403,12 @@ fn a_shot_inserted_inside_a_line_keeps_its_head_and_carries_its_tail() {
     assert_near(xy(&p, slot(a, 0)), before_xy[&slot(a, 0)], 1e-9, "A:0");
     assert_near(xy(&p, slot(a, 1)), before_xy[&slot(a, 1)], 1e-9, "A:1");
     assert_near(xy(&p, slot(a, 2)), [7.0, 12.0], 1e-9, "the new station");
-    assert_near(xy(&p, slot(a, 3)), [7.0, 17.0], 1e-9, "the old end, carried");
+    assert_near(
+        xy(&p, slot(a, 3)),
+        [7.0, 17.0],
+        1e-9,
+        "the old end, carried",
+    );
 }
 
 // ===========================================================================
@@ -419,7 +454,11 @@ fn a_redone_shot_keeps_its_uuid_in_every_insert_mode() {
         );
         assert!(o.state.redo().success, "{mode}: redo");
         assert_same(&snapshot(&o.state), &state_after, mode);
-        assert_eq!(uuid_lengths(&o.state, a), at, "{mode}: every uuid on its shot");
+        assert_eq!(
+            uuid_lengths(&o.state, a),
+            at,
+            "{mode}: every uuid on its shot"
+        );
     }
 }
 
@@ -583,9 +622,9 @@ fn gate_of(cmd: &Command) -> Gate {
         | Command::SaveProject { .. }
         | Command::CloseProject
         | Command::MergeProjects { .. } => Gate::Lifecycle,
-        Command::RepairIntegrity | Command::UpdateProjectSettings | Command::SetSurfaceElevation => {
-            Gate::OwnEntryPoint
-        }
+        Command::RepairIntegrity
+        | Command::UpdateProjectSettings
+        | Command::SetSurfaceElevation => Gate::OwnEntryPoint,
         Command::CreateLine { .. }
         | Command::DeleteLine { .. }
         | Command::UpdateLineMetadata { .. }
@@ -890,7 +929,10 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
 ];
 
 fn assert_disabled(label: &str, result: &CommandResult) {
-    assert!(!result.success, "{label} must be refused when editing is off");
+    assert!(
+        !result.success,
+        "{label} must be refused when editing is off"
+    );
     assert!(
         result
             .error
@@ -1088,7 +1130,11 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "set_project_name_for_path",
             &state.set_project_name_for_path(open_path.clone(), "Renamed Remote".to_string()),
         );
-        assert_eq!(std::fs::read(&open_path).unwrap(), before, "the file is untouched");
+        assert_eq!(
+            std::fs::read(&open_path).unwrap(),
+            before,
+            "the file is untouched"
+        );
         drop(temp);
     }
 
@@ -1105,7 +1151,10 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             .delete_resolved_warning_gated(line, first, "SHORT_SHOT", None)
             .expect_err("unresolve is refused when editing is off");
         assert!(unresolve.starts_with(EDIT_DISABLED_CODE), "{unresolve:?}");
-        assert!(!dirty_bit(&state), "a refused ignore does not dirty the project");
+        assert!(
+            !dirty_bit(&state),
+            "a refused ignore does not dirty the project"
+        );
         assert!(
             state.load_resolved_warnings().unwrap().is_empty(),
             "and stores nothing"
@@ -1145,7 +1194,7 @@ fn every_public_mutation_method_is_enumerated() {
             || name.ends_with("_kit.rs")
             || name.ends_with("_fixtures.rs")
             || name == "tests_support.rs";
-        if !name.ends_with(".rs") || is_test {
+        if path.extension().is_none_or(|ext| ext != "rs") || is_test {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
@@ -1239,7 +1288,10 @@ fn warning_resolve_unresolve_in_edit_session_dirty_for_push() {
         state
             .save_resolved_warning_gated(&resolved(line, first))
             .expect("resolve is allowed in an edit session");
-        assert!(dirty_bit(&state), "an edit-session resolve dirties the project");
+        assert!(
+            dirty_bit(&state),
+            "an edit-session resolve dirties the project"
+        );
     }
     {
         let (state, line, first, _temp) = remote_fixture_editable();
@@ -1253,7 +1305,10 @@ fn warning_resolve_unresolve_in_edit_session_dirty_for_push() {
         state
             .delete_resolved_warning_gated(line, first, "SHORT_SHOT", None)
             .expect("unresolve is allowed in an edit session");
-        assert!(dirty_bit(&state), "an edit-session unresolve dirties the project");
+        assert!(
+            dirty_bit(&state),
+            "an edit-session unresolve dirties the project"
+        );
     }
 }
 
@@ -1262,7 +1317,10 @@ fn dirty_bit_flips_false_to_true_on_successful_remote_edit() {
     let (state, line, first, _temp) = remote_fixture_editable();
     assert!(!dirty_bit(&state));
     run(&state, length_edit(line, first, 9.0));
-    assert!(dirty_bit(&state), "a successful remote edit sets the dirty bit");
+    assert!(
+        dirty_bit(&state),
+        "a successful remote edit sets the dirty bit"
+    );
 }
 
 /// Set-only and idempotent: a second edit and a local save leave it set, and
@@ -1346,11 +1404,16 @@ fn a_read_only_refusal_names_the_command_without_positional_ids() {
         station_b: StationRef::new(line, 2),
     });
     assert!(
-        merge.contains(&format!("Merge stations {name} / 0 and {name} / 2 is disabled")),
+        merge.contains(&format!(
+            "Merge stations {name} / 0 and {name} / 2 is disabled"
+        )),
         "{merge}"
     );
     let closure = refusal(Command::RemoveLoopClosure { closure_id: 7 });
-    assert!(closure.contains("Remove loop closure is disabled"), "{closure}");
+    assert!(
+        closure.contains("Remove loop closure is disabled"),
+        "{closure}"
+    );
     for text in [&update, &merge, &closure] {
         assert!(!text.contains(&format!("{line}:")), "{text}");
         assert!(!text.contains('#'), "{text}");
@@ -1394,7 +1457,10 @@ fn save_as_on_a_linked_project_writes_an_unlinked_copy_and_stays_put() {
         "saved_path stays None: the frontend re-points file_path on it"
     );
     assert_eq!(state.open_project_path().unwrap(), open_path);
-    assert!(state.speleodb_open_link().is_ok(), "the managed file keeps its link");
+    assert!(
+        state.speleodb_open_link().is_ok(),
+        "the managed file keeps its link"
+    );
     let copy = decoded(&copy_path);
     assert!(copy.extras.speleodb.is_none(), "the copy carries no link");
     assert!(
@@ -1437,9 +1503,15 @@ fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() 
     let result = state.save_project(None);
 
     assert!(result.success, "{:?}", result.error);
-    assert!(result.saved_path.is_some(), "an implicit save reports saved_path");
+    assert!(
+        result.saved_path.is_some(),
+        "an implicit save reports saved_path"
+    );
     assert!(result.unlinked_copy_path.is_none());
-    assert!(state.speleodb_open_link().is_ok(), "the link survived the save");
+    assert!(
+        state.speleodb_open_link().is_ok(),
+        "the link survived the save"
+    );
     assert!(
         dirty_bit(&state),
         "a local save never clears the dirty bit, only a push does"
@@ -1559,12 +1631,11 @@ fn a_shotless_reverse_keeps_the_redo_branch_and_stamps_no_remote_edit() {
     state.set_edit_enabled(true);
     run(&state, length_edit(real, shot_ids(&state, real)[0], 6.0));
     assert!(state.undo().success);
-    state
-        .with_file(|file| {
-            let mut link = file.speleo_link().unwrap();
-            link.has_unpushed_edits = false;
-            file.set_speleo_link(Some(&link));
-        });
+    state.with_file(|file| {
+        let mut link = file.speleo_link().unwrap();
+        link.has_unpushed_edits = false;
+        file.set_speleo_link(Some(&link));
+    });
     assert!(!dirty_bit(&state), "setup: clean");
     let before = snapshot(&state);
 
@@ -1576,7 +1647,10 @@ fn a_shotless_reverse_keeps_the_redo_branch_and_stamps_no_remote_edit() {
         },
     );
 
-    assert!(state.can_redo(), "a provable no-op leaves the redo branch alone");
+    assert!(
+        state.can_redo(),
+        "a provable no-op leaves the redo branch alone"
+    );
     assert!(!dirty_bit(&state), "and stamps no edit for the push");
     assert_same(&snapshot(&state), &before, "and changes nothing");
 }
@@ -1618,7 +1692,10 @@ fn test_update_config_leaves_an_explicitly_cleared_shortcut_empty() {
     crate::test_helpers::with_isolated_config(|| {
         let state = AppState::new().unwrap();
         let mut payload = state.get_config();
-        assert!(!payload.shortcuts.select.is_empty(), "setup: a stock binding");
+        assert!(
+            !payload.shortcuts.select.is_empty(),
+            "setup: a stock binding"
+        );
         payload.shortcuts.select = Vec::new();
 
         state.update_config(payload).expect("settings saved");
@@ -1723,7 +1800,13 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
     run(&state, length_edit(a, second, 6.0));
 
     let edited = slot_xy(&state);
-    for at in [slot(a, 0), slot(a, 1), slot(anchor, 0), slot(anchor, 1), slot(anchor, 2)] {
+    for at in [
+        slot(a, 0),
+        slot(a, 1),
+        slot(anchor, 0),
+        slot(anchor, 1),
+        slot(anchor, 2),
+    ] {
         assert_near(
             edited[&at],
             promoted[&at],
@@ -1833,7 +1916,12 @@ fn a_jump_and_single_steps_over_a_reopened_history_reach_the_same_survey() {
     let (state, _) = jump_history();
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("jumps.stalx");
-    run(&state, Command::SaveProject { path: Some(path.clone()) });
+    run(
+        &state,
+        Command::SaveProject {
+            path: Some(path.clone()),
+        },
+    );
     let twin = || {
         let s = AppState::new().unwrap();
         assert!(s.open_project(path.clone()).success);
@@ -1841,7 +1929,11 @@ fn a_jump_and_single_steps_over_a_reopened_history_reach_the_same_survey() {
         s
     };
     let (jumped, stepped) = (twin(), twin());
-    assert_same(&snapshot(&jumped), &snapshot(&stepped), "the twins start equal");
+    assert_same(
+        &snapshot(&jumped),
+        &snapshot(&stepped),
+        "the twins start equal",
+    );
 
     assert!(jumped.undo_to(2).success);
     for _ in 0..3 {
@@ -1854,7 +1946,10 @@ fn a_jump_and_single_steps_over_a_reopened_history_reach_the_same_survey() {
         assert!(stepped.redo().success);
     }
     assert_same(&snapshot(&jumped), &snapshot(&stepped), "two steps forward");
-    assert_eq!(jumped.get_undo_stack().len(), stepped.get_undo_stack().len());
+    assert_eq!(
+        jumped.get_undo_stack().len(),
+        stepped.get_undo_stack().len()
+    );
 }
 
 // ===========================================================================
@@ -1872,7 +1967,8 @@ fn assert_ids_sound(state: &AppState, line: LineId, what: &str) {
     let distinct: HashSet<ShotId> = ids.iter().copied().collect();
     assert_eq!(distinct.len(), ids.len(), "{what}: a repeated id {ids:?}");
     assert!(
-        ids.iter().all(|&id| id >= base && id < end && id < l.next_shot_id),
+        ids.iter()
+            .all(|&id| id >= base && id < end && id < l.next_shot_id),
         "{what}: ids {ids:?} outside [{base}, {end}) or not below {}",
         l.next_shot_id
     );
@@ -1918,7 +2014,11 @@ fn a_line_that_used_up_its_session_ids_refuses_the_next_shot_and_steps_exactly()
     assert_ids_sound(&o.state, a, "after the undo");
     assert!(o.state.redo().success);
     assert_ids_sound(&o.state, a, "after the redo");
-    assert_same(&snapshot(&o.state), &after, "the redo lands on the recorded state");
+    assert_same(
+        &snapshot(&o.state),
+        &after,
+        "the redo lands on the recorded state",
+    );
 }
 
 // ===========================================================================
@@ -1967,7 +2067,11 @@ fn undo_and_redo_of_a_created_line_keep_every_uuid_on_its_own_shot() {
     assert!(state.redo().success);
     assert!(state.redo().success);
 
-    assert_eq!(uuid_lengths(&state, line), owned, "every uuid on its own shot");
+    assert_eq!(
+        uuid_lengths(&state, line),
+        owned,
+        "every uuid on its own shot"
+    );
     assert_same(&snapshot(&state), &after, "and the survey to the bit");
 }
 
@@ -2005,7 +2109,10 @@ fn an_undo_over_a_line_changed_behind_the_engine_is_refused_and_kept() {
 
     let undone = o.state.undo();
 
-    assert!(!undone.success, "a step whose precondition fails is refused");
+    assert!(
+        !undone.success,
+        "a step whose precondition fails is refused"
+    );
     assert_same(&snapshot(&o.state), &before, "and changes nothing");
     assert_eq!(o.state.get_undo_stack().len(), 1, "and keeps its entry");
     assert!(project(&o.state).line(a).is_some());
@@ -2033,7 +2140,12 @@ fn merge_into(dir: &Path, sources: Vec<PathBuf>, output: PathBuf, archive: bool)
 /// A project `name` with one free line `line` of one shot (uuid `uuid`).
 fn one_line_project(name: &str, line: &str, uuid: &str, length: f64) -> Project {
     let mut p = Project::new(name, None);
-    free_line(&mut p, line, [0.0, 0.0], vec![fixed_shot(uuid, 45.0, length, 10.0)]);
+    free_line(
+        &mut p,
+        line,
+        [0.0, 0.0],
+        vec![fixed_shot(uuid, 45.0, length, 10.0)],
+    );
     p
 }
 
@@ -2057,7 +2169,12 @@ fn a_merge_adds_the_extension_and_archives_every_source() {
     std::fs::write(&existing_archive, b"archived").unwrap();
     let output = temp.path().join("merged-output");
 
-    let result = merge_into(temp.path(), vec![a.clone(), b.clone()], output.clone(), true);
+    let result = merge_into(
+        temp.path(),
+        vec![a.clone(), b.clone()],
+        output.clone(),
+        true,
+    );
 
     assert!(result.success, "{:?}", result.error);
     let written = output.with_extension("stalx");
@@ -2098,7 +2215,12 @@ fn each_merged_line_keeps_its_resolved_north_reference() {
         ..ShotData::default()
     };
     let mut declared = Project::new("A", None);
-    let line = free_line(&mut declared, "Declared", [0.0, 0.0], vec![due_north("d-0")]);
+    let line = free_line(
+        &mut declared,
+        "Declared",
+        [0.0, 0.0],
+        vec![due_north("d-0")],
+    );
     declared.line_mut(line).unwrap().azimuth_reference = Some(
         crate::models::AzimuthReference::magnetic(10.0, crate::models::CorrectionSource::Manual),
     );
@@ -2107,7 +2229,12 @@ fn each_merged_line_keeps_its_resolved_north_reference() {
         -4.0,
         crate::models::CorrectionSource::FileDeclared,
     ));
-    free_line(&mut inherited, "Inherited", [0.0, 0.0], vec![due_north("i-0")]);
+    free_line(
+        &mut inherited,
+        "Inherited",
+        [0.0, 0.0],
+        vec![due_north("i-0")],
+    );
     let output = temp.path().join("merged.stalx");
 
     let result = merge_into(
@@ -2179,8 +2306,14 @@ fn merge_two_elevations(
 /// so, once.
 #[test]
 fn the_merged_entrance_elevation_is_the_first_one_and_a_disagreement_is_reported() {
-    assert_eq!(merge_two_elevations(Some(123.5), None), (Some(123.5), vec![]));
-    assert_eq!(merge_two_elevations(None, Some(-7.25)), (Some(-7.25), vec![]));
+    assert_eq!(
+        merge_two_elevations(Some(123.5), None),
+        (Some(123.5), vec![])
+    );
+    assert_eq!(
+        merge_two_elevations(None, Some(-7.25)),
+        (Some(-7.25), vec![])
+    );
     assert_eq!(
         merge_two_elevations(Some(100.0), Some(100.002)),
         (Some(100.0), vec![])
@@ -2210,25 +2343,26 @@ fn the_merged_entrance_elevation_is_the_first_one_and_a_disagreement_is_reported
 fn a_merge_places_each_source_by_its_datum_and_keeps_what_its_stations_carry() {
     let temp = TempDir::new().unwrap();
     let (gps_a, gps_b) = (gps(20.6, -87.3, 0.0), gps(20.55, -87.25, 2.0));
-    let source = |name: &str, prefix: &str, at: GpsCoordinates, hand: [f64; 3], comment_at: usize| {
-        let mut p = Project::new(name, None);
-        let line = bare_line(
-            &mut p,
-            &format!("Line {name}"),
-            vec![
-                fixed_shot(&format!("{prefix}-0"), 30.0, 4.0, 1.0),
-                fixed_shot(&format!("{prefix}-1"), 80.0, 6.0, 2.0),
-            ],
-        );
-        let (s0, s1, s2) = (st(&p, line, 0), st(&p, line, 1), st(&p, line, 2));
-        p.push_datum(ZeroDatum::new(s0, at));
-        p.line_mut(line).unwrap().hand_moves.insert(s1, hand);
-        p.push_closure(s0, Some(line), s2, Some(line), ClosureStrategy::Batch);
-        let commented = st(&p, line, comment_at as u32);
-        p.stations.get_mut(&commented).unwrap().comment = Some(format!("{name} note"));
-        assert!(p.validate().is_empty(), "{:?}", p.validate());
-        p
-    };
+    let source =
+        |name: &str, prefix: &str, at: GpsCoordinates, hand: [f64; 3], comment_at: usize| {
+            let mut p = Project::new(name, None);
+            let line = bare_line(
+                &mut p,
+                &format!("Line {name}"),
+                vec![
+                    fixed_shot(&format!("{prefix}-0"), 30.0, 4.0, 1.0),
+                    fixed_shot(&format!("{prefix}-1"), 80.0, 6.0, 2.0),
+                ],
+            );
+            let (s0, s1, s2) = (st(&p, line, 0), st(&p, line, 1), st(&p, line, 2));
+            p.push_datum(ZeroDatum::new(s0, at));
+            p.line_mut(line).unwrap().hand_moves.insert(s1, hand);
+            p.push_closure(s0, Some(line), s2, Some(line), ClosureStrategy::Batch);
+            let commented = st(&p, line, comment_at as u32);
+            p.stations.get_mut(&commented).unwrap().comment = Some(format!("{name} note"));
+            assert!(p.validate().is_empty(), "{:?}", p.validate());
+            p
+        };
     let a = source("A", "a", gps_a, [0.5, -0.5, 1.0], 0);
     let b = source("B", "b", gps_b, [-1.0, 1.5, 0.0], 1);
     let output = temp.path().join("merged.stalx");
@@ -2247,7 +2381,10 @@ fn a_merge_places_each_source_by_its_datum_and_keeps_what_its_stations_carry() {
     let merged = read_v2(&output).project;
     let (la, lb) = (line_named(&merged, "Line A"), line_named(&merged, "Line B"));
     let a0 = station_xy(&merged, station_of(&merged, la, 0));
-    assert!(a0[0].abs() < 1e-9 && a0[1].abs() < 1e-9, "the frame origin: {a0:?}");
+    assert!(
+        a0[0].abs() < 1e-9 && a0[1].abs() < 1e-9,
+        "the frame origin: {a0:?}"
+    );
     let expected = crate::models::gps_to_local(&gps_b, &gps_a);
     let b0 = station_xy(&merged, station_of(&merged, lb, 0));
     assert!(
@@ -2409,7 +2546,10 @@ fn test_csv_export_preserves_azimuth_precision() {
     let row: Vec<&str> = contents.lines().nth(1).unwrap().split(',').collect();
     // Line, From, To, From ID, To ID, Length, Azimuth In, Azimuth Out, ...
     assert_eq!(row[5], "4.57", "the length at two decimals: {row:?}");
-    assert_eq!(row[6], "359.9", "azimuth in, not truncated to 359 or 360: {row:?}");
+    assert_eq!(
+        row[6], "359.9",
+        "azimuth in, not truncated to 359 or 360: {row:?}"
+    );
     assert_eq!(row[7], "0.1", "azimuth out: {row:?}");
 }
 
@@ -2443,9 +2583,11 @@ fn test_legacy_project_seeds_validation_from_global_config() {
         config.validation.warn_shot_length_min = 6.0;
         state.update_config(config).unwrap();
 
-        assert!(state
-            .open_project(fixture_copy(temp.path(), "fractal_plant_iter3.stalx"))
-            .success);
+        assert!(
+            state
+                .open_project(fixture_copy(temp.path(), "fractal_plant_iter3.stalx"))
+                .success
+        );
         let opened = project(&state);
         assert_eq!(
             opened.settings.validation.warn_shot_length_min, 6.0,
@@ -2459,9 +2601,11 @@ fn test_legacy_project_seeds_validation_from_global_config() {
             "the inherited threshold drives the warnings"
         );
 
-        assert!(state
-            .open_project(fixture_copy(temp.path(), "naharon.stalx"))
-            .success);
+        assert!(
+            state
+                .open_project(fixture_copy(temp.path(), "naharon.stalx"))
+                .success
+        );
         assert_eq!(
             project(&state).settings.validation.warn_shot_length_min,
             0.1,
