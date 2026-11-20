@@ -20,6 +20,13 @@
 //! such: `models/project/legacy_oracle.rs` (component anchors) and
 //! `persistence/sqlite/legacy_shape.rs` (the writer's 0.5.5 shape).
 //!
+//! Release fixes ported since, each with the same mechanical edits only:
+//! - #822 (release merge 1fa450d3c, #776): Delete Shot's closure loop asks
+//!   `are_stations_merged_with_planned` and
+//!   `are_stations_connected_with_planned` about the merges it already
+//!   planned. `models/project/shots.rs` is release/0.6.0 1f41128eb's
+//!   (`tests/delete_closure_promotion.rs` carries its model tests).
+//!
 //! # Opening a file
 //!
 //! [`open_path`] and [`open_bytes`] copy the input (and, for a path, any

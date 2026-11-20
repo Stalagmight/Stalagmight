@@ -916,10 +916,6 @@ impl<'a> Case<'a> {
                 self.tally.note(
                     "delete: a closure on the removed member stays between two placed pieces (a GPS fix the delete promotes places the junction's piece; today promoted it)",
                 );
-            } else if old_promoted >= 2 && new_promoted >= 1 && old_promoted > new_promoted {
-                self.tally.note(
-                    "delete: today also promoted a second closure on the removed member whose ends the first promotion had joined (a merge cycle); it stays a loop closure",
-                );
             } else if tied {
                 self.tally.note(
                     "delete: a promotion on the removed member differs over a demoted merge (a Tie does not join pieces)",
