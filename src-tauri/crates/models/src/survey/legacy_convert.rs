@@ -442,7 +442,7 @@ pub(super) fn random_legacy_survey(seed: u64, mix: Mix) -> Old {
         let line = lines[rng.below(lines.len())];
         let slot = old::StationRef::new(line, rng.below(slot_count(&old, line)) as u32);
         let positions = old_raw(&old);
-        let frame = old.zero_datums.first().map(|d| d.gps.clone());
+        let frame = old.zero_datums.first().map(|d| d.gps);
         let g = match frame {
             None => gps(20.5 + rng.unit() * 0.01, -87.4 + rng.unit() * 0.01),
             Some(frame) => {

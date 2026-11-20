@@ -832,6 +832,10 @@ fn merging_project_files_with_a_closure_across_one_shot_warns_and_skips_it() {
     let merged = state.merge_projects(&[one, two], out.clone(), "merged", false);
     assert!(merged.success, "{:?}", merged.error);
     let bytes = std::fs::read(&out).unwrap();
-    let decoded = crate::persistence::stalx_v2::decode(&bytes, &Default::default()).unwrap();
+    let decoded = crate::persistence::stalx_v2::decode(
+        &bytes,
+        &crate::persistence::stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
     assert_skipped_and_warned(decoded.project);
 }

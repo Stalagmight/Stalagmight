@@ -2223,7 +2223,8 @@ mod legacy {
         assert!(p.reverse_line(k, false));
         let after = pins(&p);
         let path = dir.path().join("cave.stalx");
-        let bytes = stalagmight_legacy::write_v18(&p, &Default::default()).unwrap();
+        let bytes = stalagmight_legacy::write_v18(&p, &stalagmight_legacy::LegacyExtras::default())
+            .unwrap();
         std::fs::write(&path, bytes).unwrap();
         Written {
             path,
