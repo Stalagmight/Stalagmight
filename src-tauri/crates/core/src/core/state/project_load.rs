@@ -190,7 +190,22 @@ impl AppState {
             Format::V2 => {
                 let decoded = decode(&bytes, &options).map_err(|e| decode_error(path, &e))?;
                 for note in &decoded.notes {
-                    tracing::info!(note = ?note, "decode note");
+                    match note {
+                        // Informative by the format's rule: a newer writer
+                        // whose formulas change what users see also requires
+                        // a feature, which opens the file read-only.
+                        crate::persistence::stalx_v2::DecodeNote::OtherSolver { found }
+                            if *found > crate::persistence::stalx_v2::SOLVER =>
+                        {
+                            tracing::warn!(
+                                found,
+                                ours = crate::persistence::stalx_v2::SOLVER,
+                                "Saved by a newer solver; positions are derived with this \
+                                 version's formulas"
+                            );
+                        }
+                        _ => tracing::info!(note = ?note, "decode note"),
+                    }
                 }
                 if let Some(reason) = decoded.read_only() {
                     tracing::warn!(

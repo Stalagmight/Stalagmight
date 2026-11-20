@@ -116,7 +116,7 @@ comment.
 | Member | Meaning | A reader... |
 |---|---|---|
 | `version` | The major format version: `2`. | refuses a higher value (made with a newer Stalagmight) and any value below 2. |
-| `solver` | The version of the formulas that derive positions (section 9): `1`. | may derive positions with its own formulas; a different value is informative. |
+| `solver` | The version of the formulas that derive positions (section 9): `1`. | derives positions with its own formulas; a different value alone is informative (below). |
 | `requires` | Names of features a reader must understand to use the file correctly. Sorted, no duplicates. | that meets a name it does not know must not modify the file's survey; Stalagmight opens it read-only. |
 | `conventions` | Units and sign conventions, fixed for version 2 (below). | refuses any other value, a missing key or an extra key. |
 | `generator` | Who wrote the survey, e.g. `"Stalagmight 0.6.0"`. | may show it; nothing depends on it. |
@@ -130,6 +130,22 @@ feature reads the rest as far as it can: when the survey it reads then breaks
 a rule of section 6, the feature may be what relaxes the rule, so the file is
 reported as made with a newer Stalagmight, never as damaged (Stalagmight
 refuses it with its "saved by a newer version" message and no repair offer).
+
+**The solver rule.** Positions, depths, closure figures and the other derived
+values are not stored (section 9), so `solver` is the only trace of the
+formulas the author saw them with. A writer bumps it whenever it changes a
+formula. A different value is surfaced to the user only when it changes what
+the user sees, and only the writer can know that: a writer whose formulas
+would make a reader with an older `solver` show the file's survey differently
+(another position, depth or closure figure) must also add a `requires`
+feature, so that reader opens the file read-only with its "made with a newer
+Stalagmight" banner (Stalagmight does). A bump without a feature tells a
+reader that nothing it shows changes (a faster or more exact solve, a fix of
+a case the file does not have); the reader opens the file normally and may
+log the difference. On save a reader writes its own `solver`: the value names
+the formulas that derived what the user saw last. Solver 1 is the first; a
+later Stalagmight that reads a file of an older solver applies the same rule
+from its side, knowing both formulas.
 
 **Conventions** (the object is always exactly this):
 

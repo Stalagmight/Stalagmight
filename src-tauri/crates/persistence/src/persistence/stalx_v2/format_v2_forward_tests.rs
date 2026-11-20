@@ -341,3 +341,33 @@ fn section_names_are_unique_at_load() {
     let names: Vec<&str> = salvaged.sections.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["Upstream", "Upstream (2)"], "{report:?}");
 }
+
+/// The documented solver rule (`docs/file-format.md` section 3, review
+/// findings C-file-format-4 and B-derived-solver-2): a different `solver` is
+/// surfaced only when it changes what users see, and a writer whose formulas
+/// would make this version show the survey differently says so with a
+/// `requires` feature, which opens the file read-only with the "made with a
+/// newer Stalagmight" banner. A bump alone is informative: the file opens
+/// editable, the note is kept for the log, and a save stamps the formulas
+/// that derived what the user saw last (this version's).
+#[test]
+fn a_different_solver_is_surfaced_only_through_requires() {
+    let (p, extras) = example();
+    let text = text_of(&encode(&p, &extras, Mode::Normal).unwrap()).to_string();
+    let bumped = text.replacen("\"solver\":1,", "\"solver\":2,", 1);
+    let decoded = open(&bumped);
+    assert!(decoded.read_only().is_none());
+    assert!(decoded
+        .notes
+        .contains(&DecodeNote::OtherSolver { found: 2 }));
+    let saved = encode(&decoded.project, &decoded.extras, Mode::Normal).unwrap();
+    assert_eq!(text_of(&saved), text, "a save stamps this version's solver");
+
+    let visible = bumped.replacen("\"requires\":[]", "\"requires\":[\"solver-2-layout\"]", 1);
+    let decoded = open(&visible);
+    let reason = decoded.read_only().expect("read-only with the banner");
+    assert_eq!(reason.unknown_features, vec!["solver-2-layout".to_string()]);
+    assert!(reason
+        .to_string()
+        .starts_with("made with a newer Stalagmight"));
+}

@@ -143,6 +143,13 @@ v2 encoder and decoder refuse through it; no bound is checked twice.
 
 ## Solver v1 (`positions.rs`)
 
+The file records the solver version (`stalx_v2::SOLVER`). A change to any
+formula below bumps it, and a change that moves anything a user sees (a
+position, a depth, a closure figure, the Computed View) also adds a
+`requires` feature to the files it writes, so an older build opens them
+read-only instead of showing another layout without a word
+([file-format.md](file-format.md) section 3, "The solver rule").
+
 - `frame_datum()`: the first datum whose station is on a line.
 - `placement_datums()`: the first datum of each component (indexed like
   `topology().components()`); later datums are GPS fixes.
