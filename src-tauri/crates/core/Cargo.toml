@@ -68,6 +68,9 @@ trash = "5.2.6"
 stalagmight-models = { path = "../models", features = ["test-support"] }
 stalagmight-parsers = { path = "../parsers", features = ["test-support"] }
 stalagmight-speleodb = { path = "../speleodb", features = ["test-support"] }
+# The undo fuzzer's `legacy_origin` mode writes a seeded 0.6.0 survey with the
+# frozen 0.6.0 save (`write_v18`) and opens it through the migration.
+stalagmight-legacy = { path = "../legacy", features = ["writer"] }
 tempfile = { workspace = true }
 libc = "0.2"
 # The profiling harnesses in `core::state::tests` install a real fmt

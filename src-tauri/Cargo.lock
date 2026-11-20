@@ -4673,6 +4673,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "stalagmight-export",
+ "stalagmight-legacy",
  "stalagmight-models",
  "stalagmight-parsers",
  "stalagmight-persistence",

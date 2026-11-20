@@ -344,9 +344,20 @@ impl UndoStack {
     /// The file's `history` member: both stacks in file order (each list's
     /// last element is the next step).
     pub fn persisted(&self) -> History {
+        self.persisted_window(None)
+    }
+
+    /// [`Self::persisted`] keeping at most the newest `count` entries of
+    /// each stack (`None`: all of them) - the persisted window
+    /// (`general.undo_persist_limit`).
+    pub fn persisted_window(&self, count: Option<usize>) -> History {
+        let newest = |list: &VecDeque<UndoEntry>| -> Vec<RawJson> {
+            let skip = count.map_or(0, |n| list.len().saturating_sub(n));
+            list.iter().skip(skip).map(|e| e.raw.clone()).collect()
+        };
         History {
-            undo: self.undo.iter().map(|e| e.raw.clone()).collect(),
-            redo: self.redo.iter().map(|e| e.raw.clone()).collect(),
+            undo: newest(&self.undo),
+            redo: newest(&self.redo),
         }
     }
 

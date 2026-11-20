@@ -1,67 +1,66 @@
-//! Two coverage knobs (see `Knobs` in `fuzz_undo_tests.rs`) that widen what the
-//! roundtrip engine drives, with every draw from the coverage stream.
+//! The rarer actions of the undo fuzzer (`fuzz_undo_tests.rs`), the starting
+//! shapes no command builds in a few moves, and the findings they pinned.
 //!
-//! # `EXTENDED=1`: the actions no generator drew
+//! # The rarer actions
 //!
-//! A tenth of the mutations are one of the actions below, each through the
-//! entry point the app itself uses, with its targets picked from the live
-//! project. The oracle is the engine's own - the exact snapshot per depth,
-//! through every history move, jump and crossing - because each of these pushes
-//! an ordinary undo entry and nothing about it may be special.
+//! Every one is in the DEFAULT draw (the last block of `draw_op`, from the
+//! run's own generator); `EXTENDED=1` draws a tenth more of them from the
+//! coverage stream. Each goes through the entry point the app itself uses,
+//! with its targets picked from the live survey, and is held to the engine's
+//! own oracles: an ordinary undo entry, nothing special about it.
 //!
-//! | action | entry point | what it brings the engine |
-//! |---|---|---|
-//! | Edit Shot Credit | `Command::EditShotCredit`, one line or a multi-shot selection | the `ShotCredit` typed entry |
-//! | Unmerge Stations (whole station) | `Command::UnmergeStations` | every merge at a station removed by one entry |
-//! | Move Comment | `Command::MoveComment`, station or shot holders, with swap | a comment moving between holders |
-//! | Project Settings | `AppState::update_project_settings` | a delta that edits `name` / `validation` |
-//! | Entrance elevation | `AppState::set_surface_elevation` | a delta that edits `surface_elevation`, including back to unknown |
-//! | Untrack Import | `Command::UntrackImport` | positional edits of the tracked-hash lists |
-//! | a synthetic import | `AppState::execute_import_lines`, the route every importer ends in | several lines in one entry, `station_names` bag edits, the import hash lists |
-//! | Add .stalx | `Command::AddProjectFile` on a second synthetic project saved to disk | the `AddedProjectContent` entry, cross-file uuid repeats, `station_names` / `station_offsets` brought in, redo after a reload with no file to read |
-//! | Rename station | `Command::SetStationName`, a name the line may already hold (refused) | the `InverseCommand` rename entry, `station_names` restored exactly |
-//! | a Section command (#327) | `Command::{Create,Update,Delete}CaveSection`, `MoveLinesToCaveSection`, `ApplyCaveSectionColor`, on the project's Sections by position | the `CaveSections` typed entry; Sections and memberships then ride in every later delta (`cave_sections`, a line's `cave_section_id`) |
+//! | action | entry point |
+//! |---|---|
+//! | Edit Shot Credit, one line or a multi-shot selection | `Command::EditShotCredit` |
+//! | Unmerge a whole station (every line but the first leaves the junction) | `Command::UnmergeStations` |
+//! | Move Comment, station or shot holders, with swap | `Command::MoveComment` |
+//! | Project Settings (name, validation) | `AppState::update_project_settings` |
+//! | Entrance elevation, including back to unknown | `AppState::set_surface_elevation` |
+//! | Untrack Import, alone and batched with a line delete (the DMP withdrawal) | `Command::UntrackImport`, `Command::Batch` |
+//! | a synthetic import, placed at the origin or on a live station | `AppState::execute_import_lines`, the route every importer ends in |
+//! | Add .stalx of a second synthetic v2 project, repeating live uuids | `Command::AddProjectFile` |
+//! | Rename station, sometimes to a name the station's lines already hold (refused) | `Command::SetStationName` |
+//! | a Section command (#327) | `Command::{Create,Update,Delete}CaveSection`, `MoveLinesToCaveSection`, `ApplyCaveSectionColor` |
+//! | a new line created ON a live station, optionally into a Section | `AppState::execute_create_and_merge_in_cave_section` |
 //!
-//! Not drawn, and why: Merge Projects writes a NEW output project and opens it,
-//! which ends the run's history by design (there is nothing left to walk);
-//! Repair Integrity has nothing to repair on a project only the app's own
-//! commands built, so it would push no entry; SpeleoDB tree replacement needs a
-//! linked project and a server.
+//! Not drawn: Merge Projects writes and opens a NEW project, which ends the
+//! run's history by design; Repair has nothing to repair on a survey only the
+//! app's commands built; SpeleoDB replacements need a server.
 //!
-//! # `LARGE=1`: a project past the whole-list threshold
+//! # The starting shapes
 //!
-//! A top-level list of 64 elements or fewer is replaced whole by a delta
-//! (`SMALL_LIST`, core/undo/delta.rs); only a longer one is edited by position,
-//! with its source length recorded and checked on apply. No ordinary run ever
-//! held such a list (the peak was 32 merges), so that whole path went unrun.
-//! The large project adds, after the ordinary builder has run:
-//!
-//! * a chain of `LARGE_CHAIN` lines, each merged to the one before - so
-//!   `station_merges` is well past 64 - with a loop closure across every two of
-//!   them, so `loop_closures` is too;
-//! * `LARGE_ISLANDS` unmerged one-shot islands, each holding its own gauge in
-//!   `held_gauges` (at most one per component is kept, so the islands are what
-//!   lets the list pass 64);
-//! * `LARGE_HASHES` tracked import hashes of each kind.
-//!
-//! It is built on the live project, then saved and reopened through the app,
-//! so the run starts from exactly what the loader makes of it.
+//! * `LARGE=1`: an 80-line chain on junctions with a closure across every two
+//!   links, 70 islands each placed by its own `Placement`, and 70 tracked
+//!   import hashes of each kind - lists long enough that every history hunk
+//!   lands well inside them - built on the live survey, then saved and
+//!   reopened so the run starts from what the loader makes of it.
+//! * `LEGACY_ORIGIN=1` (`Plan::legacy_origin`): a seeded synthetic 0.6.0
+//!   survey (junction merges, a raw cycle-closing merge the migration demotes
+//!   to a `Tie`, hand moves, a datum, closures, comments, a piece moved by
+//!   hand) written by the frozen 0.6.0 save and opened through the migration.
+//! * `DIVERGENCE=1`: session ids out of positional order, the id-addressed
+//!   edits on top, then a crossing (the loader re-mints, persisted entries
+//!   mint).
+//! * `CLOSURE_SHAPES=1`: two closures, so list order matters to every undo
+//!   of a removal; at the first crossing, two datum-held pieces tied by a
+//!   closure, one datum then removed (the orphan sweep's promotion).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::{random_shot, Drawn, Fuzzer, Op, Refs, Rng, ShotRefT, StationRefT, Targets, COLORS};
+use super::{random_shot, Drawn, Fuzzer, Op, Refs, Rng, ShotRefT, StationT, Targets, COLORS};
 use crate::core::{Command, CommentHolder};
+use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{
-    ClosureStrategy, CreditEdit, CreditTargets, HeldGauge, ImportLineConfig, ImportPlacement,
-    LineData, LineId, Person, Project, ShotData, StationRef,
+    ClosureStrategy, CreditEdit, CreditTargets, GpsCoordinates, ImportLineConfig, ImportPlacement,
+    LineId, Person, ShotData, ShotUpdates, StationRef,
 };
-use crate::persistence::Database;
+use crate::persistence::stalx_v2::{self, Extras, Mode};
 
 /// Lines in the LARGE chain.
 const LARGE_CHAIN: usize = 80;
-/// Unmerged islands in the LARGE project, each holding a gauge.
+/// Islands in the LARGE project, each with its own placement.
 const LARGE_ISLANDS: usize = 70;
 /// Tracked import hashes of each kind in the LARGE project.
 const LARGE_HASHES: usize = 70;
@@ -69,24 +68,24 @@ const LARGE_HASHES: usize = 70;
 /// A station or a shot that can hold a comment, as a trace names it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(in crate::core::state) enum Holder {
-    Station(StationRefT),
+    Station(StationT),
     Shot(ShotRefT),
 }
 
-/// One extended action, as a value: everything drawn, every reference symbolic.
+/// One rarer action, as a value: everything drawn, every reference symbolic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(in crate::core::state) enum ExtOp {
     EditCredit {
         /// The whole line when set, else `shots`.
         line: Option<LineId>,
         shots: Vec<ShotRefT>,
-        /// 0 set surveyors, 1 add explorers, 2 remove surveyors, 3 set a date,
-        /// 4 clear the date.
+        /// 0 set surveyors, 1 add explorers, 2 remove surveyors, 3 set a
+        /// date, 4 clear the date.
         role: u8,
         person: u32,
     },
     UnmergeStation {
-        station: StationRefT,
+        station: StationT,
     },
     MoveComment {
         source: Holder,
@@ -98,22 +97,20 @@ pub(in crate::core::state) enum ExtOp {
         nudge: u32,
     },
     SurfaceElevation {
-        /// Millimetres, so the value is an integer draw.
         millimetres: Option<i64>,
     },
-    /// The withdrawal the DMP wizard sends: one batch of an optional line
-    /// delete and the untrack. A bare `UntrackImport` through `execute()` pushes
-    /// no entry (see `untrack_import_alone_is_undoable`), so the route the app
-    /// uses is the one drawn.
     UntrackImport {
         delete: Option<LineId>,
         file_hashes: Vec<String>,
         line_hashes: Vec<String>,
+        /// Inside a batch with the delete (the DMP wizard's route); alone
+        /// otherwise.
+        batched: bool,
     },
     Import {
         seed: u32,
         lines: u8,
-        anchor: Option<StationRefT>,
+        anchor: Option<StationT>,
         names: bool,
     },
     AddProjectFile {
@@ -122,16 +119,16 @@ pub(in crate::core::state) enum ExtOp {
         /// Live shots whose uuids the added file repeats.
         repeats: Vec<ShotRefT>,
     },
-    /// Rename a station. `name` picks one of a few names, so a draw can land
-    /// on a name the line already holds and exercise the refusal.
+    /// Rename a station to one of a few names, so a draw can land on a name
+    /// its lines already hold and exercise the refusal.
     RenameStation {
-        station: StationRefT,
+        station: StationT,
         name: u32,
     },
-    /// A Section command, addressing the project's Sections by position at
-    /// apply time (`at` modulo their count): `kind` 0 creates one holding
-    /// `lines`, 1 renames, 2 moves `lines` into it (out of any when
-    /// `ungroup`), 3 applies its colour to its lines, 4 deletes it.
+    /// A Section command on the project's Sections by position (`at` modulo
+    /// their count): `kind` 0 creates one holding `lines`, 1 renames, 2 moves
+    /// `lines` into it (out of any when `ungroup`), 3 applies its colour, 4
+    /// deletes it.
     Section {
         kind: u8,
         at: u32,
@@ -139,13 +136,36 @@ pub(in crate::core::state) enum ExtOp {
         name: u32,
         ungroup: bool,
     },
+    /// A new line whose station `at` (clamped to the line) is the live
+    /// station `target`, optionally into the Section at that position.
+    CreateAndMerge {
+        shots: Vec<ShotData>,
+        at: u32,
+        target: StationT,
+        section: Option<u32>,
+    },
 }
 
 impl ExtOp {
-    pub(super) fn describe(&self) -> String {
-        let station = |s: &StationRefT| format!("{}/{}", s.line, s.index);
+    pub(in crate::core::state) fn kind(&self) -> &'static str {
+        match self {
+            Self::EditCredit { .. } => "edit_shot_credit",
+            Self::UnmergeStation { .. } => "unmerge_station",
+            Self::MoveComment { .. } => "move_comment",
+            Self::ProjectSettings { .. } => "project_settings",
+            Self::SurfaceElevation { .. } => "surface_elevation",
+            Self::UntrackImport { .. } => "untrack_import",
+            Self::Import { .. } => "import_lines",
+            Self::AddProjectFile { .. } => "add_project_file",
+            Self::RenameStation { .. } => "rename_station",
+            Self::Section { .. } => "cave_section",
+            Self::CreateAndMerge { .. } => "create_and_merge",
+        }
+    }
+
+    pub(in crate::core::state) fn describe(&self) -> String {
         let holder = |h: &Holder| match h {
-            Holder::Station(s) => format!("station {}", station(s)),
+            Holder::Station(s) => format!("station {}", s.describe()),
             Holder::Shot(s) => format!("shot {}:{}", s.line, s.id),
         };
         match self {
@@ -155,7 +175,9 @@ impl ExtOp {
                 Some(id) => format!("editShotCredit(line {id},role={role})"),
                 None => format!("editShotCredit({} shot(s),role={role})", shots.len()),
             },
-            Self::UnmergeStation { station: s } => format!("unmergeStations({})", station(s)),
+            Self::UnmergeStation { station } => {
+                format!("unmergeStations({})", station.describe())
+            }
             Self::MoveComment {
                 source,
                 target,
@@ -165,12 +187,10 @@ impl ExtOp {
                 holder(source),
                 holder(target)
             ),
-            Self::ProjectSettings { rename, nudge } => {
-                format!(
-                    "updateProjectSettings(rename={},nudge={nudge})",
-                    rename.is_some()
-                )
-            }
+            Self::ProjectSettings { rename, nudge } => format!(
+                "updateProjectSettings(rename={},nudge={nudge})",
+                rename.is_some()
+            ),
             Self::SurfaceElevation { millimetres } => {
                 format!("setSurfaceElevation({millimetres:?}mm)")
             }
@@ -178,8 +198,9 @@ impl ExtOp {
                 delete,
                 file_hashes,
                 line_hashes,
+                batched,
             } => format!(
-                "batch(deleteLine={delete:?},untrackImport(files={},lines={}))",
+                "untrackImport(deleteLine={delete:?},files={},lines={},batched={batched})",
                 file_hashes.len(),
                 line_hashes.len()
             ),
@@ -190,9 +211,7 @@ impl ExtOp {
                 names,
             } => format!(
                 "importLines(seed={seed},n={lines},anchor={},names={names})",
-                anchor
-                    .as_ref()
-                    .map_or_else(|| "origin".to_string(), station)
+                anchor.map_or_else(|| "origin".to_string(), StationT::describe)
             ),
             Self::AddProjectFile {
                 seed,
@@ -202,8 +221,8 @@ impl ExtOp {
                 "addProjectFile(seed={seed},n={lines},repeats={})",
                 repeats.len()
             ),
-            Self::RenameStation { station: s, name } => {
-                format!("setStationName({},r{name})", station(s))
+            Self::RenameStation { station, name } => {
+                format!("setStationName({},r{name})", station.describe())
             }
             Self::Section {
                 kind,
@@ -215,375 +234,419 @@ impl ExtOp {
                 "caveSection(kind={kind},at={at},lines={},ungroup={ungroup})",
                 lines.len()
             ),
+            Self::CreateAndMerge {
+                shots,
+                at,
+                target,
+                section,
+            } => format!(
+                "createAndMerge(shots={},at={at},target={},section={section:?})",
+                shots.len(),
+                target.describe()
+            ),
         }
     }
 }
 
-impl Fuzzer {
-    /// Draw one extended action from the coverage stream. `None` when the
-    /// project has no target of the drawn kind right now.
-    pub(super) fn draw_extended(&mut self, targets: &Targets) -> Option<Op> {
-        let ext = match self.aux.below(10) {
-            0 => self.draw_credit(targets),
-            1 => {
-                if targets.merges.is_empty() {
-                    return None;
-                }
-                let (a, b) = targets.merges[self.aux.below(targets.merges.len())];
-                let (line, index) = if self.aux.chance(50) { a } else { b };
-                Some(ExtOp::UnmergeStation {
-                    station: StationRefT { line, index },
-                })
-            }
-            2 => self.draw_move_comment(targets),
-            3 => Some(ExtOp::ProjectSettings {
-                rename: self
-                    .aux
-                    .chance(50)
-                    .then(|| u32::try_from(self.aux.below(1000)).unwrap_or(0)),
-                nudge: u32::try_from(self.aux.below(40)).unwrap_or(0),
-            }),
-            4 => Some(ExtOp::SurfaceElevation {
-                millimetres: (!self.aux.chance(25)).then(|| self.aux.range(-50_000, 500_000)),
-            }),
-            5 => self.draw_untrack(targets),
-            6 => Some(ExtOp::Import {
-                seed: u32::try_from(self.aux.below(1 << 30)).unwrap_or(0),
-                lines: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
-                anchor: (!targets.stations.is_empty() && self.aux.chance(70)).then(|| {
-                    let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
-                    StationRefT { line, index }
-                }),
-                names: self.aux.chance(60),
-            }),
-            8 => {
-                if targets.stations.is_empty() {
-                    return None;
-                }
-                let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
-                Some(ExtOp::RenameStation {
-                    station: StationRefT { line, index },
-                    name: u32::try_from(self.aux.below(4)).unwrap_or(0),
-                })
-            }
-            9 => {
-                let count = self.aux.below(4);
-                let lines = if targets.lines.is_empty() {
-                    Vec::new()
-                } else {
-                    (0..count)
-                        .map(|_| targets.lines[self.aux.below(targets.lines.len())].0)
-                        .collect()
-                };
-                Some(ExtOp::Section {
-                    kind: u8::try_from(self.aux.below(5)).unwrap_or(0),
-                    at: u32::try_from(self.aux.below(8)).unwrap_or(0),
-                    lines,
-                    name: u32::try_from(self.aux.below(6)).unwrap_or(0),
-                    ungroup: self.aux.chance(25),
-                })
-            }
-            _ => {
-                let repeats = (0..self.aux.below(3))
-                    .filter_map(|_| self.pick_shot_ref(targets))
-                    .collect();
-                Some(ExtOp::AddProjectFile {
-                    seed: u32::try_from(self.aux.below(1 << 30)).unwrap_or(0),
-                    lines: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
-                    repeats,
-                })
-            }
-        }?;
-        Some(Op::Extended(Box::new(ext)))
-    }
+/// The default draw's rare block, from the run's own generator.
+pub(super) fn draw_rare(fuzzer: &mut Fuzzer, targets: &Targets) -> Option<Op> {
+    let project = fuzzer.live();
+    draw_ext(&mut fuzzer.rng, targets, &project).map(|ext| Op::Extended(Box::new(ext)))
+}
 
-    /// A live shot as a trace reference, drawn from the coverage stream.
-    fn pick_shot_ref(&mut self, targets: &Targets) -> Option<ShotRefT> {
-        if targets.shot_uuids.is_empty() {
-            return None;
-        }
-        let (line, id, uuid) = &targets.shot_uuids[self.aux.below(targets.shot_uuids.len())];
-        Some(ShotRefT {
-            line: *line,
-            id: *id,
-            uuid: Some(uuid.clone()),
-        })
-    }
+/// `EXTENDED=1`'s extra draws, from the coverage stream.
+pub(super) fn draw_extended(fuzzer: &mut Fuzzer, targets: &Targets) -> Option<Op> {
+    let project = fuzzer.live();
+    draw_ext(&mut fuzzer.aux, targets, &project).map(|ext| Op::Extended(Box::new(ext)))
+}
 
-    fn draw_credit(&mut self, targets: &Targets) -> Option<ExtOp> {
-        let role = u8::try_from(self.aux.below(5)).unwrap_or(0);
-        let person = u32::try_from(self.aux.below(4)).unwrap_or(0);
-        if self.aux.chance(30) {
-            if targets.lines.is_empty() {
-                return None;
+fn pick_shot_ref(rng: &mut Rng, targets: &Targets) -> Option<ShotRefT> {
+    if targets.shot_uuids.is_empty() {
+        return None;
+    }
+    let (line, id, uuid) = &targets.shot_uuids[rng.below(targets.shot_uuids.len())];
+    Some(ShotRefT {
+        line: *line,
+        id: *id,
+        uuid: uuid.clone(),
+    })
+}
+
+fn pick_station(rng: &mut Rng, targets: &Targets) -> Option<StationT> {
+    (!targets.slots.is_empty()).then(|| targets.station_at(rng.below(targets.slots.len())))
+}
+
+fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp> {
+    match rng.below(28) {
+        0..=3 => {
+            let role = rng.below(5) as u8;
+            let person = rng.below(4) as u32;
+            if rng.chance(30) {
+                let (line, _) = &targets.lines[rng.below(targets.lines.len().max(1))];
+                return Some(ExtOp::EditCredit {
+                    line: Some(*line),
+                    shots: Vec::new(),
+                    role,
+                    person,
+                });
             }
-            let (line, _) = &targets.lines[self.aux.below(targets.lines.len())];
-            return Some(ExtOp::EditCredit {
-                line: Some(*line),
-                shots: Vec::new(),
-                role,
-                person,
-            });
-        }
-        // A multi-shot selection, possibly across lines - the shape the
-        // grid's credit editor sends.
-        let count = 1 + self.aux.below(4);
-        let shots: Vec<ShotRefT> = (0..count)
-            .filter_map(|_| self.pick_shot_ref(targets))
-            .collect();
-        (!shots.is_empty()).then_some(ExtOp::EditCredit {
-            line: None,
-            shots,
-            role,
-            person,
-        })
-    }
-
-    fn draw_move_comment(&mut self, targets: &Targets) -> Option<ExtOp> {
-        let project = self.state.get_project_state()?;
-        // Sources that hold a comment, so most moves move something: station
-        // comments, then shot comments, both in a stable order.
-        let mut sources: Vec<Holder> = Vec::new();
-        for &(line, index) in &targets.stations {
-            let holds = project
-                .key_for_ref(StationRef::new(line, index))
-                .is_some_and(|key| project.station_comments.contains_key(&key));
-            if holds {
-                sources.push(Holder::Station(StationRefT { line, index }));
-            }
-        }
-        for (line, id, uuid) in &targets.shot_uuids {
-            let holds = project
-                .get_line(*line)
-                .and_then(|s| s.shots.iter().find(|shot| shot.id == *id))
-                .is_some_and(|shot| shot.comment.is_some());
-            if holds {
-                sources.push(Holder::Shot(ShotRefT {
-                    line: *line,
-                    id: *id,
-                    uuid: Some(uuid.clone()),
-                }));
-            }
-        }
-        if sources.is_empty() || targets.stations.is_empty() {
-            return None;
-        }
-        let source = sources.swap_remove(self.aux.below(sources.len()));
-        let target = if self.aux.chance(50) {
-            let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
-            Holder::Station(StationRefT { line, index })
-        } else {
-            Holder::Shot(self.pick_shot_ref(targets)?)
-        };
-        Some(ExtOp::MoveComment {
-            source,
-            target,
-            swap: self.aux.chance(30),
-        })
-    }
-
-    fn draw_untrack(&mut self, targets: &Targets) -> Option<ExtOp> {
-        let project = self.state.get_project_state()?;
-        let delete = (!targets.lines.is_empty() && self.aux.chance(50))
-            .then(|| targets.lines[self.aux.below(targets.lines.len())].0);
-        let mut pick = |all: &[String]| -> Vec<String> {
-            all.iter()
-                .filter(|_| self.aux.chance(30))
-                .cloned()
-                .collect()
-        };
-        let file_hashes = pick(&project.imported_file_hashes);
-        let line_hashes = pick(&project.imported_line_hashes);
-        (!file_hashes.is_empty() || !line_hashes.is_empty()).then_some(ExtOp::UntrackImport {
-            delete,
-            file_hashes,
-            line_hashes,
-        })
-    }
-
-    /// Execute one extended action. The `apply_op` of `Op::Extended`.
-    pub(super) fn apply_extended(
-        &mut self,
-        ext: &ExtOp,
-        refs: &mut Refs,
-        targets: &Targets,
-    ) -> Option<Drawn> {
-        self.outcome.coverage.extended += 1;
-        let label = ext.describe();
-        let result = match ext {
-            ExtOp::EditCredit {
-                line,
+            let count = 1 + rng.below(4);
+            let shots: Vec<ShotRefT> = (0..count)
+                .filter_map(|_| pick_shot_ref(rng, targets))
+                .collect();
+            (!shots.is_empty()).then_some(ExtOp::EditCredit {
+                line: None,
                 shots,
                 role,
                 person,
-            } => {
-                let credit_targets = if let Some(id) = line {
-                    let Some(id) = refs.line(*id, targets) else {
-                        return refs.skip(&label);
-                    };
-                    CreditTargets::Line { line_id: id }
-                } else {
-                    let mut resolved: Vec<_> =
-                        shots.iter().filter_map(|s| refs.shot(s, targets)).collect();
-                    resolved.dedup();
-                    if resolved.is_empty() {
-                        return refs.skip(&label);
-                    }
-                    CreditTargets::Shots { shots: resolved }
-                };
-                self.state.execute(Command::EditShotCredit {
-                    targets: credit_targets,
-                    edit: credit_edit(*role, *person),
-                })
+            })
+        }
+        4..=6 => {
+            if targets.junctions.is_empty() {
+                return None;
             }
-            ExtOp::UnmergeStation { station } => {
-                let Some((line, index)) = refs.station(*station, targets) else {
-                    return refs.skip(&label);
-                };
-                self.state.execute(Command::UnmergeStations {
-                    station_ref: StationRef::new(line, index),
-                })
-            }
-            ExtOp::MoveComment {
-                source,
-                target,
-                swap,
-            } => {
-                let (Some(source), Some(target)) = (
-                    resolve_holder(source, refs, targets),
-                    resolve_holder(target, refs, targets),
-                ) else {
-                    return refs.skip(&label);
-                };
-                self.state.execute(Command::MoveComment {
-                    source,
-                    target,
-                    swap: *swap,
-                })
-            }
-            ExtOp::ProjectSettings { rename, nudge } => {
-                let project = self.state.get_project_state()?;
-                let name = rename.map_or(project.name.clone(), |n| format!("RustFuzz-{n}"));
-                let mut validation = project.validation;
-                validation.warn_shot_length_max = 50.0 + f64::from(*nudge);
-                self.state.update_project_settings(name, validation)
-            }
-            ExtOp::SurfaceElevation { millimetres } => self
-                .state
-                .set_surface_elevation(millimetres.map(|mm| mm as f64 / 1000.0)),
-            ExtOp::UntrackImport {
-                delete,
+            let (station, slots) = &targets.junctions[rng.below(targets.junctions.len())];
+            Some(ExtOp::UnmergeStation {
+                station: StationT {
+                    station: *station,
+                    line: slots[rng.below(slots.len())].0,
+                },
+            })
+        }
+        7..=8 => draw_move_comment(rng, targets, project),
+        9..=10 => Some(ExtOp::ProjectSettings {
+            rename: rng.chance(50).then(|| rng.below(1000) as u32),
+            nudge: rng.below(40) as u32,
+        }),
+        11..=12 => Some(ExtOp::SurfaceElevation {
+            millimetres: (!rng.chance(25)).then(|| rng.range(-50_000, 500_000)),
+        }),
+        13..=14 => {
+            let delete = (!targets.lines.is_empty() && rng.chance(40))
+                .then(|| targets.lines[rng.below(targets.lines.len())].0);
+            let mut pick = |all: &[String]| -> Vec<String> {
+                all.iter().filter(|_| rng.chance(40)).cloned().collect()
+            };
+            let file_hashes = pick(&targets.file_hashes);
+            let line_hashes = pick(&targets.line_hashes);
+            let batched = rng.chance(50);
+            (!file_hashes.is_empty() || !line_hashes.is_empty()).then_some(ExtOp::UntrackImport {
+                delete: delete.filter(|_| batched),
                 file_hashes,
                 line_hashes,
-            } => {
+                batched,
+            })
+        }
+        15..=17 => Some(ExtOp::Import {
+            seed: rng.below(1 << 30) as u32,
+            lines: 1 + rng.below(3) as u8,
+            anchor: (rng.chance(70))
+                .then(|| pick_station(rng, targets))
+                .flatten(),
+            names: rng.chance(60),
+        }),
+        18..=19 => {
+            let repeats = (0..rng.below(3))
+                .filter_map(|_| pick_shot_ref(rng, targets))
+                .collect();
+            Some(ExtOp::AddProjectFile {
+                seed: rng.below(1 << 30) as u32,
+                lines: 1 + rng.below(3) as u8,
+                repeats,
+            })
+        }
+        20..=22 => Some(ExtOp::RenameStation {
+            station: pick_station(rng, targets)?,
+            name: rng.below(4) as u32,
+        }),
+        23..=25 => {
+            let count = rng.below(4);
+            let lines = if targets.lines.is_empty() {
+                Vec::new()
+            } else {
+                (0..count)
+                    .map(|_| targets.lines[rng.below(targets.lines.len())].0)
+                    .collect()
+            };
+            Some(ExtOp::Section {
+                kind: rng.below(5) as u8,
+                at: rng.below(8) as u32,
+                lines,
+                name: rng.below(6) as u32,
+                ungroup: rng.chance(25),
+            })
+        }
+        _ => {
+            let target = pick_station(rng, targets)?;
+            let shots: Vec<ShotData> = (0..=rng.below(3)).map(|_| random_shot(rng)).collect();
+            Some(ExtOp::CreateAndMerge {
+                at: rng.below(shots.len() + 1) as u32,
+                shots,
+                target,
+                section: (!targets.sections.is_empty() && rng.chance(30))
+                    .then(|| rng.below(8) as u32),
+            })
+        }
+    }
+}
+
+fn draw_move_comment(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp> {
+    // Sources that hold a comment, so most moves move something.
+    let mut sources: Vec<Holder> = Vec::new();
+    for &station in &targets.commented {
+        if let Some(line) = targets
+            .slots
+            .iter()
+            .find(|(_, _, s)| *s == station)
+            .map(|(l, _, _)| *l)
+        {
+            sources.push(Holder::Station(StationT { station, line }));
+        }
+    }
+    for line in project.lines() {
+        for shot in &line.shots {
+            if shot.comment.is_some() {
+                sources.push(Holder::Shot(ShotRefT {
+                    line: line.id,
+                    id: shot.id,
+                    uuid: shot.uuid.clone(),
+                }));
+            }
+        }
+    }
+    if sources.is_empty() || targets.slots.is_empty() {
+        return None;
+    }
+    let source = sources.swap_remove(rng.below(sources.len()));
+    let target = if rng.chance(50) {
+        Holder::Station(pick_station(rng, targets)?)
+    } else {
+        Holder::Shot(pick_shot_ref(rng, targets)?)
+    };
+    Some(ExtOp::MoveComment {
+        source,
+        target,
+        swap: rng.chance(30),
+    })
+}
+
+/// Execute one rarer action: the `apply_op` of `Op::Extended`.
+pub(super) fn apply_extended(
+    fuzzer: &mut Fuzzer,
+    ext: &ExtOp,
+    refs: &mut Refs,
+    targets: &Targets,
+) -> Option<Drawn> {
+    fuzzer.outcome.coverage.extended += 1;
+    let label = ext.describe();
+    let state = &fuzzer.state;
+    let result = match ext {
+        ExtOp::EditCredit {
+            line,
+            shots,
+            role,
+            person,
+        } => {
+            let credit_targets = if let Some(id) = line {
+                let Some(line_id) = refs.line(*id, targets) else {
+                    return refs.skip(&label);
+                };
+                CreditTargets::Line { line_id }
+            } else {
+                let mut resolved: Vec<_> =
+                    shots.iter().filter_map(|s| refs.shot(s, targets)).collect();
+                resolved.dedup();
+                if resolved.is_empty() {
+                    return refs.skip(&label);
+                }
+                CreditTargets::Shots { shots: resolved }
+            };
+            state.execute(Command::EditShotCredit {
+                targets: credit_targets,
+                edit: credit_edit(*role, *person),
+            })
+        }
+        ExtOp::UnmergeStation { station } => {
+            let Some(station_ref) = refs.station(*station, targets) else {
+                return refs.skip(&label);
+            };
+            state.execute(Command::UnmergeStations { station_ref })
+        }
+        ExtOp::MoveComment {
+            source,
+            target,
+            swap,
+        } => {
+            let (Some(source), Some(target)) = (
+                resolve_holder(source, refs, targets),
+                resolve_holder(target, refs, targets),
+            ) else {
+                return refs.skip(&label);
+            };
+            state.execute(Command::MoveComment {
+                source,
+                target,
+                swap: *swap,
+            })
+        }
+        ExtOp::ProjectSettings { rename, nudge } => {
+            let project = state.get_project_state()?;
+            let name = rename.map_or(project.name.clone(), |n| format!("RustFuzz-{n}"));
+            let mut validation = project.settings.validation;
+            validation.warn_shot_length_max = 50.0 + f64::from(*nudge);
+            state.update_project_settings(name, validation)
+        }
+        ExtOp::SurfaceElevation { millimetres } => {
+            state.set_surface_elevation(millimetres.map(|mm| mm as f64 / 1000.0))
+        }
+        ExtOp::UntrackImport {
+            delete,
+            file_hashes,
+            line_hashes,
+            batched,
+        } => {
+            let untrack = Command::UntrackImport {
+                file_hashes: file_hashes.clone(),
+                line_hashes: line_hashes.clone(),
+            };
+            if *batched {
                 let mut commands = Vec::new();
                 if let Some(line_id) = delete.and_then(|id| refs.line(id, targets)) {
                     commands.push(Command::DeleteLine { line_id });
                 }
-                commands.push(Command::UntrackImport {
-                    file_hashes: file_hashes.clone(),
-                    line_hashes: line_hashes.clone(),
-                });
-                self.state.execute(Command::Batch {
+                commands.push(untrack);
+                state.execute(Command::Batch {
                     commands,
                     label: None,
                 })
+            } else {
+                state.execute(untrack)
             }
-            ExtOp::Import {
-                seed,
-                lines,
-                anchor,
-                names,
-            } => {
-                let anchor = match anchor {
-                    Some(at) => match refs.station(*at, targets) {
-                        Some(resolved) => Some(resolved),
-                        None => return refs.skip(&label),
-                    },
-                    None => None,
-                };
-                let (configs, file_hash, line_hashes) =
-                    import_configs(*seed, usize::from(*lines), anchor, *names);
-                self.state.execute_import_lines(
-                    configs,
-                    Vec::new(),
-                    Some(file_hash),
-                    line_hashes,
-                    Vec::new(),
-                    super::super::command_import::VirtualShotMode::default(),
-                )
-            }
-            ExtOp::AddProjectFile {
-                seed,
-                lines,
-                repeats,
-            } => {
-                let uuids: Vec<String> = repeats
-                    .iter()
-                    .filter_map(|r| {
-                        let (line, id) = refs.shot(r, targets)?;
-                        targets.uuid_of(line, id)
-                    })
-                    .collect();
-                let temp = self.temp.get_or_insert_with(|| TempDir::new().unwrap());
-                let path: PathBuf = temp.path().join(format!("added-{seed}.stalx"));
-                let added = added_project(*seed, usize::from(*lines), &uuids);
-                Database::open(&path)
-                    .and_then(|mut db| db.save_project(&added))
-                    .expect("write the project to add");
-                let result = self.state.execute(Command::add_project_file(path.clone()));
-                let _ = std::fs::remove_file(&path);
-                result
-            }
-            ExtOp::RenameStation { station, name } => {
-                let Some((line, index)) = refs.station(*station, targets) else {
-                    return refs.skip(&label);
-                };
-                self.state.execute(Command::SetStationName {
-                    station_ref: StationRef::new(line, index),
-                    name: format!("r{name}"),
+        }
+        ExtOp::Import {
+            seed,
+            lines,
+            anchor,
+            names,
+        } => {
+            let anchor = match anchor {
+                Some(at) => match refs.station(*at, targets) {
+                    Some(resolved) => Some(resolved),
+                    None => return refs.skip(&label),
+                },
+                None => None,
+            };
+            let (configs, file_hash, line_hashes) =
+                import_configs(*seed, usize::from(*lines), anchor, *names);
+            state.execute_import_lines(
+                configs,
+                Vec::new(),
+                Some(file_hash),
+                line_hashes,
+                Vec::new(),
+                super::super::command_import::VirtualShotMode::default(),
+            )
+        }
+        ExtOp::AddProjectFile {
+            seed,
+            lines,
+            repeats,
+        } => {
+            let uuids: Vec<String> = repeats
+                .iter()
+                .filter_map(|r| {
+                    let (line, id) = refs.shot(r, targets)?;
+                    targets.uuid_of(line, id)
                 })
-            }
-            ExtOp::Section {
-                kind,
-                at,
-                lines,
-                name,
-                ungroup,
-            } => {
-                let project = self.state.get_project_state()?;
-                let line_ids: Vec<LineId> = lines
-                    .iter()
-                    .filter_map(|id| refs.line(*id, targets))
-                    .collect();
-                let section = (!project.sections.is_empty()).then(|| {
-                    let len = u32::try_from(project.sections.len()).unwrap_or(u32::MAX);
-                    project.sections[(*at % len) as usize].id
-                });
-                let command = match (*kind, section) {
-                    (0, _) => Command::CreateCaveSection {
-                        name: format!("Region {name}"),
-                        color: COLORS[*name as usize % COLORS.len()].to_string(),
-                        line_ids,
-                    },
-                    (_, None) => return refs.skip(&label),
-                    (1, Some(section_id)) => Command::UpdateCaveSection {
-                        section_id,
-                        name: Some(format!("Region {name}")),
-                        color: None,
-                    },
-                    (2, Some(section_id)) => Command::MoveLinesToCaveSection {
-                        line_ids,
-                        section_id: (!*ungroup).then_some(section_id),
-                    },
-                    (3, Some(section_id)) => Command::ApplyCaveSectionColor { section_id },
-                    (_, Some(section_id)) => Command::DeleteCaveSection { section_id },
-                };
-                self.state.execute(command)
-            }
-        };
-        Some(Drawn::new(label, result))
-    }
+                .collect();
+            let temp = fuzzer.temp.get_or_insert_with(|| TempDir::new().unwrap());
+            let path: PathBuf = temp.path().join(format!("added-{seed}.stalx"));
+            let added = added_project(*seed, usize::from(*lines), &uuids);
+            std::fs::write(
+                &path,
+                stalx_v2::encode(&added, &Extras::default(), Mode::Normal)
+                    .expect("the project to add encodes"),
+            )
+            .expect("write the project to add");
+            let result = fuzzer
+                .state
+                .execute(Command::add_project_file(path.clone()));
+            let _ = std::fs::remove_file(&path);
+            result
+        }
+        ExtOp::RenameStation { station, name } => {
+            let Some(station_ref) = refs.station(*station, targets) else {
+                return refs.skip(&label);
+            };
+            state.execute(Command::SetStationName {
+                station_ref,
+                name: format!("r{name}"),
+            })
+        }
+        ExtOp::Section {
+            kind,
+            at,
+            lines,
+            name,
+            ungroup,
+        } => {
+            let line_ids: Vec<LineId> = lines
+                .iter()
+                .filter_map(|id| refs.line(*id, targets))
+                .collect();
+            let section = (!targets.sections.is_empty()).then(|| {
+                let len = targets.sections.len() as u32;
+                targets.sections[(*at % len) as usize]
+            });
+            // With no Section yet every kind creates one.
+            let command = match (*kind, section) {
+                (0, _) | (_, None) => Command::CreateCaveSection {
+                    name: format!("Region {name}"),
+                    color: COLORS[*name as usize % COLORS.len()].to_string(),
+                    line_ids,
+                },
+                (1, Some(section_id)) => Command::UpdateCaveSection {
+                    section_id,
+                    name: Some(format!("Region {name}")),
+                    color: None,
+                },
+                (2, Some(section_id)) => Command::MoveLinesToCaveSection {
+                    line_ids,
+                    section_id: (!*ungroup).then_some(section_id),
+                },
+                (3, Some(section_id)) => Command::ApplyCaveSectionColor { section_id },
+                (_, Some(section_id)) => Command::DeleteCaveSection { section_id },
+            };
+            state.execute(command)
+        }
+        ExtOp::CreateAndMerge {
+            shots,
+            at,
+            target,
+            section,
+        } => {
+            let Some(target_station) = refs.station(*target, targets) else {
+                return refs.skip(&label);
+            };
+            let cave_section_id = section.and_then(|at| {
+                let len = targets.sections.len() as u32;
+                (len > 0).then(|| targets.sections[(at % len) as usize])
+            });
+            state.execute_create_and_merge_in_cave_section(
+                Some(format!("joined-{}", shots.len())),
+                None,
+                None,
+                COLORS[shots.len() % COLORS.len()].to_string(),
+                None,
+                shots.clone(),
+                (*at).min(shots.len() as u32),
+                target_station,
+                ClosureStrategy::Move,
+                cave_section_id,
+            )
+        }
+    };
+    Some(Drawn::new(label, result))
 }
 
 /// The edit a credit draw names.
@@ -624,12 +687,9 @@ fn credit_edit(role: u8, person: u32) -> CreditEdit {
 
 fn resolve_holder(holder: &Holder, refs: &Refs, targets: &Targets) -> Option<CommentHolder> {
     Some(match holder {
-        Holder::Station(at) => {
-            let (line, index) = refs.station(*at, targets)?;
-            CommentHolder::Station {
-                station_ref: StationRef::new(line, index),
-            }
-        }
+        Holder::Station(at) => CommentHolder::Station {
+            station_ref: refs.station(*at, targets)?,
+        },
         Holder::Shot(shot) => {
             let (line_id, shot_id) = refs.shot(shot, targets)?;
             CommentHolder::Shot { line_id, shot_id }
@@ -637,14 +697,13 @@ fn resolve_holder(holder: &Holder, refs: &Refs, targets: &Targets) -> Option<Com
     })
 }
 
-/// A synthetic import of `count` lines, a function of `seed`: the first
-/// placed on `anchor` (or at the origin), each later one hung off the one
-/// before it, with station names and comments on some stations. Returns the
-/// configs, the file hash and one line hash per line.
+/// A synthetic import of `count` lines, a function of `seed`: the first at
+/// `anchor` (or the origin), each later one hung off the one before, with
+/// station names and comments on some stations.
 fn import_configs(
     seed: u32,
     count: usize,
-    anchor: Option<(LineId, u32)>,
+    anchor: Option<StationRef>,
     names: bool,
 ) -> (Vec<ImportLineConfig>, String, Vec<String>) {
     let mut rng = Rng::new(seed);
@@ -653,16 +712,16 @@ fn import_configs(
     let mut hashes = Vec::new();
     for index in 0..count {
         let shots: Vec<ShotData> = (0..=rng.below(4)).map(|_| random_shot(&mut rng)).collect();
-        let stations = u32::try_from(shots.len()).unwrap_or(0);
+        let stations = shots.len() as u32;
         let placement = match (index, anchor) {
-            (0, Some((line, station))) => ImportPlacement::FromExisting {
+            (0, Some(existing_station)) => ImportPlacement::FromExisting {
                 import_station: 0,
-                existing_station: StationRef::new(line, station),
+                existing_station,
             },
             (0, None) => ImportPlacement::Origin,
             _ => ImportPlacement::FromImporting {
                 import_station: 0,
-                target_line_index: u32::try_from(index - 1).unwrap_or(0),
+                target_line_index: index as u32 - 1,
                 target_station_index: 1,
             },
         };
@@ -681,7 +740,7 @@ fn import_configs(
         hashes.push(format!("{file_hash}-s{index}"));
         configs.push(ImportLineConfig {
             reverse: false,
-            line_index: u32::try_from(index).unwrap_or(0),
+            line_index: index as u32,
             name: Some(format!("imported-{seed:x}-{index}")),
             surveyor: None,
             date: None,
@@ -702,113 +761,113 @@ fn import_configs(
     (configs, file_hash, hashes)
 }
 
-/// The second project an Add .stalx brings in, a function of `seed`: a chain of
-/// `count` lines, the first `repeats.len()` shots carrying uuids the open
-/// project already holds, station names on every line and a station offset
-/// on the last one (whose far end nothing is merged to).
+fn meta(name: String, color: &str) -> LineMeta {
+    LineMeta {
+        name: Some(name),
+        color: color.to_string(),
+        ..LineMeta::default()
+    }
+}
+
+/// The second project an Add .stalx brings in, a function of `seed`: a
+/// chain of `count` lines on junctions, its last shots carrying uuids the
+/// open project already holds, a station name on every line.
 fn added_project(seed: u32, count: usize, repeats: &[String]) -> Project {
     let mut rng = Rng::new(seed);
     let mut project = Project::new(format!("Added {seed}"), None);
-    let mut ids = Vec::new();
+    let mut start = StartAt::New;
     for index in 0..count {
         let shots: Vec<ShotData> = (0..2 + rng.below(3))
             .map(|_| random_shot(&mut rng))
             .collect();
-        let data = LineData {
-            name: Some(format!("added-{seed:x}-{index}")),
-            color: (*rng.pick(COLORS)).to_string(),
-            shots,
-            ..LineData::default()
-        };
-        ids.push(project.add_line(data).id);
+        let id = project
+            .add_line(
+                meta(format!("added-{seed:x}-{index}"), rng.pick(COLORS)),
+                start,
+                shots,
+            )
+            .expect("the added project builds");
+        let line = project.line(id).expect("the line just added");
+        if index == 0 {
+            let first = line.start;
+            project.set_placement(first, 0.0, 0.0).expect("a placement");
+        }
+        let line = project.line(id).expect("the line just added");
+        let second = line.station(1).expect("two stations");
+        start = StartAt::Station(line.stations().last().expect("a last station"));
+        if let Some(station) = project.station_mut(second) {
+            station.name = format!("A{seed:x}-{index}");
+        }
     }
-    // The repeats: a later shot of the file takes a uuid the open project holds.
+    // The repeats: later shots of the file take uuids the open project holds.
     let mut slots: Vec<(usize, usize)> = project
-        .lines
+        .lines()
         .iter()
         .enumerate()
         .flat_map(|(s, line)| (0..line.shots.len()).map(move |i| (s, i)))
         .collect();
     slots.reverse();
-    for (uuid, (s, i)) in repeats.iter().zip(slots) {
-        project.lines[s].shots[i].uuid = Some(uuid.clone());
-    }
-    project.rebuild_shot_uuid_index();
-    for pair in ids.windows(2) {
-        let last =
-            u32::try_from(project.get_line(pair[0]).map_or(0, |s| s.shots.len())).unwrap_or(0);
-        let _ = project.merge_stations(StationRef::new(pair[1], 0), StationRef::new(pair[0], last));
-    }
-    for (index, id) in ids.iter().enumerate() {
-        if let Some(key) = project.key_for_ref(StationRef::new(*id, 1)) {
-            project
-                .station_names
-                .insert(key, format!("A{seed:x}-{index}"));
+    // Each repeated uuid once: a draw can name the same live shot twice.
+    let mut distinct: Vec<&String> = Vec::new();
+    for uuid in repeats {
+        if !distinct.contains(&uuid) {
+            distinct.push(uuid);
         }
     }
-    if let Some(key) = ids
-        .last()
-        .and_then(|id| project.key_for_ref(StationRef::new(*id, 1)))
-    {
-        project.station_offsets.insert(key, (0.25, -0.5, 0.0));
+    for (uuid, (s, i)) in distinct.into_iter().zip(slots) {
+        project.lines_mut()[s].shots[i].uuid = uuid.clone();
     }
+    assert!(
+        project.validate().is_empty(),
+        "the added project is invalid: {:?}",
+        project.validate()
+    );
     project
 }
 
-/// Grow the live project into the LARGE one, then save and reopen it so the run
-/// starts from what the loader makes of it. Returns the dir holding its file.
+/// Grow the live project into the LARGE one, then save and reopen it so the
+/// run starts from what the loader makes of it.
 pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().expect("the builder opened a project");
+        let root = project.lines()[0].start;
+        let mut at = StartAt::Station(root);
         let mut chain = Vec::new();
         for index in 0..LARGE_CHAIN {
             let shots: Vec<ShotData> = (0..3).map(|_| random_shot(aux)).collect();
-            let data = LineData {
-                name: Some(format!("chain-{index}")),
-                color: (*aux.pick(COLORS)).to_string(),
-                shots,
-                ..LineData::default()
-            };
-            chain.push(project.add_line(data).id);
+            let id = project
+                .add_line(meta(format!("chain-{index}"), aux.pick(COLORS)), at, shots)
+                .expect("a chain link");
+            let line = project.line(id).expect("the link just added");
+            at = StartAt::Station(line.stations().last().expect("a last station"));
+            chain.push(id);
         }
-        // Hang the chain off the first ordinary line so it shares its datum.
-        let root = project.lines[0].id;
-        project
-            .merge_stations(StationRef::new(chain[0], 0), StationRef::new(root, 0))
-            .expect("hang the chain");
-        for pair in chain.windows(2) {
-            project
-                .merge_stations(StationRef::new(pair[1], 0), StationRef::new(pair[0], 3))
-                .expect("chain-merge");
-        }
-        // A loop across every two links: the far end of a link closes onto the
-        // start of the link two back.
-        for index in (2..LARGE_CHAIN).step_by(1) {
-            let _ = project.create_loop_closure(
-                StationRef::new(chain[index], 3),
-                StationRef::new(chain[index - 2], 1),
-                ClosureStrategy::Move,
-            );
+        for index in 2..LARGE_CHAIN {
+            let far = project.line(chain[index]).and_then(|l| l.station(3));
+            let back = project.line(chain[index - 2]).and_then(|l| l.station(1));
+            if let (Some(a), Some(b)) = (far, back) {
+                project.push_closure(
+                    a,
+                    Some(chain[index]),
+                    b,
+                    Some(chain[index - 2]),
+                    crate::models::survey::ClosureStrategy::Move,
+                );
+            }
         }
         for index in 0..LARGE_ISLANDS {
-            let data = LineData {
-                name: Some(format!("island-{index}")),
-                color: (*aux.pick(COLORS)).to_string(),
-                shots: vec![random_shot(aux), random_shot(aux)],
-                ..LineData::default()
-            };
-            let id = project.add_line(data).id;
-            let line = project.get_line(id).expect("the island just added");
-            let shot = line.shots[1].uuid.clone().expect("a minted uuid");
-            let parity = project.shot_record_parity(line, Some(&shot));
-            project.held_gauges.push(HeldGauge {
-                line_id: id,
-                shot,
-                neighbour: None,
-                end: false,
-                parity,
-            });
+            let id = project
+                .add_line(
+                    meta(format!("island-{index}"), aux.pick(COLORS)),
+                    StartAt::New,
+                    vec![random_shot(aux), random_shot(aux)],
+                )
+                .expect("an island");
+            let start = project.line(id).expect("the island").start;
+            project
+                .set_placement(start, 500.0 + index as f64 * 25.0, -300.0)
+                .expect("the island's placement");
         }
         project
             .imported_file_hashes
@@ -816,8 +875,13 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
         project
             .imported_line_hashes
             .extend((0..LARGE_HASHES).map(|i| format!("large-line-{i:03}")));
-        project.touch();
+        assert!(
+            project.validate().is_empty(),
+            "the LARGE project is invalid: {:?}",
+            project.validate()
+        );
     }
+    state.bump_revision();
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("large.stalx");
     assert!(
@@ -835,37 +899,277 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
         .get_project_state()
         .expect("the LARGE project is open");
     assert!(
-        project.station_merges.len() > 64
-            && project.loop_closures.len() > 64
-            && project.held_gauges.len() > 64
+        project.closures.len() > 64
+            && project.placements.len() > 64
             && project.imported_file_hashes.len() > 64,
-        "the LARGE project lost its long lists on the way through the file: merges={} \
-         closures={} held gauges={} file hashes={}",
-        project.station_merges.len(),
-        project.loop_closures.len(),
-        project.held_gauges.len(),
-        project.imported_file_hashes.len()
+        "the LARGE project lost its long lists on the way through the file"
     );
     dir
 }
 
+/// A seeded synthetic 0.6.0 survey, written by the frozen 0.6.0 save into
+/// `dir`: what `Plan::legacy_origin` opens through the migration.
+pub(super) fn legacy_origin_file(seed: u32, dir: &Path) -> PathBuf {
+    use stalagmight_legacy::models as m;
+    let mut rng = Rng::new(seed ^ 0x0001_E6AC);
+    let mut minted = 0_u64;
+    let mut uuid = || {
+        minted += 1;
+        format!("{seed:08x}-0000-4000-8000-{minted:012x}")
+    };
+    let at = chrono::DateTime::from_timestamp(1_700_000_000 + i64::from(seed), 0)
+        .expect("a valid instant");
+    let mut p = m::Project::new(format!("Legacy {seed}"), None);
+    p.created_at = at;
+    p.modified_at = at;
+    let shape: [usize; 7] = [3, 0, 1, 4, 2, 3, 2];
+    for (n, count) in shape.iter().enumerate() {
+        let shots = (0..*count)
+            .map(|_| {
+                let fresh = random_shot(&mut rng);
+                m::ShotData {
+                    uuid: Some(uuid()),
+                    azimuth_in: fresh.azimuth_in,
+                    azimuth_out: fresh.azimuth_out,
+                    length: fresh.length,
+                    depth_in: fresh.depth_in,
+                    depth_out: fresh.depth_out,
+                    left: fresh.left,
+                    right: fresh.right,
+                    comment: fresh.comment,
+                    ..m::ShotData::default()
+                }
+            })
+            .collect();
+        p.add_line(m::LineData {
+            name: (n % 3 != 0).then(|| format!("L{n}")),
+            surveyor: (n % 2 == 0).then(|| "Ada; Bo".to_string()),
+            date: None,
+            color: (*rng.pick(COLORS)).to_string(),
+            direction: Some(m::SurveyDirection::In),
+            quality: 1.0,
+            shots,
+        });
+    }
+    let ids: Vec<m::LineId> = p.lines.iter().map(|l| l.id).collect();
+    let key = |p: &m::Project, line: usize, index: u32| {
+        p.key_for_ref(m::StationRef::new(ids[line], index))
+    };
+    // A hand move before the merges (a merge holds the shown position).
+    if let Some(k) = key(&p, 0, 1) {
+        p.station_offsets.insert(
+            k,
+            (
+                rng.float(-1.0, 1.0),
+                rng.float(-1.0, 1.0),
+                rng.float(-0.5, 0.5),
+            ),
+        );
+    }
+    let _ = p.set_zero_datum(
+        m::StationRef::new(ids[0], 0),
+        m::GpsCoordinates::new(20.5, -87.3, 0.0).expect("valid GPS"),
+    );
+    // Junctions: 3 hangs off 0's end, 4 off 3's end, 6 off 5's middle.
+    let _ = p.merge_stations(m::StationRef::new(ids[3], 0), m::StationRef::new(ids[0], 3));
+    let _ = p.merge_stations(m::StationRef::new(ids[4], 0), m::StationRef::new(ids[3], 4));
+    let _ = p.merge_stations(m::StationRef::new(ids[6], 0), m::StationRef::new(ids[5], 1));
+    // A raw cycle-closing merge (0.6.0 files can hold one): a `Tie` once
+    // migrated.
+    if rng.chance(60) {
+        if let (Some(station_a), Some(station_b)) = (key(&p, 4, 2), key(&p, 0, 1)) {
+            p.station_merges.push(m::StationMerge {
+                station_a,
+                station_b,
+                merged_at: at,
+            });
+        }
+    }
+    let strategy = if rng.chance(50) {
+        m::ClosureStrategy::Move
+    } else {
+        m::ClosureStrategy::Batch
+    };
+    let _ = p.create_loop_closure(
+        m::StationRef::new(ids[0], 0),
+        m::StationRef::new(ids[4], 1),
+        strategy,
+    );
+    for (line, index, text) in [(2, 1, "legacy note"), (5, 0, "tie-off")] {
+        if let Some(k) = key(&p, line, index) {
+            p.station_comments.insert(k, text.to_string());
+        }
+    }
+    // The free piece moved by hand.
+    p.adjust_rigid_group_offsets(ids[5], rng.float(-200.0, 200.0), rng.float(-200.0, 200.0));
+    let bytes = stalagmight_legacy::write_v18(&p, &stalagmight_legacy::LegacyExtras::default())
+        .expect("the frozen 0.6.0 save writes the legacy origin");
+    let path = dir.join("legacy.stalx");
+    std::fs::write(&path, bytes).expect("write the legacy origin");
+    path
+}
+
+/// `DIVERGENCE=1`: a fresh line, an insert BEFORE its first shot (session
+/// ids stop following positional order), then every id-addressed edit
+/// contiguous on top - all through the ordinary per-move oracles.
+pub(super) fn expose_stale_ids(fuzzer: &mut Fuzzer) {
+    let shots: Vec<ShotData> = (0..3).map(|_| random_shot(&mut fuzzer.rng)).collect();
+    let create = Op::CreateLine {
+        name: Some("diverged".to_string()),
+        surveyor: None,
+        color: COLORS[0].to_string(),
+        direction: None,
+        shots,
+        section: None,
+    };
+    fuzzer.step_apply(
+        &create,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
+    let Some(line) = fuzzer.live().lines().last().map(|l| l.id) else {
+        return;
+    };
+    let first = |fuzzer: &Fuzzer| -> Option<ShotRefT> {
+        let targets = super::read_targets(&fuzzer.state);
+        let id = *targets.shots_of(line)?.first()?;
+        Some(targets.shot_ref(line, id))
+    };
+    let Some(anchor) = first(fuzzer) else {
+        return;
+    };
+    let insert = Op::CreateShot {
+        line,
+        shot: Box::new(random_shot(&mut fuzzer.rng)),
+        after: None,
+        before: Some(anchor),
+    };
+    fuzzer.step_apply(
+        &insert,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
+    let edits: Vec<Box<dyn Fn(ShotRefT) -> Op>> = vec![
+        Box::new(|shot| Op::UpdateShot {
+            shot,
+            updates: Box::new(ShotUpdates {
+                length: Some(7.25),
+                ..ShotUpdates::default()
+            }),
+        }),
+        Box::new(|shot| Op::SetShotKind {
+            shot,
+            kind: crate::models::ShotKind::Jump,
+        }),
+        Box::new(|shot| Op::SplitShotAtDistance {
+            shot,
+            distance: 1.5,
+        }),
+        Box::new(|shot| Op::DeleteShot { shot }),
+    ];
+    for edit in edits {
+        let Some(shot) = first(fuzzer) else {
+            return;
+        };
+        fuzzer.step_apply(
+            &edit(shot),
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
+    }
+}
+
+/// `CLOSURE_SHAPES=1`: two closures, so list order matters to the undo of
+/// a removal.
+pub(super) fn expose_closure_shapes(fuzzer: &mut Fuzzer) {
+    for strategy in [ClosureStrategy::Batch, ClosureStrategy::Move] {
+        let targets = super::read_targets(&fuzzer.state);
+        let Some((a, b)) = fuzzer.pick_cross_pair(&targets) else {
+            return;
+        };
+        fuzzer.step_apply(
+            &Op::CreateClosure { a, b, strategy },
+            &mut Refs::identity(),
+            &targets,
+        );
+    }
+}
+
+/// At the first crossing of a `CLOSURE_SHAPES` persistence run: two new
+/// pieces each held by a datum, a closure between them, then one datum
+/// removed - the orphan sweep must promote or keep the closure, and the
+/// undo of the removal must put everything back.
+pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
+    let mut ends = Vec::new();
+    for (index, (lat, lon)) in [(20.45, -87.25), (20.46, -87.26)].into_iter().enumerate() {
+        let create = Op::CreateLine {
+            name: Some(format!("orphan-{index}")),
+            surveyor: None,
+            color: COLORS[index].to_string(),
+            direction: None,
+            shots: vec![random_shot(&mut fuzzer.rng), random_shot(&mut fuzzer.rng)],
+            section: None,
+        };
+        fuzzer.step_apply(
+            &create,
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
+        let Some(line) = fuzzer.live().lines().last().cloned() else {
+            return;
+        };
+        let station = StationT {
+            station: line.start,
+            line: line.id,
+        };
+        let datum = Op::SetZeroDatum {
+            station,
+            coordinates: GpsCoordinates::new(lat, lon, 0.0).expect("valid GPS"),
+            accuracy_mm: None,
+            entrance: None,
+        };
+        fuzzer.step_apply(
+            &datum,
+            &mut Refs::identity(),
+            &super::read_targets(&fuzzer.state),
+        );
+        ends.push(StationT {
+            station: line.stations().last().unwrap_or(line.start),
+            line: line.id,
+        });
+        ends.push(station);
+    }
+    if ends.len() < 4 {
+        return;
+    }
+    let closure = Op::CreateClosure {
+        a: ends[0],
+        b: ends[2],
+        strategy: ClosureStrategy::Batch,
+    };
+    fuzzer.step_apply(
+        &closure,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
+    let remove = Op::RemoveZeroDatum { station: ends[3] };
+    fuzzer.step_apply(
+        &remove,
+        &mut Refs::identity(),
+        &super::read_targets(&fuzzer.state),
+    );
+}
+
 // ===========================================================================
-// What EXTENDED found
+// What these actions pinned
 // ===========================================================================
 
-/// OPEN FINDING (EXTENDED, seeds 4, 10, 18, 28 and 30 at 120 moves before the
-/// generator was moved onto the batch route): `Command::UntrackImport` run on
-/// its own through `execute()` changes the project's import tracking and clears
-/// the redo branch, but pushes NO undo entry. `is_undoable` says it is undoable,
-/// and `generate_undo_data` has no arm for it, so it falls to `UndoData::None` -
-/// the change cannot be undone, and a redo the user had is gone.
-///
-/// The app's one caller, the DMP wizard's withdrawal, always sends it inside a
-/// `Batch` (which records its own snapshot pair), so no UI path reaches it
-/// today; the IPC accepts it on its own. Either it records an entry or it is
-/// refused outside a batch - this pins the first.
+/// RESOLVED (was an `#[ignore]`d open finding of the old engine): a
+/// standalone `UntrackImport` through `execute()` changed the import
+/// tracking and cleared the redo branch but pushed no undo entry. On the
+/// station-graph pipeline it records one, and its undo restores both lists
+/// exactly.
 #[test]
-#[ignore = "open finding: a standalone UntrackImport pushes no undo entry - see the doc comment"]
 fn untrack_import_alone_is_undoable() {
     let _config = crate::test_helpers::isolated_config();
     let state = super::AppState::new().unwrap();
@@ -877,7 +1181,7 @@ fn untrack_import_alone_is_undoable() {
             })
             .success
     );
-    let (configs, file_hash, line_hashes) = import_configs(7, 1, None, false);
+    let (configs, file_hash, line_hashes) = import_configs(7, 2, None, false);
     let imported = state.execute_import_lines(
         configs,
         Vec::new(),
@@ -887,63 +1191,39 @@ fn untrack_import_alone_is_undoable() {
         super::super::command_import::VirtualShotMode::default(),
     );
     assert!(imported.success, "{:?}", imported.error);
+    let tracked = state.get_project_state().unwrap();
     let before = state.get_undo_stack().len();
     let untracked = state.execute(Command::UntrackImport {
         file_hashes: vec![file_hash],
-        line_hashes,
+        line_hashes: line_hashes[..1].to_vec(),
     });
     assert!(untracked.success, "{:?}", untracked.error);
     let project = state.get_project_state().unwrap();
     assert!(project.imported_file_hashes.is_empty(), "the untrack ran");
+    assert_eq!(project.imported_line_hashes, line_hashes[1..].to_vec());
     assert_eq!(
         state.get_undo_stack().len(),
         before + 1,
-        "an undoable command that changed the project pushed no undo entry"
+        "an untrack that changed the project pushed no undo entry"
     );
+    assert!(state.undo().success);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.imported_file_hashes, tracked.imported_file_hashes);
+    assert_eq!(restored.imported_line_hashes, tracked.imported_line_hashes);
 }
 
-/// Found by LARGE (seed 1 x60, persistence half), fixed: Merge Stations
-/// joining two components that each hold a gauge used to leave BOTH entries
-/// in `held_gauges`, while the load keeps at most one per connected component
-/// (`normalize_held_gauges`). A save and a reopen then changed the project with
-/// no undo entry, and for a list past 64 entries every positional edit of it
-/// recorded before the reopen refused. An edit whose entry captures the whole
-/// state now normalizes in its forward epilogue, so its entry records the drop.
+/// Two free pieces with a placement each, merged. The merged component holds
+/// ONE placement (invariant 6), the save and the reopen keep the survey to
+/// the byte, and the undo puts both placements back - the station-graph form
+/// of the old `a_merge_of_two_held_components_survives_a_reopen` (whose
+/// held-gauge list the redesign deleted; the anchor of a datum-less piece is
+/// its `Placement` now).
 #[test]
-fn a_merge_of_two_held_components_survives_a_reopen() {
+fn a_merge_of_two_placed_pieces_survives_a_reopen() {
     let _config = crate::test_helpers::isolated_config();
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("held.stalx");
-    let mut project = Project::new("Held".to_string(), None);
-    let mut rng = Rng::new(3);
-    let mut ids = Vec::new();
-    for index in 0..2 {
-        let data = LineData {
-            name: Some(format!("island-{index}")),
-            color: "#123456".to_string(),
-            shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
-            ..LineData::default()
-        };
-        let id = project.add_line(data).id;
-        let line = project.get_line(id).unwrap();
-        let shot = line.shots[1].uuid.clone().unwrap();
-        let parity = project.shot_record_parity(line, Some(&shot));
-        project.held_gauges.push(HeldGauge {
-            line_id: id,
-            shot,
-            neighbour: None,
-            end: false,
-            parity,
-        });
-        ids.push(id);
-    }
-    Database::open(&path)
-        .unwrap()
-        .save_project(&project)
-        .unwrap();
-    let state = super::AppState::new().unwrap();
-    assert!(state.open_project(path.clone()).success);
-    assert_eq!(state.get_project_state().unwrap().held_gauges.len(), 2);
+    let (state, dir, ids) = two_placed_pieces();
+    let original = state.get_project_state().unwrap();
+    assert_eq!(original.placements.len(), 2);
     assert!(
         state
             .execute(Command::MergeStations {
@@ -952,57 +1232,33 @@ fn a_merge_of_two_held_components_survives_a_reopen() {
             })
             .success
     );
-    let in_session = state.get_project_state().unwrap().held_gauges;
+    let merged = state.get_project_state().unwrap();
+    assert_eq!(merged.placements.len(), 1, "one placement per component");
+    let path = dir.path().join("held.stalx");
     assert!(state.save_project(Some(path.clone())).success);
     assert!(state.execute(Command::CloseProject).success);
     assert!(state.execute(Command::OpenProject { path }).success);
+    let reopened = state.get_project_state().unwrap();
     assert_eq!(
-        state.get_project_state().unwrap().held_gauges,
-        in_session,
-        "the reopen changed held_gauges the session had left as they were"
+        super::canonical_bytes(&reopened, reopened.counters),
+        super::canonical_bytes(&merged, merged.counters),
+        "the reopen changed what the session had"
+    );
+    assert!(state.undo().success);
+    let undone = state.get_project_state().unwrap();
+    assert_eq!(
+        super::canonical_bytes(&undone, original.counters),
+        super::canonical_bytes(&original, original.counters)
     );
 }
 
-/// Found by LARGE + EXTENDED + SAVES (seed 6 x80, on the merge of
-/// release/0.6.0), fixed with the test above: an Add .stalx normalizes the
-/// whole project's `held_gauges` (`project_append.rs`), and after a merge had
-/// left two entries in one component it dropped one of the project's own,
-/// which `AddedProjectContent` does not record. The merge now leaves one, so
-/// the Add finds nothing to drop, and its undo is exact.
+/// After that merge, an Add .stalx and its undo are exact, and the undo of
+/// the merge after it too (the old `an_add_after_a_merge_of_two_held_components_undoes_exactly`).
 #[test]
-fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
+fn an_add_after_a_merge_of_two_placed_pieces_undoes_exactly() {
     let _config = crate::test_helpers::isolated_config();
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("held.stalx");
-    let mut project = Project::new("Held".to_string(), None);
-    let mut rng = Rng::new(3);
-    let mut ids = Vec::new();
-    for index in 0..2 {
-        let data = LineData {
-            name: Some(format!("island-{index}")),
-            color: "#123456".to_string(),
-            shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
-            ..LineData::default()
-        };
-        let id = project.add_line(data).id;
-        let line = project.get_line(id).unwrap();
-        let shot = line.shots[1].uuid.clone().unwrap();
-        let parity = project.shot_record_parity(line, Some(&shot));
-        project.held_gauges.push(HeldGauge {
-            line_id: id,
-            shot,
-            neighbour: None,
-            end: false,
-            parity,
-        });
-        ids.push(id);
-    }
-    Database::open(&path)
-        .unwrap()
-        .save_project(&project)
-        .unwrap();
-    let state = super::AppState::new().unwrap();
-    assert!(state.open_project(path).success);
+    let (state, dir, ids) = two_placed_pieces();
+    let original = state.get_project_state().unwrap();
     assert!(
         state
             .execute(Command::MergeStations {
@@ -1011,28 +1267,106 @@ fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
             })
             .success
     );
-    let before_add = state.get_project_state().unwrap().held_gauges;
-    assert_eq!(
-        before_add.len(),
-        1,
-        "the merge keeps one entry per component, as a load does"
-    );
+    let merged = state.get_project_state().unwrap();
     let added = dir.path().join("added.stalx");
-    Database::open(&added)
-        .unwrap()
-        .save_project(&added_project(11, 1, &[]))
-        .unwrap();
-    assert!(state.execute(Command::add_project_file(added)).success);
+    std::fs::write(
+        &added,
+        stalx_v2::encode(&added_project(11, 2, &[]), &Extras::default(), Mode::Normal).unwrap(),
+    )
+    .unwrap();
+    let r = state.execute(Command::add_project_file(added));
+    assert!(r.success, "{:?}", r.error);
+    assert!(state.get_project_state().unwrap().lines().len() > merged.lines().len());
     assert!(state.undo().success);
+    let undone = state.get_project_state().unwrap();
     assert_eq!(
-        state.get_project_state().unwrap().held_gauges,
-        before_add,
-        "the undo of the add did not put back the held gauges it found"
+        super::canonical_bytes(&undone, merged.counters),
+        super::canonical_bytes(&merged, merged.counters),
+        "the undo of the add did not put back what it found"
     );
     assert!(state.undo().success);
+    let undone = state.get_project_state().unwrap();
     assert_eq!(
-        state.get_project_state().unwrap().held_gauges.len(),
-        2,
-        "the undo of the merge puts back the entry it dropped"
+        super::canonical_bytes(&undone, original.counters),
+        super::canonical_bytes(&original, original.counters),
+        "the undo of the merge did not put back both placements"
+    );
+}
+
+/// An app with two separate two-shot lines, each placed by its own
+/// `Placement`.
+fn two_placed_pieces() -> (super::AppState, TempDir, Vec<LineId>) {
+    let state = super::AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Held".to_string(),
+                location: None,
+            })
+            .success
+    );
+    let mut rng = Rng::new(3);
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let r = state.execute(Command::CreateLine {
+            name: Some(format!("island-{index}")),
+            surveyor: None,
+            date: None,
+            color: "#123456".to_string(),
+            direction: None,
+            shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
+            cave_section_id: None,
+        });
+        assert!(r.success, "{:?}", r.error);
+        ids.push(r.line_id.unwrap());
+    }
+    (state, TempDir::new().unwrap(), ids)
+}
+
+/// The legacy origin reaches the shapes it exists for over a few seeds: a
+/// `Tie` (the demoted cycle-closing merge), junctions, a hand move, aliases
+/// - and every one opens as a valid survey.
+#[test]
+fn the_legacy_origin_is_a_migrated_survey_with_the_old_shapes() {
+    let _config = crate::test_helpers::isolated_config();
+    let (mut ties, mut hands, mut junctions, mut aliases) = (0, 0, 0, 0);
+    for seed in 1..=6 {
+        let dir = TempDir::new().unwrap();
+        let path = legacy_origin_file(seed, dir.path());
+        let state = super::AppState::new().unwrap();
+        let opened = state.execute(Command::OpenProject { path });
+        assert!(opened.success, "seed {seed}: {:?}", opened.error);
+        let project = state.get_project_state().unwrap();
+        assert!(
+            project.validate().is_empty(),
+            "seed {seed}: {:?}",
+            project.validate()
+        );
+        ties += project
+            .closures
+            .iter()
+            .filter(|c| c.strategy == crate::models::survey::ClosureStrategy::Tie)
+            .count();
+        hands += project
+            .lines()
+            .iter()
+            .map(|l| l.hand_moves.len())
+            .sum::<usize>();
+        junctions += project
+            .stations
+            .keys()
+            .filter(|s| project.topology().is_junction(**s))
+            .count();
+        aliases += project
+            .stations
+            .values()
+            .map(|s| s.aliases.len())
+            .sum::<usize>();
+    }
+    assert!(ties > 0, "no seed migrated a Tie");
+    assert!(hands > 0, "no seed kept a hand move");
+    assert!(
+        junctions > 0 && aliases > 0,
+        "no seed made a junction with aliases"
     );
 }
