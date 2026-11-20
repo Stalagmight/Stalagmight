@@ -46,7 +46,7 @@ use crate::core::{Command, CommandResult, CommentHolder};
 use crate::models::survey::{ClosureStrategy, Project, StartAt, ZeroDatum};
 use crate::models::{
     Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates,
-    SpeleoLink, StationId, StationRef, UndoMode, FEATURE_ID_STRIDE,
+    SpeleoLink, StationRef, UndoMode, FEATURE_ID_STRIDE,
 };
 use crate::persistence::stalx_v2::{self, DecodeOptions, Decoded};
 use crate::persistence::ResolvedWarning;
@@ -1130,11 +1130,13 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
 /// entry point (`execute_*`, `track_*`, `set_*_for_path`, `*_gated`) is in
 /// [`MUTATION_ENTRYPOINTS`], so a new one cannot be added without the
 /// tripwire knowing (the follow-up the 0.6.0 list asked for: a hand list
-/// alone does not see a new method).
+/// alone does not see a new method); and every name in the list is a public
+/// method that exists (a rename cannot leave a stale entry).
 #[test]
 fn every_public_mutation_method_is_enumerated() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/state");
     let mut found = BTreeSet::new();
+    let mut public = BTreeSet::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -1155,6 +1157,7 @@ fn every_public_mutation_method_is_enumerated() {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
+            public.insert(method.clone());
             let looks_like_a_mutation = method.starts_with("execute_")
                 || method.starts_with("track_")
                 || (method.starts_with("set_") && method.ends_with("_for_path"))
@@ -1176,6 +1179,11 @@ fn every_public_mutation_method_is_enumerated() {
         missing.is_empty(),
         "route these through guard_mutation and add them to MUTATION_ENTRYPOINTS: {missing:?}"
     );
+    let stale: Vec<_> = MUTATION_ENTRYPOINTS
+        .iter()
+        .filter(|m| !public.contains(**m))
+        .collect();
+    assert!(stale.is_empty(), "no such public method: {stale:?}");
 }
 
 fn import_config(name: &str) -> crate::models::ImportLineConfig {
@@ -2001,4 +2009,463 @@ fn an_undo_over_a_line_changed_behind_the_engine_is_refused_and_kept() {
     assert_same(&snapshot(&o.state), &before, "and changes nothing");
     assert_eq!(o.state.get_undo_stack().len(), 1, "and keeps its entry");
     assert!(project(&o.state).line(a).is_some());
+}
+
+// ===========================================================================
+// Merge Projects: the cases of "Project Operations" (C13's range) that are
+// the merge's (C8's merge_projects_tests holds the edge cases)
+// ===========================================================================
+
+use super::project_add_tests::{
+    at as station_of, gps, line_named, read_v2, shot as fixed_shot, write_v2, xy as station_xy,
+};
+
+fn merge_into(dir: &Path, sources: Vec<PathBuf>, output: PathBuf, archive: bool) -> CommandResult {
+    let _ = dir;
+    AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: sources,
+        output_path: output,
+        output_name: "Merged".to_string(),
+        archive_originals: archive,
+    })
+}
+
+/// A project `name` with one free line `line` of one shot (uuid `uuid`).
+fn one_line_project(name: &str, line: &str, uuid: &str, length: f64) -> Project {
+    let mut p = Project::new(name, None);
+    free_line(&mut p, line, [0.0, 0.0], vec![fixed_shot(uuid, 45.0, length, 10.0)]);
+    p
+}
+
+/// 0.6.0's `test_merge_projects_archives_sources_and_adds_extension`: an
+/// extension-less output gets `.stalx`, and every source is archived beside
+/// itself, next to (never over) an archive that was already there.
+#[test]
+fn a_merge_adds_the_extension_and_archives_every_source() {
+    let temp = TempDir::new().unwrap();
+    let a = write_v2(
+        temp.path(),
+        "a.stalx",
+        &one_line_project("A", "Line A", "a-0", 1.0),
+    );
+    let b = write_v2(
+        temp.path(),
+        "b.stalx",
+        &one_line_project("B", "Line B", "b-0", 2.0),
+    );
+    let existing_archive = temp.path().join("a.stalx.archived");
+    std::fs::write(&existing_archive, b"archived").unwrap();
+    let output = temp.path().join("merged-output");
+
+    let result = merge_into(temp.path(), vec![a.clone(), b.clone()], output.clone(), true);
+
+    assert!(result.success, "{:?}", result.error);
+    let written = output.with_extension("stalx");
+    assert_eq!(read_v2(&written).project.lines().len(), 2);
+    assert!(!a.exists() && !b.exists(), "the sources are archived away");
+    assert_eq!(
+        std::fs::read(&existing_archive).unwrap(),
+        b"archived",
+        "an existing archive is never replaced"
+    );
+    let a_archives = std::fs::read_dir(temp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("a.stalx.archived")
+        })
+        .count();
+    assert_eq!(a_archives, 2, "the old archive and a new one beside it");
+    assert!(temp.path().join("b.stalx.archived").exists());
+}
+
+/// #438: a merged line keeps the north reference it was RESOLVED to in its
+/// own project, whether it declared one or inherited its project's default,
+/// and the geometry follows (station 1 of a due-north shot sits on the
+/// corrected bearing).
+#[test]
+fn each_merged_line_keeps_its_resolved_north_reference() {
+    let temp = TempDir::new().unwrap();
+    let due_north = |uuid: &str| ShotData {
+        uuid: Some(uuid.to_string()),
+        azimuth_in: 0.0,
+        azimuth_out: 0.0,
+        length: 10.0,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..ShotData::default()
+    };
+    let mut declared = Project::new("A", None);
+    let line = free_line(&mut declared, "Declared", [0.0, 0.0], vec![due_north("d-0")]);
+    declared.line_mut(line).unwrap().azimuth_reference = Some(
+        crate::models::AzimuthReference::magnetic(10.0, crate::models::CorrectionSource::Manual),
+    );
+    let mut inherited = Project::new("B", None);
+    inherited.settings.default_azimuth_reference = Some(crate::models::AzimuthReference::magnetic(
+        -4.0,
+        crate::models::CorrectionSource::FileDeclared,
+    ));
+    free_line(&mut inherited, "Inherited", [0.0, 0.0], vec![due_north("i-0")]);
+    let output = temp.path().join("merged.stalx");
+
+    let result = merge_into(
+        temp.path(),
+        vec![
+            write_v2(temp.path(), "a.stalx", &declared),
+            write_v2(temp.path(), "b.stalx", &inherited),
+        ],
+        output.clone(),
+        false,
+    );
+
+    assert!(result.success, "{:?}", result.error);
+    let merged = read_v2(&output).project;
+    for (name, correction) in [("Declared", 10.0_f64), ("Inherited", -4.0_f64)] {
+        let id = line_named(&merged, name);
+        let l = merged.line(id).unwrap();
+        assert!(
+            (merged.azimuth_reference_for(l).applied_correction() - correction).abs() < 1e-9,
+            "{name} lost its north reference: {:?}",
+            l.azimuth_reference
+        );
+        let from = station_xy(&merged, station_of(&merged, id, 0));
+        let to = station_xy(&merged, station_of(&merged, id, 1));
+        let bearing = (to[0] - from[0]).atan2(to[1] - from[1]).to_degrees();
+        assert!(
+            (bearing - correction).abs() < 1e-6,
+            "{name} walks at {bearing} degrees, expected {correction}"
+        );
+    }
+}
+
+/// Merge two one-line sources with these entrance elevations: the merged
+/// elevation and the merge's warnings (code, message).
+fn merge_two_elevations(
+    first: Option<f64>,
+    second: Option<f64>,
+) -> (Option<f64>, Vec<(String, String)>) {
+    let temp = TempDir::new().unwrap();
+    let mut a = one_line_project("A", "Line A", "a-0", 1.0);
+    a.settings.surface_elevation = first;
+    let mut b = one_line_project("B", "Line B", "b-0", 2.0);
+    b.settings.surface_elevation = second;
+    let output = temp.path().join("merged.stalx");
+    let result = merge_into(
+        temp.path(),
+        vec![
+            write_v2(temp.path(), "a.stalx", &a),
+            write_v2(temp.path(), "b.stalx", &b),
+        ],
+        output.clone(),
+        false,
+    );
+    assert!(result.success, "{:?}", result.error);
+    (
+        read_v2(&output).project.settings.surface_elevation,
+        result
+            .warnings
+            .into_iter()
+            .map(|w| (w.code, w.message))
+            .collect(),
+    )
+}
+
+/// 0.6.0's five finite `test_merge_projects_surface_elevation_*` cases: the
+/// first source that has an elevation wins; a later one agreeing within
+/// the tolerance (strictly greater than 0.005 m disagrees, matching the
+/// message's `{:.2}`) is quiet; a disagreeing one keeps the first and says
+/// so, once.
+#[test]
+fn the_merged_entrance_elevation_is_the_first_one_and_a_disagreement_is_reported() {
+    assert_eq!(merge_two_elevations(Some(123.5), None), (Some(123.5), vec![]));
+    assert_eq!(merge_two_elevations(None, Some(-7.25)), (Some(-7.25), vec![]));
+    assert_eq!(
+        merge_two_elevations(Some(100.0), Some(100.002)),
+        (Some(100.0), vec![])
+    );
+    let (kept, warnings) = merge_two_elevations(Some(100.0), Some(100.005));
+    assert_eq!(kept, Some(100.0));
+    assert!(
+        warnings.is_empty(),
+        "0.005 m is AT the tolerance, not beyond it: {warnings:?}"
+    );
+    let (kept, warnings) = merge_two_elevations(Some(100.0), Some(150.0));
+    assert_eq!(kept, Some(100.0));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let (code, message) = &warnings[0];
+    assert_eq!(code, "SURFACE_ELEVATION_MISMATCH");
+    assert!(message.contains("100.00"), "{message}");
+    assert!(message.contains("150.00"), "{message}");
+}
+
+/// 0.6.0's `test_merge_projects_places_by_datum_and_keeps_station_offsets_
+/// datums_and_closure_ids` and `test_merge_projects_preserves_station_comments`:
+/// each georeferenced source is placed by its datum (the first's station on
+/// the frame origin, the second's at its GPS in that frame), and every
+/// source keeps its hand moves, datums, closures (re-minted, distinct ids)
+/// and station comments.
+#[test]
+fn a_merge_places_each_source_by_its_datum_and_keeps_what_its_stations_carry() {
+    let temp = TempDir::new().unwrap();
+    let (gps_a, gps_b) = (gps(20.6, -87.3, 0.0), gps(20.55, -87.25, 2.0));
+    let source = |name: &str, prefix: &str, at: GpsCoordinates, hand: [f64; 3], comment_at: usize| {
+        let mut p = Project::new(name, None);
+        let line = bare_line(
+            &mut p,
+            &format!("Line {name}"),
+            vec![
+                fixed_shot(&format!("{prefix}-0"), 30.0, 4.0, 1.0),
+                fixed_shot(&format!("{prefix}-1"), 80.0, 6.0, 2.0),
+            ],
+        );
+        let (s0, s1, s2) = (st(&p, line, 0), st(&p, line, 1), st(&p, line, 2));
+        p.push_datum(ZeroDatum::new(s0, at));
+        p.line_mut(line).unwrap().hand_moves.insert(s1, hand);
+        p.push_closure(s0, Some(line), s2, Some(line), ClosureStrategy::Batch);
+        let commented = st(&p, line, comment_at as u32);
+        p.stations.get_mut(&commented).unwrap().comment = Some(format!("{name} note"));
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+        p
+    };
+    let a = source("A", "a", gps_a, [0.5, -0.5, 1.0], 0);
+    let b = source("B", "b", gps_b, [-1.0, 1.5, 0.0], 1);
+    let output = temp.path().join("merged.stalx");
+
+    let result = merge_into(
+        temp.path(),
+        vec![
+            write_v2(temp.path(), "a.stalx", &a),
+            write_v2(temp.path(), "b.stalx", &b),
+        ],
+        output.clone(),
+        false,
+    );
+
+    assert!(result.success, "{:?}", result.error);
+    let merged = read_v2(&output).project;
+    let (la, lb) = (line_named(&merged, "Line A"), line_named(&merged, "Line B"));
+    let a0 = station_xy(&merged, station_of(&merged, la, 0));
+    assert!(a0[0].abs() < 1e-9 && a0[1].abs() < 1e-9, "the frame origin: {a0:?}");
+    let expected = crate::models::gps_to_local(&gps_b, &gps_a);
+    let b0 = station_xy(&merged, station_of(&merged, lb, 0));
+    assert!(
+        (b0[0] - expected.0).abs() < 1e-6 && (b0[1] - expected.1).abs() < 1e-6,
+        "the second datum station sits at its GPS: {b0:?} vs {expected:?}"
+    );
+    for (line, hand) in [(la, [0.5, -0.5, 1.0]), (lb, [-1.0, 1.5, 0.0])] {
+        let s1 = station_of(&merged, line, 1);
+        assert_eq!(
+            merged.line(line).unwrap().hand_moves.get(&s1),
+            Some(&hand),
+            "line {line} keeps its hand move"
+        );
+    }
+    let latitudes: Vec<f64> = merged.datums.iter().map(|d| d.gps.latitude).collect();
+    assert_eq!(latitudes, vec![20.6, 20.55], "both datums, in source order");
+    let ids: HashSet<u64> = merged.closures.iter().map(|c| c.id).collect();
+    assert_eq!(ids.len(), 2, "two closures with distinct ids");
+    for line in [la, lb] {
+        let (s0, s2) = (station_of(&merged, line, 0), station_of(&merged, line, 2));
+        assert!(
+            merged.closures.iter().any(|c| (c.a, c.b) == (s0, s2)),
+            "line {line}'s closure kept its ends"
+        );
+    }
+    let comment = |line, index| {
+        merged.stations[&station_of(&merged, line, index)]
+            .comment
+            .clone()
+    };
+    assert_eq!(comment(la, 0).as_deref(), Some("A note"));
+    assert_eq!(comment(lb, 1).as_deref(), Some("B note"));
+}
+
+// ===========================================================================
+// Group 1: export round trips (C13's range), on the station-graph exporters
+// ===========================================================================
+
+fn line_with(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
+    run(
+        state,
+        Command::CreateLine {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots,
+            cave_section_id: None,
+        },
+    )
+    .line_id
+    .unwrap()
+}
+
+fn created_state(name: &str) -> AppState {
+    let state = AppState::new().unwrap();
+    run(
+        &state,
+        Command::CreateProject {
+            name: name.to_string(),
+            location: None,
+        },
+    );
+    state
+}
+
+/// Export the open project to Ariane and read it back the way the import
+/// wizard does: the import configs.
+fn tml_round_trip(state: &AppState) -> Vec<crate::models::ImportLineConfig> {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("roundtrip.tmlu");
+    crate::export::survey::export_tml(&project(state), &path).unwrap();
+    let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+    let (configs, _closures, _warnings) =
+        crate::parsers::tml::convert_tml_to_import_configs(&parsed, true, false).unwrap();
+    configs
+}
+
+#[test]
+fn test_tml_roundtrip_preserves_shot_data() {
+    let state = created_state("TML Roundtrip");
+    let first = ShotData {
+        azimuth_in: 12.5,
+        azimuth_out: 192.3,
+        length: 8.75,
+        depth_in: 3.2,
+        depth_out: 5.8,
+        left: Some(1.1),
+        right: Some(0.9),
+        up: Some(2.3),
+        down: Some(0.4),
+        comment: Some("test note".to_string()),
+        ..ShotData::default()
+    };
+    let second = ShotData {
+        azimuth_in: 280.0,
+        azimuth_out: 100.0,
+        length: 3.25,
+        depth_in: 5.8,
+        depth_out: 4.0,
+        ..ShotData::default()
+    };
+    line_with(&state, "Main Passage", vec![first, second]);
+
+    let configs = tml_round_trip(&state);
+
+    assert!(!configs.is_empty(), "at least one line");
+    let shots = &configs[0].shots;
+    assert_eq!(shots.len(), 2);
+    let eps = 0.05; // the Ariane format's precision
+    let close = |got: f64, want: f64, what: &str| {
+        assert!((got - want).abs() < eps, "{what}: {got} vs {want}");
+    };
+    close(shots[0].length, 8.75, "length");
+    close(shots[0].azimuth_in, 12.5, "azimuth_in");
+    close(shots[0].depth_in, 3.2, "depth_in");
+    close(shots[0].depth_out, 5.8, "depth_out");
+    close(shots[1].length, 3.25, "second length");
+    close(shots[1].azimuth_in, 280.0, "second azimuth_in");
+}
+
+#[test]
+fn test_tml_roundtrip_preserves_multiple_sections() {
+    let state = created_state("TML Multi");
+    line_with(&state, "Entrance", vec![shot(10.0, 5.0), shot(20.0, 6.0)]);
+    line_with(&state, "Side", vec![shot(100.0, 4.0)]);
+
+    let configs = tml_round_trip(&state);
+
+    assert_eq!(configs.len(), 2, "two lines");
+    let total: usize = configs.iter().map(|c| c.shots.len()).sum();
+    assert_eq!(total, 3, "every shot");
+}
+
+#[test]
+fn test_csv_export_preserves_azimuth_precision() {
+    let state = created_state("CSV Precision");
+    line_with(
+        &state,
+        "Boundary",
+        vec![ShotData {
+            azimuth_in: 359.9,
+            azimuth_out: 0.1,
+            length: 4.567,
+            depth_in: 12.345,
+            depth_out: 12.678,
+            left: Some(0.01),
+            right: Some(99.99),
+            ..ShotData::default()
+        }],
+    );
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("precision.csv");
+
+    crate::export::survey::export_csv(&project(&state), &path).unwrap();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let row: Vec<&str> = contents.lines().nth(1).unwrap().split(',').collect();
+    // Line, From, To, From ID, To ID, Length, Azimuth In, Azimuth Out, ...
+    assert_eq!(row[5], "4.57", "the length at two decimals: {row:?}");
+    assert_eq!(row[6], "359.9", "azimuth in, not truncated to 359 or 360: {row:?}");
+    assert_eq!(row[7], "0.1", "azimuth out: {row:?}");
+}
+
+// ===========================================================================
+// The legacy open seeds the validation thresholds (C2's range)
+// ===========================================================================
+
+/// A temporary copy of the tracked e2e fixture `name`.
+fn fixture_copy(dir: &Path, name: &str) -> PathBuf {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../e2e/fixtures")
+        .join(name);
+    let path = dir.join(name);
+    std::fs::copy(&fixture, &path).unwrap();
+    path
+}
+
+/// Issue #57 item 5: an old file saved before per-project validation (no
+/// stored thresholds) opens with the user's GLOBAL thresholds (the
+/// "defaults for new projects"), not the built-in defaults, and those drive
+/// the warnings; a file that stores its own keeps them. The tracked
+/// fixtures are one of each (schema 4 without, schema 14 with).
+#[test]
+fn test_legacy_project_seeds_validation_from_global_config() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = TempDir::new().unwrap();
+        let state = AppState::new().unwrap();
+        let mut config = state.get_config();
+        // Every shot of the schema 4 fixture is 5 m: short under a 6 m
+        // minimum, fine under the built-in 0.3 m.
+        config.validation.warn_shot_length_min = 6.0;
+        state.update_config(config).unwrap();
+
+        assert!(state
+            .open_project(fixture_copy(temp.path(), "fractal_plant_iter3.stalx"))
+            .success);
+        let opened = project(&state);
+        assert_eq!(
+            opened.settings.validation.warn_shot_length_min, 6.0,
+            "an old file without thresholds inherits the global ones"
+        );
+        assert!(
+            state
+                .compute_project_warnings(&opened)
+                .iter()
+                .any(|w| w.code == "SHORT_SHOT"),
+            "the inherited threshold drives the warnings"
+        );
+
+        assert!(state
+            .open_project(fixture_copy(temp.path(), "naharon.stalx"))
+            .success);
+        assert_eq!(
+            project(&state).settings.validation.warn_shot_length_min,
+            0.1,
+            "a file that stores its thresholds keeps them"
+        );
+    });
 }
