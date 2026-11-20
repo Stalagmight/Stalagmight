@@ -132,7 +132,9 @@ impl Project {
     }
 
     /// The knots and the skipped closures for the alignment `aligned`
-    /// (parallel to `closures`).
+    /// (parallel to `closures`). Decided in list order: the first closure
+    /// whose union would collapse a shot is joined and a later one is
+    /// skipped, so reordering closures can change the skip set.
     pub(crate) fn closure_knots(&self, aligned: &[bool]) -> (Knots, Vec<ClosureAcrossOneShot>) {
         let mut knots = Knots::new(self);
         let topology = self.topology();

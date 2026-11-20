@@ -395,3 +395,79 @@ fn a_closure_between_two_datum_held_pieces_has_0_6_0_s_error_percentage() {
     );
     assert!(m.error_percentage > 30.0);
 }
+
+/// What `docs/survey-model.md` says about order (review finding
+/// B-derived-solver-4): the across-one-shot skip set is decided in closure
+/// list order, so reordering two closures can swap which one is skipped and
+/// with it the Computed View.
+#[test]
+fn closure_order_decides_the_skip_set() {
+    use super::test_helpers::flat;
+    let mut p = project();
+    // s0 -> s1 10 m east, -> s2 10 m north, -> s3 9 m west.
+    let a = free_line(
+        &mut p,
+        [0.0, 0.0],
+        vec![flat(90.0, 10.0), flat(0.0, 10.0), flat(270.0, 9.0)],
+    );
+    let (s0, s2, s3) = (at(&p, a, 0), at(&p, a, 2), at(&p, a, 3));
+    let first = ok(p.create_closure(s0, None, s2, None, ClosureStrategy::Batch))
+        .value
+        .closure;
+    // A second closure from s0 to s3: Create refuses it (across one shot
+    // once the first is joined), so it is planted as a file could hold it.
+    let mut second = first.clone();
+    second.id = first.id + 1;
+    second.b = s3;
+    p.closures.push(second.clone());
+    p.counters.next_closure_id = second.id + 1;
+    assert_valid(&p);
+    let mut q = p.clone();
+    q.closures.reverse();
+    let skipped = |p: &Project| -> Vec<u64> {
+        p.closures_across_one_shot()
+            .iter()
+            .map(|c| c.closure_id)
+            .collect()
+    };
+    assert_eq!(skipped(&p), [second.id], "list order: the later is skipped");
+    assert_eq!(skipped(&q), [first.id], "reversed: the other is skipped");
+    let config = crate::config::ClosureAdjustmentConfig::default();
+    let s1 = at(&p, a, 1);
+    assert_ne!(
+        p.adjusted_positions(&config).xy(s1),
+        q.adjusted_positions(&config).xy(s1),
+        "the Computed View follows the skip set"
+    );
+}
+
+/// `AdjustedPositions::z` is the raw depth except at the ends of a closure
+/// the solve adjusted, which share their mean depth (D12; review finding
+/// B-derived-solver-4).
+#[test]
+fn adjusted_depth_co_locates_the_ends_of_an_adjusted_closure() {
+    use super::ops_test_helpers::branch;
+    use super::test_helpers::shot;
+    let mut p = project();
+    let a = free_line(
+        &mut p,
+        [0.0, 0.0],
+        vec![shot(90.0, 10.0, 0.0, 2.0), shot(0.0, 10.0, 2.0, 4.0)],
+    );
+    let s0 = at(&p, a, 0);
+    let b = branch(
+        &mut p,
+        s0,
+        vec![shot(0.0, 10.0, 0.0, 1.0), shot(90.0, 10.2, 1.0, 6.0)],
+    );
+    let (a2, b2) = (at(&p, a, 2), at(&p, b, 2));
+    ok(p.create_closure(a2, None, b2, None, ClosureStrategy::Batch));
+    let raw = p.raw_positions();
+    let adjusted = p.adjusted_positions(&crate::config::ClosureAdjustmentConfig::default());
+    assert_eq!(raw.z(a2), Some(4.0));
+    assert_eq!(raw.z(b2), Some(6.0));
+    assert_eq!(adjusted.z(a2), Some(5.0), "the closure's ends share a depth");
+    assert_eq!(adjusted.z(b2), Some(5.0));
+    let a1 = at(&p, a, 1);
+    assert_eq!(adjusted.z(a1), raw.z(a1), "other stations keep the raw depth");
+}

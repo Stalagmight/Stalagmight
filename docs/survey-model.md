@@ -161,8 +161,15 @@ v2 encoder and decoder refuse through it; no bound is checked twice.
   ends are less than `ALIGNMENT_TOLERANCE_M` (1 cm) apart and the tie would
   not join two datum-held components; others never.
 
-No hash order reaches a result; reordering lines, closures, or datums without
-changing roles changes no bit (tested).
+No hash order reaches a result. Reordering lines changes no bit (tested).
+Reordering closures changes no bit as long as the across-one-shot skip set
+stays the same: the skip set is decided in closure list order (the first
+closure whose union would collapse a shot is joined, a later one is skipped),
+so swapping two closures can swap which one is skipped and with it the
+Computed View (tested). Reordering datums changes no bit as long as the frame
+(the first datum in list order) and each piece's placement datum stay the
+same; moving another datum first moves the frame, so every raw position
+changes.
 
 ## The anchor algorithm (`anchors.rs`)
 

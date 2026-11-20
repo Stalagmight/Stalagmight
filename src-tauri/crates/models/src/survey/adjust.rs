@@ -168,7 +168,9 @@ impl AdjustedPositions {
         self.index(station).map(|d| self.xy[d])
     }
 
-    /// A station's depth (the raw one; the view is horizontal only).
+    /// A station's depth: the raw one, except at the ends of every closure a
+    /// successful solve adjusted, which share their tie group's mean depth
+    /// (D12, `co_locate_adjusted_depths`). The solve itself is horizontal.
     pub fn z(&self, station: StationId) -> Option<f64> {
         self.index(station).map(|d| self.z[d])
     }
