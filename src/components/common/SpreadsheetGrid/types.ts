@@ -93,6 +93,50 @@ export interface GridColumn<Row> {
    *  keep the editor open so the value can be fixed; bulk paste/fill/move skip a
    *  rejected cell. Clears are never validated. */
   validate?: (value: unknown, row: Row) => string | null;
+  /** Does this column apply to this row at all? `false` renders a blank
+   *  "not applicable" cell (lighter than the locked look, no not-allowed
+   *  cursor), never takes an edit (type/paste/fill/clear/move skip it), copies
+   *  as '' and is skipped by Tab. Defaults to applicable. For grids that mix
+   *  row kinds (the Data workspace's station / shot rows). */
+  isApplicable?: (row: Row, rowIdx: number) => boolean;
+  /** Can the header be clicked to sort (the grid shows the sort affordance;
+   *  the host owns the order through `sort` / `onSortChange`). */
+  sortable?: boolean;
+  /** Extra class on this column's header cell (e.g. "revealed by search"). */
+  headerClassName?: string;
+  /** Tooltip on this column's header cell. */
+  headerTitle?: string;
+}
+
+/** Substring highlights for one cell's formatted text (`format(getValue())`),
+ *  e.g. find matches. `current` is the focused match, drawn stronger. */
+export interface CellMarks {
+  ranges: readonly (readonly [number, number])[];
+  current?: readonly [number, number];
+}
+
+/** Host request to bring a cell into view and make it active. A new `nonce`
+ *  re-fires the same target. */
+export interface GridScrollRequest {
+  row: number;
+  colKey?: string;
+  /** 'auto' = minimum scroll (default); 'center' = centre the row. */
+  align?: 'auto' | 'center';
+  nonce: number;
+  /** Move DOM focus to the grid: `true` always, `false` never. Default: only
+   *  when focus is already inside the grid or on <body>, so a host input the
+   *  user is typing in (a find box) keeps it. */
+  focus?: boolean;
+}
+
+/** A host entry appended to the grid's right-click menu. */
+export interface GridExtraMenuItem {
+  label: string;
+  onClick: () => void;
+  testId?: string;
+  disabled?: boolean;
+  /** Draw a divider above this item. */
+  separatorBefore?: boolean;
 }
 
 /** A cell identified by data-row index + column key (never DOM/position). */

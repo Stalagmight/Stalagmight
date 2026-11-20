@@ -69,14 +69,57 @@ export const DATA_FORMATS: readonly ExportFormat[] = ['csv', 'json', 'tml', 'tml
 export const IMAGE_FORMATS: readonly ExportFormat[] = ['png', 'svg', 'pdf'];
 
 /**
- * The three ways a user (or the IPC boundary) reaches an export.
+ * The two ways a user (or the IPC boundary) reaches an export.
  *
- * `modal` and `panel` render THE SAME COMPONENT (`ExportControls`, variant
- * `dialog` / `panel`) over two different option sets - the dialog's local
- * `useState`, the panel's `exportStore` - which is exactly why both are walked:
- * the component is shared, the state is not, and #X8 is about that seam.
+ * `panel` is the Export workspace: `ExportControls` rendered inside
+ * `ExportPanel` over `exportStore`, entered and left through the real
+ * affordances (`ExportEntry` / `ExportExit` below). `store` is the raw
+ * `projectStore` action, which is what the IPC boundary looks like.
+ *
+ * There used to be a third, `modal`: the Export dialog rendered the same
+ * component over its own local `useState`. The dialog is retired - Export is a
+ * workspace now and has exactly one surface - so a trace step naming `modal` is
+ * refused on replay rather than silently re-routed through the panel, which
+ * would replay a different surface than the one the recording drove.
  */
-export type ExportRoute = 'modal' | 'panel' | 'store';
+export type ExportRoute = 'panel' | 'store';
+
+/**
+ * The modes the Export workspace can be entered from, and so the modes it must
+ * hand back on the way out.
+ *
+ * `uiStore.enterExport` records `appMode` in `exportReturnMode` unless it is
+ * already `export`, so the set is "every AppMode except export".
+ */
+export type ReturnableMode = 'survey' | 'data' | 'plan';
+export const RETURNABLE_MODES: readonly ReturnableMode[] = ['survey', 'data', 'plan'];
+
+/**
+ * How a panel move ENTERS the Export workspace.
+ *
+ *   menu         the hamburger row `toolbar-export-button` (after
+ *                `app-menu-trigger`), which calls `enterExport()`
+ *   shortcut     Ctrl+E at idle, which calls the same
+ *   enterExport  the store action itself - the floor the other two stand on,
+ *                and the fallback when a drawn UI entry has no control to press
+ */
+export type ExportEntry = 'menu' | 'shortcut' | 'enterExport';
+export const EXPORT_ENTRIES: readonly ExportEntry[] = ['menu', 'shortcut', 'enterExport'];
+
+/**
+ * How a panel move LEAVES it. Every one must land on the recorded mode - X10.
+ *
+ *   closeButton  the toolbar's `export-close-button` (rendered only in Export)
+ *   panelClose   the ExportPanel header's `export-panel-close`
+ *   menu         the same hamburger row, labelled "Close export" in Export
+ *   shortcut     Ctrl+E again (it toggles)
+ *   escape       Escape with nothing transient left to clear
+ *   closeExport  the store action; never DRAWN, only the fallback when a drawn
+ *                affordance has no control, so X10 still judges the exit
+ */
+export type ExportExit = 'closeButton' | 'panelClose' | 'menu' | 'shortcut' | 'escape' | 'closeExport';
+/** The exits a move draws from. `closeExport` is the fallback, not a draw. */
+export const DRAWN_EXPORT_EXITS: readonly ExportExit[] = ['closeButton', 'panelClose', 'menu', 'shortcut', 'escape'];
 
 /**
  * Destination-path shapes. Each one aims at a rule somewhere in the stack:
@@ -1352,7 +1395,7 @@ export function checkNoDuplicateUuids(
   );
 }
 
-/** The option set one surface is showing, as the scenario read it back. */
+/** The panel's option set, as the scenario read it back from `exportStore`. */
 export interface OptionSnapshot {
   exportType: string;
   dataFormat: string;
@@ -1361,36 +1404,16 @@ export interface OptionSnapshot {
   branchingThreshold: number;
 }
 
-/**
- * X8 - the two surfaces do not share state, and the store resets on a switch.
+/*
+ * X8 is RETIRED, and the number is not reused.
  *
- * The modal keeps LOCAL `useState` and the panel reads `exportStore`
- * (`ExportDialog.tsx:17-19` vs `ExportPanel.tsx`), which is a deliberate split
- * rather than an accident - so it has to hold in both directions, and a future
- * "just use the store everywhere" would break the dialog's documented
- * open-on-CSV behaviour rather than quietly unify anything.
+ * It asserted that the modal Export dialog's local option set and the panel's
+ * `exportStore` never wrote each other. The dialog is gone - Export is one
+ * workspace with one option set - so there is no second surface left for the
+ * first set to leak into, and no honest way to keep the claim: re-aiming it at
+ * anything else would be a different oracle wearing X8's name. X8b, the half
+ * about the STORE, still stands on its own below.
  */
-export function checkOptionIndependence(
-  args: { panelBefore: OptionSnapshot; panelAfter: OptionSnapshot; modalChangedTo: OptionSnapshot },
-  reproduce: string,
-): void {
-  const same =
-    args.panelBefore.exportType === args.panelAfter.exportType &&
-    args.panelBefore.dataFormat === args.panelAfter.dataFormat &&
-    args.panelBefore.imageFormat === args.panelAfter.imageFormat &&
-    args.panelBefore.dpi === args.panelAfter.dpi &&
-    args.panelBefore.branchingThreshold === args.panelAfter.branchingThreshold;
-  if (same) return;
-  throw new ExportOracleError(
-    `X8 changing the MODAL's options changed the PANEL's\n` +
-      `    panel before: ${JSON.stringify(args.panelBefore)}\n` +
-      `    panel after:  ${JSON.stringify(args.panelAfter)}\n` +
-      `    modal set to: ${JSON.stringify(args.modalChangedTo)}\n` +
-      `    the dialog owns local state and the panel owns exportStore; they are two\n` +
-      `    renders of one component over two option sets, and neither may write the other.\n` +
-      `  ${reproduce}`,
-  );
-}
 
 /** X8b - a project switch drops the Export-mode options. */
 export function checkExportStoreReset(
@@ -1444,7 +1467,8 @@ export interface ModeSnapshot {
  * that case from the start. So:
  *
  *   - READ-ONLY is unconditional. `isMapReadOnly` is true whenever `appMode` is
- *     not survey, and MapCanvas's own comment says the same from the other side:
+ *     neither survey nor data (the two editable workspaces; Export is neither),
+ *     and MapCanvas's own comment says the same from the other side:
  *     the map is read-only in Plan/Export "even on a project with no closures
  *     where the display falls back to measured geometry". This is the half that
  *     protects data, and it has no exemption.
@@ -1478,8 +1502,9 @@ export function checkExportModeInvariants(
   if (!args.during.mapReadOnly) {
     throw new ExportOracleError(
       `X9 the map was still EDITABLE in Export mode\n` +
-        `    UNCONDITIONAL: isMapReadOnly is true whenever appMode is not survey, closures\n` +
-        `    or no closures - MapCanvas says so explicitly at the tool-drop effect.\n  ${reproduce}`,
+        `    UNCONDITIONAL: isMapReadOnly is true whenever appMode is neither survey nor\n` +
+        `    data, closures or no closures - MapCanvas says so explicitly at the tool-drop\n` +
+        `    effect.\n  ${reproduce}`,
     );
   }
   if (args.after.appMode !== args.before.appMode || args.after.geometryMode !== args.before.geometryMode) {
@@ -1489,6 +1514,85 @@ export function checkExportModeInvariants(
         `    after:  ${JSON.stringify(args.after)}\n` +
         `    the snapshot lives in a module variable (prePlanGeometryMode), which nothing\n` +
         `    can read - so this behavioural check is the only thing that covers it.\n  ${reproduce}`,
+    );
+  }
+}
+
+/** Is `mode` one the Export workspace can be entered from (and must return to)? */
+export function isReturnableMode(mode: string): mode is ReturnableMode {
+  return (RETURNABLE_MODES as readonly string[]).includes(mode);
+}
+
+/** One trip through the Export workspace, as the store reported it. */
+export interface ExportCloseObservation {
+  /** `appMode` read immediately before the ENTRY. */
+  before: string;
+  /** The affordance the move left through. */
+  exit: ExportExit;
+  /** `appMode` once the exit settled. */
+  after: string;
+  /** `uiStore.exportReturnMode` once the exit settled. */
+  returnModeAfter: string | null;
+}
+
+/**
+ * X10 - Close export returns to the recorded mode.
+ *
+ * Export is a workspace you visit, not a mode you switch to: `enterExport`
+ * records where the user was in `exportReturnMode`, and EVERY way out - the
+ * toolbar's close button, the panel header's close, the menu row (which reads
+ * "Close export" there), Ctrl+E, and an Escape with nothing transient left to
+ * clear - goes through `closeExport`, which hands that mode back and clears the
+ * field. Five affordances over one store path is exactly the shape where one of
+ * them gets wired to `setAppMode('survey')` instead, and a user who opened
+ * Export from Plan or Data is then dropped into Survey.
+ *
+ * Two claims, both unconditional:
+ *
+ *   - the mode after the exit is the mode before the entry. Not "not export":
+ *     landing in the WRONG workspace is the defect this exists for;
+ *   - `exportReturnMode` is null after the exit. A stale value is not inert:
+ *     the subscription that makes a direct `setAppMode('export')` return to
+ *     where it came from only records a mode when none is recorded, so a
+ *     leftover one would send the NEXT trip back to a workspace the user left
+ *     two trips ago.
+ *
+ * The entry mode must itself be one Export returns to; anything else is a
+ * harness bug (the scenario entered from inside Export), so that is a plain
+ * `Error` rather than a finding against the app.
+ */
+export function checkExportCloseReturn(obs: ExportCloseObservation, reproduce: string): void {
+  if (!isReturnableMode(obs.before)) {
+    throw new Error(
+      `X10 precondition: the move entered Export from appMode "${obs.before}", which is not a ` +
+        `mode Export returns to (${RETURNABLE_MODES.join(', ')}) - the scenario must enter from one of them`,
+    );
+  }
+  if (obs.after === 'export') {
+    throw new ExportOracleError(
+      `X10 leaving Export via ${obs.exit} did not leave it: appMode is still "export"\n` +
+        `    entered from: ${obs.before}\n` +
+        `    every exit affordance ends in closeExport(), which sets the recorded mode;\n` +
+        `    an Escape is allowed to spend presses clearing transient map state first,\n` +
+        `    and the scenario gives it a budget for that before calling this.\n  ${reproduce}`,
+    );
+  }
+  if (obs.after !== obs.before) {
+    throw new ExportOracleError(
+      `X10 leaving Export via ${obs.exit} returned to "${obs.after}", not to the mode it was ` +
+        `entered from ("${obs.before}")\n` +
+        `    enterExport records the mode it left in exportReturnMode and closeExport hands it\n` +
+        `    back; an exit that lands anywhere else drops the user into a workspace they did\n` +
+        `    not come from.\n  ${reproduce}`,
+    );
+  }
+  if (obs.returnModeAfter !== null) {
+    throw new ExportOracleError(
+      `X10 leaving Export via ${obs.exit} left exportReturnMode = ${JSON.stringify(obs.returnModeAfter)}\n` +
+        `    appMode came back to "${obs.after}" correctly, but the recorded mode must be cleared\n` +
+        `    on the way out: the uiStore subscription only records a mode when none is\n` +
+        `    recorded, so a stale one sends the NEXT direct entry back to the wrong place.\n` +
+        `  ${reproduce}`,
     );
   }
 }

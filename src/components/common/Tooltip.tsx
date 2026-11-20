@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -39,6 +40,69 @@ interface TooltipProps {
   open?: boolean | undefined;
   /** Fires whenever hover would open or close the bubble. */
   onHoverChange?: (hovered: boolean) => void;
+  /**
+   * Where the bubble sits. 'top' (default): centred above the trigger, below
+   * it when there is no room above. 'right': beside the anchor's right edge
+   * (+8px), top-aligned with it and clamped to the viewport; on the anchor's
+   * left when there is no room on the right, and as 'top' when neither side
+   * fits. For a bubble that must not cover its neighbours (a row's details
+   * card next to the row instead of over the rows above it).
+   */
+  placement?: 'top' | 'right';
+  /** The box 'right' places against (default: the trigger), e.g. the whole
+   *  row header around a small name. */
+  anchorRef?: RefObject<HTMLElement | null>;
+}
+
+/** Gap between the anchor and the bubble, and the bubble's viewport margin. */
+const GAP = 8;
+const MARGIN = 8;
+
+interface TooltipPosition {
+  left: number;
+  top: number;
+  transform: string;
+}
+
+/** 'top' placement: centred above the trigger, clamped sideways, below it
+ *  when there is no room above. */
+function placeTop(trigger: DOMRect, bubble: DOMRect | null): TooltipPosition {
+  let left = trigger.left + trigger.width / 2;
+  let top = trigger.top - 10;
+  let transform = 'translate(-50%, -100%)';
+  if (bubble) {
+    const halfWidth = bubble.width / 2;
+    if (left - halfWidth < MARGIN) left = MARGIN + halfWidth;
+    else if (left + halfWidth > window.innerWidth - MARGIN) left = window.innerWidth - MARGIN - halfWidth;
+    // If there isn't enough room above, place below the trigger.
+    if (top - bubble.height < MARGIN) {
+      top = trigger.bottom + 10;
+      transform = 'translate(-50%, 0)';
+    }
+  }
+  return { left, top, transform };
+}
+
+/**
+ * Where the bubble goes (viewport px, for `position: fixed`). Exported for
+ * tests. `bubble` is null before the bubble has been measured.
+ */
+export function tooltipPosition(
+  placement: 'top' | 'right',
+  trigger: DOMRect,
+  anchor: DOMRect,
+  bubble: DOMRect | null,
+): TooltipPosition {
+  if (placement === 'top') return placeTop(trigger, bubble);
+  const right = { left: anchor.right + GAP, top: anchor.top, transform: 'none' };
+  if (!bubble) return right;
+  let left = right.left;
+  if (left + bubble.width > window.innerWidth - MARGIN) {
+    left = anchor.left - GAP - bubble.width;
+    if (left < MARGIN) return placeTop(trigger, bubble);
+  }
+  const top = Math.max(MARGIN, Math.min(anchor.top, window.innerHeight - MARGIN - bubble.height));
+  return { left, top, transform: 'none' };
 }
 
 /**
@@ -59,12 +123,14 @@ export function Tooltip({
   closeDelayMs = 0,
   open,
   onHoverChange,
+  placement = 'top',
+  anchorRef,
 }: TooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [position, setPosition] = useState({
+  const [position, setPosition] = useState<TooltipPosition>({
     left: 0,
     top: 0,
     transform: 'translate(-50%, -100%)',
@@ -106,38 +172,18 @@ export function Tooltip({
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;
-
     const triggerRect = trigger.getBoundingClientRect();
-    const tooltipEl = tooltipRef.current;
-    const margin = 8;
-
-    let left = triggerRect.left + triggerRect.width / 2;
-    let top = triggerRect.top - 10;
-    let transform = 'translate(-50%, -100%)';
-
-    if (tooltipEl) {
-      const tooltipRect = tooltipEl.getBoundingClientRect();
-      const halfWidth = tooltipRect.width / 2;
-
-      if (left - halfWidth < margin) {
-        left = margin + halfWidth;
-      } else if (left + halfWidth > window.innerWidth - margin) {
-        left = window.innerWidth - margin - halfWidth;
-      }
-
-      // If there isn't enough room above, place below the trigger.
-      if (top - tooltipRect.height < margin) {
-        top = triggerRect.bottom + 10;
-        transform = 'translate(-50%, 0)';
-      }
-    }
-
-    setPosition({ left, top, transform });
-  }, []);
+    const anchorRect = anchorRef?.current?.getBoundingClientRect() ?? triggerRect;
+    const bubble = tooltipRef.current?.getBoundingClientRect() ?? null;
+    setPosition(tooltipPosition(placement, triggerRect, anchorRect, bubble));
+  }, [placement, anchorRef]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
 
+    // Place it before the first paint (no frame at the viewport's corner),
+    // then again once the bubble's content has laid out.
+    updatePosition();
     const rafId = requestAnimationFrame(updatePosition);
     const reposition = () => updatePosition();
 

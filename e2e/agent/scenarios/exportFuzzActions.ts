@@ -27,21 +27,37 @@
  * ## Impossible moves are skipped and counted, never asserted
  *
  * Every driver returns a reason instead of throwing when its control is not
- * there. A shrunk trace reaches states the original run never had - the modal
- * closed, no project open, the panel unmounted - and half its moves become
+ * there. A shrunk trace reaches states the original run never had - Export
+ * already left, no project open, the panel unmounted - and half its moves become
  * impossible there. That is what keeps a ddmin-cut trace RUNNABLE.
+ *
+ * ## Entering and leaving the Export workspace
+ *
+ * Export is a workspace with a recorded way back, not a mode switch: a panel
+ * move enters through a drawn `ExportEntry` (the menu row, Ctrl+E, or
+ * `enterExport`) from a drawn mode, and leaves through a drawn `ExportExit`
+ * (the toolbar close, the panel close, the menu row, Ctrl+E, Escape) - so every
+ * panel export also exercises the code that decides where the user lands, and
+ * X10 judges it. A drawn affordance whose control is absent falls back to the
+ * store action (`enterExport` / `closeExport`) and is counted, never asserted.
  */
 import type { ScenarioContext } from './framework';
 import {
   DATA_FORMATS,
+  DRAWN_EXPORT_EXITS,
+  EXPORT_ENTRIES,
   IMAGE_FORMATS,
   naturalExtension,
   PATH_SHAPES,
+  RETURNABLE_MODES,
+  type ExportEntry,
+  type ExportExit,
   type ExportFormat,
   type ExportRoute,
   type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
+  type ReturnableMode,
   type ToastSnapshot,
 } from '../lib/exportOracles';
 
@@ -157,16 +173,19 @@ const FORMAT_WEIGHT: Record<ExportFormat, number> = {
  *  - `diveProfile` has no UI route from here: `ProfileChart` lives in the
  *    Plan-mode bottom dock, which Export mode hides entirely
  *    (`SingleSystemView.tsx` skips the Dock when `appMode === 'export'`).
+ *
+ * There is no `modal` route any more: the Export dialog is retired and the
+ * workspace panel is the one UI surface, so `preview` is panel-only.
  */
 const ROUTES_FOR: Record<ExportFormat, readonly ExportRoute[]> = {
-  csv: ['modal', 'panel', 'store'],
-  json: ['modal', 'panel', 'store'],
-  tml: ['modal', 'panel', 'store'],
-  tmlu: ['modal', 'panel', 'store'],
-  png: ['modal', 'panel', 'store'],
-  svg: ['modal', 'panel', 'store'],
-  pdf: ['modal', 'panel', 'store'],
-  preview: ['modal', 'panel'],
+  csv: ['panel', 'store'],
+  json: ['panel', 'store'],
+  tml: ['panel', 'store'],
+  tmlu: ['panel', 'store'],
+  png: ['panel', 'store'],
+  svg: ['panel', 'store'],
+  pdf: ['panel', 'store'],
+  preview: ['panel'],
   diveProfile: ['store'],
 };
 
@@ -185,6 +204,19 @@ export interface ImageOptionDraw {
   show_shot_data: boolean;
 }
 
+/**
+ * How a PANEL move gets into the Export workspace and out again.
+ *
+ * Drawn per move, and carried in the trace's `export` step, so a replay enters
+ * from the same mode through the same affordance and leaves the same way.
+ */
+export interface PanelPath {
+  /** The mode the move is in when it enters Export - and must return to (X10). */
+  from: ReturnableMode;
+  entry: ExportEntry;
+  exit: ExportExit;
+}
+
 export interface ExportDraw {
   format: ExportFormat;
   route: ExportRoute;
@@ -193,6 +225,42 @@ export interface ExportDraw {
   imageOptions: ImageOptionDraw;
   /** Per-move sequence number, so generated basenames never collide. */
   seq: number;
+  /** The panel route's entry/exit; null on the store route. */
+  panel: PanelPath | null;
+}
+
+/**
+ * The path an old trace's `panel` step takes when it carries none.
+ *
+ * A trace recorded before the workspace had a recorded way back entered with
+ * `setAppMode('export')` from Survey and left with `setAppMode('survey')`. The
+ * closest thing that still exists is the store pair, from Survey, so that is
+ * what such a step replays with - deterministically, and without inventing a
+ * menu or keyboard path the recording never took.
+ */
+export const LEGACY_PANEL_PATH: PanelPath = { from: 'survey', entry: 'enterExport', exit: 'closeExport' };
+
+/**
+ * Read a trace step's panel path back, or refuse it.
+ *
+ * `options` is untyped trace data, so every field is checked against this
+ * build's vocabulary - the same rule the testid allowlist applies to clicks.
+ */
+export function panelPathFromTrace(value: unknown): PanelPath {
+  if (value === undefined || value === null) return LEGACY_PANEL_PATH;
+  if (typeof value !== 'object') throw new Error(`trace export step carries a panel path of type ${typeof value}`);
+  const raw = value as { from?: unknown; entry?: unknown; exit?: unknown };
+  const from = RETURNABLE_MODES.find((mode) => mode === raw.from);
+  const entry = EXPORT_ENTRIES.find((name) => name === raw.entry);
+  const exit = [...DRAWN_EXPORT_EXITS, 'closeExport' as const].find((name) => name === raw.exit);
+  if (from === undefined || entry === undefined || exit === undefined) {
+    throw new Error(
+      `trace export step names panel path ${JSON.stringify(value)}, which this build does not run ` +
+        `(from: ${RETURNABLE_MODES.join('|')}; entry: ${EXPORT_ENTRIES.join('|')}; ` +
+        `exit: ${DRAWN_EXPORT_EXITS.join('|')}|closeExport)`,
+    );
+  }
+  return { from, entry, exit };
 }
 
 /**
@@ -249,7 +317,13 @@ export function drawExport(ctx: ScenarioContext, seq: number): ExportDraw {
     format === 'png' || format === 'svg' || format === 'pdf'
       ? format
       : ctx.pick(['png', 'svg', 'pdf'] as const);
-  return { format, route, shape, imageOptions: drawImageOptions(ctx, imageFormat), seq };
+  const imageOptions = drawImageOptions(ctx, imageFormat);
+  // Drawn LAST, and only for the panel, so the draws above keep their order.
+  const panel: PanelPath | null =
+    route === 'panel'
+      ? { from: ctx.pick(RETURNABLE_MODES), entry: ctx.pick(EXPORT_ENTRIES), exit: ctx.pick(DRAWN_EXPORT_EXITS) }
+      : null;
+  return { format, route, shape, imageOptions, seq, panel };
 }
 
 function weightedPick(ctx: ScenarioContext, formats: readonly ExportFormat[]): ExportFormat {
@@ -292,11 +366,14 @@ export function dataFormatValue(format: ExportFormat): 'csv' | 'json' | 'tml' {
  * carries an id); this set owns "a trace may only name these".
  */
 export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
-  // entry / exit
+  // entry / exit. The hamburger row is ONE id in both directions: "Export"
+  // outside the workspace, "Close export" inside it.
+  'app-menu-trigger',
   'toolbar-export-button',
-  'mode-export',
+  'export-close-button',
+  'export-panel-close',
   'mode-survey',
-  // the shared form (identical ids in the modal and the panel)
+  // the Export panel's form (`ExportControls` inside `ExportPanel`)
   'export-type-data',
   'export-type-image',
   'data-format-select',
@@ -313,7 +390,6 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   'export-show-labels',
   'export-color-mode',
   'export-button',
-  'export-cancel',
   // the TML unanchored-sections notice, which sits between the button and the
   // save dialog whenever any section is unanchored
   'tml-unanchored-warning-continue',
@@ -473,10 +549,11 @@ export async function readModeSnapshot(ctx: ScenarioContext): Promise<ModeSnapsh
     const state = ui();
     const appMode = state.appMode == null ? 'survey' : state.appMode;
     const geometryMode = state.geometryMode == null ? 'measured' : state.geometryMode;
-    // isMapReadOnly (src/store/uiStore.ts:65-67) is a free function over the
-    // state, not a store field, so there is nothing to read - it is applied
-    // here rather than reimplemented in Node, where a drift would be invisible.
-    const mapReadOnly = geometryMode === 'closureAdjusted' || appMode !== 'survey';
+    // isMapReadOnly (src/store/uiStore.ts) is a free function over the state,
+    // not a store field, so there is nothing to read - it is applied here rather
+    // than reimplemented in Node, where a drift would be invisible. Survey and
+    // Data are the two editable workspaces; Plan and Export are read-only.
+    const mapReadOnly = geometryMode === 'closureAdjusted' || !(appMode === 'survey' || appMode === 'data');
     // CLOSURE_STRATEGY_ELIGIBILITY (src/utils/closures.ts:14-20). Copied for the
     // reason every cross-tier constant here is copied; the full table is spelled
     // out rather than an inclusion list so a NEW strategy shows up as undefined
@@ -510,41 +587,6 @@ export async function readPanelOptions(ctx: ScenarioContext): Promise<OptionSnap
       imageFormat: String(image.format),
       dpi: Number(image.dpi),
       branchingThreshold: Number(image.branching_threshold),
-    };
-  `,
-  );
-}
-
-/**
- * The MODAL's option set, read off the DOM.
- *
- * There is nowhere else to read it: the dialog keeps local `useState`
- * (`ExportDialog.tsx:17-19`), deliberately, so that it always opens on
- * data/CSV. That is exactly what makes X8 worth asserting, and it is also why
- * this reader has to go through the rendered controls.
- */
-export async function readModalOptions(ctx: ScenarioContext): Promise<OptionSnapshot | null> {
-  return ctx.eval<OptionSnapshot | null>(
-    `
-    ${HELPERS}
-    if (ui().activeDialog !== 'export') return null;
-    const dialog = q('export-dialog');
-    if (!dialog) return null;
-    const scoped = (id) => dialog.querySelector('[data-testid="' + id + '"]');
-    const dataChecked = scoped('export-type-data');
-    const exportType = dataChecked && dataChecked.checked ? 'data' : 'image';
-    const text = (el) => (el ? (el.textContent || '').trim() : '');
-    const dataFormat = text(scoped('data-format-select')).toLowerCase().split(' ')[0] || '';
-    const imageFormat = text(scoped('image-format-select')).toLowerCase() || '';
-    const resolution = text(scoped('resolution-select'));
-    const dpiMatch = /(\\d+)\\s*DPI/i.exec(resolution);
-    const slider = scoped('branching-threshold-slider');
-    return {
-      exportType: exportType,
-      dataFormat: dataFormat,
-      imageFormat: imageFormat,
-      dpi: dpiMatch ? Number(dpiMatch[1]) : -1,
-      branchingThreshold: slider ? Number(slider.value) : -1,
     };
   `,
   );
@@ -822,41 +864,195 @@ export async function callProjectAction(
   );
 }
 
-/** Is the modal Export dialog up? */
-export async function modalIsOpen(ctx: ScenarioContext): Promise<boolean> {
-  return ctx.eval<boolean>(
+/**
+ * Set `appMode` through the store action. Harness setup and teardown only - the
+ * panel route ENTERS and LEAVES Export through `enterExportVia` /
+ * `leaveExportVia`, which is what X10 judges.
+ */
+export async function setAppMode(
+  ctx: ScenarioContext,
+  mode: 'survey' | 'data' | 'plan' | 'export',
+): Promise<boolean> {
+  const res = await ctx.callAction('ui', 'setAppMode', [mode]);
+  await settleOnce(ctx);
+  return res.ok;
+}
+
+/** What the store says about the workspace and the way back out of it. */
+export interface ExportReturnState {
+  appMode: string;
+  /** `uiStore.exportReturnMode`; null when nothing is recorded. */
+  exportReturnMode: string | null;
+  /** False on a build whose uiStore has no `exportReturnMode` at all. */
+  hasReturnField: boolean;
+  /** `uiStore.activeDialog`, so a leave can clear a stray dialog first. */
+  activeDialog: string | null;
+}
+
+export async function readExportReturn(ctx: ScenarioContext): Promise<ExportReturnState> {
+  return ctx.eval<ExportReturnState>(
     `
     ${HELPERS}
-    return ui().activeDialog === 'export' && !!q('export-dialog');
+    const state = ui();
+    const has = Object.prototype.hasOwnProperty.call(state, 'exportReturnMode');
+    const recorded = has ? state.exportReturnMode : null;
+    return {
+      appMode: state.appMode == null ? 'survey' : String(state.appMode),
+      exportReturnMode: recorded == null ? null : String(recorded),
+      hasReturnField: has,
+      activeDialog: state.activeDialog == null ? null : String(state.activeDialog),
+    };
   `,
   );
 }
 
-/** Open the modal through the store action the toolbar row calls. */
-export async function openModal(ctx: ScenarioContext): Promise<boolean> {
-  const res = await ctx.callAction('ui', 'openDialog', ['export']);
-  if (!res.ok) return false;
-  await settleOnce(ctx);
-  return modalIsOpen(ctx);
+/** One entry or exit, as it landed. */
+export interface AffordanceOutcome {
+  /** Did the affordance's control exist and get pressed? */
+  performed: boolean;
+  reason: ExportSkip | null;
+  /** `appMode` once the move settled. */
+  appMode: string;
+  /** Key presses spent - Escape may need more than one; 0 for a click. */
+  presses: number;
+  /** A text field held focus and was blurred before the chord. */
+  blurred: boolean;
 }
 
-/** Close the modal the way its Cancel button does. */
-export async function closeModal(ctx: ScenarioContext): Promise<void> {
-  const outcome = await clickControl(ctx, 'export-cancel');
-  if (!outcome.performed) {
-    // Cancel is `disabled={isExporting}`, and a dialog that refuses to close is
-    // itself worth knowing about - but not from here: this is teardown, and the
-    // scenario's own residue check is what reports it.
-    await ctx.callAction('ui', 'closeDialog', []);
+/**
+ * Escape presses an exit may spend before X10 judges it.
+ *
+ * Escape in Export first clears transient state - an open dropdown, a
+ * selection, measure endpoints - and only leaves once there is none. This
+ * scenario raises none of those on purpose, so one press is the expectation;
+ * three covers an open listbox plus a selection plus the press that leaves, and
+ * a fourth would be a wedge rather than a queue.
+ */
+export const ESCAPE_EXIT_BUDGET = 3;
+
+/**
+ * Drive one affordance in page.
+ *
+ *   click  - one allowlisted control
+ *   menu   - open the hamburger (`app-menu-trigger`), then its Export row; a
+ *            row that is not there closes the menu again by its own trigger
+ *            rather than by Escape, because Escape in Export would LEAVE it
+ *   key    - a chord on the focused element, as the shortcut handler reads it;
+ *            an Escape repeats while still in Export, up to `budget`
+ */
+type AffordanceRequest =
+  | { kind: 'click'; testid: string }
+  | { kind: 'menu' }
+  | { kind: 'key'; key: string; ctrl: boolean; budget: number };
+
+async function runAffordance(ctx: ScenarioContext, req: AffordanceRequest): Promise<AffordanceOutcome> {
+  if (req.kind === 'click' && !isAllowedTestId(req.testid)) {
+    throw new Error(`refusing to click "${req.testid}": not in export-roundtrip-fuzz's allowlist`);
   }
-  await settleOnce(ctx);
+  return ctx.eval<AffordanceOutcome>(
+    `
+    const req = args[0];
+    const capMs = args[1];
+    ${HELPERS}
+    const mode = () => { const s = ui(); return s.appMode == null ? 'survey' : String(s.appMode); };
+    const done = (performed, reason, presses, blurred) =>
+      ({ performed: performed, reason: reason, appMode: mode(), presses: presses, blurred: blurred });
+    if (req.kind === 'click') {
+      const el = q(req.testid);
+      if (!el) return done(false, 'absent', 0, false);
+      if (!isVisible(el) || isOff(el)) return done(false, 'not-actionable', 0, false);
+      dispatchClick(el);
+      await settle(capMs);
+      return done(true, null, 0, false);
+    }
+    if (req.kind === 'menu') {
+      const trigger = q('app-menu-trigger');
+      if (!trigger) return done(false, 'absent', 0, false);
+      if (!isVisible(trigger) || isOff(trigger)) return done(false, 'not-actionable', 0, false);
+      if (!shown('app-menu')) {
+        dispatchClick(trigger);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      const row = q('toolbar-export-button');
+      if (!row || !isVisible(row) || isOff(row)) {
+        if (shown('app-menu')) dispatchClick(trigger);
+        await settle(capMs);
+        return done(false, row ? 'not-actionable' : 'absent', 0, false);
+      }
+      dispatchClick(row);
+      await settle(capMs);
+      return done(true, null, 0, false);
+    }
+    // A chord typed into a text field is the field's: the shortcut handler
+    // ignores every non-Escape key there. Blur it first, the way a user clicks
+    // off a field before reaching for the shortcut - the claim under test is
+    // what the chord does at idle, not inside an input.
+    let blurred = false;
+    let presses = 0;
+    const startedIn = mode();
+    for (;;) {
+      const active = document.activeElement;
+      if (active && active !== document.body &&
+          (active.isContentEditable || /^(input|textarea|select)$/i.test(active.tagName))) {
+        active.blur();
+        blurred = true;
+      }
+      const target = document.activeElement || document.body;
+      const init = { key: req.key, code: req.key, ctrlKey: req.ctrl, bubbles: true, cancelable: true, composed: true };
+      target.dispatchEvent(new KeyboardEvent('keydown', init));
+      target.dispatchEvent(new KeyboardEvent('keyup', init));
+      presses += 1;
+      await settle(capMs);
+      // Only Escape repeats, and only while it is still clearing transient
+      // state inside the workspace it started in.
+      if (req.key !== 'Escape' || presses >= req.budget) break;
+      if (startedIn !== 'export' || mode() !== 'export') break;
+    }
+    return done(true, null, presses, blurred);
+  `,
+    [req, settleCapMs()],
+  );
 }
 
-/** Enter / leave Export mode through the only control that sets it. */
-export async function setAppMode(ctx: ScenarioContext, mode: 'survey' | 'plan' | 'export'): Promise<boolean> {
-  const res = await ctx.callAction('ui', 'setAppMode', [mode]);
+/**
+ * Enter the Export workspace through `entry`.
+ *
+ * The caller reads `appMode` back and decides what a miss means; this only
+ * reports whether the affordance was there to press.
+ */
+export async function enterExportVia(ctx: ScenarioContext, entry: ExportEntry): Promise<AffordanceOutcome> {
+  if (entry === 'menu') return runAffordance(ctx, { kind: 'menu' });
+  if (entry === 'shortcut') return runAffordance(ctx, { kind: 'key', key: 'e', ctrl: true, budget: 1 });
+  return storeAffordance(ctx, 'enterExport');
+}
+
+/** Leave it through `exit`. */
+export async function leaveExportVia(ctx: ScenarioContext, exit: ExportExit): Promise<AffordanceOutcome> {
+  switch (exit) {
+    case 'closeButton':
+      return runAffordance(ctx, { kind: 'click', testid: 'export-close-button' });
+    case 'panelClose':
+      return runAffordance(ctx, { kind: 'click', testid: 'export-panel-close' });
+    case 'menu':
+      return runAffordance(ctx, { kind: 'menu' });
+    case 'shortcut':
+      return runAffordance(ctx, { kind: 'key', key: 'e', ctrl: true, budget: 1 });
+    case 'escape':
+      return runAffordance(ctx, { kind: 'key', key: 'Escape', ctrl: false, budget: ESCAPE_EXIT_BUDGET });
+    case 'closeExport':
+      return storeAffordance(ctx, 'closeExport');
+  }
+}
+
+/** `enterExport` / `closeExport` straight off the store - the floor and the fallback. */
+async function storeAffordance(
+  ctx: ScenarioContext,
+  action: 'enterExport' | 'closeExport',
+): Promise<AffordanceOutcome> {
+  const res = await ctx.callAction('ui', action, []);
   await settleOnce(ctx);
-  return res.ok;
+  const state = await readExportReturn(ctx);
+  return { performed: res.ok, reason: res.ok ? null : 'absent', appMode: state.appMode, presses: 0, blurred: false };
 }
 
 /** Wait for the surface to be quiet, without performing anything. */

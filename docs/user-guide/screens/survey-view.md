@@ -18,8 +18,10 @@ The main window of an open project: the map, with **Sections** on the left,
    [DMP import](dmp-import.md).
 3. **Undo** (`Ctrl+Z`)
 4. **Redo** (`Ctrl+Y` or `Ctrl+Shift+Z`)
-5. **Survey** / **Plan** / **Export**: edit the survey, plan a dive, or export
-   a map. See [Plan and Export modes](#plan-and-export-modes).
+5. **Survey** / **Data** / **Plan**: edit the survey on the map, edit all its
+   data in one table (see the [Data view](data-view.md)), or plan a dive.
+   **Export** opens from the menu (`Ctrl+E`). See
+   [Plan and Export modes](#plan-and-export-modes).
 
 **Tools**
 
@@ -55,11 +57,11 @@ SpeleoDB project**.
 
 - **Plan**: plan a dive on the survey, with gas, route and stage drops. See
   [Planning a dive](../workflows/planning-a-dive.md).
-- **Export**: make a map image or file of the survey. See
-  [Exporting](../workflows/exporting.md).
+- **Export**: make a map image or file of the survey. Open it from **Menu** >
+  **Export** (`Ctrl+E`); **Close export**, `Ctrl+E` or `Escape` returns to the
+  mode you came from. See [Exporting](../workflows/exporting.md).
 - Both are read-only. **Import**, **Undo**, **Redo** and the editing tools are
-  hidden there; **Select** and **Measure** stay. **Display** is in Survey and
-  Plan only.
+  hidden there; **Select** and **Measure** stay. **Display** is not in Export.
 
 ## The menu
 

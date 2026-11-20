@@ -10,12 +10,10 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { AlertDialog } from './AlertDialog';
 import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
-import ExportPreview from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, ColorMode } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
-import type { ExportType, DataFormat } from '../../store/exportStore';
+import { useExportStore, type ExportType, type DataFormat } from '../../store/exportStore';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
-import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
@@ -34,39 +32,26 @@ const THRESHOLD_MIN = 0;
 const THRESHOLD_MAX = 10;
 
 export interface ExportControlsProps {
-  /** `dialog` shows the inline preview column + Cancel/Export footer; `panel`
-   *  stacks vertically with a single Export button (the large preview lives in
-   *  the Export-mode map area, not here). */
-  variant: 'dialog' | 'panel';
   exportType: ExportType;
   onExportTypeChange: (t: ExportType) => void;
   dataFormat: DataFormat;
   onDataFormatChange: (f: DataFormat) => void;
   imageOptions: ExportImageOptions;
   onImageOptionsChange: (o: ExportImageOptions) => void;
-  /** Called after a successful export (the dialog passes `closeDialog`). */
-  onComplete?: () => void;
-  /** Mirrors the in-flight export state so a host (the dialog) can guard its
-   *  own close affordances while an export is running. */
-  onExportingChange?: (v: boolean) => void;
 }
 
 /**
- * The shared Export form + export flow, used by both the modal Export dialog
- * and the Export workspace-mode panel. Controlled: the type/format/image
- * options are owned by the host (dialog = local state, panel = `exportStore`)
- * so the panel can share its options with the large map-area preview.
+ * The Export form + export flow of the Export workspace panel (`ExportPanel`).
+ * Controlled: the type/format/image options are owned by the host
+ * (`exportStore`), so the panel shares them with the large map-area preview.
  */
 export default function ExportControls({
-  variant,
   exportType,
   onExportTypeChange,
   dataFormat,
   onDataFormatChange,
   imageOptions,
   onImageOptionsChange,
-  onComplete,
-  onExportingChange,
 }: ExportControlsProps) {
   const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
     useProjectStore();
@@ -77,8 +62,8 @@ export default function ExportControls({
 
   const [isExporting, setIsExporting] = useState(false);
   const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
-  // Unique per-instance id: ExportControls renders in both the panel and the
-  // dialog, so a fixed id would duplicate in the DOM and break the ARIA link.
+  // Unique per-instance id, so a second mounted instance (tests, a future
+  // surface) can never duplicate it in the DOM and break the ARIA link.
   const labelsRegionId = useId();
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
   const [showTmlUnanchoredWarning, setShowTmlUnanchoredWarning] = useState(false);
@@ -103,17 +88,6 @@ export default function ExportControls({
     };
   }, []);
 
-  // Flip the in-flight flag AND notify the host in the SAME tick. The dialog
-  // guards its close (Escape/backdrop/×) on this; surfacing it via an effect
-  // lagged a render and briefly allowed closing mid-export (Copilot review).
-  const setExporting = useCallback(
-    (v: boolean) => {
-      setIsExporting(v);
-      onExportingChange?.(v);
-    },
-    [onExportingChange],
-  );
-
   const formatSectionLabel = useCallback(
     (section: { id: number; name: string | null }): string => {
       const trimmedName = section.name?.trim();
@@ -124,12 +98,15 @@ export default function ExportControls({
     [t],
   );
 
+  // The workspace-wide "an export is being written" flag (exportStore): it keeps
+  // the Export workspace from being closed under a running export. Set beside
+  // `isExporting`, but cleared unconditionally - even after an unmount - so a
+  // settled export can never leave the workspace stuck open.
+  const setExportRunning = (on: boolean) => useExportStore.getState().setExporting(on);
+
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
-    // Only a chosen path counts as a completed export; a cancelled OS save
-    // picker must leave the dialog open with options intact and must NOT
-    // fire `trackDialogComplete` (which would suppress the dialog-cancel
-    // telemetry for a dialog the user never actually finished).
-    let pathWasChosen = false;
+    // A cancelled OS save picker writes nothing and leaves the panel and its
+    // options exactly as they were.
     try {
       if (exportType === 'data') {
         const isTml = dataFormat === 'tml';
@@ -182,7 +159,6 @@ export default function ExportControls({
         );
 
         if (selected) {
-          pathWasChosen = true;
           // For TML, preserve the extension the OS dialog appended.
           // If the path already has .tmlu or .tml, keep it as-is;
           // otherwise default to .tml.
@@ -200,7 +176,8 @@ export default function ExportControls({
             finalPath = ensureExtension(selected, dataFormat);
           }
           // Disable button during data export (no progress events for CSV/JSON/TML)
-          setExporting(true);
+          setIsExporting(true);
+          setExportRunning(true);
           try {
             if (dataFormat === 'csv') {
               await exportCsv(finalPath);
@@ -210,8 +187,9 @@ export default function ExportControls({
               await exportTml(finalPath);
             }
           } finally {
+            setExportRunning(false);
             if (isMountedRef.current) {
-              setExporting(false);
+              setIsExporting(false);
             }
           }
         }
@@ -223,7 +201,6 @@ export default function ExportControls({
         );
 
         if (selected) {
-          pathWasChosen = true;
           const finalPath = ensureExtension(selected, extension);
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
@@ -249,7 +226,8 @@ export default function ExportControls({
             }
           });
 
-          setExporting(true);
+          setIsExporting(true);
+          setExportRunning(true);
           setExportProgress(null);
           exportLoadingIdRef.current = null;
 
@@ -258,30 +236,20 @@ export default function ExportControls({
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();
+            setExportRunning(false);
             exportLoadingIdRef.current = null;
             if (isMountedRef.current) {
-              setExporting(false);
+              setIsExporting(false);
               setExportProgress(null);
             }
           }
         }
       }
-
-      if (pathWasChosen && isMountedRef.current) {
-        // `trackDialogComplete` pairs with a dialog close (it suppresses the
-        // dialog-cancel telemetry). The panel isn't a dialog, so firing it there
-        // would leave `_dialogCompleted` stuck - only track for the dialog variant
-        // (Copilot review).
-        if (variant === 'dialog') {
-          trackDialogComplete('export');
-        }
-        onComplete?.();
-      }
     } catch (e) {
       console.error('Export failed:', e);
-      // A failed export used to be console-only, so the dialog just sat there
-      // un-greyed and the panel did nothing at all - indistinguishable from
-      // "the file was written". Every reachable refusal arrives here: the
+      // A failed export used to be console-only, so the panel did nothing at
+      // all - indistinguishable from "the file was written". Every reachable
+      // refusal arrives here: the
       // backend's "Cannot export over the open project file", `export_png`'s
       // DPI/size bails, a `Tree::from_str` parse failure, and any I/O error.
       //
@@ -292,20 +260,20 @@ export default function ExportControls({
       // preferred over the generic string for the same reason ProfileChart
       // prefers it - it names which of those refusals happened.
       showToast(getErrorMessage(e, t('dialogs.export.failed')), TOAST_KEYS.EXPORT_FAILED, 'error');
+      setExportRunning(false);
       if (isMountedRef.current) {
-        setExporting(false);
+        setIsExporting(false);
         setExportProgress(null);
       }
     }
   };
 
-  const isPanel = variant === 'panel';
   const svgSelected = imageOptions.format === 'svg';
 
   return (
     <>
-      <div className={isPanel ? 'flex flex-col gap-4' : 'flex gap-6'}>
-        {/* Left column: Options */}
+      <div className="flex flex-col gap-4">
+        {/* Options (the large preview lives in the Export workspace's map area) */}
         <div className="flex-1 space-y-4">
           {/* Export type */}
           <div>
@@ -591,15 +559,6 @@ export default function ExportControls({
             </>
           )}
         </div>
-
-        {/* Right column: inline preview (dialog only; the panel shows the large
-            preview in the Export-mode map area instead). */}
-        {!isPanel && exportType === 'image' && (
-          <div className="flex flex-col gap-2">
-            <span className="text-sm text-text-secondary">Preview</span>
-            <ExportPreview options={imageOptions} />
-          </div>
-        )}
       </div>
 
       {/* Export Progress - uses shared LoadingProgress component for consistent UI */}
@@ -632,18 +591,7 @@ export default function ExportControls({
         })()}
 
       {/* Actions */}
-      <div
-        className={
-          isPanel
-            ? 'pt-4 mt-4 border-t border-border'
-            : 'flex justify-end gap-2 pt-4 mt-4 border-t border-border'
-        }
-      >
-        {!isPanel && (
-          <Button onClick={() => onComplete?.()} disabled={isExporting} data-testid="export-cancel">
-            Cancel
-          </Button>
-        )}
+      <div className="pt-4 mt-4 border-t border-border">
         <Button
           variant="primary"
           onClick={() => {
@@ -651,7 +599,7 @@ export default function ExportControls({
           }}
           disabled={isExporting}
           data-testid="export-button"
-          className={isPanel ? 'w-full' : undefined}
+          className="w-full"
         >
           {isExporting ? 'Exporting...' : 'Export'}
         </Button>

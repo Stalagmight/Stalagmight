@@ -4,7 +4,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
  *
  * Reuses the shared GlobalView rows (New/Open/Settings/Debug/Quit) from
  * appMenuItems and adds the project-specific actions (Save, Save As, Save and
- * Close, Close Project, Export, Project Settings, Project Details). Item ids
+ * Close, Close Project, Export / Close export, Project Settings, Project Details). Item ids
  * reuse the GlobalView/legacy test-ids for matching actions so existing e2e
  * selectors/helpers keep working.
  */
@@ -12,6 +12,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { useExportStore } from '../../store/exportStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import {
@@ -25,6 +26,7 @@ import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
   CloseIcon,
+  ChevronLeftIcon,
   ExportIcon,
   SlidersIcon,
   InfoIcon,
@@ -33,6 +35,19 @@ import {
   MapIcon,
   TargetIcon,
 } from '../common/icons';
+
+/** The rows that open, replace, relocate or close the project, or import into it:
+ *  none may run under an export being written (it exports THIS project's file
+ *  and preview), so they are disabled meanwhile, like the Close export row. */
+const PROJECT_LIFECYCLE_ROWS: ReadonlySet<string> = new Set([
+  'app-menu-new-project',
+  'global-open-project-button',
+  'project-menu-save-as',
+  'project-menu-save-and-close',
+  'global-import-menu-button',
+  'app-menu-import-from-mnemo',
+  'back-button',
+]);
 
 interface UseProjectMenuItemsArgs {
   /** The SingleSystemView-wrapped save (cancels autosave, then saves). */
@@ -49,6 +64,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     handleCloseProject,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
+  const inExport = useUIStore((s) => s.appMode === 'export');
+  const enterExport = useUIStore((s) => s.enterExport);
+  const closeExport = useUIStore((s) => s.closeExport);
+  // An export being written keeps the Export workspace open (closeExport refuses).
+  const exportRunning = useExportStore((s) => s.exporting);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const showMemoryStats = useUIStore((s) => s.showMemoryStats);
   const showMapStats = useUIStore((s) => s.showMapStats);
@@ -84,7 +104,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       ui.revealDetailPanel();
     };
 
-    return [
+    const items: AppMenuItem[] = [
       ...leadingMenuItems(t, { onNewProject: handleNewProject }, 'hamburger'),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
@@ -126,13 +146,21 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       // message naming the read-only cause.
       importMenuItem(t),
       ...mnemoImportMenuItem(t, { onOpen: () => openDialog('mnemo-import') }),
+      // Export is a workspace, not a dialog: this row enters it, and inside it
+      // the same row (and its Ctrl+E hint) closes it again, back to the mode it
+      // was entered from - so the menu never offers an action that does nothing.
       {
         id: 'toolbar-export-button',
-        label: t('common.actions.export'),
-        icon: <ExportIcon size={sz} />,
+        label: inExport ? t('exportPanel.close') : t('common.actions.export'),
+        icon: inExport ? <ChevronLeftIcon size={sz} /> : <ExportIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.export,
         action: 'export',
-        onClick: () => { setSource('toolbar'); openDialog('export'); },
+        ...(inExport && exportRunning ? { disabled: true, title: t('exportPanel.inProgress') } : {}),
+        onClick: () => {
+          setSource('toolbar');
+          if (inExport) closeExport();
+          else enterExport();
+        },
       },
       { id: 'project-menu-sep-3', label: '', separator: true },
       {
@@ -196,5 +224,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
+    if (!exportRunning) return items;
+    const busy = { disabled: true, title: t('exportPanel.inProgress') };
+    return items.map((item) => (PROJECT_LIFECYCLE_ROWS.has(item.id) ? { ...item, ...busy } : item));
+  }, [t, openDialog, inExport, exportRunning, enterExport, closeExport, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
 }

@@ -3161,6 +3161,99 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
     assert!(p.data_table_station_column_widths.is_empty());
 }
 
+#[test]
+fn test_data_workspace_view_fields_default_on_a_legacy_table_like_a_fresh_install() {
+    // Every config written before the Data workspace lacks its fields; the serde
+    // defaults must equal `PanelsConfig::default()`, so "the default" is one
+    // thing rather than two that can drift apart.
+    let legacy: PanelsConfig = toml::from_str(
+        "sections_panel_width = 250\ndetail_panel_width = 300\ndata_table_height = 200\n",
+    )
+    .expect("a panels table from before the Data workspace must load");
+    let fresh = PanelsConfig::default();
+    assert_eq!(
+        legacy.data_workspace_column_order,
+        fresh.data_workspace_column_order
+    );
+    assert_eq!(
+        legacy.data_workspace_hidden_columns,
+        fresh.data_workspace_hidden_columns
+    );
+    assert_eq!(
+        legacy.data_workspace_column_widths,
+        fresh.data_workspace_column_widths
+    );
+    assert_eq!(legacy.data_workspace_tint_mode, "none");
+    assert_eq!(fresh.data_workspace_tint_mode, "none");
+    assert!(!legacy.data_workspace_map_pane_open && !fresh.data_workspace_map_pane_open);
+    assert_eq!(legacy.data_workspace_map_pane_width, 480);
+    assert_eq!(fresh.data_workspace_map_pane_width, 480);
+    assert!(legacy.data_workspace_section_headers && fresh.data_workspace_section_headers);
+    assert!(fresh.data_workspace_column_order.is_empty());
+    assert!(fresh
+        .data_workspace_hidden_columns
+        .iter()
+        .any(|key| key == "section"));
+    // Station depth starts hidden too (the shots' depth in / out carry it).
+    assert!(fresh
+        .data_workspace_hidden_columns
+        .iter()
+        .any(|key| key == "depth"));
+}
+
+#[test]
+fn test_data_workspace_view_is_repaired_on_load_without_losing_the_rest() {
+    // A hand-edited or hostile table: an unknown tint, a collapsed and a runaway
+    // pane width, junk widths, oversize and duplicate keys. The parse must
+    // survive it (so `Config::load().unwrap_or_default()` does not reset every
+    // other setting) and `normalize` must repair each field.
+    let toml_str = format!(
+        r#"
+sections_panel_width = 320
+detail_panel_width = 300
+data_table_height = 200
+data_workspace_tint_mode = "rainbow"
+data_workspace_map_pane_width = 0
+data_workspace_section_headers = false
+data_workspace_column_order = ["length", "", "length", "{long}"]
+
+[data_workspace_column_widths]
+length = 0
+comment = 99999999999
+textual = "wide"
+"#,
+        long = "k".repeat(200)
+    );
+    let mut panels: PanelsConfig =
+        toml::from_str(&toml_str).expect("a hostile Data workspace view must not fail the parse");
+    panels.normalize();
+    assert_eq!(panels.data_workspace_tint_mode, "none");
+    assert_eq!(panels.data_workspace_map_pane_width, 360);
+    assert!(!panels.data_workspace_section_headers);
+    assert_eq!(panels.data_workspace_column_order, vec!["length"]);
+    assert_eq!(
+        panels.data_workspace_column_widths,
+        std::collections::BTreeMap::from([
+            ("comment".to_string(), 2000),
+            ("length".to_string(), 40),
+        ])
+    );
+    assert_eq!(
+        panels.sections_panel_width, 320,
+        "a sibling setting survives"
+    );
+
+    panels.data_workspace_map_pane_width = u32::MAX;
+    panels.normalize();
+    assert_eq!(panels.data_workspace_map_pane_width, 4000);
+    // Every accepted tint survives normalize unchanged.
+    for mode in DATA_WORKSPACE_TINT_MODES {
+        panels.data_workspace_tint_mode = mode.to_string();
+        panels.normalize();
+        assert_eq!(panels.data_workspace_tint_mode, mode);
+    }
+}
+
 // ========================================================================
 // SpeleoDB connection settings
 // ========================================================================

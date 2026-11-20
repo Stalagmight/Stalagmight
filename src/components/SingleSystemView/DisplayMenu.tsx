@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
+import { isEditableMode, useUIStore, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
 import {
   selectEffectiveColorMode,
   selectEffectiveShowShotErrors,
@@ -414,7 +414,7 @@ export default function DisplayMenu({
           <div className="grid grid-cols-2 gap-x-5 gap-y-4">
             {/* Row 1: Color | Overlays. The Color overlays are hidden in Plan - the gas
                 reachability gradient owns the station/shot coloring there, so a color pill would
-                be a confusing no-op (it still shows in Survey + Export). */}
+                be a confusing no-op (it shows in Survey and in Data's map pane). */}
             {appMode !== 'plan' && (
               <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
                 <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
@@ -463,10 +463,11 @@ export default function DisplayMenu({
               </Category>
             </div>
 
-            {/* Row 4: Geometry (single-select), full width. Survey-only - Plan/Export force the
-                read-only closure map, so switching between the Raw Data View and the Closures
-                Computed View there would fight the mode. */}
-            {appMode === 'survey' && (
+            {/* Row 4: Geometry (single-select), full width. Editable modes only (Survey,
+                Data): Plan and Export force the read-only closure map, so switching between
+                the Raw Data View and the Closures Computed View there would fight the mode.
+                In Data it is the way back to an editable table from the closure view. */}
+            {isEditableMode(appMode) && (
             <div className="col-span-2 border-t border-border pt-3">
               <Category label={t('displayMenu.geometry.groupLabel')} icon={showIcons ? <RulerIcon size={14} /> : undefined}>
                 <Pill

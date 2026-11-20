@@ -3,10 +3,11 @@ import {
   setupMockedPage,
   createProject,
   createSectionViaStore,
+  enterExportWorkspace,
 } from './helpers/app';
 
 /**
- * Helper to create a new project and import some data for testing
+ * Create a project with two sections, so the preview has something to draw.
  */
 async function createProjectWithData(page: import('./fixtures/coverage').Page) {
   await createProject(page, 'Export Test Project');
@@ -28,114 +29,84 @@ async function createProjectWithData(page: import('./fixtures/coverage').Page) {
 }
 
 /**
- * Helper to open the export dialog
+ * The Export workspace's live preview: the backend's `preview_svg_export` markup,
+ * drawn over the map area for the image export (the retired modal dialog showed a
+ * fixed 300x300 copy of it beside its form).
  */
-async function openExportDialog(page: import('./fixtures/coverage').Page) {
-  await page.keyboard.press('Control+e');
-  await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
-}
-
 test.describe('Export Preview', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProjectWithData(page);
+    await enterExportWorkspace(page);
   });
 
-  test('should show preview panel when image export is selected', async ({ page }) => {
-    await openExportDialog(page);
+  const preview = (page: import('./fixtures/coverage').Page) =>
+    page.locator('[data-testid="export-mode-preview"] [data-testid="export-preview"]');
 
-    // By default, data export is selected, preview should not be visible
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).not.toBeVisible();
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    // Preview should now be visible
-    await expect(preview).toBeVisible({ timeout: 5000 });
+  test('shows the preview for the image export it opens on', async ({ page }) => {
+    await expect(page.getByTestId('export-type-image')).toBeChecked();
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden({ timeout: 5000 });
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
   });
 
-  test('should hide preview when switching back to data export', async ({ page }) => {
-    await openExportDialog(page);
+  test('hides the preview for a data export and brings it back for an image', async ({ page }) => {
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
 
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Switch back to data export
     await page.click('[data-testid="export-type-data"]');
+    await expect(page.getByTestId('export-mode-preview')).toHaveCount(0);
 
-    // Preview should be hidden
-    await expect(preview).not.toBeVisible();
+    await page.click('[data-testid="export-type-image"]');
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
   });
 
   test('should render inline SVG from preview_svg_export', async ({ page }) => {
-    await openExportDialog(page);
-    await page.click('[data-testid="export-type-image"]');
     await expect(page.getByTestId('export-preview-loading')).toBeHidden({ timeout: 5000 });
 
     // The preview component injects the backend SVG into the DOM. Mock returns
     // a 1-line stick map with a known viewBox.
-    const svg = page.locator('[data-testid="export-preview"] svg');
+    const svg = preview(page).locator('svg');
     await expect(svg).toBeVisible();
     await expect(svg).toHaveAttribute('viewBox', '0 0 100 100');
   });
 
   test('should re-render preview when threshold slider changes', async ({ page }) => {
-    await openExportDialog(page);
-    await page.click('[data-testid="export-type-image"]');
     await expect(page.getByTestId('export-preview-loading')).toBeHidden({ timeout: 5000 });
 
     // Mock encodes the threshold as a data attribute on the root <svg>. So we
     // can observe that the preview re-fetches when the slider moves.
-    const svg = page.locator('[data-testid="export-preview"] svg');
+    const svg = preview(page).locator('svg');
     await expect(svg).toHaveAttribute('data-threshold', '2');
 
     await page.locator('[data-testid="branching-threshold-slider"]').fill('7');
     await expect(svg).toHaveAttribute('data-threshold', '7', { timeout: 5000 });
   });
 
-  test('should have correct preview dimensions (300x300)', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Check dimensions
-    const boundingBox = await preview.boundingBox();
-    expect(boundingBox).not.toBeNull();
-    if (boundingBox) {
-      expect(boundingBox.width).toBe(300);
-      expect(boundingBox.height).toBe(300);
+  test('fills the map area rather than a fixed thumbnail', async ({ page }) => {
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
+    const area = await page.getByTestId('export-mode-preview').boundingBox();
+    const box = await preview(page).boundingBox();
+    expect(area).not.toBeNull();
+    expect(box).not.toBeNull();
+    if (area && box) {
+      // Larger than the dialog's old 300x300 box, and inside the overlay.
+      expect(box.width).toBeGreaterThan(300);
+      expect(box.height).toBeGreaterThan(300);
+      expect(box.x).toBeGreaterThanOrEqual(area.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width + 1);
     }
   });
 
-  test('should close export dialog via Cancel button', async ({ page }) => {
-    await openExportDialog(page);
-
-    const dialog = page.locator('[data-testid="export-dialog"]');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-
-    // Close via Cancel
-    await page.click('button:has-text("Cancel")');
-
-    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+  test('Close export takes the preview away with the workspace', async ({ page }) => {
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('export-close-button').click();
+    await expect(page.getByTestId('export-mode-preview')).toHaveCount(0);
+    await expect(page.getByTestId('export-panel')).toHaveCount(0);
   });
 
-  test('should close export dialog via Escape key', async ({ page }) => {
-    await openExportDialog(page);
-
-    const dialog = page.locator('[data-testid="export-dialog"]');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-
-    // Close via Escape
+  test('Escape closes the workspace and its preview', async ({ page }) => {
+    await expect(preview(page)).toBeVisible({ timeout: 5000 });
     await page.keyboard.press('Escape');
-
-    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+    await expect(page.getByTestId('export-mode-preview')).toHaveCount(0);
+    await expect(page.getByTestId('export-panel')).toHaveCount(0);
   });
 });

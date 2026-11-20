@@ -10,6 +10,7 @@ import {
   readCanvasPixel,
   type PixelRgba,
   type SectionSeed,
+  enterExportWorkspace,
 } from './helpers/app';
 
 /**
@@ -371,7 +372,7 @@ test.describe('Issue Severity coloring (#22)', () => {
   test('Export mode does not inherit the Warnings-tab colouring', async ({ page }) => {
     await page.getByTestId('detail-tab-warnings').click();
     await expect(page.getByTestId('issue-legend-ramp')).toBeVisible();
-    await page.locator('[data-testid="mode-export"]').click();
+    await enterExportWorkspace(page);
     await expect(page.getByTestId('issue-legend')).toHaveCount(0);
     await expect.poll(async () => {
       const shots = await shotColorsById(page);

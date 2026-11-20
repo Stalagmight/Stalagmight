@@ -43,6 +43,16 @@ function peopleOf(credits: Iterable<SurveyCredit | undefined>): Person[] {
   return dedupePeople(out);
 }
 
+/**
+ * True when a still-lazy section is known to credit nobody (no distinct credit
+ * at all, people or date), so a per-shot credit read can skip materializing
+ * its shots. False whenever that is not known for sure.
+ */
+export function lazySectionHasNoCredits(section: object): boolean {
+  const hint = isLazy(section) ? lazyCredits.get(section) : undefined;
+  return hint !== undefined && hint().length === 0;
+}
+
 /** The people one section credits, surveyors and explorers alike, first-seen order. */
 export function sectionPeople(section: Pick<Section, 'shots'>): Person[] {
   const hint = isLazy(section) ? lazyCredits.get(section) : undefined;

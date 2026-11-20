@@ -4,7 +4,7 @@ Plan mode answers one question: on this gas, starting here, how far into the cav
 can the diver get before they have to turn? Everything else - the route line, the
 turn dots, the stage drops, the pressure gauges - is a view onto that answer.
 
-Plan is one of the three workspace modes, read-only over the survey
+Plan is one of the four workspace modes (Survey, Data, Plan, Export), read-only over the survey
 ([SPEC.md 6.1](SPEC.md#61-workspace-modes)). The engine is
 `src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
 reached through the single `compute_gas_reach_field` command. Umbrella issue

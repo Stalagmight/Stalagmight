@@ -7,9 +7,8 @@ feature: import-export
 
 # Exporting
 
-1. Click **Export** in the top bar (next to **Survey** and **Plan**) to switch
-   to Export mode. Or open **Menu** > **Export** (`Ctrl+E`, `Cmd+E` on a Mac)
-   to get the same options in a dialog.
+1. Open **Menu** > **Export** (`Ctrl+E`, `Cmd+E` on a Mac). Export mode puts
+   its options in the right panel and the preview in the map area.
 2. Under **Export Type**, pick **Map Image** or **Survey Data**.
 3. Pick the **Format** and the options, click **Export** and choose where to
    save the file.
@@ -21,8 +20,7 @@ replacing stays as it was.
 
 - **Format**: **PNG**, **SVG** or **PDF**. For PNG, **Resolution** goes from
   **Low (72 DPI)** to **Print (600 DPI)**; the default is **High (300 DPI)**.
-- The preview is exactly what will be written: large in the map area in Export
-  mode, small under **Preview** in the dialog.
+- The preview in the map area is exactly what will be written.
 - The image always shows the whole survey, north up, with a small margin on a
   white background. It has no scale bar or north arrow.
 - The survey is drawn as the Closures Computed View shows it (loops closed,
@@ -103,8 +101,9 @@ these are usually the ties to the GPS fixes, not your survey.
 ## Details
 
 - Export mode is read-only: the right panel holds the export options, and the
-  **Data** panel and **Display** menu are hidden. Click **Survey** to edit again.
-- Export mode keeps your options while the project is open. The dialog starts
-  from the defaults each time.
+  **Data** panel and **Display** menu are hidden. Click **Close export** (or
+  press `Ctrl+E` or `Escape`) to go back to the mode you opened it from.
+- While a file is being written, Export mode stays open until it is done.
+- Export mode keeps your options while the project is open.
 - An export cannot overwrite the open project file.
 - Sending a project to SpeleoDB uploads the project itself, not an export.

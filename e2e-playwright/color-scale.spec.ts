@@ -8,6 +8,7 @@ import {
   readCanvasPixel,
   type PixelRgba,
   type SectionSeed,
+  enterExportWorkspace,
 } from './helpers/app';
 
 /**
@@ -270,7 +271,7 @@ test.describe('Colour scale', () => {
   });
 
   test('the export panel offers the palette and its own range for depth', async ({ page }) => {
-    await page.locator('[data-testid="mode-export"]').click();
+    await enterExportWorkspace(page);
     await expect(page.locator('[data-testid="export-mode-preview"]')).toBeVisible();
     await page.getByTestId('export-labels-options-toggle').click();
     await page.getByTestId('export-color-mode').click();

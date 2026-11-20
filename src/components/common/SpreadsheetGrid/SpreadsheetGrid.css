@@ -78,29 +78,98 @@
   white-space: nowrap;
 }
 
+/* Cell backgrounds come in two layers.
+   - background-COLOR is the cell's state: frozen / hovered / locked / draft /
+     missing / not-applicable (the rules below). They set only the colour, never
+     the `background` shorthand, which would wipe the image layers.
+   - background-IMAGE stacks translucent overlays on top of it, so they compose
+     with any state instead of replacing it: the host's row tint (bottom), the
+     find-match tint, then the range-selection fill (top). Each layer is a
+     variable that defaults to transparent; only cells that carry one pay for
+     the gradients. Marks (<mark class="sg-mark">) are content, painted above
+     every layer, so a match stays readable under selection / hover / tint. */
+.sg-grid .sg-row-tinted .sg-cell,
+.sg-grid .sg-cell.sg-cell-sel,
+.sg-grid .sg-cell.sg-cell-match {
+  background-image:
+    linear-gradient(var(--sg-l-sel, transparent), var(--sg-l-sel, transparent)),
+    linear-gradient(var(--sg-l-match, transparent), var(--sg-l-match, transparent)),
+    linear-gradient(var(--sg-l-tint, transparent), var(--sg-l-tint, transparent));
+}
+/* Row tint: the host sets `--sg-row-tint` (any colour) through `rowStyle`, and
+   optionally `--sg-row-tint-strength` (default 14%). Mixed into the cell at that
+   strength, over whatever state colour the cell has (N/A and locked included). */
+.sg-grid .sg-row-tinted .sg-cell {
+  --sg-l-tint: color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent);
+}
+/* Range selection (every selected cell but the active one). Same colour the
+   inline fill used to paint, now as the top layer. */
+.sg-grid .sg-cell.sg-cell-sel {
+  --sg-l-sel: var(--sg-blue-fill);
+}
+/* A cell holding a find match (the only cue on custom-render cells, which
+   cannot draw <mark>s), and the stronger look of the focused one. */
+.sg-grid .sg-cell.sg-cell-match {
+  --sg-l-match: var(--cc-warning-10);
+}
+.sg-grid .sg-cell.sg-cell-match-current {
+  --sg-l-match: var(--cc-warning-20);
+  box-shadow: inset 0 0 0 1px var(--cc-warning);
+}
+/* A custom-render cell holds its match where no <mark> can show it (inside a
+   chip, an icon): outline the whole cell in the mark colour, 2px so it reads
+   at a glance, and the focused one in the solid current-mark colour. */
+.sg-grid .sg-cell.sg-cell-match-outline {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--cc-warning) 60%, transparent);
+}
+.sg-grid .sg-cell.sg-cell-match-outline.sg-cell-match-current {
+  box-shadow: inset 0 0 0 2px var(--cc-warning-text);
+}
+/* -20, not -30: on the darker themes (one_dark, nord) -30 drops the text
+   contrast under 4:1. The focused match is solid, in the AA text tone. */
+.sg-grid mark.sg-mark {
+  background: var(--cc-warning-20);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+.sg-grid mark.sg-mark-current {
+  background: var(--cc-warning-text);
+  color: var(--cc-panel);
+  box-shadow: 0 0 0 1px var(--cc-warning-text);
+}
+
 /* Frozen rows (host-locked) carry a warning tint. */
 .sg-row-frozen .sg-cell {
-  background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
 }
 /* Externally-hovered row (e.g. the shot hovered on the map) - faint accent
    tint. Selection visuals render in overlays above the cells, so this never
    masks them. Declared after the frozen tint so hover wins on frozen rows. */
 .sg-row-hover .sg-cell {
-  background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
 }
 /* A cell that cannot be edited while the grid as a whole can (read-only
    column, frozen geometry, read-only mode): visibly recessed - darker
    background, dimmed text, not-allowed cursor. Declared after the row tints
    so the recess survives frozen/hover backgrounds. */
 .sg-grid .sg-cell-locked {
-  background: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
   color: var(--cc-text-secondary);
   cursor: not-allowed;
 }
+/* A column that does not apply to this row (GridColumn.isApplicable, or any
+   cell of a group-header row) is a plain blank cell: no class rule at all, so it
+   has the ordinary cell background and cursor and takes the row tint, hover,
+   selection and frozen layers exactly like an empty editable cell. What sets
+   it apart is behaviour (never edited, copied as '', skipped by Tab), not a
+   look: on a grid that mixes row kinds half the cells are N/A, and any pattern
+   on them is noise. `sg-cell-na` stays on the element as the hook for tests
+   and hosts. */
 
 /* The phantom "new shot" draft row at the end of the table. */
 .sg-row-draft .sg-cell {
-  background: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
 }
 
 /* A required cell the user emptied: the model keeps its value, the cell shows
@@ -113,7 +182,7 @@
    missing values live in the data table, only the inset border survived and the
    red fill silently did not. */
 .sg-grid .sg-cell.sg-cell-missing {
-  background: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-error) 60%, transparent);
 }
 
@@ -302,6 +371,135 @@
   color: var(--sg-blue);
 }
 
+/* Group-header row (groupRowContent): one band across every column, styled
+   like a quiet header. Its content sticks just right of the gutter (inline
+   `left`), so it stays in view while the grid scrolls sideways. No overflow
+   clip on the band: that would make it the sticky element's scroll box. */
+.sg-grid .sg-group-band {
+  background-color: var(--sg-header-bg);
+  border-color: var(--sg-line-strong);
+  color: var(--sg-header-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sg-grid .sg-row-tinted .sg-group-band {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent),
+    color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent)
+  );
+}
+.sg-grid .sg-group-content {
+  position: sticky;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+/* groupContentStart 'gutter': the content is a child of the sticky gutter
+   (z-20), placed at the inset (inline `left`) and flowing on over the band, so
+   it rides along with the gutter while scrolling sideways and paints above the
+   gutter's background and the band. No background of its own: the gutter's
+   selected / active / hover tints and the band-focus outline show through.
+   The band's text style, not the gutter's (11px, bold when active, accent when
+   selected). Clipped only at its own width cap (the visible area). */
+/* A group row whose content starts in the gutter reads as one band: the
+   gutter's right edge would otherwise run through the header text. */
+.sg-grid .sg-gutter.sg-gutter-group-start {
+  border-right-color: transparent;
+}
+.sg-grid .sg-group-content.sg-group-content-gutter {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  overflow: hidden;
+  padding: 0 8px 0 0;
+  color: var(--sg-header-text);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Spanning cells (spanCells): one box over a run of columns, above the cells
+   and under the selection overlay (inline z-index 2). Transparent, so cell
+   states and the selection fill show through; the pointer passes through to
+   the cells except on interactive descendants. */
+.sg-grid .sg-span {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.sg-grid .sg-span :is(a, button, input, select, textarea, summary, [role='button'], [role='link'], [tabindex], [data-sg-interactive]) {
+  pointer-events: auto;
+}
+
+/* headerCorner content: left-aligned, ellipsized (the full text is its title). */
+.sg-grid .sg-corner-content {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 12px;
+}
+
+/* A header drag whose drop the host's constrainColumnOrder turns into a no-op:
+   no drop line, a not-allowed cursor and a faded ghost. */
+.sg-grid.sg-grabbing.sg-drop-blocked,
+.sg-grid.sg-grabbing.sg-drop-blocked * {
+  cursor: not-allowed !important;
+}
+.sg-grid.sg-drop-blocked .sg-col-ghost {
+  opacity: 0.55;
+}
+
+/* Header sort affordance: after the label, shown on hover / focus, always on
+   the sorted column. */
+.sg-grid .sg-sort-btn,
+.sg-grid .sg-sort-indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--sg-header-text);
+}
+.sg-grid .sg-sort-btn {
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.sg-grid .sg-header:hover .sg-sort-btn,
+.sg-grid .sg-sort-btn:focus-visible,
+.sg-grid .sg-sort-btn.sg-sort-active {
+  opacity: 1;
+}
+.sg-grid .sg-sort-btn:hover {
+  background-color: color-mix(in srgb, var(--cc-text-primary) 10%, transparent);
+  color: var(--cc-text-primary);
+}
+.sg-grid .sg-sort-btn:focus-visible {
+  outline: 2px solid var(--cc-focus-ring);
+  outline-offset: -1px;
+}
+.sg-grid .sg-sort-btn.sg-sort-active,
+.sg-grid .sg-sort-indicator {
+  color: var(--sg-blue);
+}
+
 /* Right-click context menu. */
 .sg-context-menu {
   min-width: 160px;
@@ -326,9 +524,13 @@
   border: 0;
   cursor: pointer;
 }
-.sg-context-menu button:hover {
+.sg-context-menu button:hover:not(:disabled) {
   background: var(--cc-accent);
   color: var(--cc-accent-on);
+}
+.sg-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .sg-context-menu .sg-shortcut {
   font-size: 11px;

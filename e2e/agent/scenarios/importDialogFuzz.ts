@@ -140,8 +140,11 @@
  *                    set-all click must not move the undo stack
  *   IMPORT GATE      a second file routed into a screen an import owns must be
  *                    refused (#411's `importFlowOwnsScreen`)
- *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
- *                    judged on the dialog the DISPATCHER saw, not the digest
+ *   EXPORT CHORD     Ctrl+E toggles the Export workspace at idle, and must be
+ *                    INERT behind a dialog, an overlay, a placement, the
+ *                    fullscreen table or with no project: appMode does not
+ *                    move and no Export panel appears - judged on the gates
+ *                    the DISPATCHER saw, not the digest
  *   CLOSE            closing the project at idle must leave nothing behind
  *
  * The `RACE_TARGETS` generators still play (clicking a confirm the digest saw
@@ -439,6 +442,7 @@ import {
   ADVANCE_MOVE,
   ESCAPE_BUDGET,
   ESCAPE_PATH,
+  exportChordVerdict,
   IMPORT_GUARDED_SCREENS,
   isEscaped,
   isOrphanRepeatControl,
@@ -1119,6 +1123,12 @@ export const importDialogFuzz: Scenario = {
       placementAtDispatch: boolean | null;
       /** `dataTableFullScreen` at the same instant. `key:` chords only. */
       fullscreenAtDispatch: boolean | null;
+      /** `screenOccupants > 0` at the same instant. `key:` chords only. */
+      occupantsAtDispatch: boolean | null;
+      /** A project was open at the same instant. `key:` chords only. */
+      projectAtDispatch: boolean | null;
+      /** `appMode` at the same instant - what EXPORT CHORD compares against. */
+      appModeAtDispatch: string | null;
       /**
        * What a file entry point did with the path. Null for every other move.
        *
@@ -1139,6 +1149,9 @@ export const importDialogFuzz: Scenario = {
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
       let fullscreenAtDispatch: boolean | null = null;
+      let occupantsAtDispatch: boolean | null = null;
+      let projectAtDispatch: boolean | null = null;
+      let appModeAtDispatch: string | null = null;
       let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
@@ -1150,6 +1163,9 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch = outcome.dialogAtDispatch;
         placementAtDispatch = outcome.placementAtDispatch;
         fullscreenAtDispatch = outcome.fullscreenAtDispatch;
+        occupantsAtDispatch = outcome.occupantsAtDispatch;
+        projectAtDispatch = outcome.projectAtDispatch;
+        appModeAtDispatch = outcome.appModeAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
         if (record && performed) {
@@ -1311,6 +1327,9 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch,
         placementAtDispatch,
         fullscreenAtDispatch,
+        occupantsAtDispatch,
+        projectAtDispatch,
+        appModeAtDispatch,
         handoff,
       };
     };
@@ -2075,9 +2094,9 @@ export const importDialogFuzz: Scenario = {
           await stepOracles(move, digest, screenBefore, outcome.performed, outcome.handoff);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
           if (move.kind === 'closeProject') historyTouched = true;
-          // The export modal is not an import screen, so opening it must not
-          // make an idle walk look like a flow that imported nothing - see
-          // NON_FLOW_SCREENS.
+          // A non-import screen reachable from idle must not make an idle walk
+          // look like a flow that imported nothing - see NON_FLOW_SCREENS. (The
+          // Export workspace Ctrl+E opens is `idle` itself, not a screen.)
           if (digest.screen !== 'idle' && !NON_FLOW_SCREENS.has(digest.screen)) leftIdle = true;
           {
             // FIRST WINS, and the counts are read on the SAME step as the claim -
@@ -2216,50 +2235,61 @@ export const importDialogFuzz: Scenario = {
           }
           if (exportChord && outcome.performed) {
             ctx.metric(`exportChord:${screenBefore}`);
-            // The app's own gate, in full. `useKeyboardShortcuts` reads THREE
-            // pieces of store state inside the keydown handler, and Ctrl+E is
-            // swallowed by any of them:
+            // Ctrl+E no longer opens a dialog: at idle it TOGGLES the Export
+            // workspace (enter, or leave back to the recorded mode). The app's
+            // gate, in full, is what `useKeyboardShortcuts` reads inside the
+            // keydown handler, and every one of these swallows the chord:
             //
+            //   screenOccupants > 0 -> returns early for every key
             //   activeDialog        -> returns early for every non-Escape key
             //   placementModeActive -> `export` is not in PLACEMENT_MODE_ALLOWED_SHORTCUTS
             //   dataTableFullScreen -> nor in FULLSCREEN_TABLE_ALLOWED_SHORTCUTS
+            //   no project open     -> the `export` case does nothing
             //
-            // Reading only the first was a hole with a live case behind it: on
+            // Reading only the dialog was a hole with a live case behind it: on
             // MAP PLACEMENT the dialog is CLOSED and placement is on, which is
-            // where this scenario spends its map clicks. A regression letting
-            // the chord through there would have been recorded as
-            // `exportChordAfterDialogClosed` - a counter - instead of failing.
-            // An export modal opened behind any of the three sits over a flow
-            // that still owns the state under it.
+            // where this scenario spends its map clicks. A workspace entered
+            // behind any gate sits over a flow that still owns the state under
+            // it, so behind a gate the chord must change NOTHING - judged as
+            // `appMode` not moving and no Export panel appearing, by
+            // `exportChordVerdict`, which owns the argument and the one excuse
+            // (a project switch inside the settle window forces Survey on its
+            // own).
             //
-            // The handler's two remaining early returns - `defaultPrevented`,
-            // and focus sitting in an input or contenteditable - are deliberately
-            // NOT read. Both are conditions under which the app swallows MORE
-            // chords, never fewer, so neither can turn a legal export modal into
-            // a failure here; and a chord they swallow opens nothing to assert
-            // on. They are properties of the event and its target rather than of
-            // app state, which is also why the store cannot answer for them.
-            //
-            // Judged at dispatch - the values that gate read - and not
-            // on `screenBefore`, which is a round trip older. An import that
-            // completes in that gap closes its dialog, and the chord then lands
-            // at idle and is entitled to open the modal. Measured, on the corpus
-            // campaign's seed-117 retry: `walls import` left the screen on
-            // `walls` with the import still running, the next move was the Ctrl+E
-            // interjection, and the failure blamed the dispatcher for a chord it
-            // had swallowed correctly - the dialog was simply gone by then.
-            const gatesAtDispatch: string[] = [];
-            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
-            if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
-            if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
-            if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
-              fail(
-                `EXPORT CHORD: Ctrl+E opened the export modal behind ${gatesAtDispatch.join(' + ')}`,
-                `  screen ${screenBefore} -> ${digest.screen}; that gate was on when the keydown was ` +
-                  'dispatched, so the shortcut dispatcher must swallow the chord',
-              );
-            } else if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
-              ctx.metric('exportChordAfterDialogClosed');
+            // Judged at dispatch - the values that gate read, and the mode it
+            // would toggle - and not on `screenBefore`, which is a round trip
+            // older. An import that completes in that gap closes its dialog, and
+            // the chord then lands at idle and is entitled to act. Measured, on
+            // the corpus campaign's seed-117 retry: `walls import` left the
+            // screen on `walls` with the import still running, the next move was
+            // the Ctrl+E interjection, and the failure blamed the dispatcher for
+            // a chord it had swallowed correctly - the dialog was simply gone by
+            // then.
+            const verdict = exportChordVerdict({
+              dialog: outcome.dialogAtDispatch,
+              placement: outcome.placementAtDispatch === true,
+              fullscreen: outcome.fullscreenAtDispatch === true,
+              occupants: outcome.occupantsAtDispatch === true,
+              // `null` means the bridge could not read it; that is not "no
+              // project", so it must not invent a gate.
+              project: outcome.projectAtDispatch !== false,
+              appModeBefore: outcome.appModeAtDispatch,
+              appModeAfter: digest.appMode,
+              exportPanelAfter: digest.live['export-panel'] === 2,
+              projectSwitched: before.hasProject !== digest.hasProject || before.projectFile !== digest.projectFile,
+            });
+            if (verdict.kind === 'breach') {
+              fail(verdict.headline, `${verdict.detail}\n  screen ${screenBefore} -> ${digest.screen}`);
+            } else if (verdict.kind === 'excused') {
+              ctx.metric('exportChordModeMovedWithProject');
+            } else if (verdict.kind === 'inert') {
+              ctx.metric('exportChordInertBehindGate');
+            } else {
+              // Ungated: counted, never asserted. Focus in a text field and an
+              // already-prevented event both swallow the chord legitimately,
+              // and neither is a store fact this oracle can read.
+              ctx.metric(`exportChordUngated:${verdict.effect}`);
+              if (screenBefore !== 'idle' && verdict.effect === 'entered') ctx.metric('exportChordAfterDialogClosed');
             }
           }
           if (frozenDelete && outcome.performed) {

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../formatters';
+import {
+  MAX_STATION_NAME_CHARS,
+  displayStationName,
+  formatShotId,
+  formatStationId,
+  formatStationIdWithName,
+  sanitizeStationName,
+} from '../formatters';
 
 describe('formatShotId', () => {
   it('formats section and shot position', () => {
@@ -81,5 +88,51 @@ describe('displayStationName', () => {
   it('is empty for no name', () => {
     expect(displayStationName(undefined)).toBe('');
     expect(displayStationName(null)).toBe('');
+  });
+});
+
+// The same cases as the Rust tests of `sanitize_station_name`
+// (src-tauri/crates/models/src/station_name.rs), which this mirrors.
+describe('sanitizeStationName', () => {
+  it('keeps an ordinary name and trims it', () => {
+    expect(sanitizeStationName('17')).toBe('17');
+    expect(sanitizeStationName('  A12 east \t')).toBe('A12 east');
+    expect(sanitizeStationName('\u05e0\u05e7\u05d5\u05d3\u05d4 3')).toBe('\u05e0\u05e7\u05d5\u05d3\u05d4 3');
+  });
+
+  it('empty and whitespace-only mean remove', () => {
+    expect(sanitizeStationName('')).toBeNull();
+    expect(sanitizeStationName('   \t\n ')).toBeNull();
+    expect(sanitizeStationName('\u202e\u200f\u0007')).toBeNull();
+  });
+
+  it('strips controls and bidi overrides; a newline or tab becomes a space', () => {
+    expect(sanitizeStationName('A\u202eB\u2066C\u0000D\ufffe')).toBe('ABCD');
+    expect(sanitizeStationName('Sump\nentrance')).toBe('Sump entrance');
+    expect(sanitizeStationName('a\u0085b')).toBe('a b'); // NEL: a whitespace control
+    expect(sanitizeStationName('a\u009bb')).toBe('ab'); // a C1 control that is not whitespace
+  });
+
+  it('trims what Rust trims, and only that', () => {
+    expect(sanitizeStationName('\u3000\u00a0x\u2028')).toBe('x');
+    // U+FEFF is not Unicode White_Space: Rust keeps it, JS trim() would not.
+    expect(sanitizeStationName('\ufeffx')).toBe('\ufeffx');
+  });
+
+  it('clamps to the char limit on a code point boundary', () => {
+    const long = '\u00e9'.repeat(MAX_STATION_NAME_CHARS + 50);
+    expect(Array.from(sanitizeStationName(long)!)).toHaveLength(MAX_STATION_NAME_CHARS);
+    const astral = '\u{1f600}'.repeat(MAX_STATION_NAME_CHARS + 1);
+    expect(Array.from(sanitizeStationName(astral)!)).toHaveLength(MAX_STATION_NAME_CHARS);
+    // A cut that lands after a space does not leave trailing whitespace.
+    const spaced = `${'x'.repeat(MAX_STATION_NAME_CHARS - 1)} tail`;
+    expect(sanitizeStationName(spaced)).toBe('x'.repeat(MAX_STATION_NAME_CHARS - 1));
+  });
+
+  it('is idempotent', () => {
+    for (const raw of ['  a\tb  ', 'A\u202eB', 'z'.repeat(400), '17', ' x \n y ']) {
+      const once = sanitizeStationName(raw)!;
+      expect(sanitizeStationName(once)).toBe(once);
+    }
   });
 });

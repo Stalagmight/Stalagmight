@@ -93,7 +93,7 @@ export function useLoadingProgress() {
           return;
         }
 
-        // Filter out export-related events - those are handled by ExportDialog directly
+        // Filter out export-related events - the Export panel's ExportControls handles those
         // Export phases use a separate flow and should not update project loading state
         const { phase } = event.payload;
         if (phase.startsWith('export_')) {
