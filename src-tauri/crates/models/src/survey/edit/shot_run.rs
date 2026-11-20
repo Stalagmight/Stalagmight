@@ -326,6 +326,13 @@ impl<'p> ShotEditRun<'p> {
         }
     }
 
+    /// End the run for a caller that validates the final state itself (the
+    /// execute pipeline validates every edit before it records it), so the
+    /// survey is validated once per command, not twice. What an update can
+    /// break on a valid model (a placement no longer finite) is refused by
+    /// the update itself, with `update_shot`'s words.
+    pub fn end(self) {}
+
     /// End the run: validate once if any update ran the edit epilogue.
     pub fn finish(self) -> Result<(), EditError> {
         if self.settled {

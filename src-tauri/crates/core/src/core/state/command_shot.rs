@@ -245,7 +245,8 @@ fn created_shot_warnings(project: &Project, line: LineId, index: usize) -> Vec<V
 /// one [`ShotEditRun`]: each exactly as its own `update_shot` after the
 /// frozen-shot refusal (S12: the model does not refuse frozen shots; the
 /// command does), in one survey pass. Any other command in `cmds` is
-/// skipped. On `Err` the caller rolls back (`run_recorded`).
+/// skipped. On `Err` the caller rolls back, and on `Ok` it validates the
+/// final state (`run_recorded`).
 pub(super) fn apply_updates(project: &mut Project, cmds: &[Command]) -> Result<(), String> {
     let mut run = ShotEditRun::new(project);
     for cmd in cmds {
@@ -266,7 +267,9 @@ pub(super) fn apply_updates(project: &mut Project, cmds: &[Command]) -> Result<(
         run.update_shot(*line_id, *shot_id, updates)
             .map_err(|e| e.to_string())?;
     }
-    run.finish().map_err(|e| e.to_string())
+    // `run_recorded` validates the final state before it records it.
+    run.end();
+    Ok(())
 }
 
 /// The execute pipeline's mutation for the shot family (`commands.rs`
