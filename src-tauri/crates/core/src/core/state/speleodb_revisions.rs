@@ -15,6 +15,8 @@ use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
 use crate::models::UndoMode;
+use crate::persistence::legacy_link;
+use crate::persistence::stalx_v2::{self, Format};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
 use crate::speleodb::{client, sync};
@@ -23,13 +25,15 @@ use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 /// Read one downloaded revision's effective undo mode without installing it over the
 /// working copy. Revision metadata does not carry this policy, so a forward chain step
 /// has to inspect the child `.stalx` it would load.
-fn downloaded_revision_undo_mode(
-    source: &std::path::Path,
-    scratch_base: &std::path::Path,
-) -> Result<UndoMode, SpeleoDbError> {
+///
+/// The download is sniffed: a version 2 file answers from its header (`speleodb`
+/// is read before the survey body, so the rest is never parsed here; the install
+/// decodes and validates it whole), a legacy SQLite one from its `speleo_link`
+/// row, read-only under the untrusted caps (the value-length limit and the
+/// deadline), so nothing is copied and nothing is left behind.
+fn downloaded_revision_undo_mode(source: &std::path::Path) -> Result<UndoMode, SpeleoDbError> {
     downloaded_revision_undo_mode_with_limits(
         source,
-        scratch_base,
         super::speleodb_pull::DOWNLOADED_VALUE_LIMIT,
         super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE,
     )
@@ -37,50 +41,38 @@ fn downloaded_revision_undo_mode(
 
 fn downloaded_revision_undo_mode_with_limits(
     source: &std::path::Path,
-    scratch_base: &std::path::Path,
     value_limit: i32,
     deadline: std::time::Duration,
 ) -> Result<UndoMode, SpeleoDbError> {
-    let mut name = scratch_base
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
-        .to_os_string();
-    name.push(format!(
-        ".undo-mode.{}.stalx",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let probe = scratch_base.with_file_name(name);
-
-    let result = (|| {
-        std::fs::copy(source, &probe).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        let db =
-            crate::persistence::Database::open_existing_untrusted(&probe, value_limit, deadline)
-                .map_err(super::speleodb_cache_install::downloaded_file_error)?;
-        let stored_mode = db
-            .load_speleo_link()
-            .map_err(|e| {
-                SpeleoDbError::Io(format!(
-                    "could not read the downloaded revision's undo policy: {e}"
-                ))
-            })?
-            .and_then(|link| link.undo_mode);
-        // NULL revisions predate shared undo history. They cannot prove that a stack
-        // was intentionally published, so never reinterpret them using this machine's
-        // current global default.
-        Ok(stored_mode.map_or(UndoMode::Disabled, UndoMode::resolved))
-    })();
-
-    if let Err(e) = std::fs::remove_file(&probe) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                error = %e,
-                path = %probe.display(),
-                purpose = "clean up a downloaded revision policy probe",
-                "could not remove the temporary revision policy probe"
-            );
+    let unreadable = |e: &dyn std::fmt::Display| {
+        SpeleoDbError::Io(format!(
+            "could not read the downloaded revision's undo policy: {e}"
+        ))
+    };
+    let header = stalx_v2::probe_path(source).map_err(|e| unreadable(&e))?;
+    let stored_mode = match header.format {
+        Format::V2 if header.complete => header.speleodb.and_then(|link| link.undo_mode),
+        Format::V2 => return Err(unreadable(&"the file's header could not be read")),
+        Format::Legacy => legacy_link::read_link(
+            source,
+            &legacy_link::ReadOptions {
+                recover: false,
+                max_value_bytes: Some(value_limit),
+                deadline: Some(deadline),
+            },
+        )
+        .map_err(|e| unreadable(&e))?
+        .and_then(|link| link.undo_mode),
+        Format::Unknown => {
+            return Err(SpeleoDbError::Parse(
+                "the downloaded revision is not a Stalagmight project".to_owned(),
+            ))
         }
-    }
-    result
+    };
+    // NULL revisions predate shared undo history. They cannot prove that a stack
+    // was intentionally published, so never reinterpret them using this machine's
+    // current global default.
+    Ok(stored_mode.map_or(UndoMode::Disabled, UndoMode::resolved))
 }
 
 /// [#218] Validate a git commit SHA supplied over IPC (revision restore) before it
@@ -298,21 +290,29 @@ impl AppState {
         }
     }
 
-    /// [#303] Stamp the watermark for a stack that has just been loaded by a chain step.
+    /// [#303] The watermark for a stack that has just been loaded by a chain step.
     ///
     /// `now` would almost always do, but not quite: the entries came off another machine,
     /// and a pusher with a skewed clock can stamp them in the FUTURE. Those would then sit
     /// above the watermark and ride into the commit anyway, which is the whole bug. Taking
     /// the later of `now` and the newest loaded entry makes "at or before" true of every
     /// row that was just loaded, whatever clock wrote it.
-    fn speleodb_stamp_inherited_watermark(&self) {
+    pub(super) fn speleodb_loaded_history_watermark(&self) -> chrono::DateTime<chrono::Utc> {
         let newest = self
             .undo_stack
             .lock()
-            .ok()
-            .and_then(|stack| stack.newest_stamp());
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .newest_stamp();
         let now = chrono::Utc::now();
-        let watermark = newest.map_or(now, |newest| newest.max(now));
+        newest.map_or(now, |newest| newest.max(now))
+    }
+
+    /// [#303] Stamp the watermark for a stack that has just been loaded (see
+    /// [`Self::speleodb_loaded_history_watermark`]) and make it durable. Takes
+    /// `project`: a caller holding that guard sets the field and saves with
+    /// `persist_local_state_at` instead (`speleodb_after_swap`).
+    pub(super) fn speleodb_stamp_inherited_watermark(&self) {
+        let watermark = self.speleodb_loaded_history_watermark();
         self.speleodb_set_inherited_through(Some(&watermark.to_rfc3339()));
     }
 
@@ -485,8 +485,7 @@ impl AppState {
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         if keep_undo_history && chain_forward {
-            let target_mode =
-                downloaded_revision_undo_mode(native.path(), &dest).map_err(local_dto)?;
+            let target_mode = downloaded_revision_undo_mode(native.path()).map_err(local_dto)?;
             if !target_mode.pushes_history() {
                 return Err(local_dto(SpeleoDbError::Io(
                     "the next revision did not publish undo history, so there is no forward \
@@ -539,7 +538,10 @@ impl AppState {
         // through that same commit (`restore` asks to carry it): the claim bound to
         // the generation the swap was bound to moves to the new one, provenance and
         // all, and nothing else can (`speleodb_edit_gate`). A View carries nothing,
-        // so it lands read-only whatever was open before.
+        // so it lands read-only whatever was open before. The swap's follow-up then
+        // records the chain position on the copy it opened - this step's revision
+        // for a history-keeping Unwind (its loaded history stamped inherited), else
+        // none - and only while that copy is still the open project.
         self.speleodb_swap_in_revision(
             native.path(),
             &dest,
@@ -554,16 +556,8 @@ impl AppState {
             ),
             binding,
             restore,
+            keep_undo_history.then_some(hexsha.as_str()),
         )?;
-        self.while_swapped_in_project_is_open(&dest, &project_id, || {
-            if keep_undo_history {
-                self.speleodb_set_unwound_from(Some(&hexsha));
-                self.speleodb_stamp_inherited_watermark();
-            } else {
-                self.speleodb_set_unwound_from(None);
-                self.speleodb_set_inherited_through(None);
-            }
-        });
 
         Ok(SpeleoOpenResult {
             local_path,

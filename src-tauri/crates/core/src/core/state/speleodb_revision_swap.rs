@@ -18,16 +18,15 @@
 //! is. There is no window in which the old project is closed and the new one not
 //! yet loaded, so there is nothing for a second open to slip into either.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use super::speleodb::local_dto;
-use super::speleodb_cache::{
-    preserved_display_settings, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
+use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::speleodb_cache_install::{stage_download, sync_staged_file};
 use super::AppState;
 use crate::models::SpeleoLink;
-use crate::persistence::Database;
+use crate::persistence::stalx_v2::{self, Format};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 /// The open project a revision swap was asked for, captured under ONE `project`
@@ -74,6 +73,11 @@ impl AppState {
     /// `editing` is the edit gate the reopened project gets, set inside that same
     /// commit: a gate opened afterwards could land on a project the user switched
     /// to in between.
+    ///
+    /// `unwound_to` is the Unwind chain position the swapped-in copy records
+    /// (`Some(hexsha)` for a history-keeping step, whose loaded history is then
+    /// stamped inherited) or clears (`None`). It is written by the follow-up,
+    /// with the local display settings carried across, in ONE durable save.
     #[expect(
         clippy::result_large_err,
         reason = "preserve the shared structured IPC recovery payload"
@@ -86,19 +90,18 @@ impl AppState {
         (policy, undo): (LocalEditsPolicy, InheritedUndo),
         binding: SwapBinding,
         editing: bool,
+        unwound_to: Option<&str>,
     ) -> Result<(), SpeleoErrorDto> {
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(&link.project_id, dest)
                 .map_err(local_dto)?;
         }
+        let project_id = link.project_id.clone();
+        // Per-machine view state, read before the copy at `dest` is replaced.
+        let display = self.display_settings_at(dest);
         self.stamp_downloaded_link(native, link)
             .map_err(local_dto)?;
         let staged = stage_download(native, dest, undo, sync_staged_file).map_err(local_dto)?;
-        {
-            let db = Database::open_existing(&staged)
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-            restore_display_settings(&db, &preserved_display_settings(dest));
-        }
         sync_staged_file(&staged).map_err(local_dto)?;
         let result = self.open_project_download(
             staged.to_path_buf(),
@@ -106,14 +109,70 @@ impl AppState {
             (binding.generation, binding.snapshot),
             editing,
         )?;
-        if result.success {
-            Ok(())
-        } else {
-            Err(local_dto(SpeleoDbError::Io(
+        if !result.success {
+            return Err(local_dto(SpeleoDbError::Io(
                 result
                     .error
                     .unwrap_or_else(|| "Could not reload project".into()),
-            )))
+            )));
+        }
+        self.while_swapped_in_project_is_open(dest, &project_id, |path| {
+            self.speleodb_after_swap(path, display, unwound_to);
+        });
+        Ok(())
+    }
+
+    /// The local display settings of the copy at `dest`, carried onto the
+    /// revision that replaces it (a server copy carries no per-machine state):
+    /// the open project's in-memory ones when `dest` is the open project (the
+    /// case for every revision swap, which binds to the open project), else
+    /// those its version 2 header holds. A legacy copy that is not open keeps
+    /// none.
+    fn display_settings_at(&self, dest: &Path) -> BTreeMap<String, String> {
+        let open_here = self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, dest));
+        if open_here {
+            return self.with_file(|file| file.display_settings().clone());
+        }
+        match stalx_v2::probe_path(dest) {
+            Ok(header) if header.format == Format::V2 => {
+                header.local.map(|local| local.display).unwrap_or_default()
+            }
+            _ => BTreeMap::new(),
+        }
+    }
+
+    /// What a swap records on the copy it just opened, made durable in one
+    /// local-only save. The caller holds the `project` guard (`path` is the
+    /// open project's `file_path`, read through it):
+    /// - the carried display settings, over whatever the download held;
+    /// - [#303] the Unwind chain pointer (`unwound_to`), and the inherited-history
+    ///   watermark: for a history-keeping step the later of now and the newest
+    ///   loaded entry (`speleodb_loaded_history_watermark`), else cleared.
+    fn speleodb_after_swap(
+        &self,
+        path: Option<PathBuf>,
+        display: BTreeMap<String, String>,
+        unwound_to: Option<&str>,
+    ) {
+        let watermark = unwound_to.map(|_| self.speleodb_loaded_history_watermark());
+        self.with_file(|file| {
+            file.extras.local.display.extend(display);
+            let sync = &mut file.extras.local.speleodb;
+            sync.unwound_from = unwound_to.map(str::to_owned);
+            sync.inherited_through = watermark;
+        });
+        self.undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_inherited_through(watermark);
+        if let Err(e) = self.persist_local_state_at(path) {
+            tracing::warn!(
+                error = %e,
+                purpose = "record a revision swap's chain position and watermark (#303)",
+                "could not persist the swapped-in copy's local state; it is set in memory"
+            );
         }
     }
 
@@ -123,27 +182,31 @@ impl AppState {
     /// after its commit (lock provenance, the Unwind chain pointer, the
     /// inherited-history watermark) address whatever is open, so a switch in
     /// that gap would otherwise stamp them onto someone else's project.
+    ///
+    /// `then` gets the open project's `file_path`, read through that guard: the
+    /// guard is not reentrant, so a durable save inside `then` must go through
+    /// `persist_local_state_at`, never `persist_local_state`.
     pub(super) fn while_swapped_in_project_is_open(
         &self,
         dest: &Path,
         project_id: &str,
-        then: impl FnOnce(),
+        then: impl FnOnce(Option<PathBuf>),
     ) {
         // Held across `then`; it only takes locks that nest inside `project`.
         let project = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let at_dest = project
-            .as_ref()
-            .and_then(|open| open.file_path.as_deref())
+        let path = project.as_ref().and_then(|open| open.file_path.clone());
+        let at_dest = path
+            .as_deref()
             .is_some_and(|open| super::project_io::same_file(open, dest));
         if at_dest
             && self
                 .speleodb_open_link()
                 .is_ok_and(|link| link.project_id == project_id)
         {
-            then();
+            then(path);
         } else {
             tracing::info!(
                 project_id = %project_id,

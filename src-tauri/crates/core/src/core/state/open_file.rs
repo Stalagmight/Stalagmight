@@ -322,12 +322,17 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
-        let path = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|p| p.file_path.clone());
+        let path = self.open_file_path();
+        self.persist_local_state_at(path)
+    }
+
+    /// [`Self::persist_local_state`] for a caller that already holds the
+    /// `project` guard (which is not reentrant): `path` is the open project's
+    /// `file_path`, read through that guard. Takes `file`, then `undo_stack`.
+    pub(crate) fn persist_local_state_at(
+        &self,
+        path: Option<PathBuf>,
+    ) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
             .lock()
