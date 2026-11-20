@@ -200,3 +200,32 @@ placed on their GPS, demoted datums and dropped placement stations.
 | `anchors_tests.rs` | Shot edits, explicit and undeclared placement changes, cut-off pieces, merges (free, placed, re-keyed placement), detach with and without a `via` fix, first and later datums, frame removal (translation and promotion), last datum, GPS edits, idempotence, declared corrections. |
 | `build_tests.rs` | Construction, refusals, ids, caches, naming, uuids, closure strategy spellings, stale attachments. |
 | `legacy_crosscheck_tests.rs` | Surveys built with `models::project` (merges, a merge at a line's last station, hand moves on merged members, datum pieces, a fix, free pieces, 40 seeded random surveys) lay out every slot within 1e-9 m of `compute_station_coordinates`. |
+
+## Commands (stream M2)
+
+Topology, closures, datums, move tools and Add, on top of the construction
+API. Each command runs one pipeline (`ops.rs`, `Project::run_op`): snapshot
+the anchors, mutate, `drop_stale_attachments`, `settle_anchors`, the
+orphan-closure sweep for topology edits, `validate`; a refusal or a
+violation restores the project exactly (a clone taken first). Refusals are
+typed (`OpError`), with today's wording as `Display`. Results are
+`OpOutcome { value, anchors: AnchorReport, sweep: SweepReport }`. Commands do
+not touch `modified_at` (the command layer does).
+
+| File | Commands and queries |
+|---|---|
+| `ops.rs` | `OpError`, `OpOutcome`, `run_op`, `station_of_slot`, `line_text`, `station_text`. |
+| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias, comments joined, names re-uniquified on the moving lines, `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`. |
+| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction): new station named after the junction, datums / closure ends / hand move with `via` = the line move to it. |
+| `ops_closures.rs` | `create_closure(a, a_via, b, b_via, strategy)`, `create_closure_at(slot, slot, strategy)`, `remove_closure(id)`, `closure_refusal`, `closure_preview`, `closure_between`. |
+| `sweep.rs` | `sweep_orphan_closures() -> SweepReport` (plan 5.5): one pass in list order; `a == b` removed; a sole bridge promoted by a merge (end `a`'s piece moves unless it is placed and `b`'s is not), kept between two placed pieces. Called by M2's topology commands and by M1's deletes. |
+| `ops_datums.rs` | `set_datum(station, via, gps, accuracy)` / `set_datum_at(slot, ...)` (append, accuracy-only edit, or GPS edit through the anchor algorithm), `remove_datum(index)` / `remove_datum_at(slot)` (sweeps), `set_datum_entrance`, `datum_entrance`, `datum_index_for(station, via)` (the datum a slot has), `preview_zero_datum`. |
+| `ops_move.rs` | `move_segment(line, offset)` (translates the piece's placement; refused with a datum in the rigid group), `move_station(station, offset)` (rewrites every incident shot on every line, folds the station's hand moves, moves its placement), `rigid_group_components`, `rigid_group_lines`, `rigid_group_holds_datum`, `rigidly_tied`, `anchored_lines`, `colocated_stations`, `immovable_stations`. |
+| `append.rs` | `append_project(source) -> AppendSummary` (Add .stalx / Merge Projects: ids offset or re-minted, Sections and line names made unique, colliding uuids re-minted, the copy moved by `place_by_datum`'s vector with placements translated and corrections recomputed). |
+| `m3_stubs.rs` | Stand-ins for stream M3 (closure metrics, the across-one-shot knot rule, datum roles, gaps, entrance defaults); delete when M3 lands. |
+
+Tests: `ops_merge_tests`, `ops_detach_tests`, `ops_closures_tests`,
+`ops_datums_tests`, `ops_move_tests`, `append_tests`, `ops_scenario_tests` (the
+model review's scenarios) and `ops_property_tests` (seeded random command
+sequences: valid after every step, refusals change nothing, no-move commands
+move nothing, a seed replays bit for bit).
