@@ -52,7 +52,7 @@ use super::robustness_kit::{
 use super::{AppState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LineUpdates, ShotData, ShotUpdates, StationRef,
+    ClosureStrategy, GpsCoordinates, LineUpdates, ShotUpdates, StationRef,
 };
 use crate::persistence::stalx_v2::{self, Format};
 use crate::test_helpers::isolated_config;

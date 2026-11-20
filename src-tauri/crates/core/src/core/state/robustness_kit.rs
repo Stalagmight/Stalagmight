@@ -232,9 +232,6 @@ pub(super) struct Targets {
     pub(super) lines: Vec<(LineId, Vec<ShotId>)>,
     /// Every slot `(line, index)`, ascending.
     pub(super) stations: Vec<(LineId, u32)>,
-    /// The slots of every junction (a station on two or more lines), each list
-    /// in slot order.
-    pub(super) junctions: Vec<Vec<StationRef>>,
     /// Loop closure ids, ascending.
     pub(super) closures: Vec<u64>,
 }
@@ -257,19 +254,11 @@ impl Targets {
                 stations.push((*id, index_of(index)));
             }
         }
-        let topology = project.topology();
-        let junctions = project
-            .stations
-            .keys()
-            .map(|id| topology.slots_of(*id).to_vec())
-            .filter(|slots| slots.len() > 1)
-            .collect();
         let mut closures: Vec<u64> = project.closures.iter().map(|c| c.id).collect();
         closures.sort_unstable();
         Self {
             lines,
             stations,
-            junctions,
             closures,
         }
     }
