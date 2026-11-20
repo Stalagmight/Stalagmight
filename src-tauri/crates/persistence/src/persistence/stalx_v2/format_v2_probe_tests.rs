@@ -102,3 +102,51 @@ fn the_sniff() {
     assert_eq!(sniff(b""), Format::Unknown);
     assert_eq!(sniff(b"PK\x03\x04"), Format::Unknown);
 }
+
+/// The header read does not depend on member order (`docs/file-format.md`
+/// section 4): a file that puts its link and per-machine state after the
+/// survey body probes with them, from bytes and from disk, exactly as the
+/// full decode reads them; only the display-only listing read, which trusts
+/// the canonical order, stops at the body (review finding C-file-format-11).
+/// Injection: stopping `probe_bytes` at the first body member again reads the
+/// moved file as unlinked, which the replace guard and the foreign-copy
+/// probe would act on.
+#[test]
+fn the_probe_finds_header_members_after_the_body() {
+    let (p, extras) = super::format_v2_doc_tests::example();
+    let text = String::from_utf8(encode(&p, &extras, Mode::Normal).unwrap()).unwrap();
+    let mut moved = text.clone();
+    for key in ["\"speleodb\":{", "\"local\":{"] {
+        let start = moved.find(&format!("\n{key}")).unwrap() + 1;
+        let end = start + moved[start..].find('\n').unwrap() + 1;
+        let member = moved[start..end].to_string();
+        moved.replace_range(start..end, "");
+        let at = moved.find("\n\"end\":true").unwrap() + 1;
+        moved.insert_str(at, &member);
+    }
+    assert_ne!(moved, text);
+    let decoded = super::decode(moved.as_bytes(), &super::DecodeOptions::default()).unwrap();
+    assert!(decoded.extras.speleodb.is_some());
+
+    let header = probe_bytes(moved.as_bytes());
+    assert!(header.complete);
+    assert_eq!(header.speleodb, decoded.extras.speleodb);
+    assert_eq!(header.local.as_ref(), Some(&decoded.extras.local));
+    assert_eq!(header.project.unwrap().name, p.name);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("moved.stalx");
+    std::fs::write(&path, &moved).unwrap();
+    let from_disk = probe_path(&path).unwrap();
+    assert_eq!(from_disk, probe_bytes(moved.as_bytes()));
+    // The listing read stops at the body, by design.
+    let listed = super::probe_path_listing(&path).unwrap();
+    assert!(listed.complete && listed.speleodb.is_none() && listed.summary.is_some());
+
+    // A canonical file with a link and local state is complete at the key
+    // of its first body member.
+    let canonical = probe_bytes(text.as_bytes());
+    let key = "\n\"sections\":";
+    let body = text.find(key).unwrap() + key.len();
+    assert_eq!(probe_bytes(&text.as_bytes()[..body]), canonical);
+}

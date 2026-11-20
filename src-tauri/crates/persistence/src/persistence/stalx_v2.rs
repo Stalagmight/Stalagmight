@@ -13,7 +13,8 @@
 //! - [`decode_salvage`]: best-effort repair of a file that parses but breaks
 //!   the invariants.
 //! - [`probe_bytes`] / [`probe_path`] / [`sniff`]: the cheap header read
-//!   (Recents, the foreign-copy probe, link readers).
+//!   (the foreign-copy probe, link readers), and [`probe_path_listing`] for
+//!   Recents.
 //! - [`rewrite_local`] / [`rename_project`]: rewrite the per-machine members
 //!   (or the project name) while copying every survey member verbatim.
 //! - [`write_atomic`] and [`Fingerprint`]: the durable save and the
@@ -158,7 +159,7 @@ pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
 pub use error::{DecodeError, EncodeError};
 pub use local::{rename_project, rewrite_local, rewrite_local_keeping_history};
-pub use probe::{probe_bytes, probe_path, sniff, Format, Header, ProjectInfo};
+pub use probe::{probe_bytes, probe_path, probe_path_listing, sniff, Format, Header, ProjectInfo};
 pub use salvage::{Repair, SalvageReport};
 pub use summary::Summary;
 pub use types::{

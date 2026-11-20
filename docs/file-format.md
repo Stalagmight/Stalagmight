@@ -176,8 +176,15 @@ reader treats keys it does not know inside the member (section 7).
 | `end` | yes | - | Always `true`. Last member. |
 
 A reader should not depend on the member order (except `format` and `version`
-first). A file without `"end":true` is incomplete and refused, which, with the
-closing brace, makes a truncated file impossible to mistake for a project.
+first). A reader that wants only the header (a project list, a link check)
+may stop at the first survey member (`sections` onwards) once it has met
+every header member it needs; otherwise a member it needs may still follow
+the body. Stalagmight's header read does exactly that: a file it wrote,
+which always puts the header first, is read from its first few kilobytes,
+and a reordered file is read to its end (its project list alone stops at the
+body, so it may list such a file without a link). A file without
+`"end":true` is incomplete and refused, which, with the closing brace, makes
+a truncated file impossible to mistake for a project.
 
 ## 5. Member reference
 

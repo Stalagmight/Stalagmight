@@ -4,7 +4,7 @@ use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{GpsBounds, ProjectMetadata};
 use crate::persistence::migrate::legacy_header;
 use crate::persistence::stalx_v2::{
-    self, decode, encode, probe_path, rename_project, sniff, write_atomic, DecodeOptions,
+    self, decode, encode, probe_path_listing, rename_project, sniff, write_atomic, DecodeOptions,
     Fingerprint, Format, Guard, Header, History, Mode, Summary, WriteError, MAX_PROJECT_FILE_BYTES,
 };
 
@@ -41,7 +41,7 @@ impl AppState {
     ///
     /// Hot path on every navigation to the global view, so it never decodes
     /// a survey body: a version 2 file is read through its header
-    /// (`stalx_v2::probe_path`: the `summary` cache, `project` and `speleodb`
+    /// (`stalx_v2::probe_path_listing`: the `summary` cache, `project` and `speleodb`
     /// from the first bytes, plan 6.1/10.4), a legacy SQLite file through
     /// [`legacy_header`] (aggregate queries on a read-only connection, F13).
     /// Only a version 2 file without a usable header (a third-party writer
@@ -769,7 +769,9 @@ fn rename_write_failure(e: &WriteError) -> CommandResult {
 /// The Recents entry of the file at `path`, from its header (see
 /// [`AppState::get_recent_projects`]).
 fn recent_metadata(path: &Path) -> Result<ProjectMetadata, String> {
-    let header = probe_path(path).map_err(|e| e.to_string())?;
+    // Display only: the listing read stops at the first survey member (a
+    // file that puts its link after the body is listed without it).
+    let header = probe_path_listing(path).map_err(|e| e.to_string())?;
     let header = match header.format {
         Format::V2 => header,
         Format::Legacy => legacy_header(path).map_err(|e| e.to_string())?,
