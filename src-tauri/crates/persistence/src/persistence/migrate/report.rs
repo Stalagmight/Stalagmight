@@ -251,7 +251,10 @@ impl MigrationReport {
         put("placements_held_gauge", self.placements_held_gauge);
         put("placements_default_gauge", self.placements_default_gauge);
         put("placements_fallback", self.placements_fallback);
-        put("entrance_overrides_written", self.entrance_overrides_written);
+        put(
+            "entrance_overrides_written",
+            self.entrance_overrides_written,
+        );
         put("hand_moves_carried", self.hand_moves_carried);
         put("ignores_kept", self.ignores_kept);
         put("ignores_rekeyed", self.ignores_rekeyed);

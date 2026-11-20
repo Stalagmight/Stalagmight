@@ -209,7 +209,11 @@ fn the_merge_the_old_cascade_left_torn_is_the_one_demoted() {
 #[test]
 fn same_line_self_and_repeated_merges() {
     let mut p = project();
-    let a = line(&mut p, "A", &[(90.0, 10.0), (0.0, 10.0), (270.0, 10.0), (180.0, 4.0)]);
+    let a = line(
+        &mut p,
+        "A",
+        &[(90.0, 10.0), (0.0, 10.0), (270.0, 10.0), (180.0, 4.0)],
+    );
     let b = line(&mut p, "B", &[(45.0, 3.0)]);
     p.merge_stations(at(b, 0), at(a, 2)).unwrap();
     raw_merge(&mut p, at(a, 0), at(a, 3));
@@ -232,7 +236,9 @@ fn same_line_self_and_repeated_merges() {
 fn an_aligned_non_move_closure_becomes_a_tie_and_a_snap_stays_a_snap() {
     let mut p = project();
     let a = line(&mut p, "A", &[(90.0, 10.0), (0.0, 10.0), (270.0, 10.0)]);
-    let c = p.create_loop_closure(at(a, 0), at(a, 3), OldStrategy::Batch).unwrap();
+    let c = p
+        .create_loop_closure(at(a, 0), at(a, 3), OldStrategy::Batch)
+        .unwrap();
     // A destructive adjust stamped it aligned; 0.6.0 trusts the stamp.
     if let Some(stored) = p.loop_closures.iter_mut().find(|x| x.id == c.id) {
         stored.is_aligned = true;
@@ -260,7 +266,12 @@ fn an_aligned_non_move_closure_becomes_a_tie_and_a_snap_stays_a_snap() {
     assert!(snap.is_aligned);
     assert_eq!(strategies[&snap.id], ClosureStrategy::Move);
     let positions = out.project.raw_positions();
-    let migrated_snap = out.project.closures.iter().find(|x| x.id == snap.id).unwrap();
+    let migrated_snap = out
+        .project
+        .closures
+        .iter()
+        .find(|x| x.id == snap.id)
+        .unwrap();
     assert!(out.project.closure_is_aligned(&positions, migrated_snap));
 }
 
@@ -318,7 +329,10 @@ fn an_orphan_closure_promoted_by_the_load_is_one_station() {
     let a = line(&mut p, "A", &[(90.0, 10.0)]);
     let b = line(&mut p, "B", &[(0.0, 10.0)]);
     p.adjust_rigid_group_offsets(b, 3.0, 4.0);
-    let (ka, kb) = (p.key_for_ref(at(a, 1)).unwrap(), p.key_for_ref(at(b, 0)).unwrap());
+    let (ka, kb) = (
+        p.key_for_ref(at(a, 1)).unwrap(),
+        p.key_for_ref(at(b, 0)).unwrap(),
+    );
     p.loop_closures.push(m::LoopClosure {
         id: 0,
         station_a: ka,
@@ -372,7 +386,7 @@ fn shot_uuids_and_ignores_follow_every_legacy_rule() {
         display_settings: BTreeMap::from([("k".to_string(), "v".to_string())]),
         ..LegacyExtras::default()
     };
-    let b0_uuid = b0.uuid.clone().unwrap();
+    let b0_uuid = b0.uuid.unwrap();
     let bytes = edit_sqlite(&write_v18(&p, &extras).unwrap(), |conn| {
         conn.execute("UPDATE shots SET uuid = NULL WHERE uuid = ?1", [&b0_uuid])
             .unwrap();
@@ -386,7 +400,10 @@ fn shot_uuids_and_ignores_follow_every_legacy_rule() {
     let minted = out.project.lines()[1].shots[1].uuid.clone();
     assert_ne!(minted, long);
     assert!(minted.len() <= 128);
-    assert_eq!((r.ignores_kept, r.ignores_rekeyed, r.ignores_dropped), (1, 2, 2));
+    assert_eq!(
+        (r.ignores_kept, r.ignores_rekeyed, r.ignores_dropped),
+        (1, 2, 2)
+    );
     let keys: Vec<(&str, &str)> = out
         .extras
         .ignored_warnings
@@ -417,7 +434,10 @@ fn history_is_dropped_and_said_so() {
     let out = migrate_bytes(&bytes).unwrap();
     assert!(out.had_history);
     assert_eq!(out.report.history_rows_dropped, 1);
-    assert_eq!(out.report.verification.adjusted, AdjustedCheck::AwaitingSolver);
+    assert_eq!(
+        out.report.verification.adjusted,
+        AdjustedCheck::AwaitingSolver
+    );
 }
 
 #[test]
@@ -452,7 +472,10 @@ fn the_speleodb_link_and_validation_state_are_carried() {
     assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
     assert!(link.has_unpushed_edits);
     assert_eq!(out.extras.speleo_undo_chain, extras.speleo_undo_chain);
-    assert_eq!(out.extras.speleo_undo_watermark, extras.speleo_undo_watermark);
+    assert_eq!(
+        out.extras.speleo_undo_watermark,
+        extras.speleo_undo_watermark
+    );
     // The 0.6.0 save always writes the thresholds it holds.
     assert!(out.extras.validation_stored);
 }

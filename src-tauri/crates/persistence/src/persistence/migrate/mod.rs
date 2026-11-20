@@ -56,10 +56,8 @@ mod migrate_tests;
 
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
-    clippy::panic,
     clippy::print_stderr,
-    reason = "test module: panics on a failed assumption are the point; a failing seed prints its replay line"
+    reason = "test module: a failing seed prints its replay line, a sweep its coverage counts"
 )]
 mod migrate_property_tests;
 
@@ -75,7 +73,6 @@ mod migrate_fixture_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
     reason = "test helpers: a refused legacy build is a broken test setup"
 )]
 mod test_support;
@@ -90,7 +87,7 @@ use crate::models::{LineId, SpeleoLink};
 
 pub use ignores::IgnoredWarning;
 pub use report::{
-    AdjustedCheck, Axis, ClassStats, ExpectedClass, Mismatch, MigrationReport, Verification,
+    AdjustedCheck, Axis, ClassStats, ExpectedClass, MigrationReport, Mismatch, Verification,
 };
 
 /// A migrated legacy project.
@@ -235,11 +232,7 @@ pub fn migrate(legacy: &LegacySurvey) -> Result<Migrated, MigrateError> {
     let ignored_warnings = ignores::rekey(legacy, &built.final_uuid, &mut report);
     let lp = &legacy.project;
     let extras = MigratedExtras {
-        speleo_link: legacy
-            .extras
-            .speleo_link
-            .as_ref()
-            .map(convert::speleo_link),
+        speleo_link: legacy.extras.speleo_link.as_ref().map(convert::speleo_link),
         speleo_undo_chain: legacy.extras.speleo_undo_chain.clone(),
         speleo_undo_watermark: legacy.extras.speleo_undo_watermark.clone(),
         display_settings: legacy.extras.display_settings.clone(),

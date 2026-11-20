@@ -96,16 +96,15 @@ pub(super) fn plan(
     let mut of_slot = vec![0; slots.len()];
     let mut stations = BTreeMap::new();
     for (group, (survivor, aliases)) in groups.iter().zip(chosen) {
-        let id = match survivor {
-            Some(id) => id,
-            None => {
-                if next >= MAX_STATION_ID {
-                    return Err(MigrateError::StationIdsExhausted);
-                }
-                report.station_ids_minted += 1;
-                next += 1;
-                next - 1
+        let id = if let Some(id) = survivor {
+            id
+        } else {
+            if next >= MAX_STATION_ID {
+                return Err(MigrateError::StationIdsExhausted);
             }
+            report.station_ids_minted += 1;
+            next += 1;
+            next - 1
         };
         let name = group
             .iter()

@@ -66,9 +66,7 @@ pub(super) fn rekey(
                 if holds(row.line_id, &renamed) {
                     Some((row.line_id, renamed))
                 } else {
-                    anywhere
-                        .get(stored)
-                        .map(|&line| (line, stored.to_string()))
+                    anywhere.get(stored).map(|&line| (line, stored.to_string()))
                 }
             }
             None => by_line

@@ -170,7 +170,8 @@ fn shot_data(rng: &mut Rng, uuids: &mut Uuids, depth: &mut f64) -> ShotData {
     let dz = rng.range(-0.4, 0.4) * length;
     let depth_in = *depth;
     *depth = (depth_in + dz).max(0.0);
-    let optional = |rng: &mut Rng, p: f64, lo: f64, hi: f64| rng.chance(p).then(|| rng.range(lo, hi));
+    let optional =
+        |rng: &mut Rng, p: f64, lo: f64, hi: f64| rng.chance(p).then(|| rng.range(lo, hi));
     ShotData {
         uuid: Some(uuids.mint()),
         azimuth_in: azimuth,
@@ -244,7 +245,11 @@ fn raw_merge(project: &mut m::Project, a: StationRef, b: StationRef, at: DateTim
 
 /// Two slots of one line that do not span exactly one shot.
 fn same_line_pair(project: &m::Project, rng: &mut Rng) -> Option<(StationRef, StationRef)> {
-    let candidates: Vec<&m::Line> = project.lines.iter().filter(|l| l.shots.len() >= 2).collect();
+    let candidates: Vec<&m::Line> = project
+        .lines
+        .iter()
+        .filter(|l| l.shots.len() >= 2)
+        .collect();
     if candidates.is_empty() {
         return None;
     }
@@ -252,7 +257,10 @@ fn same_line_pair(project: &m::Project, rng: &mut Rng) -> Option<(StationRef, St
     let n = line.shots.len() as u32;
     let i = rng.below(n as usize - 1) as u32;
     let j = i + 2 + rng.below((n - i - 1) as usize) as u32;
-    Some((StationRef::new(line.id, i), StationRef::new(line.id, j.min(n))))
+    Some((
+        StationRef::new(line.id, i),
+        StationRef::new(line.id, j.min(n)),
+    ))
 }
 
 /// A random legacy project for `seed`. See the module tests for the list of
@@ -292,7 +300,11 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
     for _ in 0..rng.below(4) {
         let sr = any_slot(&p, &mut rng);
         if let Some(k) = key(&p, sr) {
-            let offset = (rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-0.5, 0.5));
+            let offset = (
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+                rng.range(-0.5, 0.5),
+            );
             p.station_offsets.insert(k, offset);
         }
     }
@@ -300,7 +312,7 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
     // Merges onto earlier lines; some with a hand move on both members.
     let ids: Vec<LineId> = p.lines.iter().map(|l| l.id).collect();
     for (i, &line) in ids.iter().enumerate().skip(1) {
-        for _ in 0..1 + usize::from(rng.chance(0.3)) {
+        for _ in 0..=usize::from(rng.chance(0.3)) {
             if !rng.chance(0.75) {
                 continue;
             }
@@ -310,7 +322,11 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
             if rng.chance(0.15) {
                 for sr in [a, b] {
                     if let Some(k) = key(&p, sr) {
-                        let offset = (rng.range(-0.5, 0.5), rng.range(-0.5, 0.5), rng.range(-0.3, 0.3));
+                        let offset = (
+                            rng.range(-0.5, 0.5),
+                            rng.range(-0.5, 0.5),
+                            rng.range(-0.3, 0.3),
+                        );
                         p.station_offsets.insert(k, offset);
                     }
                 }
@@ -322,7 +338,10 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
     // A resurvey of two shots of a line, tied back with an aligned snap.
     if rng.chance(0.3) {
         if let Some(line) = p.lines.iter().find(|l| l.shots.len() >= 3).map(|l| l.id) {
-            let source = p.get_line(line).map(|l| l.shots[..2].to_vec()).unwrap_or_default();
+            let source = p
+                .get_line(line)
+                .map(|l| l.shots[..2].to_vec())
+                .unwrap_or_default();
             let shots = source
                 .iter()
                 .map(|s| ShotData {
@@ -341,7 +360,9 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
                     shots,
                 })
                 .id;
-            if p.merge_stations(StationRef::new(bypass, 0), StationRef::new(line, 0)).is_ok() {
+            if p.merge_stations(StationRef::new(bypass, 0), StationRef::new(line, 0))
+                .is_ok()
+            {
                 let _ = p.create_loop_closure(
                     StationRef::new(bypass, 2),
                     StationRef::new(line, 2),
@@ -360,7 +381,8 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
     if let Some(datum) = p.zero_datums.first().cloned() {
         if rng.chance(0.2) {
             let _ = p.set_zero_datum_entrance(
-                p.resolve_key(&datum.station_ref).unwrap_or(StationRef::new(0, 0)),
+                p.resolve_key(&datum.station_ref)
+                    .unwrap_or(StationRef::new(0, 0)),
                 Some(rng.chance(0.5)),
             );
         }
@@ -497,9 +519,11 @@ pub(super) fn random_case(seed: u64) -> LegacyCase {
     for merge in p.station_merges.iter().take(3).cloned().collect::<Vec<_>>() {
         if rng.chance(0.5) {
             let text = if rng.chance(0.5) { "sump" } else { "tight" };
-            p.station_comments.insert(merge.station_a.clone(), text.to_string());
+            p.station_comments
+                .insert(merge.station_a.clone(), text.to_string());
             let other = if rng.chance(0.5) { text } else { "low air" };
-            p.station_comments.insert(merge.station_b.clone(), other.to_string());
+            p.station_comments
+                .insert(merge.station_b.clone(), other.to_string());
         }
     }
     for _ in 0..rng.below(3) {
@@ -553,7 +577,11 @@ fn random_extras(p: &m::Project, rng: &mut Rng, at: DateTime<Utc>) -> LegacyExtr
         .collect();
     if !shots.is_empty() {
         // The last shot too: the duplicate-uuid degradation renames it.
-        let picks = [rng.below(shots.len()), shots.len() - 1, rng.below(shots.len())];
+        let picks = [
+            rng.below(shots.len()),
+            shots.len() - 1,
+            rng.below(shots.len()),
+        ];
         for (n, &i) in picks.iter().enumerate() {
             let (line, shot) = shots[i];
             resolved.push(ResolvedWarning {
@@ -627,9 +655,11 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
         .filter(|c| c.strategy == ClosureStrategy::Tie)
         .map(|c| (c.a.min(c.b), c.a.max(c.b)))
         .collect();
-    for merge in lp.station_merges.iter() {
-        let (Some(a), Some(b)) = (lp.resolve_key(&merge.station_a), lp.resolve_key(&merge.station_b))
-        else {
+    for merge in &lp.station_merges {
+        let (Some(a), Some(b)) = (
+            lp.resolve_key(&merge.station_a),
+            lp.resolve_key(&merge.station_b),
+        ) else {
             continue;
         };
         let (Some(sa), Some(sb)) = (at(a), at(b)) else {
@@ -705,7 +735,43 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
         .filter(|id| !ids.contains(id))
         .count();
     if lost != r.station_ids_dropped {
-        return Err(format!("{lost} station ids lost, {} reported", r.station_ids_dropped));
+        return Err(format!(
+            "{lost} station ids lost, {} reported",
+            r.station_ids_dropped
+        ));
+    }
+
+    // Datums keep their order and their member's line as the `via` hint.
+    let legacy_datums = lp
+        .zero_datums
+        .iter()
+        .filter_map(|d| lp.resolve_key(&d.station_ref));
+    for (sr, datum) in legacy_datums.zip(&p.datums) {
+        if at(sr) != Some(datum.station) || datum.via != Some(sr.line_id) {
+            return Err(format!("datum at {sr}: station or via hint"));
+        }
+    }
+    // Every datum-less piece is placed at its legacy gauge station (the
+    // station the old least-squares solve held), never by the fallback.
+    if r.placements_fallback != 0 {
+        return Err("a piece had no legacy gauge".to_string());
+    }
+    let topology = p.topology();
+    for gauge in legacy.datumless_gauges() {
+        let Some(station) = at(gauge.station) else {
+            return Err("gauge slot unmapped".to_string());
+        };
+        let component = topology.component_of(station);
+        let placed = p
+            .placements
+            .iter()
+            .find(|pl| topology.component_of(pl.station) == component);
+        if placed.map(|pl| pl.station) != Some(station) {
+            return Err(format!(
+                "the piece held at {} is placed elsewhere",
+                gauge.station
+            ));
+        }
     }
 
     // Positions.
@@ -735,10 +801,10 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     {
         return Err("migrating twice gave different results".to_string());
     }
-    let (a, b) = (
-        serde_json::to_string(&again.project).unwrap(),
-        serde_json::to_string(&migrated.project).unwrap(),
-    );
+    let json = |project: &crate::models::survey::Project| {
+        serde_json::to_string(project).map_err(|e| format!("serialize: {e}"))
+    };
+    let (a, b) = (json(&again.project)?, json(&migrated.project)?);
     if a != b {
         return Err("migrating twice serialized differently".to_string());
     }
@@ -754,15 +820,27 @@ fn same_measurements(a: &m::Shot, b: &crate::models::survey::Shot) -> bool {
     let fixed = |x: f64| x.to_bits();
     let credit_a = a.credit.as_ref().filter(|c| !c.is_empty()).map(|c| {
         (
-            c.surveyors.iter().map(|p| (p.name.clone(), p.email.clone())).collect::<Vec<_>>(),
-            c.explorers.iter().map(|p| (p.name.clone(), p.email.clone())).collect::<Vec<_>>(),
+            c.surveyors
+                .iter()
+                .map(|p| (p.name.clone(), p.email.clone()))
+                .collect::<Vec<_>>(),
+            c.explorers
+                .iter()
+                .map(|p| (p.name.clone(), p.email.clone()))
+                .collect::<Vec<_>>(),
             c.date,
         )
     });
     let credit_b = b.credit.as_ref().map(|c| {
         (
-            c.surveyors.iter().map(|p| (p.name.clone(), p.email.clone())).collect::<Vec<_>>(),
-            c.explorers.iter().map(|p| (p.name.clone(), p.email.clone())).collect::<Vec<_>>(),
+            c.surveyors
+                .iter()
+                .map(|p| (p.name.clone(), p.email.clone()))
+                .collect::<Vec<_>>(),
+            c.explorers
+                .iter()
+                .map(|p| (p.name.clone(), p.email.clone()))
+                .collect::<Vec<_>>(),
             c.date,
         )
     });

@@ -59,10 +59,16 @@ pub(super) fn build(
     project.modified_at = lp.modified_at;
     project.settings.validation = convert::validation(&lp.validation);
     project.settings.surface_elevation = lp.surface_elevation;
-    project.settings.default_azimuth_reference =
-        lp.default_azimuth_reference.as_ref().map(convert::azimuth_reference);
-    project.imported_file_hashes.clone_from(&lp.imported_file_hashes);
-    project.imported_line_hashes.clone_from(&lp.imported_line_hashes);
+    project.settings.default_azimuth_reference = lp
+        .default_azimuth_reference
+        .as_ref()
+        .map(convert::azimuth_reference);
+    project
+        .imported_file_hashes
+        .clone_from(&lp.imported_file_hashes);
+    project
+        .imported_line_hashes
+        .clone_from(&lp.imported_line_hashes);
     project.sections = lp.sections.iter().map(convert::section).collect();
     project.stations = station_plan.stations;
     project.counters.next_station_id = station_plan.next_station_id;
@@ -123,7 +129,8 @@ pub(super) fn build(
     // 5. Closures: demoted merges first (merges were united before any
     //    closure, so later closures keep their skip verdicts), then the legacy
     //    closures in list order with their ids.
-    let legacy_snap_alignment = build_closures(legacy, &slots, &of_slot, &merges, &mut project, report);
+    let legacy_snap_alignment =
+        build_closures(legacy, &slots, &of_slot, &merges, &mut project, report);
 
     // 6. Anchors: corrections for placement datums, placements for the rest.
     let anchor_slots = build_anchors(legacy, &slots, &of_slot, &datum_slots, &mut project, report);
@@ -185,12 +192,11 @@ fn build_lines(
             let usable = source.uuid.as_deref().filter(|u| {
                 !u.is_empty() && u.chars().count() <= MAX_SHOT_UUID_CHARS && !taken.contains(*u)
             });
-            let uuid = match usable {
-                Some(u) => u.to_string(),
-                None => {
-                    report.shot_uuids_minted += 1;
-                    mint_uuid(line.id, index, source.uuid.as_deref(), &taken)
-                }
+            let uuid = if let Some(u) = usable {
+                u.to_string()
+            } else {
+                report.shot_uuids_minted += 1;
+                mint_uuid(line.id, index, source.uuid.as_deref(), &taken)
             };
             taken.insert(uuid.clone());
             if let Some(old) = &source.uuid {
@@ -217,7 +223,10 @@ fn build_lines(
             color: line.color.clone(),
             direction: convert::direction(line.direction),
             quality,
-            azimuth_reference: line.azimuth_reference.as_ref().map(convert::azimuth_reference),
+            azimuth_reference: line
+                .azimuth_reference
+                .as_ref()
+                .map(convert::azimuth_reference),
             section_id: line.section_id,
             legacy_surveyor: line.legacy_surveyor.clone(),
             legacy_date: line.legacy_date,
@@ -239,7 +248,7 @@ fn build_lines(
 /// its old uuid, stepping past any already taken.
 fn mint_uuid(line: LineId, index: usize, old: Option<&str>, taken: &HashSet<String>) -> String {
     let name = format!("{line}/{index}/{}", old.unwrap_or(""));
-    (0u32..)
+    (0..u32::MAX)
         .map(|n| {
             let seed = if n == 0 {
                 name.clone()
@@ -375,8 +384,7 @@ fn build_anchors(
             anchor_slots.push(dense);
             continue;
         }
-        let in_component =
-            |dense: usize| topology.component_of(of_slot[dense]) == Some(c);
+        let in_component = |dense: usize| topology.component_of(of_slot[dense]) == Some(c);
         let held = gauges.get(&c).copied().or_else(|| {
             let lines: HashSet<LineId> = component.lines.iter().copied().collect();
             let (sr, hold) = lp.anchor_for_lines(&lines)?;
@@ -430,7 +438,10 @@ fn drop_unanchored_closures(project: &mut Project, report: &mut MigrationReport)
         .collect();
     let before = project.closures.len();
     project.closures.retain(|closure| {
-        match (topology.component_of(closure.a), topology.component_of(closure.b)) {
+        match (
+            topology.component_of(closure.a),
+            topology.component_of(closure.b),
+        ) {
             (Some(ca), Some(cb)) => ca == cb || (held[ca] && held[cb]),
             _ => false,
         }

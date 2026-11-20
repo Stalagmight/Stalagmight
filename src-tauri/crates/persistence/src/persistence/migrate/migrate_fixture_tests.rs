@@ -6,6 +6,7 @@
 //! file names). Never a name, a coordinate or any other content of a file:
 //! the corpus runner is run on private data on another host.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -54,7 +55,10 @@ fn the_schema_14_fixture_migrates_with_every_station_in_place() {
 /// A short, stable, non-reversible tag for a file name.
 fn name_hash(name: &str) -> String {
     const NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x1b0e_4a2c_77d9_4c31_9f05_2e6a_c8d4_5b17);
-    uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes()).simple().to_string()[..12].to_string()
+    uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes())
+        .simple()
+        .to_string()[..12]
+        .to_string()
 }
 
 fn stalx_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -94,8 +98,8 @@ fn migrate_corpus() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let (mut ok, mut failed, mut panicked, mut unclean) = (0, 0, 0, 0);
-    let mut classes: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut expected_max: std::collections::BTreeMap<ExpectedClass, f64> = Default::default();
+    let mut classes: BTreeMap<String, usize> = BTreeMap::default();
+    let mut expected_max: BTreeMap<ExpectedClass, f64> = BTreeMap::default();
     for path in &files {
         let relative = path.strip_prefix(&dir).unwrap_or(path);
         let tag = name_hash(&relative.to_string_lossy());

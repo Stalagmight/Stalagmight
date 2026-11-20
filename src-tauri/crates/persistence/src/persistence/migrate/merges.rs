@@ -166,10 +166,8 @@ fn cascade_order(
     }
 
     let computable = |a: Slot, b: Slot| {
-        let (Some(pa), Some(pb)) = (
-            legacy.raw_positions.get(&a),
-            legacy.raw_positions.get(&b),
-        ) else {
+        let (Some(pa), Some(pb)) = (legacy.raw_positions.get(&a), legacy.raw_positions.get(&b))
+        else {
             return false;
         };
         (pa[0] - pb[0]).is_finite() && (pa[1] - pb[1]).is_finite()

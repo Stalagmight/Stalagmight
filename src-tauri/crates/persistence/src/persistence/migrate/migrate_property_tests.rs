@@ -83,31 +83,73 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
     }
     assert!(failures.is_empty(), "{} seed(s) failed", failures.len());
 
-    if swept.is_some() {
-        return;
-    }
     // The gate's seeds must reach every conversion rule they are meant to.
     let c = &coverage;
-    let checks: [(&str, usize); 18] = [
+    let checks: [(&str, usize); 22] = [
         ("merges collapsed", c.total(|r| r.merges_collapsed)),
         ("cycle merges demoted", c.total(|r| r.merges_demoted_cycle)),
-        ("same-line merges demoted", c.total(|r| r.merges_demoted_same_line)),
+        (
+            "same-line merges demoted",
+            c.total(|r| r.merges_demoted_same_line),
+        ),
         ("self merges dropped", c.total(|r| r.merges_dropped_self)),
-        ("repeated merges dropped", c.total(|r| r.merges_dropped_redundant)),
+        (
+            "repeated merges dropped",
+            c.total(|r| r.merges_dropped_redundant),
+        ),
         ("aliases", c.total(|r| r.aliases_created)),
         ("comments joined", c.total(|r| r.comments_joined)),
         ("stations renamed", c.total(|r| r.stations_renamed)),
-        ("aligned closures to Tie", c.total(|r| r.aligned_closures_to_tie)),
+        (
+            "aligned closures to Tie",
+            c.total(|r| r.aligned_closures_to_tie),
+        ),
         ("corrections", c.total(|r| r.corrections_stored)),
         ("placements", c.total(|r| r.placements_default_gauge)),
         ("hand moves", c.total(|r| r.hand_moves_carried)),
-        ("orphan closures promoted", c.total(|r| r.legacy_merges_created)),
-        ("derived shot uuids", c.total(|r| r.legacy_derived_shot_uuids)),
-        ("renamed shot uuids", c.total(|r| r.legacy_renamed_shot_uuids)),
+        (
+            "orphan closures promoted",
+            c.total(|r| r.legacy_merges_created),
+        ),
+        (
+            "derived shot uuids",
+            c.total(|r| r.legacy_derived_shot_uuids),
+        ),
+        (
+            "renamed shot uuids",
+            c.total(|r| r.legacy_renamed_shot_uuids),
+        ),
         ("ignores re-keyed", c.total(|r| r.ignores_rekeyed)),
         ("closures kept", c.total(|r| r.closures_kept)),
         ("0.5.5 file shape", c.release_055),
+        (
+            "datum-less pieces",
+            c.total(|r| r.placements_default_gauge + r.placements_held_gauge),
+        ),
+        ("datums", c.total(|r| r.datums_kept)),
+        (
+            "entrance overrides (none expected)",
+            1 + c.total(|r| r.entrance_overrides_written),
+        ),
+        ("ignores kept", c.total(|r| r.ignores_kept)),
     ];
+    if swept.is_some() {
+        // A sweep reports what it reached (counts only) instead of gating it.
+        for (name, n) in &checks {
+            eprintln!("coverage: {name} = {n}");
+        }
+        let snaps = c
+            .reports
+            .iter()
+            .filter_map(|r| {
+                r.verification
+                    .expected
+                    .get(&super::ExpectedClass::SnapAlignmentChanged)
+            })
+            .count();
+        eprintln!("coverage: seeds with a snap alignment change = {snaps}");
+        return;
+    }
     let missing: Vec<&str> = checks
         .iter()
         .filter(|(_, n)| *n == 0)

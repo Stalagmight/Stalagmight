@@ -22,7 +22,7 @@
 //!
 //! **Closures Computed View.** See [`verify_adjusted`].
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use stalagmight_legacy::LegacySurvey;
 
@@ -61,14 +61,15 @@ pub(super) fn verify(built: &Built, legacy: &LegacySurvey) -> Verification {
                 positions.slot(project, slot),
                 legacy.raw_positions.get(&legacy_slot),
             ) else {
-                v.mismatches.push(mismatch(slot, Axis::Missing, f64::INFINITY, 0.0));
+                v.mismatches
+                    .push(mismatch(slot, Axis::Missing, f64::INFINITY, 0.0));
                 continue;
             };
             let dxy = (new[0] - old[0]).hypot(new[1] - old[1]);
             let dz = (new[2] - old[2]).abs();
             v.max_xy_m = v.max_xy_m.max(dxy);
             v.max_z_m = v.max_z_m.max(dz);
-            if !(dxy <= dust) {
+            if dxy.is_nan() || dxy > dust {
                 if gap > dust && dxy <= gap + dust {
                     expect(&mut v, ExpectedClass::TornMergeCollapsed, dxy);
                 } else {
@@ -76,9 +77,9 @@ pub(super) fn verify(built: &Built, legacy: &LegacySurvey) -> Verification {
                         .push(mismatch(slot, Axis::Horizontal, dxy, dust));
                 }
             }
-            if !(dz <= DEPTH_TOLERANCE_M) {
+            if dz.is_nan() || dz > DEPTH_TOLERANCE_M {
                 let station = topology.station_at(slot);
-                if station.is_some_and(|s| changed_ties.contains_key(&s)) {
+                if station.is_some_and(|s| changed_ties.contains(&s)) {
                     expect(&mut v, ExpectedClass::SnapAlignmentChanged, dz);
                 } else {
                     v.mismatches
@@ -213,7 +214,7 @@ fn changed_tie_groups(
     built: &Built,
     project: &Project,
     positions: &RawPositions,
-) -> BTreeMap<StationId, ()> {
+) -> BTreeSet<StationId> {
     let topology = project.topology();
     let flipped = project.closures.iter().any(|c| {
         c.strategy == ClosureStrategy::Move
@@ -221,7 +222,7 @@ fn changed_tie_groups(
                 != Some(project.closure_is_aligned(positions, c))
     });
     if !flipped {
-        return BTreeMap::new();
+        return BTreeSet::new();
     }
     let n = topology.stations().len();
     let groups = |legacy_flags: bool| {
@@ -229,9 +230,11 @@ fn changed_tie_groups(
         for c in &project.closures {
             let tied = match c.strategy {
                 ClosureStrategy::Tie => true,
-                ClosureStrategy::Move if legacy_flags => {
-                    built.legacy_snap_alignment.get(&c.id).copied().unwrap_or(false)
-                }
+                ClosureStrategy::Move if legacy_flags => built
+                    .legacy_snap_alignment
+                    .get(&c.id)
+                    .copied()
+                    .unwrap_or(false),
                 ClosureStrategy::Move => project.closure_is_aligned(positions, c),
                 _ => false,
             };
@@ -252,6 +255,6 @@ fn changed_tie_groups(
         .iter()
         .enumerate()
         .filter(|&(d, _)| derived[d] != flagged[d])
-        .map(|(_, &s)| (s, ()))
+        .map(|(_, &s)| s)
         .collect()
 }
