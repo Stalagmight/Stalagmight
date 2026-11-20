@@ -26,7 +26,7 @@ fn id(s: StationId) -> i64 {
     i64::from(s)
 }
 
-fn row<'a>(rows: &'a [super::ExportShot], id: i64) -> &'a super::ExportShot {
+fn row(rows: &[super::ExportShot], id: i64) -> &super::ExportShot {
     rows.iter()
         .find(|r| r.id == id)
         .unwrap_or_else(|| panic!("no row {id}"))

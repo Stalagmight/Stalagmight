@@ -30,9 +30,14 @@
 //! bytes (the JSON export's `exported_at` is an argument of [`write_json`]).
 
 mod dive_profile;
+mod image;
 mod tabular;
 
 pub use dive_profile::render_dive_profile;
+pub use image::{
+    export_image, export_image_with_positions, export_value_histogram, generate_svg_string,
+    generate_svg_string_with_positions,
+};
 pub(crate) use tabular::shot_credit;
 pub use tabular::{export_csv, export_json, json_export, write_csv, write_json};
 

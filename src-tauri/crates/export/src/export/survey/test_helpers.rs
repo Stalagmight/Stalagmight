@@ -85,9 +85,6 @@ pub(crate) struct Cave {
     pub(crate) trunk: LineId,
     pub(crate) north: LineId,
     pub(crate) back: LineId,
-    pub(crate) mid: LineId,
-    pub(crate) island: LineId,
-    pub(crate) free: LineId,
     /// Trunk's chain (`T0..T4`).
     pub(crate) t: Vec<StationId>,
     /// North's chain (`N0 = T2 .. N3`).
@@ -202,9 +199,6 @@ pub(crate) fn cave() -> Cave {
         trunk,
         north,
         back,
-        mid,
-        island,
-        free,
         t,
         n,
         b,
