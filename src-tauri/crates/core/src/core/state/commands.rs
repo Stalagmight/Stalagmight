@@ -163,9 +163,10 @@ pub(crate) fn apply_command(
             let mut station_moves = command_move::StationMoves::default();
             for sub in commands {
                 if !AppState::is_batch_allowed(sub) {
+                    // 0.6.0's words, naming the command as the history would.
                     return Err(format!(
-                        "{} cannot be part of a batch",
-                        crate::core::command_kind(sub)
+                        "Command '{}' is not allowed in batch context",
+                        super::labels::command_label(project, sub)
                     ));
                 }
                 if station_moves.repeats(project, sub) {
@@ -173,6 +174,12 @@ pub(crate) fn apply_command(
                 }
                 applied.merge(apply_command(project, record, sub)?);
             }
+            // A reverse is reported for the lines the batch leaves (0.6.0's
+            // `settle_reversed_lines`): a line it reversed and then deleted
+            // has nothing for the frontend to mirror.
+            applied
+                .reversed
+                .retain(|r| project.line(r.line_id).is_some_and(|l| !l.shots.is_empty()));
             Ok(applied)
         }
         Command::CreateProject { .. }

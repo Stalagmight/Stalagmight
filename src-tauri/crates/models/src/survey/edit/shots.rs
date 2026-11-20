@@ -404,6 +404,21 @@ impl Project {
                 )));
             }
         }
+        if !updates.touches_geometry() && updates.kind.is_none() {
+            // An annotation (walls, comment, marker, temperature) moves
+            // nothing and breaks no invariant but finiteness, checked above:
+            // no working copy, no anchor pass, no validation (as E4's
+            // accuracy-only datum edit). A paste of 1,000 wall cells is 1,000
+            // of these, and a full pass each made it O(cells x survey).
+            let Some(l) = self.line_mut(line) else {
+                return Err(EditError::line_gone());
+            };
+            apply_shot_updates(&mut l.shots[index], updates);
+            return Ok(Edited {
+                value: (),
+                report: super::EditReport::default(),
+            });
+        }
         let ctx = if updates.touches_geometry() {
             EditContext::geometry(line)
         } else {
