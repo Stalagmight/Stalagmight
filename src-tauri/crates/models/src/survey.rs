@@ -102,6 +102,13 @@ mod ops_closures_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod ops_datums_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod ops_detach_tests;
