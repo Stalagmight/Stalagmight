@@ -474,6 +474,13 @@ mod topology_kit;
 mod undo_after_reopen_tests;
 #[cfg(sg_unported)]
 mod undo_size_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod warnings_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay

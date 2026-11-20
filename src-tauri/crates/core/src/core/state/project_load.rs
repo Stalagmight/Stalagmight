@@ -429,7 +429,8 @@ impl AppState {
         cancelled(progress)?;
         progress.complete_phase(LoadingPhase::ComputingStations);
         progress.start_phase(LoadingPhase::ValidatingData);
-        let warnings = self.compute_project_warnings(&opened.project);
+        let warnings =
+            super::warnings::opened_project_warnings(&opened.project, &raw, &opened.file);
         cancelled(progress)?;
         progress.complete_phase(LoadingPhase::ValidatingData);
         progress.start_phase(LoadingPhase::LoadingSettings);

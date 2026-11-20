@@ -54,7 +54,7 @@ pub(super) struct DerivedCache {
 
 /// Hash the closure-adjustment config fields that affect the solve, for the
 /// adjusted cache key.
-fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
+pub(super) fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     ca.base_sigma_length_m.to_bits().hash(&mut h);
