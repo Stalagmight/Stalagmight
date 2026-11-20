@@ -48,7 +48,7 @@ use super::{
     SweepReport, Violation,
 };
 
-// mod combine;
+mod combine;
 mod fold;
 mod lines;
 mod one_shot;
@@ -57,6 +57,10 @@ mod reverse;
 mod shots;
 mod split;
 
+pub use combine::{
+    CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
+    TornTie, TornTieKind, TornTieReason,
+};
 pub use fold::{CommentRule, Fold};
 pub use lines::DeletedLine;
 pub use ranges::{DeleteRangePreview, DeletedRange, RangeDeleteMode};

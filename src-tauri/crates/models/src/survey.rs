@@ -100,6 +100,10 @@ pub use types::{
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
 
 pub use edit::{
+    CombineCandidate, CombineJoin, CombineReport, JoinedMove, RemovedClosure, ReplacedClosure,
+    TornTie, TornTieKind, TornTieReason,
+};
+pub use edit::{
     CommentRule, CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange,
     DeletedShot, EditError, EditReport, Edited, Fold, RangeDeleteMode, ShotPlace, SplitLinePreview,
     SplitOptions, SplitShot,
