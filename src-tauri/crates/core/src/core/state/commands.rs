@@ -274,6 +274,18 @@ impl AppState {
         record: impl FnOnce(&Project) -> Record,
         mutate: impl FnOnce(&mut Project, &mut Record) -> Result<T, String>,
     ) -> Result<T, CommandResult> {
+        self.run_recorded_from(record, |project, record, _before| mutate(project, record))
+    }
+
+    /// [`Self::run_recorded`] whose mutation also reads the project as it
+    /// was before the edit (the pipeline's own snapshot), for a recipe that
+    /// words its result from both states and would otherwise clone the
+    /// survey a second time (Combine Lines, C4).
+    pub(crate) fn run_recorded_from<T>(
+        &self,
+        record: impl FnOnce(&Project) -> Record,
+        mutate: impl FnOnce(&mut Project, &mut Record, &Project) -> Result<T, String>,
+    ) -> Result<T, CommandResult> {
         self.guard_file_writable()?;
         let mut guard = self
             .project
@@ -284,7 +296,7 @@ impl AppState {
         };
         let mut record = record(project);
         let before = project.clone();
-        let value = match mutate(project, &mut record) {
+        let value = match mutate(project, &mut record, &before) {
             Ok(value) => value,
             Err(message) => {
                 *project = before;

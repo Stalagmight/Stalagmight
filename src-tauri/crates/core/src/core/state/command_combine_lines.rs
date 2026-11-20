@@ -198,7 +198,7 @@ impl AppState {
             return f;
         }
         tracing::info!(kept, other, "Executing combine_lines as single undo unit");
-        let result = self.run_recorded(
+        let result = self.run_recorded_from(
             |project| {
                 let mut lines: Vec<LineId> = [kept, other]
                     .into_iter()
@@ -218,7 +218,7 @@ impl AppState {
                     preview: RecordedPreview::default(),
                 }
             },
-            |project, record| {
+            |project, record, before| {
                 // The combined line's name replaces both lines' names: refused
                 // like a rename when empty (the model validates a non-empty one
                 // itself, after the join's refusals, as 0.6.0 did).
@@ -227,21 +227,21 @@ impl AppState {
                         .combine_refusal(kept, other, options.join)
                         .unwrap_or_else(|| EMPTY_NAME.to_string()));
                 }
-                let mut work = project.clone();
-                let edited = work
+                // The model's combine is all or nothing; the pipeline's
+                // snapshot is the state the dialog showed.
+                let edited = project
                     .combine_lines(kept, other, &options)
                     .map_err(|e| e.to_string())?;
                 // Named in the state the dialog showed: before the combine.
-                let plan = project.combine_plan_wire(&edited.value);
+                let plan = before.combine_plan_wire(&edited.value);
                 log_closure_changes(&plan);
                 let warnings = combine_removed_warnings(
-                    project,
+                    before,
                     plan.closures_removed_across_one_shot
                         .as_deref()
                         .unwrap_or_default(),
                 );
-                record.preview = combine_rows(project, &work, kept, other);
-                *project = work;
+                record.preview = combine_rows(before, project, kept, other);
                 Ok(warnings)
             },
         );

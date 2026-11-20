@@ -832,3 +832,120 @@ fn perf_parts_20k() {
     );
     report.write();
 }
+
+/// The pieces of Combine Lines and of a legacy upgrade-open on the
+/// 20,000-shot survey.
+#[test]
+#[ignore = "a release-build benchmark: cargo test --release ... perf_parts -- --ignored"]
+fn perf_parts_combine_open_20k() {
+    use std::hint::black_box;
+    let b = Bench::open(400);
+    let p = b.state.get_project_state().unwrap();
+    let candidate = b
+        .state
+        .combine_candidates(StationRef::new(b.leaf, 0))
+        .unwrap()
+        .into_iter()
+        .find(|c| c.blocked_reason.is_none())
+        .unwrap();
+    let options = CombineLinesOptions {
+        name: "Combined".to_string(),
+        color: "#333333".to_string(),
+        swap_lr: false,
+        comment_pick: CombinePick::Kept,
+        name_pick: CombinePick::Kept,
+        join: None,
+    };
+    let (kept, other) = (candidate.line_a, candidate.line_b);
+    let mut report = Report::default();
+    let mut add = |name: &str, ms: f64| report.add(name, [ms, 0.0, 0.0]);
+    add(
+        "combine: model combine_lines",
+        timed(
+            || p.clone(),
+            |mut q| drop(black_box(q.combine_lines(kept, other, &options).unwrap())),
+        ),
+    );
+    let mut q = p.clone();
+    let edited = q.combine_lines(kept, other, &options).unwrap();
+    add(
+        "combine: combine_plan_wire",
+        timed(
+            || (),
+            |()| drop(black_box(p.combine_plan_wire(&edited.value))),
+        ),
+    );
+    add(
+        "combine: candidates at the leaf",
+        timed(
+            || (),
+            |()| {
+                drop(black_box(
+                    b.state.combine_candidates(StationRef::new(b.leaf, 0)),
+                ))
+            },
+        ),
+    );
+    add(
+        "combine: execute_combine_lines + undo",
+        timed(
+            || (),
+            |()| {
+                assert!(
+                    b.state
+                        .execute_combine_lines(kept, other, options.clone())
+                        .success
+                );
+                assert!(b.state.undo().success);
+            },
+        ),
+    );
+    let dir = TempDir::new().unwrap();
+    let legacy = legacy_file(dir.path(), 400);
+    add(
+        "open: frozen legacy read",
+        timed(
+            || (),
+            |()| {
+                let options = stalagmight_legacy::OpenOptions::default();
+                drop(black_box(
+                    stalagmight_legacy::open_path(&legacy, &options).unwrap(),
+                ));
+            },
+        ),
+    );
+    add(
+        "open: frozen legacy read, no adjusted view",
+        timed(
+            || (),
+            |()| {
+                let options = stalagmight_legacy::OpenOptions {
+                    with_adjusted: false,
+                    ..Default::default()
+                };
+                drop(black_box(
+                    stalagmight_legacy::open_path(&legacy, &options).unwrap(),
+                ));
+            },
+        ),
+    );
+    let config = crate::models::config::ClosureAdjustmentConfig::default();
+    add(
+        "open: migrate_path_for_app (read + convert + verify)",
+        timed(
+            || (),
+            |()| {
+                drop(black_box(
+                    crate::persistence::migrate::migrate_path_for_app(&legacy, &config).unwrap(),
+                ));
+            },
+        ),
+    );
+    add(
+        "open: v2 read_project_file",
+        timed(fresh_state, |state| {
+            drop(black_box(state.read_project_file(&b.path).unwrap()))
+        }),
+    );
+    report.write();
+}
