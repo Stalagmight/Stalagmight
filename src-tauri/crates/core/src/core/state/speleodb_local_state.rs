@@ -28,7 +28,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::AppState;
-use crate::persistence::Database;
 use crate::speleodb::models::SpeleoLocalProjectState;
 use crate::speleodb::SpeleoDbError;
 
@@ -186,29 +185,17 @@ pub(super) fn read_cached_link(path: &Path) -> CachedLink {
         );
         return CachedLink::Unreadable;
     }
-    match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
-        Ok(Some(link)) => CachedLink::Linked(link),
-        // No link row: a `.stalx` sitting in the cache that is not a managed
-        // project. Nothing to report, and nothing to push.
-        Ok(None) => CachedLink::NotManaged,
-        Err(e) => {
-            // `try_exists` rather than `exists`: an Err there (a permission denial
-            // on a parent component) is itself "cannot tell", and must not be
-            // rounded down to "absent".
-            let present = path.try_exists().unwrap_or(true);
-            tracing::debug!(
-                path = %path.display(),
-                error = %e,
-                present,
-                purpose = "report local SpeleoDB state for a project list",
-                "speleodb: cached .stalx could not be read"
-            );
-            if present {
-                CachedLink::Unreadable
-            } else {
-                CachedLink::NotManaged
-            }
-        }
+    // C11: version 2 copies through the header probe, legacy ones through the
+    // frozen reader (`speleodb_cache::read_cache_file`); C12 owns this reader.
+    match super::speleodb_cache::read_cache_file(path) {
+        super::speleodb_cache::CacheFile::Read {
+            link: Some(link), ..
+        } => CachedLink::Linked(link),
+        // No link: a `.stalx` sitting in the cache that is not a managed project
+        // (or no file at all). Nothing to report, and nothing to push.
+        super::speleodb_cache::CacheFile::Read { link: None, .. }
+        | super::speleodb_cache::CacheFile::Absent => CachedLink::NotManaged,
+        super::speleodb_cache::CacheFile::Unreadable => CachedLink::Unreadable,
     }
 }
 
@@ -473,9 +460,12 @@ impl AppState {
             });
         let link = match live {
             Some(link) => link,
-            None => Database::open_for_metadata(dest)
-                .and_then(|db| db.load_speleo_link())
-                .ok()??,
+            None => match super::speleodb_cache::read_cache_file(dest) {
+                super::speleodb_cache::CacheFile::Read {
+                    link: Some(link), ..
+                } => link,
+                _ => return None,
+            },
         };
         let same_server = crate::speleodb::auth::normalize_endpoint(&link.endpoint)
             == crate::speleodb::auth::normalize_endpoint(endpoint);

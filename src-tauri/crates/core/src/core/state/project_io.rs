@@ -196,7 +196,7 @@ pub fn set_generator(version: &str) {
     let _ = GENERATOR.set(format!("Stalagmight {version}"));
 }
 
-fn generator() -> String {
+pub(super) fn generator() -> String {
     GENERATOR
         .get()
         .cloned()

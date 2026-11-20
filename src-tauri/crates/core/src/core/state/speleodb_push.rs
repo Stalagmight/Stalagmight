@@ -2,15 +2,24 @@
 //! editing" and "the server has the bytes".
 //!
 //! Split out of `speleodb.rs` along the axis that module's own doc declares, and
-//! the one the #275 plan names for this module: the BASE-SHA fence, the quiescent
-//! VACUUM snapshot, the native SQLite upload, and the
-//! Done / Push / Update verdicts built on their outcomes.
+//! the one the #275 plan names for this module: the BASE-SHA fence, the push
+//! snapshot (the canonical version 2 file in its "for push" mode, plan 6.5), the
+//! upload, and the Done / Push / Update verdicts built on their outcomes.
 //!
 //! What holds this together rather than being a grab bag: every path here decides
 //! what the SERVER ends up holding, and each has to answer the same two questions
 //! the fence exists for - is our BASE still the tip, and did the upload actually
 //! land. [`PushOutcome`] is the shared answer type; `Unconfirmed` is why the dirty
 //! bit and the lock outlive a failed attempt.
+//!
+//! Every state change a landed push makes (BASE, the dirty bit, the cut history,
+//! the cleared Unwind chain) is durable at once through the local-only save
+//! (plan 6.5 mode 4, R2 B3), so a close right after Done never reopens to a stale
+//! BASE over a "dirty" copy.
+//!
+//! Rollout (plan 12.1): a SpeleoDB server that still refuses non-SQLite uploads
+//! answers the version 2 upload with a hard rejection, which surfaces through the
+//! ordinary error path: the project stays dirty and the lock stays held.
 //!
 //! Also here: the two escape hatches a push offers when the copy is NOT something
 //! the user wants to publish - `speleodb_discard_changes` and the unwound-copy
@@ -42,7 +51,7 @@ pub(super) enum PushOutcome {
     ///
     /// `undo_history_omitted` (sdk#3): the uploaded copy left its undo history out
     /// to fit under the server's upload limit (see
-    /// [`fit_snapshot_to_upload_limit`]); a new revision landed without it.
+    /// [`push_snapshot`]); a new revision landed without it.
     Confirmed { undo_history_omitted: bool },
     /// A stranger commit sits between our BASE and the server tip - never pushed.
     /// Stay locked + dirty for the user to reconcile (#198).
@@ -53,107 +62,103 @@ pub(super) enum PushOutcome {
     Unconfirmed,
 }
 
-/// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
-/// per-machine / per-session LOCAL tables so they don't ride to the server (#197).
-/// All durable project data - survey, config, import-dedup, resolved-warnings -
-/// proliferates with the project. See
-/// [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set and
-/// for which failures are fatal (stripping the redo history and clearing the
-/// dirty bit are; the privacy-neutral local prefs are not).
+/// The bytes a push uploads, and what they left out.
+#[derive(Debug)]
+pub(super) struct PushSnapshot {
+    pub(super) bytes: Vec<u8>,
+    /// sdk#3: the push had undo history to carry (Full mode), and every entry of
+    /// it was left out to fit the server's upload limit: a new revision lands
+    /// without it. A push that keeps only its newest entries is not this (the
+    /// cut is logged).
+    pub(super) undo_history_omitted: bool,
+}
+
+/// Serialize the open project for a push (plan 6.5 mode 2, 10.1): the canonical
+/// version 2 file without `local` (the dirty bit, the view, the sync state and
+/// the Unwind position never ride to the server, #197) and without redo; the
+/// undo history only when `keep_undo` (the project's undo mode is Full, #303),
+/// cut at the inherited watermark (`local.speleodb.inherited_through`: history
+/// loaded by a chain step is not authored here and must not ride into the new
+/// commit twice), then from the oldest end so the whole file fits `limit`
+/// (sdk#3, R2 H8: the newest entries are the ones kept).
 ///
-/// `keep_undo` (#303) is the one policy input: a Full-mode linked project ships its
-/// undo history since the last commit, which is what gives undo cross-commit reach.
-/// The redo stack is stripped in every mode.
+/// SpeleoDB refuses a file over its upload limit only after the whole body has
+/// arrived, so the size is settled here, before a byte is sent: a survey that
+/// does not fit even without its history is refused with `UploadTooLarge`.
 ///
-/// `inherited_through` (#303) narrows what "since the last commit" means when a chain
-/// step has loaded a past commit's history into the stack: everything at or before that
-/// instant was inherited rather than authored here, and is cut from the COPY so it does
-/// not ride into the new commit twice. `None` on the ordinary lock-edit-push path, where
-/// every entry is this session's.
-///
-/// FATAL for the push: an unsanitized snapshot must never be uploaded.
-pub(super) fn clear_snapshot_dirty(
-    snapshot: &Path,
+/// `extras` must be the open file's, with `history` the undo stack as it is now:
+/// the same in-memory snapshot as `project` (taken under one `project`
+/// acquisition by the push).
+pub(super) fn push_snapshot(
+    project: &crate::models::survey::Project,
+    extras: &crate::persistence::stalx_v2::Extras,
     keep_undo: bool,
-    inherited_through: Option<&str>,
-) -> Result<(), SpeleoDbError> {
-    crate::persistence::Database::sanitize_push_snapshot(snapshot, keep_undo, inherited_through)
-        .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
-}
-
-/// sdk#3: make the sanitized push SNAPSHOT fit SpeleoDB's upload limit before a
-/// byte is sent. The server only refuses an oversized file after receiving all of
-/// it (a Fatal 400 that keeps every later push failing the same way), so the size
-/// is checked here, against `limit` ([`client::SERVER_UPLOAD_LIMIT_BYTES`]).
-///
-/// - Within the limit: unchanged, `Ok(false)`.
-/// - Over it, with the undo history in the copy (`history_included`, Full mode):
-///   the copy is re-sanitized on the upload-without-history path every other undo
-///   mode takes (`keep_undo = false`: `undo_stack` emptied, file compacted). If that
-///   fits, `Ok(true)`: the survey data uploads in full, the revision just carries no
-///   history to unwind.
-/// - Still over (or no history to drop): `Err(UploadTooLarge)`, and nothing is sent.
-///
-/// Only the copy is touched. The live project, its undo stack and its dirty bit
-/// stay as they are; what happens to the local stack after a landed push is the
-/// same per-push rule as in every mode (`speleodb_clear_undo_after_push`).
-pub(super) fn fit_snapshot_to_upload_limit(
-    snapshot: &Path,
-    history_included: bool,
     limit: u64,
-) -> Result<bool, SpeleoDbError> {
-    let size_of = |path: &Path| {
-        std::fs::metadata(path)
-            .map(|m| m.len())
-            .map_err(|e| SpeleoDbError::Io(format!("could not read the push snapshot size: {e}")))
+) -> Result<PushSnapshot, SpeleoDbError> {
+    use crate::persistence::stalx_v2::{encode_with_report, EncodeError, Mode, PushOptions};
+    let options = PushOptions {
+        keep_undo,
+        watermark: extras.local.speleodb.inherited_through,
+        byte_cap: usize::try_from(limit).unwrap_or(usize::MAX),
     };
-    let size = size_of(snapshot)?;
-    if size <= limit {
-        return Ok(false);
-    }
-    if !history_included {
-        return Err(SpeleoDbError::UploadTooLarge { size, limit });
-    }
-    // `inherited_through` only narrows a KEPT history; with none kept it is moot.
-    clear_snapshot_dirty(snapshot, false, None)?;
-    let without_history = size_of(snapshot)?;
-    if without_history > limit {
-        return Err(SpeleoDbError::UploadTooLarge {
-            size: without_history,
+    match encode_with_report(project, extras, Mode::ForPush(options)) {
+        Ok((bytes, report)) => {
+            let cut = &report.history;
+            if cut.size_cut > 0 || cut.inherited_cut > 0 {
+                tracing::info!(
+                    kept = cut.undo_kept,
+                    inherited_cut = cut.inherited_cut,
+                    size_cut = cut.size_cut,
+                    size = report.size,
+                    limit,
+                    purpose = "fit the upload under the server size limit (sdk#3)",
+                    "speleodb push: cut the uploaded undo history; the live project is untouched"
+                );
+            }
+            Ok(PushSnapshot {
+                bytes,
+                undo_history_omitted: cut.size_cut > 0 && cut.undo_kept == 0,
+            })
+        }
+        Err(EncodeError::TooLarge { size, .. }) => Err(SpeleoDbError::UploadTooLarge {
+            size: u64::try_from(size).unwrap_or(u64::MAX),
             limit,
-        });
+        }),
+        Err(e) => Err(SpeleoDbError::Io(format!(
+            "could not serialize the push snapshot: {e}"
+        ))),
     }
-    tracing::info!(
-        size,
-        without_history,
-        limit,
-        purpose = "fit the upload under the server size limit (sdk#3)",
-        "left the undo history out of the uploaded copy; the live project is untouched"
-    );
-    Ok(true)
 }
 
-/// Read the undo-sharing inputs from the snapshot that will actually be uploaded.
-/// The live database handle may be absent after a successful save whose reopen failed,
-/// but the installed file and its snapshot still carry the authoritative project policy.
-fn snapshot_undo_metadata(
-    state: &AppState,
-    snapshot: &crate::persistence::Database,
-) -> Result<(bool, Option<String>), SpeleoDbError> {
-    let link = snapshot.load_speleo_link().map_err(|e| {
-        SpeleoDbError::Io(format!(
-            "could not read the undo policy from the push snapshot: {e}"
-        ))
-    })?;
-    let inherited_through = snapshot.load_speleo_undo_watermark().map_err(|e| {
-        SpeleoDbError::Io(format!(
-            "could not read the undo watermark from the push snapshot: {e}"
-        ))
-    })?;
-    Ok((
-        state.undo_policy_for(link.as_ref()).pushes_history(),
-        inherited_through,
-    ))
+/// Write the push snapshot to a scratch file in `dir` (the cache directory) for
+/// the upload to stream; removed when the handle drops.
+fn write_push_snapshot(dir: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile, SpeleoDbError> {
+    use std::io::Write as _;
+    let io =
+        |e: std::io::Error| SpeleoDbError::Io(format!("could not stage the push snapshot: {e}"));
+    let mut file = tempfile::Builder::new()
+        .prefix(".speleodb-push-")
+        .suffix(".stalx")
+        .tempfile_in(dir)
+        .map_err(io)?;
+    file.write_all(bytes).map_err(io)?;
+    file.flush().map_err(io)?;
+    Ok(file)
+}
+
+/// The time an undo history entry was recorded (its `"t"`), when it says.
+fn history_entry_time(
+    entry: &crate::persistence::stalx_v2::RawJson,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    #[derive(serde::Deserialize)]
+    struct Stamp {
+        #[serde(default)]
+        t: Option<String>,
+    }
+    let text = serde_json::from_str::<Stamp>(entry.as_str()).ok()?.t?;
+    chrono::DateTime::parse_from_rfc3339(&text)
+        .ok()
+        .map(|at| at.with_timezone(&chrono::Utc))
 }
 
 /// The server `type` an un-adopted Ariane project carries. Compared
@@ -207,9 +212,16 @@ impl AppState {
     fn speleodb_push_project_guard(
         &self,
         generation: u64,
-    ) -> Result<std::sync::MutexGuard<'_, Option<crate::models::Project>>, SpeleoErrorDto> {
-        let _ = (&generation,);
-        crate::core::stub::not_ported("speleodb_push::speleodb_push_project_guard")
+    ) -> Result<std::sync::MutexGuard<'_, Option<crate::models::survey::Project>>, SpeleoErrorDto>
+    {
+        let project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.speleodb_session_generation() != generation || project.is_none() {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
+        Ok(project)
     }
 
     /// Push the open project's edits (if any) and release the write lock,
@@ -563,8 +575,90 @@ impl AppState {
         discard_changes: bool,
         expected: Option<&crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<UpdateResult, SpeleoErrorDto> {
-        let _ = (&discard_changes, &expected);
-        crate::core::stub::not_ported("speleodb_push::speleodb_reload_locked")
+        // The consent is for the project open NOW, exactly as it is: the session
+        // generation and the project revision (`OpenProjectToken`), re-checked after
+        // the network round trip and again inside the reload's commit.
+        let consent = {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let token = self.open_project_token_locked();
+            if expected.is_some_and(|expected| {
+                expected.session_generation != token.generation.to_string()
+                    || project.as_ref().is_none_or(|project| {
+                        project.modified_at.to_rfc3339() != expected.project_modified_at
+                    })
+            }) {
+                return Err(local_dto(SpeleoDbError::SessionMoved));
+            }
+            token
+        };
+        if !discard_changes {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(local_dto)?;
+        }
+        let link = self.speleodb_validated_link()?;
+        if link.has_unpushed_edits && !discard_changes {
+            return Err(local_dto(SpeleoDbError::Io(
+                "Reload Project requires confirmation to discard unsaved and unuploaded changes. Saving first preserves your work.".into(),
+            )));
+        }
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+        })
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.open_project_token_holds_locked(consent) {
+                return Err(local_dto(SpeleoDbError::SessionMoved));
+            }
+        }
+        if tip.is_none() && !commits.is_empty() {
+            return Ok(UpdateResult::DivergenceNeeded);
+        }
+        let verdict = sync::reconcile_verdict(
+            link.base_commit_sha.as_deref(),
+            tip.as_deref(),
+            link.has_unpushed_edits,
+            &commits,
+        );
+        let replace = discard_changes || self.speleodb_unwound_from().is_some();
+        if !replace {
+            match verdict {
+                ReconcileVerdict::UpToDate => return Ok(UpdateResult::UpToDate),
+                ReconcileVerdict::Diverged => return Ok(UpdateResult::DivergenceNeeded),
+                ReconcileVerdict::FastForward => {}
+            }
+        }
+        let local_path = self
+            .speleodb_fast_forward(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link,
+                tip.as_deref(),
+                (
+                    if discard_changes {
+                        LocalEditsPolicy::Discard
+                    } else {
+                        LocalEditsPolicy::Protect
+                    },
+                    consent.generation,
+                    Some(consent.revision),
+                ),
+            )
+            .map_err(local_dto)?;
+        Ok(UpdateResult::FastForwarded { local_path })
     }
 
     /// Resolve the server's TRUE HEAD and return it with the full revision
@@ -693,9 +787,8 @@ impl AppState {
         )
     }
 
-    /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
-    /// the `.tml` render) and push it as one commit, then reconcile the dirty bit
-    /// from the result.
+    /// Save, build the push snapshot ([`push_snapshot`]) and push it as one
+    /// commit, then reconcile the dirty bit, BASE and the history from the result.
     pub(super) fn speleodb_upload(
         &self,
         endpoint: &str,
@@ -754,26 +847,26 @@ impl AppState {
             }
         }
 
-        // The live on-disk `.stalx` (the open project's cache file) and the scratch
-        // snapshot / render paths beside it.
+        // The snapshot is written beside the open project's cache file (the same
+        // volume, never the system temp) for the upload to stream, and removed
+        // after it.
         let live = self.speleodb_cache_path(project_id).map_err(local_dto)?;
         let dir = live
             .parent()
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
-        let snapshot = dir.join("snapshot.stalx");
 
-        // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
-        // Any edit recorded after this (last_edit_at > push_start) is NOT in the
-        // snapshot we upload, so a confirmed push must NOT clear its dirty bit - it
-        // is re-pushed on the next Done instead of being silently dropped. (dirty
-        // edits always carry a last_edit_at: mark_remote_dirty stamps both
-        // together, so the None branch of edits_captured_by_push is unreachable for
-        // a real dirty bit here.)
-        let push_start = chrono::Utc::now().to_rfc3339();
+        // Push-start fence (#197): capture the instant BEFORE the save and the
+        // snapshot. Any edit recorded after this (last_edit_at > push_start) may not
+        // be in the commit, so a confirmed push must NOT clear its dirty bit - it is
+        // re-pushed on the next Done instead of being silently dropped. (dirty edits
+        // always carry a last_edit_at: mark_remote_dirty stamps both together, so the
+        // None branch of edits_captured_by_push is unreachable for a real dirty bit
+        // here.)
+        let push_floor = chrono::Utc::now();
+        let push_start = push_floor.to_rfc3339();
 
-        // Flush in-memory state before taking the native SQLite snapshot.
-        // save_project also heals duplicate shot UUIDs and non-finite geometry,
-        // so the upload carries the same normalized data as the local file.
+        // A push first saves (plan 6.5): the local copy and the commit describe the
+        // same survey, and an unsaved survey is never uploaded without being on disk.
         if !self
             .save_project_at_generation(None, Some(generation))
             .success
@@ -783,49 +876,45 @@ impl AppState {
             )));
         }
 
-        // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
-        // the COPY so it never rides to the server.
-        {
-            let _project = self.speleodb_push_project_guard(generation)?;
-            crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        }
-
-        // Derive policy and history cleanup from the file just captured, never from the
-        // live handle or stack. `save_project` can return success with a
-        // DATABASE_NOT_REOPENED warning, which deliberately leaves `self.database` empty;
-        // consulting `undo_policy()` there classifies a linked Full project as local and
-        // strips the history from an upload whose snapshot still says Full.
-        // An edit can land after save_project and before this point: it is absent from the
-        // snapshot and must retain its undo entry after the confirmed push. Sampling the
-        // live stack here included that edit in the cutoff even though it was not uploaded.
-        let snapshot_db = crate::persistence::Database::open_for_metadata(&snapshot)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        let (keep_undo, inherited_through) =
-            snapshot_undo_metadata(self, &snapshot_db).map_err(local_dto)?;
-        let snapshot_newest = snapshot_db
-            .newest_undo_timestamp()
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        let push_floor = chrono::DateTime::parse_from_rfc3339(&push_start)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?
-            .with_timezone(&chrono::Utc);
-        let undo_cutoff = snapshot_newest
-            .map_or(push_floor, |newest| newest.max(push_floor))
-            .to_rfc3339();
-        drop(snapshot_db);
-
-        // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
-        // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
-        // the undo history is fatal to leak too; in Full mode it is the payload.
-        clear_snapshot_dirty(&snapshot, keep_undo, inherited_through.as_deref())
-            .map_err(local_dto)?;
-
-        // sdk#3: SpeleoDB refuses a file over its upload limit only after the whole
-        // body has arrived. Fit the COPY first - leaving its undo history out when
-        // that is enough - and refuse before sending anything when nothing fits.
-        let undo_history_omitted =
-            fit_snapshot_to_upload_limit(&snapshot, keep_undo, client::SERVER_UPLOAD_LIMIT_BYTES)
-                .map_err(|e| dto_for_error(Endpoint::UploadStalx, &e))?;
+        // Then the push serializes from the in-memory project, its file state and its
+        // undo stack, all under ONE `project` acquisition, so the bytes, the undo
+        // policy and the history cutoff describe one instant. The policy is the open
+        // link's (the project's own undo mode, #303); the encoder backs it up with the
+        // link it writes.
+        let (snapshot, snapshot_newest) = {
+            let project = self.speleodb_push_project_guard(generation)?;
+            let mut extras = self.with_file(|file| file.extras.clone());
+            let keep_undo = self
+                .undo_policy_for(self.speleo_link().as_ref())
+                .pushes_history();
+            let (history, newest) = {
+                let stack = self
+                    .undo_stack
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (stack.persisted(), stack.newest_stamp())
+            };
+            extras.history = history;
+            let survey = project
+                .as_ref()
+                .ok_or_else(|| local_dto(SpeleoDbError::SessionMoved))?;
+            let snapshot = push_snapshot(
+                survey,
+                &extras,
+                keep_undo,
+                client::SERVER_UPLOAD_LIMIT_BYTES,
+            )
+            .map_err(|e| dto_for_error(Endpoint::UploadStalx, &e))?;
+            (snapshot, newest)
+        };
+        let undo_history_omitted = snapshot.undo_history_omitted;
+        // [#303] The clear-on-push cutoff: every undo entry in the stack when the
+        // snapshot was taken is on the server now (or older than what fit), so it is
+        // the later of the stack's newest stamp at that instant and the push floor.
+        // An entry recorded afterwards stamps strictly above both, keeps its history,
+        // and rides the next push.
+        let undo_cutoff = snapshot_newest.map_or(push_floor, |newest| newest.max(push_floor));
+        let staged = write_push_snapshot(dir, &snapshot.bytes).map_err(local_dto)?;
 
         {
             let _project = self.speleodb_push_project_guard(generation)?;
@@ -837,10 +926,11 @@ impl AppState {
                 token,
                 insecure_http,
                 project_id,
-                &snapshot,
+                staged.path(),
                 &commit_message,
             ),
         );
+        drop(staged);
         match result {
             // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
             // no edit was recorded after push_start (else a concurrent edit during
@@ -903,7 +993,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                self.speleodb_clear_undo_after_push(&undo_cutoff);
+                self.speleodb_clear_undo_after_push(undo_cutoff);
                 Ok(landed)
             }
             Err(e) => {
@@ -937,7 +1027,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    self.speleodb_clear_undo_after_push(&undo_cutoff);
+                    self.speleodb_clear_undo_after_push(undo_cutoff);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -1058,64 +1148,51 @@ impl AppState {
     ///
     /// Best-effort because the push has already landed. Poisoned guards are recovered;
     /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
-    pub(super) fn speleodb_clear_undo_after_push(&self, undo_cutoff: &str) {
-        let _ = (&undo_cutoff,);
-        crate::core::stub::not_ported::<()>("speleodb_push::speleodb_clear_undo_after_push");
-    }
-}
-
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "test setup failures should stop the regression test immediately"
-)]
-mod snapshot_undo_metadata_tests {
-    use super::*;
-    use crate::models::{Project, SpeleoLink, UndoMode};
-    use crate::persistence::Database;
-    use crate::test_helpers::with_isolated_config;
-    use tempfile::TempDir;
-
-    #[test]
-    fn full_snapshot_policy_survives_an_absent_live_database_handle() {
-        with_isolated_config(|| {
-            let state = AppState::new().expect("construct state");
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
-            assert!(
-                !state.undo_policy().pushes_history(),
-                "the old live-handle lookup classifies an unopened state as local"
-            );
-
-            let temp = TempDir::new().expect("temp dir");
-            let path = temp.path().join("snapshot.stalx");
-            {
-                let mut db = Database::open(&path).expect("create snapshot");
-                db.save_project(&Project::new("Snapshot".to_owned(), None))
-                    .expect("save project");
-                db.save_speleo_link(Some(&SpeleoLink {
-                    endpoint: "https://example.invalid".to_owned(),
-                    project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
-                    project_name: "Snapshot".to_owned(),
-                    base_commit_sha: None,
-                    has_unpushed_edits: true,
-                    last_edit_at: None,
-                    last_verify_at: None,
-                    undo_mode: Some(UndoMode::Full),
-                }))
-                .expect("save link");
-                db.save_speleo_undo_watermark(Some("2026-08-02T10:00:00+00:00"))
-                    .expect("save watermark");
-            }
-
-            let snapshot = Database::open_for_metadata(&path).expect("open snapshot metadata");
-            let (keep_undo, inherited_through) =
-                snapshot_undo_metadata(&state, &snapshot).expect("read snapshot policy");
-
-            assert!(keep_undo, "the snapshot's explicit Full policy wins");
-            assert_eq!(
-                inherited_through.as_deref(),
-                Some("2026-08-02T10:00:00+00:00")
-            );
+    pub(super) fn speleodb_clear_undo_after_push(
+        &self,
+        undo_cutoff: chrono::DateTime<chrono::Utc>,
+    ) {
+        let (dropped, remaining) = {
+            let mut stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let dropped = stack.drop_entries_up_to(undo_cutoff);
+            // Nothing left in the stack is inherited: what was is on the server.
+            stack.set_inherited_through(None);
+            (dropped, stack.len())
+        };
+        self.with_file(|file| {
+            // While the survey has unsaved changes the local-only save writes the
+            // history the file last held, not the stack (open_file.rs): cut that one
+            // the same way, so the disk never keeps pushed entries as fresh history.
+            let saved = &mut file.saved_history;
+            saved
+                .undo
+                .retain(|entry| history_entry_time(entry).is_none_or(|at| at > undo_cutoff));
+            saved.redo.clear();
+            // The chain position and the watermark described the history that just
+            // went; the next Unwind restarts from the new BASE.
+            file.extras.local.speleodb.unwound_from = None;
+            file.extras.local.speleodb.inherited_through = None;
         });
+        // ONE local-only save writes the cut history and the cleared chain metadata
+        // together. If it fails the disk keeps both as they were (the old rows still
+        // fall under the old watermark), and the next save writes them together.
+        match self.persist_local_state() {
+            Ok(()) => tracing::info!(
+                dropped,
+                remaining,
+                undo_cutoff = %undo_cutoff,
+                purpose = "avoid duplicating pushed history in the next commit (#303)",
+                "Persisted the undo cleanup for a confirmed push"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                dropped,
+                purpose = "persist confirmed-push undo cleanup (#303)",
+                "could not persist the pruned history; it is cut in memory and the next save writes it"
+            ),
+        }
     }
 }

@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::open_file::FileState;
+use super::speleodb_cache::OpenProjectToken;
+use super::speleodb_cache_install::PreparedDownload;
 use super::AppState;
 use crate::core::loading::{
     DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
@@ -32,6 +34,7 @@ use crate::persistence::migrate::{LegacyError, MigrateError};
 use crate::persistence::stalx_v2::{
     decode, sniff, DecodeError, DecodeOptions, Fingerprint, Format, History,
 };
+use crate::speleodb::SpeleoDbError;
 
 /// A project file read into memory, not yet committed into the slot.
 pub(crate) struct Opened {
@@ -195,8 +198,32 @@ impl AppState {
 
     /// Commit a read file into the project slot: the project, its file
     /// state, the edit gate, the undo stacks, the banner flags. The caller
-    /// holds no lock.
+    /// holds no lock. A lock held for the project that leaves is released
+    /// first (detached).
     pub(crate) fn commit_opened(&self, opened: Opened) {
+        self.speleodb_release_held_lock_detached();
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.commit_opened_locked(&mut proj_guard, opened, None);
+        drop(proj_guard);
+        self.persist_pending_local_state();
+    }
+
+    /// [`Self::commit_opened`] under the caller's `project` guard, in ONE
+    /// acquisition with whatever the caller did before (the prepared reload
+    /// installs the file first). `carry_from` is the session generation whose
+    /// edit claim the reopened project keeps (a fast-forward that keeps its
+    /// edit session); `None` re-derives the gate from the link alone. The
+    /// caller runs [`Self::persist_pending_local_state`] once the guard is
+    /// dropped.
+    pub(super) fn commit_opened_locked(
+        &self,
+        proj_guard: &mut Option<Project>,
+        opened: Opened,
+        carry_from: Option<u64>,
+    ) {
         let Opened {
             project,
             mut file,
@@ -213,11 +240,6 @@ impl AppState {
             }
         }
         let watermark = file.extras.local.speleodb.inherited_through;
-        self.speleodb_release_held_lock_detached();
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *proj_guard = Some(project);
         {
             let mut session = self
@@ -225,7 +247,7 @@ impl AppState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.bump_speleodb_session();
-            self.speleodb_commit_open_gate(&mut session, link.as_ref(), None);
+            self.speleodb_commit_open_gate(&mut session, link.as_ref(), carry_from);
         }
         self.bump_revision();
         *self
@@ -252,7 +274,12 @@ impl AppState {
         self.note_history_dropped(dropped);
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        drop(proj_guard);
+    }
+
+    /// Write durable state the commit changed in memory only (a materialized
+    /// undo mode), now that no guard is held. A failure leaves it in memory
+    /// for the next save.
+    pub(super) fn persist_pending_local_state(&self) {
         if self.with_file(|f| f.local_pending) {
             if let Err(e) = self.persist_local_state() {
                 tracing::warn!(error = %e, "Could not write the materialized undo mode; it stays in memory");
@@ -273,29 +300,81 @@ impl AppState {
         }
     }
 
-    /// Open a downloaded SpeleoDB project (pull, install, revision swap):
-    /// ported by the SpeleoDB work package.
-    pub(super) fn open_project_prepared<F>(
-        &self,
-        _path: PathBuf,
-        _expected: Option<(u64, Vec<u8>)>,
-        _before_commit: F,
-    ) -> Result<CommandResult, crate::speleodb::SpeleoErrorDto>
-    where
-        F: FnOnce() -> Result<(), crate::speleodb::SpeleoErrorDto>,
-    {
-        crate::core::stub::not_ported("project_load::open_project_prepared")
-    }
-
-    /// See [`Self::open_project_prepared`].
+    /// Install a prepared download at `dest` and open it in place, in ONE
+    /// acquisition of the `project` guard (the fast-forward and the revision
+    /// swap): there is no window in which the old project is closed and the
+    /// new one not yet open, so nothing can slip in between.
+    ///
+    /// `consent` is the open project the transition was decided over
+    /// (generation and revision, [`OpenProjectToken`]), re-checked before and
+    /// again under the guard together with the open link's identity: an edit
+    /// made while the download ran, or a different project opened meanwhile,
+    /// refuses with [`SpeleoDbError::SessionMoved`] before a byte is written.
+    /// `editing` carries the edit claim bound to the consent's generation into
+    /// the reopened project (a fast-forward inside an edit session); a reload
+    /// never starts a session, so a claim released before it leaves the
+    /// project read-only.
+    ///
+    /// Deliberately without the canonical-storage guard of
+    /// `do_load_project_full` (`foreign_link`): `dest` is always the managed
+    /// cache path of the project being reloaded.
     pub(super) fn open_project_download(
         &self,
-        _source: PathBuf,
-        _dest: PathBuf,
-        _expected: (u64, Vec<u8>),
-        _editing: bool,
-    ) -> Result<CommandResult, crate::speleodb::SpeleoErrorDto> {
-        crate::core::stub::not_ported("project_load::open_project_download")
+        mut prepared: PreparedDownload,
+        dest: PathBuf,
+        consent: OpenProjectToken,
+        editing: bool,
+    ) -> Result<(), SpeleoDbError> {
+        tracing::info!(
+            path = ?dest,
+            purpose = "reload a SpeleoDB project in place",
+            "Installing and opening a downloaded project"
+        );
+        let link_matches = || {
+            self.speleodb_open_link().is_ok_and(|live| {
+                prepared.link.project_id == live.project_id
+                    && crate::speleodb::auth::normalize_endpoint(&prepared.link.endpoint)
+                        == crate::speleodb::auth::normalize_endpoint(&live.endpoint)
+            })
+        };
+        {
+            let _guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.open_project_token_holds_locked(consent) || !link_matches() {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+        }
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !self.open_project_token_holds_locked(consent) || !link_matches() {
+            return Err(SpeleoDbError::SessionMoved);
+        }
+        if self
+            .active_loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            return Err(SpeleoDbError::SessionMoved);
+        }
+        let display = self.outgoing_display(proj_guard.as_ref(), &dest);
+        let fingerprint = self.install_prepared(&mut prepared, &dest, display)?;
+        let opened = prepared.into_opened(dest.clone(), fingerprint);
+        let carry_from = editing.then_some(consent.generation);
+        self.commit_opened_locked(&mut proj_guard, opened, carry_from);
+        drop(proj_guard);
+        self.persist_pending_local_state();
+        self.note_recent_project(&dest);
+        tracing::info!(
+            path = ?dest,
+            purpose = "reload a SpeleoDB project in place",
+            "Project reloaded"
+        );
+        Ok(())
     }
 
     /// Load a project with full progress reporting (the `load_project_full`

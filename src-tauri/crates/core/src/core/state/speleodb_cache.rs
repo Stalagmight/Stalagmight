@@ -3,19 +3,21 @@
 //! Three flows do this - the pull (`speleodb_open_project`), the fast-forward
 //! (`speleodb_start_editing` / `speleodb_update`), and the revision swap
 //! (`speleodb_restore_revision`) - and all three must handle the same hazards
-//! around clobbering a file the app may still hold open:
+//! around clobbering a file the app may still have open:
 //!
-//! 1. the per-machine `display_settings` in the OLD file have to survive the
-//!    replace (the server copy has them stripped, #197),
-//! 2. any live SQLite handle to the destination has to be closed BEFORE the
-//!    replace, and the replace itself has to be atomic, and
-//! 3. the OLD file's SQLite sidecars have to be out of the way before the new
-//!    file takes its name (`speleodb_sidecars`).
+//! 1. the per-machine view toggles (`local.display`) of the OLD file have to
+//!    survive the replace (a push never carries `local`, #197);
+//! 2. the replace itself has to be atomic and durable (`write_atomic`), and
+//! 3. a legacy (SQLite) cache file's sidecars have to be out of the way before
+//!    the new file takes its name (`speleodb_sidecars`).
 //!
-//! Every flow stages through `stage_download`; the pull then renames through
+//! Every flow first reads the download into memory and checks it
+//! (`speleodb_cache_install::PreparedDownload`): a version 2 file is decoded, a
+//! legacy one migrated, and the link, the undo policy and the history rule are
+//! settled there, before any lock is taken. The pull then installs it through
 //! `replace_cache_for_session`, the fast-forward and the revision swap through
-//! the prepared reload (`install_prepared_database`). Each of those renames
-//! handles all three, so no call site can forget one. Both run under the
+//! the prepared reload (`open_project_download`). Each install handles all
+//! three hazards, so no call site can forget one. Both run under the
 //! session's locks and refuse once a newer open or login has moved it, so a
 //! late download can never replace a copy the user has since reopened.
 //!
@@ -34,84 +36,131 @@
 //! copy un-pushed itself, so without the waiver Restore was single-use). Anything
 //! else passes [`LocalEditsPolicy::Protect`] and refuses instead.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use super::open_file::FileState;
 use super::AppState;
+use crate::models::survey::Project;
+use crate::models::SpeleoLink;
+use crate::persistence::stalx_v2::{probe_path, Format};
 use crate::speleodb::SpeleoDbError;
 
-/// Snapshot the local per-machine `display_settings` from an existing cache file
-/// BEFORE a download-replace overwrites it. View toggles are stripped from the
-/// server copy on push (#197), so without re-applying them a fast-forward / re-open
-/// - which replaces the whole local `.stalx` with the server's - would reset the
-/// user's view to defaults. Empty when the file is absent or unreadable (a first
-/// open → defaults, which is correct). Pairs with [`restore_display_settings`].
+/// What a cache file says about itself, read without decoding the survey.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum CacheFile {
+    /// Nothing is at the path.
+    Absent,
+    /// A file is there, but its state could not be read: NOT a claim that it
+    /// is unlinked or clean.
+    Unreadable,
+    /// The file's link (none: not a managed copy) and its view toggles.
+    Read {
+        link: Option<SpeleoLink>,
+        display: BTreeMap<String, String>,
+    },
+}
+
+/// Read the link and the view toggles of the cache file at `path`.
 ///
-/// Opens READ-ONLY via `open_for_metadata`: this is a handful of `SELECT`s, so it
-/// needs neither the integrity check / migration chain nor `open_existing`'s
-/// read-write connection with its 256 MB mmap - and it must not add another
-/// mmap'd handle to a file that is about to be replaced.
-pub(super) fn preserved_display_settings(dest: &Path) -> HashMap<String, String> {
-    if !dest.exists() {
-        return HashMap::new();
+/// A version 2 file is read through the header probe (the first bytes only,
+/// plan 6.1). A legacy (SQLite) copy, which an older build left in the cache,
+/// is read through the frozen 0.6.0 reader and the migration, in memory: its
+/// file and journal are copied to a private temp first, so nothing is ever
+/// written beside it, and a hot journal is rolled back in the copy, which is
+/// exactly the committed state a read-write open would have recovered.
+pub(super) fn read_cache_file(path: &Path) -> CacheFile {
+    let header = match probe_path(path) {
+        Ok(header) => header,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CacheFile::Absent,
+        Err(e) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %e,
+                purpose = "read a SpeleoDB cache copy's link",
+                "speleodb: the cached copy could not be read"
+            );
+            return CacheFile::Unreadable;
+        }
+    };
+    match header.format {
+        Format::V2 if header.complete => {
+            let mut file = FileState::default();
+            file.extras.speleodb = header.speleodb;
+            file.extras.local = header.local.unwrap_or_default();
+            let link = file.speleo_link();
+            CacheFile::Read {
+                link,
+                display: std::mem::take(&mut file.extras.local.display),
+            }
+        }
+        Format::Legacy => match crate::persistence::migrate::migrate_path(path) {
+            Ok(migrated) => CacheFile::Read {
+                link: migrated.extras.speleo_link,
+                display: migrated.extras.display_settings,
+            },
+            Err(e) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    class = e.class(),
+                    purpose = "read a legacy SpeleoDB cache copy's link",
+                    "speleodb: the legacy cached copy could not be read"
+                );
+                CacheFile::Unreadable
+            }
+        },
+        Format::V2 | Format::Unknown => CacheFile::Unreadable,
     }
-    crate::persistence::Database::open_for_metadata(dest)
-        .and_then(|db| db.load_display_settings())
-        .unwrap_or_default()
 }
 
-/// [#303] The `speleo_link.undo_mode` already recorded in the `.stalx` at `dest`.
-///
-/// Every stamp site rewrites the WHOLE link row, so without this a pull / fast-forward /
-/// revision swap would reset the project's explicit undo policy, silently discarding a
-/// `Disabled` that the project owner set precisely because the
-/// project is too big to ship undo snapshots. The value rides in the pushed snapshot
-/// (it is project state, not machine state), so the value in the downloaded file
-/// IS the authoritative answer and the stamp has to carry it forward.
-///
-/// `None` when the file carries no link or a legacy NULL. The caller materializes the
-/// application default before stamping the shared row. Takes the handle each stamp site
-/// has ALREADY opened on the file it is about to stamp, rather than a path: a second
-/// connection to a file mid-replace is exactly what the rest of this module avoids.
-pub(super) fn preserved_undo_mode(
-    db: &crate::persistence::Database,
-) -> Option<crate::models::UndoMode> {
-    db.load_speleo_link()
-        .ok()
-        .flatten()
-        .and_then(|l| l.undo_mode)
+/// The exact open project a SpeleoDB transition was decided over: the
+/// session generation and the project revision, which every change of the
+/// project slot bumps (an edit, an undo, an open, a close). A transition that
+/// replaces the open project carries it from the moment its consent was taken
+/// to its commit, and refuses with [`SpeleoDbError::SessionMoved`] when either
+/// moved, so an edit made while the download ran is never thrown away by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OpenProjectToken {
+    pub(super) generation: u64,
+    pub(super) revision: u64,
 }
 
-/// [#303] Empty the undo/redo tables in a freshly-downloaded cache file.
-///
-/// The file arrives carrying whatever the last pusher's session held (a Full-mode push
-/// ships its undo history on purpose), and inheriting that implicitly is the #194 b3
-/// replay hazard. Clearing it HERE - in the bytes on disk, before anything opens them -
-/// rather than in memory after the load is deliberate: the load path reads these tables
-/// into the live stack, and a clear that only touched memory would leave the history in
-/// the file for the next open to pick up again.
-///
-/// Fatal while the file is still staged. A downloaded database is never installed until
-/// all inherited history metadata has been removed successfully.
-pub(super) fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
-    crate::persistence::Database::clear_undo_history_at(dest).map_err(|e| {
-        SpeleoDbError::Io(format!(
-            "could not clear inherited history from {}: {e}",
-            dest.display()
-        ))
-    })
-}
+impl AppState {
+    /// The token of the project open now. The caller holds the `project`
+    /// guard, so the two counters describe one world.
+    pub(super) fn open_project_token_locked(&self) -> OpenProjectToken {
+        OpenProjectToken {
+            generation: self.speleodb_session_generation(),
+            revision: self.current_revision(),
+        }
+    }
 
-/// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
-/// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
-/// restore only means that one view toggle falls back to its default.
-pub(super) fn restore_display_settings(
-    db: &crate::persistence::Database,
-    preserved: &HashMap<String, String>,
-) {
-    for (key, value) in preserved {
-        if let Err(e) = db.save_display_setting(key, value) {
-            tracing::warn!(error = %e, key = %key, "failed to restore local display setting after download-replace");
+    /// Whether `token` still describes the project open now. The caller holds
+    /// the `project` guard.
+    pub(super) fn open_project_token_holds_locked(&self, token: OpenProjectToken) -> bool {
+        self.open_project_token_locked() == token
+    }
+
+    /// The view toggles of the copy about to be replaced at `dest`, for the
+    /// new copy to keep (#197). `open` is the project in the slot (the caller
+    /// holds the `project` guard): when `dest` is its file, the toggles in
+    /// memory are the authority (they are durable at once, but a legacy or a
+    /// never-saved copy holds them in memory only). Otherwise the file is read;
+    /// an absent or unreadable one has none, which is a first open's defaults.
+    pub(super) fn outgoing_display(
+        &self,
+        open: Option<&Project>,
+        dest: &Path,
+    ) -> BTreeMap<String, String> {
+        let is_open = open
+            .and_then(|p| p.file_path.as_deref())
+            .is_some_and(|path| super::project_io::same_file(path, dest));
+        if is_open {
+            return self.with_file(|file| file.display_settings().clone());
+        }
+        match read_cache_file(dest) {
+            CacheFile::Read { display, .. } => display,
+            CacheFile::Absent | CacheFile::Unreadable => BTreeMap::new(),
         }
     }
 }
@@ -136,7 +185,7 @@ pub(super) enum LocalEditsPolicy {
 
 /// [#303] What to do with the undo history riding IN the downloaded `.stalx`.
 ///
-/// Now that a Full-mode push ships its undo stack, every server copy arrives carrying
+/// A Full-mode push ships its undo stack, so a server copy can arrive carrying
 /// the last pusher's edit history. Inheriting that IMPLICITLY is the #194 b3 hazard:
 /// press Ctrl-Z on a freshly-pulled project and you replay a stranger's command, with
 /// its prior-state payload, against a tree you have not looked at yet.
@@ -146,11 +195,15 @@ pub(super) enum LocalEditsPolicy {
 /// to ask for it: the Unwind (`speleodb_restore_revision` with `keep_undo_history`, which
 /// no UI offers since #668 and whose preconditions the backend enforces itself).
 /// `undo_history_keep_is_unwind_only` pins that there is exactly one `Keep` site.
+///
+/// Applied to the download in memory (`PreparedDownload`), before the cache file is
+/// written, so the history never reaches the disk for a later open to pick up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InheritedUndo {
-    /// Empty the downloaded file's undo/redo tables. Every implicit adopt path.
+    /// The installed copy holds no undo or redo history. Every implicit adopt path.
     Drop,
-    /// Keep them: the caller is the Unwind, and that history is what it came for.
+    /// Keep the downloaded undo history: the caller is the Unwind, and that history
+    /// is what it came for.
     Keep,
 }
 
@@ -173,10 +226,8 @@ impl AppState {
     ) -> Result<(), SpeleoDbError> {
         // `None` = the file is there but unreadable, so we CANNOT rule out un-pushed
         // edits. A guard that stands in front of an overwrite has to fail closed on
-        // that: the likely causes are a hot journal after a kill or power loss (which
-        // a read-only connection cannot roll back - `SQLITE_READONLY_ROLLBACK`) and a
-        // transient `SQLITE_BUSY`, and in both cases a read-write open would have
-        // recovered work that reading the silence as "clean" would have overwritten.
+        // that: for a legacy copy the likeliest cause is a hot journal after a kill or
+        // power loss, and for any copy a file that is damaged or cannot be opened.
         // Refusing is recoverable in a way overwriting is not: the frontend's prompt
         // offers cancel (nothing is touched) or an explicit take-remote.
         let Some(local) = self.local_copy_state(project_id, dest) else {
@@ -218,11 +269,14 @@ impl AppState {
 )]
 mod tests {
     use super::*;
+    use crate::core::state::speleodb_v2_fixtures::{
+        display_at, fixture_link, history_counts, link_at, name_at, seed_linked, seed_with_history,
+        set_display, FIXTURE_ID,
+    };
     use crate::core::state::tests_support::speleodb_prod_matches;
-    use crate::models::{Project, SpeleoLink};
-    use crate::persistence::Database;
+    use crate::persistence::stalx_v2::DecodeOptions;
 
-    const ID: &str = "11111111-1111-1111-1111-111111111111";
+    const ID: &str = FIXTURE_ID;
 
     /// [#303] Spec item 15's structural half, and the reason `InheritedUndo` is a named
     /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
@@ -232,7 +286,8 @@ mod tests {
     ///
     /// A diff that adds a second `Keep` site fails here and has to justify itself.
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
+    #[ignore = "C11: the scan stops at `#[cfg(test)]`, and speleodb_revisions.rs's test module \
+                is still parked (C12 flips it), so its doc comment counts; un-ignore at integration"]
     fn undo_history_keep_is_unwind_only() {
         let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
         assert_eq!(
@@ -243,37 +298,15 @@ mod tests {
         );
     }
 
-    /// A `.stalx` at `path` linked to [`ID`], carrying the given un-pushed-edits bit.
-    fn seed_linked_stalx(path: &Path, dirty: bool) {
-        let mut db = Database::open(path).expect("open db");
-        db.save_project(&Project::new("Local".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
-            project_id: ID.to_owned(),
-            project_name: "Local".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: dirty,
-            last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-    }
-
-    /// A native SQLite file standing in for a downloaded native file.
+    /// A downloaded version 2 file standing in for the server's copy.
     fn server_stalx() -> tempfile::NamedTempFile {
-        let temp = tempfile::TempDir::new().expect("server project temp");
-        let project = temp.path().join("server.stalx");
-        {
-            let mut db = Database::open(&project).expect("open server project");
-            db.save_project(&Project::new("Server Copy".to_owned(), None))
-                .expect("save server project");
-        }
         let native = tempfile::NamedTempFile::new().expect("native file");
-        std::fs::copy(&project, native.path()).expect("copy native file");
+        let mut link = fixture_link("https://server.example", false);
+        link.base_commit_sha = Some("0000000".to_owned());
+        seed_linked(native.path(), "Server Copy", &link);
         native
     }
+
     /// Install `source` over `dest` through the session-bound replace, under the
     /// generation that is current right now (nothing moves it in these tests).
     fn install(
@@ -282,26 +315,23 @@ mod tests {
         dest: &Path,
         policy: LocalEditsPolicy,
         undo: InheritedUndo,
-    ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        state.replace_cache_for_session(
+    ) -> Result<(), SpeleoDbError> {
+        let prepared = state.prepare_download(
             source,
+            fixture_link("http://x/", false),
+            undo,
+            &DecodeOptions::default(),
+        )?;
+        state.replace_cache_for_session(
+            prepared,
             dest,
             ID,
             policy,
-            undo,
             state.speleodb_session_generation(),
         )
     }
-    fn replaced_project_name(path: &Path) -> String {
-        Database::open_existing(path)
-            .expect("open replaced project")
-            .load_project()
-            .expect("load replaced project")
-            .name
-    }
 
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn only_a_named_discard_gets_a_replace_past_un_pushed_edits() {
         // The behaviour the policy exists for, pinned from both sides: `Protect`
         // refuses over un-pushed work and leaves the file alone, and `Discard` is the
@@ -309,7 +339,7 @@ mod tests {
         // name it.
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked_stalx(&dest, true);
+        seed_linked(&dest, "Local", &fixture_link("http://x/", true));
         let before = std::fs::read(&dest).expect("read dest");
         let state = AppState::new().expect("state");
         let native = server_stalx();
@@ -341,127 +371,83 @@ mod tests {
         )
         .expect("the confirmed-discard waiver replaces the copy");
         assert_eq!(
-            replaced_project_name(&dest),
+            name_at(&dest),
             "Server Copy",
             "and only that waiver actually overwrites it"
         );
     }
 
     /// [#303] Spec item 15's behavioural half: a replace that carries
-    /// `InheritedUndo::Drop` leaves every downloaded history table EMPTY, and one that
-    /// carries `Keep` leaves them intact.
+    /// `InheritedUndo::Drop` leaves the installed file with NO history and no chain
+    /// metadata, and one that carries `Keep` keeps the downloaded undo history.
     ///
     /// Asserted on the FILE rather than on the in-memory stack, because that is where it
-    /// has to be true: the load path reads these tables into the live stack, so a clear
-    /// that only touched memory would leave the history on disk for the next open.
+    /// has to be true: the load path reads the file's history into the live stack, so a
+    /// clear that only touched memory would leave the history on disk for the next open.
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
-    fn a_dropped_replace_empties_the_downloaded_undo_tables() {
-        /// A real `.stalx` dump entry carrying two undo rows and one redo row, standing
-        /// in for a Full-mode push's snapshot.
-        fn stalx_with_history() -> tempfile::NamedTempFile {
-            let temp = tempfile::TempDir::new().expect("temp");
-            let seeded = temp.path().join("seeded.stalx");
-            {
-                let mut db = Database::open(&seeded).expect("open seed");
-                db.save_project(&Project::new("Pushed".to_owned(), None))
-                    .expect("save project");
-                db.save_undo_stack(vec![
-                    (r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned()),
-                    (r#"{"c":2}"#.to_owned(), r#"{"u":2}"#.to_owned()),
-                ])
-                .expect("seed undo");
-                db.save_redo_stack_with_timestamps(vec![(
-                    r#"{"c":3}"#.to_owned(),
-                    r#"{"u":3}"#.to_owned(),
-                    None,
-                )])
-                .expect("seed redo");
-                db.save_speleo_undo_chain(Some("older-revision"))
-                    .expect("seed chain pointer");
-                db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
-                    .expect("seed watermark");
-            }
-            let native = tempfile::NamedTempFile::new().expect("native file");
-            std::fs::copy(&seeded, native.path()).expect("copy native file");
-            native
-        }
-        let history = |path: &Path| -> (usize, usize, Option<String>, Option<String>) {
-            let db = Database::open_existing(path).expect("open replaced");
-            (
-                db.load_undo_stack_with_timestamps()
-                    .expect("load undo")
-                    .len(),
-                db.load_redo_stack_with_timestamps()
-                    .expect("load redo")
-                    .len(),
-                db.load_speleo_undo_chain().expect("load chain pointer"),
-                db.load_speleo_undo_watermark().expect("load watermark"),
-            )
-        };
-
-        let state = AppState::new().expect("state");
-        let native = stalx_with_history();
-
-        // Sanity: the fixture really does carry history, so the assertions below are not
-        // passing vacuously.
+    fn a_dropped_replace_empties_the_downloaded_history() {
         let temp = tempfile::TempDir::new().expect("temp");
+        let native = temp.path().join("download.stalx");
+        seed_with_history(
+            &native,
+            "Pushed",
+            &fixture_link("https://server.example", false),
+            2,
+            1,
+        );
+        assert_eq!(history_counts(&native), (2, 1), "precondition: history");
+        let state = AppState::new().expect("state");
+
         let kept = temp.path().join("kept.stalx");
         install(
             &state,
-            native.path(),
+            &native,
             &kept,
             LocalEditsPolicy::Discard,
             InheritedUndo::Keep,
         )
         .expect("replace with Keep");
         assert_eq!(
-            history(&kept),
-            (
-                2,
-                1,
-                Some("older-revision".to_owned()),
-                Some("2026-08-01T00:00:00+00:00".to_owned()),
-            ),
-            "Keep leaves the downloaded history in place - what the Unwind needs"
+            history_counts(&kept),
+            (2, 0),
+            "Keep leaves the downloaded undo history in place - what the Unwind needs \
+             (a push never carries redo, and neither does an install)"
         );
 
         let dropped = temp.path().join("dropped.stalx");
         install(
             &state,
-            native.path(),
+            &native,
             &dropped,
             LocalEditsPolicy::Discard,
             InheritedUndo::Drop,
         )
         .expect("replace with Drop");
         assert_eq!(
-            history(&dropped),
-            (0, 0, None, None),
-            "Drop empties all history metadata, so no adopt path can inherit it (#194 b3)"
+            history_counts(&dropped),
+            (0, 0),
+            "Drop empties the history, so no adopt path can inherit it (#194 b3)"
         );
+        for path in [&kept, &dropped] {
+            let link = link_at(path).expect("linked");
+            assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
+            let sync = crate::core::state::speleodb_v2_fixtures::decoded(path)
+                .extras
+                .local
+                .speleodb;
+            assert_eq!(
+                (sync.unwound_from, sync.inherited_through),
+                (None, None),
+                "the other machine's chain position and watermark never ride along"
+            );
+        }
     }
 
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
-    fn failed_history_cleanup_leaves_the_existing_cache_untouched() {
-        let seed_dir = tempfile::TempDir::new().expect("seed temp");
-        let seeded = seed_dir.path().join("seeded.stalx");
-        {
-            let mut db = Database::open(&seeded).expect("open seed");
-            db.save_project(&Project::new("Pushed".to_owned(), None))
-                .expect("save project");
-            db.save_undo_stack(vec![(r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned())])
-                .expect("seed undo");
-        }
-        rusqlite::Connection::open(&seeded)
-            .expect("reopen seed")
-            .execute_batch(
-                "CREATE TRIGGER block_undo_delete BEFORE DELETE ON undo_stack \
-                 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
-            )
-            .expect("install blocking trigger");
+    fn a_refused_download_leaves_the_existing_cache_untouched() {
         let temp = tempfile::TempDir::new().expect("temp");
+        let native = temp.path().join("download.stalx");
+        std::fs::write(&native, b"{\"format\":\"stalx\",\"version\":2,").expect("truncated");
         let dest = temp.path().join("project.stalx");
         std::fs::write(&dest, b"original cache").expect("seed destination");
         let before = std::fs::read(&dest).expect("read destination");
@@ -469,38 +455,40 @@ mod tests {
 
         let err = install(
             &state,
-            &seeded,
+            &native,
             &dest,
             LocalEditsPolicy::Discard,
             InheritedUndo::Drop,
         )
-        .expect_err("a downloaded file carrying a trigger must not be adopted");
-        // Refused by the schema check before the cleanup could fire the trigger.
+        .expect_err("a truncated download must not be adopted");
         assert!(
             err.to_string()
-                .contains("the downloaded project file was refused: the file defines a trigger"),
+                .contains("the downloaded project file was refused"),
             "{err}"
         );
         assert_eq!(std::fs::read(&dest).expect("read destination"), before);
-        let remaining: Vec<_> = std::fs::read_dir(temp.path())
+        let mut remaining: Vec<_> = std::fs::read_dir(temp.path())
             .expect("directory")
             .map(|entry| entry.expect("entry").file_name())
             .collect();
+        remaining.sort();
         assert_eq!(
             remaining,
-            vec![std::ffi::OsString::from("project.stalx")],
-            "schema rejection must remove every actual staging file"
+            vec![
+                std::ffi::OsString::from("download.stalx"),
+                std::ffi::OsString::from("project.stalx")
+            ],
+            "a refused download leaves no staging file behind"
         );
     }
 
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
     fn a_clean_copy_is_replaced_without_any_waiver() {
         // The other half: `Protect` is not "always refuse". With nothing un-pushed
         // there is no work to lose, so an ordinary re-pull goes straight through.
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked_stalx(&dest, false);
+        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
         let state = AppState::new().expect("state");
         let native = server_stalx();
 
@@ -512,32 +500,68 @@ mod tests {
             InheritedUndo::Drop,
         )
         .expect("a clean local copy needs no waiver");
+        assert_eq!(name_at(&dest), "Server Copy", "the server copy landed");
+    }
+
+    /// The per-machine view toggles of the replaced copy survive the replace; the
+    /// server copy never carries any of its own (#197).
+    #[test]
+    fn local_view_toggles_survive_a_download_replace() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
+        set_display(&dest, "show_station_names", "true");
+        let native = temp.path().join("download.stalx");
+        seed_linked(&native, "Server Copy", &fixture_link("http://x/", false));
+        set_display(&native, "show_station_names", "false");
+        set_display(&native, "pushers_view", "1");
+        let state = AppState::new().expect("state");
+
+        install(
+            &state,
+            &native,
+            &dest,
+            LocalEditsPolicy::Protect,
+            InheritedUndo::Drop,
+        )
+        .expect("install");
+        let display = display_at(&dest);
         assert_eq!(
-            replaced_project_name(&dest),
-            "Server Copy",
-            "the server copy landed"
+            display.get("show_station_names").map(String::as_str),
+            Some("true")
+        );
+        assert!(
+            !display.contains_key("pushers_view"),
+            "the downloaded file's own view state is not adopted"
+        );
+        let fresh = temp.path().join("fresh.stalx");
+        install(
+            &state,
+            &native,
+            &fresh,
+            LocalEditsPolicy::Protect,
+            InheritedUndo::Drop,
+        )
+        .expect("install");
+        assert!(
+            display_at(&fresh).is_empty(),
+            "a first install has defaults"
         );
     }
 
-    /// [#649] A server `.stalx` a newer Stalagmight saved never replaces the local
-    /// copy: this build could not open it, and a save from it would push a file
-    /// with the newer build's additions dropped. Refused before the history
-    /// cleanup writes into the staged copy and before the rename.
+    /// [#649] A server `.stalx` a newer Stalagmight wrote (a higher major format
+    /// version) never replaces the local copy: this build could not open it.
     #[test]
-    #[ignore = "C0: exercises a path not ported to the station-graph model yet (see the C0 work breakdown)"]
-    fn a_download_from_a_newer_schema_never_replaces_the_cache() {
+    fn a_download_from_a_newer_format_never_replaces_the_cache() {
         let temp = tempfile::TempDir::new().expect("temp");
         let source = temp.path().join("download.stalx");
-        Database::open(&source)
-            .expect("seed")
-            .save_project(&Project::new("From the future".into(), None))
-            .expect("save");
-        rusqlite::Connection::open(&source)
-            .expect("connection")
-            .pragma_update(None, "user_version", crate::persistence::SCHEMA_VERSION + 1)
-            .expect("stamp newer schema");
+        std::fs::write(
+            &source,
+            b"{\"format\":\"stalx\",\"version\":3,\"requires\":[],\"end\":true}\n",
+        )
+        .expect("a newer file");
         let dest = temp.path().join("project.stalx");
-        seed_linked_stalx(&dest, false);
+        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
         let before = std::fs::read(&dest).expect("destination");
         let state = AppState::new().expect("state");
         let err = install(
@@ -547,19 +571,13 @@ mod tests {
             LocalEditsPolicy::Protect,
             InheritedUndo::Drop,
         )
-        .expect_err("newer schema refused");
+        .expect_err("newer format refused");
         let SpeleoDbError::NewerSchema(newer) = &err else {
             panic!("wrong refusal: {err:?}");
         };
-        assert_eq!(
-            *newer,
-            crate::persistence::NewerSchema {
-                file: "project.stalx".into(),
-                found: crate::persistence::SCHEMA_VERSION + 1,
-                supported: crate::persistence::SCHEMA_VERSION,
-            }
-        );
-        assert_eq!(err.to_string(), newer.to_string());
+        assert_eq!(newer.file, "project.stalx");
+        assert_eq!(newer.found, 3);
+        assert_eq!(newer.supported, 2);
         assert_eq!(std::fs::read(&dest).expect("destination"), before);
         let mut names = std::fs::read_dir(temp.path())
             .expect("directory")
@@ -573,5 +591,34 @@ mod tests {
                 std::ffi::OsString::from("project.stalx")
             ]
         );
+    }
+
+    #[test]
+    fn the_cache_reader_tells_absent_unreadable_and_read_apart() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        assert_eq!(
+            read_cache_file(&temp.path().join("missing.stalx")),
+            CacheFile::Absent
+        );
+        let junk = temp.path().join("junk.stalx");
+        std::fs::write(&junk, b"not a project").expect("junk");
+        assert_eq!(read_cache_file(&junk), CacheFile::Unreadable);
+        let legacy = temp.path().join("legacy.stalx");
+        std::fs::write(&legacy, b"SQLite format 3\0 but nothing after it").expect("legacy");
+        assert_eq!(
+            read_cache_file(&legacy),
+            CacheFile::Unreadable,
+            "a legacy copy the frozen reader refuses is unreadable, never clean"
+        );
+        let linked = temp.path().join("linked.stalx");
+        seed_linked(&linked, "Linked", &fixture_link("http://x/", true));
+        set_display(&linked, "view", "kept");
+        let CacheFile::Read { link, display } = read_cache_file(&linked) else {
+            panic!("a version 2 copy reads");
+        };
+        let link = link.expect("linked");
+        assert!(link.has_unpushed_edits);
+        assert_eq!(link.project_id, ID);
+        assert_eq!(display.get("view").map(String::as_str), Some("kept"));
     }
 }

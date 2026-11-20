@@ -1548,20 +1548,48 @@ impl AppState {
     ///
     /// `reason` goes to the log so the disappearance of a visible history is explicable.
     fn speleodb_clear_inherited_undo(&self, reason: &str) {
-        // A fresh edit session starts at BASE, so any chain position from an earlier one
-        // is stale: the next Unwind restarts from BASE rather than resuming a walk that
-        // described a different working copy.
-        self.speleodb_set_unwound_from(None);
-        // ...and with the inherited history about to go with it, nothing in the stack is
-        // inherited any more. A watermark left behind would cut this session's own work
-        // out of its first push.
-        self.speleodb_set_inherited_through(None);
-        if let Ok(mut stack) = self.undo_stack.lock() {
-            if stack.is_empty() && !stack.can_redo() {
-                return;
-            }
+        let dropped = {
+            let mut stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // ...and with the inherited history going, nothing in the stack is
+            // inherited any more. A watermark left behind would cut this session's own
+            // work out of its first push.
+            stack.set_inherited_through(None);
+            let had_history = !stack.is_empty() || stack.can_redo();
             let dropped = stack.len();
             stack.clear();
+            had_history.then_some(dropped)
+        };
+        let chain_moved = self.with_file(|file| {
+            let sync = &mut file.extras.local.speleodb;
+            let moved = sync.unwound_from.is_some() || sync.inherited_through.is_some();
+            // A fresh edit session starts at BASE, so any chain position from an earlier
+            // one is stale: the next Unwind restarts from BASE rather than resuming a walk
+            // that described a different working copy.
+            sync.unwound_from = None;
+            sync.inherited_through = None;
+            if dropped.is_some() {
+                // The copy is clean (the caller checked), so the file's history is the
+                // stack's: it goes too.
+                file.saved_history = crate::persistence::stalx_v2::History::default();
+            }
+            moved
+        });
+        if dropped.is_none() && !chain_moved {
+            return;
+        }
+        // One local-only save makes the clear durable, history and chain together
+        // (R2 B3): a reopen never brings the stranger's history back.
+        if let Err(e) = self.persist_local_state() {
+            tracing::warn!(
+                error = %e,
+                purpose = "never inherit another editor's undo history (#194 b3 / #303)",
+                "could not persist the cleared history; it is cleared in memory"
+            );
+        }
+        if let Some(dropped) = dropped {
             tracing::info!(
                 dropped,
                 reason,
