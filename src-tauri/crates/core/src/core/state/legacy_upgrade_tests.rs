@@ -984,7 +984,7 @@ fn an_upgrade_over_a_changed_original_writes_nothing() {
         .place(dir.path(), &format!("{stem}.stalx"))
         .unwrap();
     let state = open_fresh(&path).unwrap();
-    let mut changed = original.main.clone();
+    let mut changed = original.main;
     changed[100] ^= 1;
     std::fs::write(&path, &changed).unwrap();
     let journal = sidecar_path(&path, "-journal");

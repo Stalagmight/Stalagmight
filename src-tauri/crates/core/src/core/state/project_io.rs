@@ -407,10 +407,15 @@ impl AppState {
                         tracing::warn!(error = %e, "Save refused: the file changed on disk");
                         CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
                     }
-                    UpgradeError::Write(WriteError::Io { error, .. })
-                    | UpgradeError::Sidecar { error, .. } => {
+                    UpgradeError::Write(WriteError::Io { error, .. }) => {
                         save_failure("Failed to save", &target, &anyhow::Error::from(error))
                     }
+                    UpgradeError::Sidecar { path, error } => save_failure(
+                        "Failed to save",
+                        &target,
+                        &anyhow::Error::from(error)
+                            .context(format!("could not remove {}", path.display())),
+                    ),
                     e @ (UpgradeError::Unfinished(_) | UpgradeError::Backup(_)) => {
                         tracing::error!(error = %e, "Could not prepare the legacy original for its upgrade");
                         CommandResult::failure(format!("Can't save: {e}"))

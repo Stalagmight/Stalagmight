@@ -426,10 +426,10 @@ fn remove_leftovers(original: &Path) {
         let path = entry.path();
         match std::fs::remove_file(&path) {
             Ok(()) => {
-                tracing::info!(path = ?path, "Removed what an interrupted upgrade left behind")
+                tracing::info!(path = ?path, "Removed what an interrupted upgrade left behind");
             }
             Err(e) => {
-                tracing::debug!(error = %e, path = ?path, "Could not remove what an interrupted upgrade left behind")
+                tracing::debug!(error = %e, path = ?path, "Could not remove what an interrupted upgrade left behind");
             }
         }
     }
@@ -489,6 +489,7 @@ thread_local! {
 #[cfg(test)]
 #[expect(
     clippy::panic,
+    clippy::manual_assert,
     reason = "the injected kill: unwinding past every cleanup is what a kill does"
 )]
 fn kill_point(step: Step) {
