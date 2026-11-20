@@ -915,6 +915,8 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_create_and_merge",
     "execute_create_and_merge_in_cave_section",
     "execute_import_lines",
+    // The DMP wizard's route (#814: the one import that still fails whole).
+    "execute_import_lines_all_or_nothing",
     "execute_tml_import_sections",
     // Import tracking is a recorded edit now (C7).
     "track_imported_file",
@@ -947,7 +949,7 @@ fn assert_disabled(label: &str, result: &CommandResult) {
 fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        24,
+        25,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -1086,6 +1088,16 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute_import_lines(
                 vec![import_config("Imp")],
                 Vec::new(),
+                None,
+                Vec::new(),
+                Vec::new(),
+                crate::core::VirtualShotMode::Auto,
+            ),
+        );
+        assert_disabled(
+            "execute_import_lines_all_or_nothing",
+            &state.execute_import_lines_all_or_nothing(
+                vec![import_config("Imp")],
                 None,
                 Vec::new(),
                 Vec::new(),

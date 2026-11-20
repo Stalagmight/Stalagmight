@@ -583,6 +583,13 @@ impl World {
                 }
             }
             ("save-as", Some(target)) => {
+                // An explicit save lands on a `.stalx` (0.6.0's rule, restored
+                // by C19): `a.stalx.tmp` saves as `a.stalx.stalx`.
+                let target = if target.extension().is_some_and(|e| e == "stalx") {
+                    target
+                } else {
+                    target.with_extension("stalx")
+                };
                 let before = std::fs::read(&target).ok();
                 step.save_target = Some((target, before));
             }

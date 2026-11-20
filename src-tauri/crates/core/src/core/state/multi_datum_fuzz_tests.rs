@@ -418,7 +418,8 @@ struct Chain {
     /// Timeline entries below this index predate the last reopen.
     reopened_at: usize,
     /// Timeline entries below this index are out of reach: a reopen keeps
-    /// the newest `window` entries of each stack (the history limit).
+    /// the newest `window` entries of each stack (the persisted window,
+    /// `general.undo_persist_limit`, as 0.6.0 saved it).
     floor: usize,
     window: usize,
     gps_seen: Vec<GpsCoordinates>,
@@ -464,7 +465,13 @@ impl Chain {
             });
             assert!(r.success, "{:?}", r.error);
         }
-        let window = state.undo_stack.lock().unwrap().history_limit();
+        // What a save keeps of each stack (`AppState::history_to_persist`):
+        // the newest `undo_persist_limit` entries, within the in-memory limit.
+        let window = state
+            .get_config()
+            .general
+            .undo_persist_limit
+            .min(state.undo_stack.lock().unwrap().history_limit());
         let chain = Self {
             state,
             _dir: dir,
@@ -1423,9 +1430,10 @@ fn pinned_datum_chains_keep_every_invariant() {
     }
 }
 
-/// A reopen keeps the whole history (the history limit is the window): 24
-/// accuracy edits, a reopen, then 24 undos, every one landing on its recorded
-/// state. On the SQLite build only the newest 20 entries were persisted.
+/// A reopen keeps the persisted window of the history (the newest
+/// `undo_persist_limit` entries, 20 by default, as 0.6.0 saved it): 24
+/// accuracy edits, a reopen, then 24 undos. The first 20 land on their
+/// recorded states; the rest are refused and change nothing.
 #[test]
 fn a_reopen_keeps_the_history_and_bounds_the_undo_guard() {
     let _config = crate::test_helpers::isolated_config();

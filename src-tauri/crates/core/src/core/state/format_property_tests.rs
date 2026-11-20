@@ -14,7 +14,10 @@
 //!    of an unchanged project rewrites the same bytes too.
 //! 2. **The open is a function of the file.** Several opens of one file give
 //!    the same survey (canonical text), verdict, Computed View (bit for bit),
-//!    id allocators and history (lengths and labels).
+//!    id allocators and history (lengths and labels). The first open holds
+//!    what the session held, its history cut to the persisted window (the
+//!    newest `general.undo_persist_limit` entries of each stack, as 0.6.0
+//!    saved it).
 //! 3. **The guard** (plan 6.5). A file changed on disk since it was opened
 //!    (a same-size byte flip, a truncation, another valid project, a delete)
 //!    refuses the plain save and the local-only save with
@@ -223,6 +226,22 @@ fn history_labels(state: &AppState) -> (Vec<String>, Vec<String>) {
     )
 }
 
+/// What a save of `state` writes of its history (`AppState::history_to_persist`,
+/// for a project with no SpeleoDB link): the newest `undo_persist_limit`
+/// entries of each stack. The labels list the most recent entry first.
+fn persisted_window_of(
+    state: &AppState,
+    mut observed: Observed,
+    (mut undo, mut redo): (Vec<String>, Vec<String>),
+) -> (Observed, (Vec<String>, Vec<String>)) {
+    let window = state.get_config().general.undo_persist_limit;
+    observed.undo_len = observed.undo_len.min(window);
+    observed.redo_len = observed.redo_len.min(window);
+    undo.truncate(window);
+    redo.truncate(window);
+    (observed, (undo, redo))
+}
+
 // ===========================================================================
 // PROPERTY 1 and 2
 // ===========================================================================
@@ -335,7 +354,7 @@ fn check_open_is_a_function(seed: u32, closures: bool, moves: usize, loads: usiz
     if !state.save_project(Some(path.clone())).success {
         return Checked::skipped();
     }
-    let in_session = (observe(&state), history_labels(&state));
+    let in_session = persisted_window_of(&state, observe(&state), history_labels(&state));
     drop(state);
     let mut problems = Vec::new();
     let mut seen: Option<(Observed, (Vec<String>, Vec<String>))> = None;

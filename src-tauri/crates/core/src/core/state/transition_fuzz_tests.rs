@@ -14,10 +14,12 @@
 //! back, and a reopen that continues on the reopened project. Properties:
 //! - every step leaves a valid project; a refused command changes nothing
 //!   (model, stacks, dirty flag);
-//! - a save writes exactly the in-memory survey and stacks: the file decodes
-//!   to the same body and history counts, a fresh open shows the same
-//!   survey and stacks, and saving that unchanged is a byte fixpoint; the
-//!   reopened history redoes and undoes end to end;
+//! - a save writes exactly the in-memory survey and the persisted window of
+//!   the stacks (the newest `general.undo_persist_limit` entries of each, or
+//!   both whole on a project in Full SpeleoDB mode, as 0.6.0 saved them): the
+//!   file decodes to the same body and history counts, a fresh open shows the
+//!   same survey and stacks, and saving that unchanged is a byte fixpoint;
+//!   the reopened history redoes and undoes end to end;
 //! - Save a Copy of a linked project is detached (no link) and leaves the
 //!   session on its file; Save As moves the session to the new file;
 //! - a display toggle rewrites only the per-machine members (the survey
@@ -693,7 +695,18 @@ fn save_and_reopen(state: &AppState, path: &Path) -> Result<AppState, Fail> {
     check(body(&file.project)? == body(&p)?, || {
         "the file's survey is not the in-memory one".to_string()
     })?;
-    let (undo, redo) = (state.get_undo_stack(), state.get_redo_stack());
+    // What a save keeps of each stack: the newest `undo_persist_limit`
+    // entries (the lists are most recent first), unless the history rides to
+    // SpeleoDB (Full mode).
+    let window = (!state
+        .undo_policy_for(state.speleo_link().as_ref())
+        .unlimited_depth())
+    .then(|| state.get_config().general.undo_persist_limit);
+    let (mut undo, mut redo) = (state.get_undo_stack(), state.get_redo_stack());
+    if let Some(n) = window {
+        undo.truncate(n);
+        redo.truncate(n);
+    }
     check(
         file.extras.history.undo.len() == undo.len()
             && file.extras.history.redo.len() == redo.len(),
