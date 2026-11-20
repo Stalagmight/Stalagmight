@@ -169,7 +169,7 @@ mod issue_517_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_555_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
@@ -353,9 +353,10 @@ mod speleodb_upload_limit_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_line_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_identity_tests;
