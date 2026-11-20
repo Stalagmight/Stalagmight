@@ -116,7 +116,13 @@ mod combine_lines_tests;
     reason = "a fuzzer's summary IS its output, and a failed setup step is the point"
 )]
 mod concurrency_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "a property sweep's summary IS its output, and a failed setup step is the point"
+)]
 mod crash_property_tests;
 #[cfg(test)]
 #[expect(

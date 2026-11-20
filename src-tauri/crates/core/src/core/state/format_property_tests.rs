@@ -343,8 +343,16 @@ fn check_open_is_a_function(seed: u32, closures: bool, moves: usize, loads: usiz
         };
         let now = (observe(&opened), history_labels(&opened));
         if load == 0 {
-            // The file holds what the session held.
-            let found = differences(&in_session.0, &now.0);
+            // The file holds what the session held. Session shot ids are
+            // never persisted (plan 1.1), so a line's session allocator may
+            // stand higher in the session (a shot created and undone): it is
+            // the one allocator a reopen does not carry.
+            let persisted = |o: &Observed| {
+                let mut o = o.clone();
+                o.allocators.retain(|k, _| !k.ends_with(".next_shot_id"));
+                o
+            };
+            let found = differences(&persisted(&in_session.0), &persisted(&now.0));
             if !found.is_empty() {
                 problems.push(format!(
                     "seed {seed}: the opened file differs from the session it was saved \
