@@ -26,6 +26,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use stalagmight_legacy::FileShape;
 
 use super::test_support::{check, random_case};
+use crate::models::config::ClosureAdjustmentConfig;
+
 use super::{migrate, MigrationReport};
 
 /// Seeds the gate runs when no sweep is asked for.
@@ -51,7 +53,7 @@ impl Coverage {
 fn run_seed(seed: u64) -> Result<(MigrationReport, bool), String> {
     let case = random_case(seed);
     let legacy = case.open();
-    let migrated = migrate(&legacy).map_err(|e| format!("migrate: {e}"))?;
+    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).map_err(|e| format!("migrate: {e}"))?;
     check(&legacy, &migrated).map_err(|e| format!("{e}\n{}", migrated.report.summary()))?;
     Ok((migrated.report, case.shape == FileShape::Release055))
 }
@@ -144,6 +146,28 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
             })
             .count();
         eprintln!("coverage: seeds with a snap alignment change = {snaps}");
+        // The Closures Computed View's expected classes (plan D10, D11):
+        // seeds, slots and the largest displacement, per class.
+        let mut classes: std::collections::BTreeMap<&str, (usize, usize, f64)> =
+            std::collections::BTreeMap::new();
+        let mut compared = 0;
+        for r in &c.reports {
+            if let super::AdjustedCheck::Compared(a) = &r.verification.adjusted {
+                compared += 1;
+                for (class, stats) in &a.expected {
+                    let e = classes.entry(class.as_str()).or_default();
+                    e.0 += 1;
+                    e.1 += stats.slots;
+                    e.2 = e.2.max(stats.max_displacement_m);
+                }
+            }
+        }
+        eprintln!("coverage: Computed View compared = {compared}");
+        for (class, (seeds, slots, max_m)) in &classes {
+            eprintln!(
+                "coverage: Computed View {class} = {seeds} seeds, {slots} slots, max {max_m:e} m"
+            );
+        }
         return;
     }
     let missing: Vec<&str> = checks

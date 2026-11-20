@@ -69,6 +69,16 @@ pub(super) fn validation(v: &old::config::ValidationConfig) -> live::config::Val
     }
 }
 
+pub(super) fn closure_adjustment(
+    c: &old::config::ClosureAdjustmentConfig,
+) -> live::config::ClosureAdjustmentConfig {
+    live::config::ClosureAdjustmentConfig {
+        base_sigma_length_m: c.base_sigma_length_m,
+        base_sigma_azimuth_deg: c.base_sigma_azimuth_deg,
+        base_sigma_depth_m: c.base_sigma_depth_m,
+    }
+}
+
 pub(super) fn section(s: &old::Section) -> live::Section {
     live::Section {
         id: s.id,

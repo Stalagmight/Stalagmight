@@ -29,8 +29,21 @@ pub(super) struct Built {
     pub(super) anchor_slots: Vec<usize>,
     /// Legacy `is_aligned` of every migrated `Move` closure, by id.
     pub(super) legacy_snap_alignment: BTreeMap<ClosureId, bool>,
+    /// Where each `Tie` closure came from, by id.
+    pub(super) tie_origins: BTreeMap<ClosureId, TieOrigin>,
     /// Legacy shot `(line, uuid after the load)` -> migrated uuid.
     pub(super) final_uuid: HashMap<(LineId, String), String>,
+}
+
+/// What a migrated `Tie` closure was in the legacy file (plan 7.2.1, 7.2.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TieOrigin {
+    /// A merge that would have closed a cycle.
+    CycleMerge,
+    /// A merge with both ends on one line.
+    SameLineMerge,
+    /// A legacy aligned closure of a strategy other than `Move`.
+    AlignedClosure,
 }
 
 /// The namespace migrated shot uuids are minted in (a shot the legacy load
@@ -147,7 +160,7 @@ pub(super) fn build(
     // 5. Closures: demoted merges first (merges were united before any
     //    closure, so later closures keep their skip verdicts), then the legacy
     //    closures in list order with their ids.
-    let legacy_snap_alignment =
+    let (legacy_snap_alignment, tie_origins) =
         build_closures(legacy, &slots, &of_slot, &merges, &mut project, report);
 
     // 6. Anchors: corrections for placement datums, placements for the rest.
@@ -171,6 +184,7 @@ pub(super) fn build(
         slots,
         anchor_slots,
         legacy_snap_alignment,
+        tie_origins,
         final_uuid,
     })
 }
@@ -316,12 +330,13 @@ fn build_closures(
     merges: &merges::MergePlan,
     project: &mut Project,
     report: &mut MigrationReport,
-) -> BTreeMap<ClosureId, bool> {
+) -> (BTreeMap<ClosureId, bool>, BTreeMap<ClosureId, TieOrigin>) {
     let lp = &legacy.project;
     let end = |dense: usize| (of_slot[dense], Some(slots.slot(dense).line_id));
-    // (closure, legacy is_aligned of a Move, whether its id must be minted)
-    let mut built: Vec<(LoopClosure, Option<bool>, bool)> = Vec::new();
-    for (a, b) in merges.ties() {
+    // (closure, legacy is_aligned of a Move, whether its id must be minted,
+    // what a Tie was)
+    let mut built: Vec<(LoopClosure, Option<bool>, bool, Option<TieOrigin>)> = Vec::new();
+    for (a, b, fate) in merges.ties() {
         let ((sa, va), (sb, vb)) = (end(a), end(b));
         let tie = LoopClosure {
             id: 0,
@@ -331,7 +346,12 @@ fn build_closures(
             b_via: vb,
             strategy: ClosureStrategy::Tie,
         };
-        built.push((tie, None, true));
+        let origin = if fate == Fate::DemotedSameLine {
+            TieOrigin::SameLineMerge
+        } else {
+            TieOrigin::CycleMerge
+        };
+        built.push((tie, None, true, Some(origin)));
     }
     let mut used: HashSet<ClosureId> = HashSet::new();
     for closure in &lp.loop_closures {
@@ -356,6 +376,7 @@ fn build_closures(
             report.closure_ids_reminted += 1;
         }
         let snap = (strategy == ClosureStrategy::Move).then_some(closure.is_aligned);
+        let origin = (strategy == ClosureStrategy::Tie).then_some(TieOrigin::AlignedClosure);
         let migrated = LoopClosure {
             id: closure.id,
             a: sa,
@@ -364,7 +385,7 @@ fn build_closures(
             b_via: vb,
             strategy,
         };
-        built.push((migrated, snap, !keep_id));
+        built.push((migrated, snap, !keep_id, origin));
     }
     let mut next = used
         .iter()
@@ -374,7 +395,8 @@ fn build_closures(
         .max(lp.next_closure_id)
         .max(1);
     let mut snaps = BTreeMap::new();
-    for (mut closure, snap, mint) in built {
+    let mut origins = BTreeMap::new();
+    for (mut closure, snap, mint, origin) in built {
         if mint {
             closure.id = next;
             next = next.saturating_add(1);
@@ -382,10 +404,13 @@ fn build_closures(
         if let Some(aligned) = snap {
             snaps.insert(closure.id, aligned);
         }
+        if let Some(origin) = origin {
+            origins.insert(closure.id, origin);
+        }
         project.closures.push(closure);
     }
     project.counters.next_closure_id = next;
-    snaps
+    (snaps, origins)
 }
 
 /// Give every component its anchor (plan 7.2.5) and return, per component,

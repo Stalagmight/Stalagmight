@@ -14,7 +14,9 @@ use stalagmight_legacy::models::{self as m, GpsCoordinates, LineData, ShotData, 
 use stalagmight_legacy::{write_v18, LegacyExtras, OpenOptions};
 
 use super::test_support::{check, Rng};
-use super::{migrate, migrate_path, ExpectedClass, Migrated};
+use crate::models::config::ClosureAdjustmentConfig;
+
+use super::{migrate, migrate_path, AdjustedCheck, Migrated};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -26,7 +28,7 @@ fn migrate_fixture(name: &str) -> Migrated {
     let path = fixture(name);
     let before = std::fs::read(&path).unwrap();
     let legacy = stalagmight_legacy::open_path(&path, &OpenOptions::default()).unwrap();
-    let migrated = migrate(&legacy).unwrap();
+    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     if let Err(e) = check(&legacy, &migrated) {
         panic!("{name}: {e}");
     }
@@ -99,7 +101,7 @@ fn migrate_corpus() {
     std::panic::set_hook(Box::new(|_| {}));
     let (mut ok, mut failed, mut panicked, mut unclean) = (0, 0, 0, 0);
     let mut classes: BTreeMap<String, usize> = BTreeMap::default();
-    let mut expected_max: BTreeMap<ExpectedClass, f64> = BTreeMap::default();
+    let mut expected_max: BTreeMap<String, f64> = BTreeMap::default();
     for path in &files {
         let relative = path.strip_prefix(&dir).unwrap_or(path);
         let tag = name_hash(&relative.to_string_lossy());
@@ -113,9 +115,17 @@ fn migrate_corpus() {
                 if !v.is_clean() {
                     unclean += 1;
                 }
-                for (class, stats) in &v.expected {
-                    let worst = expected_max.entry(*class).or_insert(0.0);
-                    *worst = worst.max(stats.max_displacement_m);
+                let adjusted = match &v.adjusted {
+                    AdjustedCheck::Compared(a) => Some(&a.expected),
+                    AdjustedCheck::NoLegacyPositions => None,
+                };
+                let views = [("raw", Some(&v.expected)), ("adjusted", adjusted)];
+                for (view, expected) in views {
+                    for (class, stats) in expected.into_iter().flatten() {
+                        let key = format!("{view}.{}", class.as_str());
+                        let worst = expected_max.entry(key).or_insert(0.0);
+                        *worst = worst.max(stats.max_displacement_m);
+                    }
                 }
                 eprintln!(
                     "file={tag} status=ok ms={millis} schema={} history={}\n{}",
@@ -144,7 +154,7 @@ fn migrate_corpus() {
         eprintln!("corpus: error.{class}={n}");
     }
     for (class, worst) in &expected_max {
-        eprintln!("corpus: expected.{}.max_m={worst:e}", class.as_str());
+        eprintln!("corpus: expected.{class}.max_m={worst:e}");
     }
     // A file the legacy reader opens must migrate: any other error is a
     // migration bug (or a model limit that loses a file the old app opened).
@@ -235,7 +245,7 @@ fn migration_timing() {
         let legacy = stalagmight_legacy::open_bytes(&bytes, &options).unwrap();
         let open = started.elapsed();
         let started = Instant::now();
-        let migrated = migrate(&legacy).unwrap();
+        let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
         let total = started.elapsed();
         let started = Instant::now();
         let positions = migrated.project.raw_positions();

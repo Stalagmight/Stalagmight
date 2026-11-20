@@ -149,9 +149,10 @@ pub struct Verification {
 }
 
 impl Verification {
-    /// Whether every difference is explained.
+    /// Whether every difference is explained, in the raw view and in the
+    /// Closures Computed View.
     pub fn is_clean(&self) -> bool {
-        self.mismatches.is_empty()
+        self.mismatches.is_empty() && self.adjusted.is_clean()
     }
 
     /// The slots that moved horizontally beyond the cascade's dust, expected
@@ -185,6 +186,19 @@ pub enum ExpectedClass {
     /// The legacy position is not finite (a non-finite reading the 0.6.0
     /// load kept and its save would have zeroed); nothing to compare.
     LegacyNotFinite,
+    /// Closures Computed View only (plan Deviations D10, G2): a component
+    /// 0.6.0 showed measured without a failure (nothing eligible to solve)
+    /// is solved now because it holds a migrated `Tie` (a demoted merge, or a
+    /// legacy aligned closure of a non-eligible strategy), which pulls the
+    /// torn tie together.
+    TieSolved,
+    /// Closures Computed View only (D11, G2): 0.6.0's solve failed a
+    /// component ("inconsistent line translation", shown measured) because it
+    /// united a merge before the across-one-shot check (a same-line merge, or
+    /// a cycle-closing merge spanning one shot); that merge is a `Tie` now,
+    /// which the solve ties as one point or skips (and reports), and the
+    /// component is adjusted by its other closures and GPS fixes.
+    TieNoLongerFails,
 }
 
 impl ExpectedClass {
@@ -193,6 +207,8 @@ impl ExpectedClass {
             Self::TornMergeCollapsed => "torn-merge-collapsed",
             Self::SnapAlignmentChanged => "snap-alignment-changed",
             Self::LegacyNotFinite => "legacy-not-finite",
+            Self::TieSolved => "tie-solved",
+            Self::TieNoLongerFails => "tie-no-longer-fails",
         }
     }
 }
@@ -226,16 +242,49 @@ pub enum Axis {
 }
 
 /// The state of the Closures Computed View comparison
-/// ([`super::verify::verify_adjusted`]).
+/// ([`super::verify`], plan 7.2.7).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum AdjustedCheck {
-    /// Not compared: the station-graph least-squares solve (stream M3) is
-    /// not on this branch yet.
-    #[default]
-    AwaitingSolver,
     /// Not compared: the legacy open did not compute adjusted positions
     /// (`OpenOptions::with_adjusted` off).
+    #[default]
     NoLegacyPositions,
+    /// Compared slot by slot.
+    Compared(AdjustedVerification),
+}
+
+impl AdjustedCheck {
+    /// Whether every difference is explained (vacuously when not compared).
+    pub fn is_clean(&self) -> bool {
+        match self {
+            Self::NoLegacyPositions => true,
+            Self::Compared(v) => v.mismatches.is_empty() && v.failure_mismatches.is_empty(),
+        }
+    }
+}
+
+/// The Closures Computed View of the migrated project against the one 0.6.0
+/// showed, per slot, with the least-squares config the legacy open used.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AdjustedVerification {
+    /// Legacy slots compared.
+    pub slots_checked: usize,
+    /// Largest horizontal displacement of any slot, metres (expected ones
+    /// included).
+    pub max_xy_m: f64,
+    /// Largest depth difference of any slot, metres.
+    pub max_z_m: f64,
+    /// Differences that a known rule explains, by class.
+    pub expected: BTreeMap<ExpectedClass, ClassStats>,
+    /// Differences nothing explains. Must be empty.
+    pub mismatches: Vec<Mismatch>,
+    /// Components 0.6.0's solve failed (shown measured), and the migrated
+    /// solve's.
+    pub failures_legacy: usize,
+    pub failures_new: usize,
+    /// Failed components (their lines, ascending) on one side only that no
+    /// rule explains. Must be empty.
+    pub failure_mismatches: Vec<Vec<LineId>>,
 }
 
 impl MigrationReport {
@@ -336,7 +385,33 @@ impl MigrationReport {
         {
             let _ = writeln!(out, "verify.mismatch_max_m={worst:e}");
         }
-        let _ = writeln!(out, "verify.adjusted={:?}", v.adjusted);
+        match &v.adjusted {
+            AdjustedCheck::NoLegacyPositions => {
+                let _ = writeln!(out, "verify.adjusted=not-compared");
+            }
+            AdjustedCheck::Compared(a) => {
+                let _ = writeln!(out, "verify.adjusted.slots={}", a.slots_checked);
+                let _ = writeln!(out, "verify.adjusted.max_xy_m={:e}", a.max_xy_m);
+                let _ = writeln!(out, "verify.adjusted.max_z_m={:e}", a.max_z_m);
+                for (class, stats) in &a.expected {
+                    let _ = writeln!(
+                        out,
+                        "verify.adjusted.expected.{}={} max_m={:e}",
+                        class.as_str(),
+                        stats.slots,
+                        stats.max_displacement_m
+                    );
+                }
+                let _ = writeln!(out, "verify.adjusted.mismatches={}", a.mismatches.len());
+                let _ = writeln!(
+                    out,
+                    "verify.adjusted.failures={}/{} unexplained={}",
+                    a.failures_legacy,
+                    a.failures_new,
+                    a.failure_mismatches.len()
+                );
+            }
+        }
         out
     }
 }

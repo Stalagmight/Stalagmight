@@ -17,7 +17,9 @@ use stalagmight_legacy::{
 use crate::models::survey::{ClosureStrategy, Project};
 
 use super::test_support::{check, edit_sqlite};
-use super::{migrate, migrate_bytes, AdjustedCheck, Migrated};
+use crate::models::config::ClosureAdjustmentConfig;
+
+use super::{migrate, migrate_bytes, AdjustedCheck, ExpectedClass, Migrated};
 
 /// The legacy crate's shared builders, written against the alias `m`
 /// (`super::m` from inside, the import above).
@@ -77,7 +79,7 @@ fn open(p: &m::Project, extras: &LegacyExtras) -> LegacySurvey {
 /// Write, open, migrate, and run the full property check.
 fn migrated(p: &m::Project) -> (LegacySurvey, Migrated) {
     let legacy = open(p, &LegacyExtras::default());
-    let migrated = migrate(&legacy).unwrap();
+    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     if let Err(e) = check(&legacy, &migrated) {
         panic!("{e}\n{}", migrated.report.summary());
     }
@@ -104,7 +106,7 @@ fn raw_merge(p: &mut m::Project, a: StationRef, b: StationRef) {
 fn every_legacy_builder_migrates_with_every_station_in_place() {
     for (name, project) in builder::all() {
         let legacy = open(&project, &LegacyExtras::default());
-        let migrated = migrate(&legacy).unwrap();
+        let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
         if let Err(e) = check(&legacy, &migrated) {
             panic!("{name}: {e}\n{}", migrated.report.summary());
         }
@@ -220,6 +222,20 @@ fn the_merge_the_old_cascade_left_torn_is_the_one_demoted() {
     );
     assert_eq!(station(&out.project, b, 0), station(&out.project, a, 1));
     assert_eq!(station(&out.project, c, 0), station(&out.project, a, 2));
+    // D10: nothing here was eligible, so 0.6.0 showed this survey measured
+    // in the Closures Computed View, with C~B 17.5 m apart. The `Tie` is
+    // eligible: the view now pulls it together. Reported, not hidden.
+    let AdjustedCheck::Compared(view) = &out.report.verification.adjusted else {
+        panic!("the Computed View was compared");
+    };
+    let solved = view.expected[&ExpectedClass::TieSolved];
+    assert!(solved.slots > 0 && solved.slots < out.report.slots, "the gauge stays: {solved:?}");
+    assert!(
+        solved.max_displacement_m > 1.0 && solved.max_displacement_m < 17.5,
+        "{solved:?}"
+    );
+    assert!(view.mismatches.is_empty() && view.failure_mismatches.is_empty());
+    assert!(out.report.verification.is_clean());
 }
 
 #[test]
@@ -408,7 +424,7 @@ fn shot_uuids_and_ignores_follow_every_legacy_rule() {
             .unwrap();
     });
     let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     check(&legacy, &out).unwrap();
     let r = &out.report;
     assert_eq!(r.shot_uuids_minted, 1);
@@ -450,10 +466,10 @@ fn history_is_dropped_and_said_so() {
     let out = migrate_bytes(&bytes).unwrap();
     assert!(out.had_history);
     assert_eq!(out.report.history_rows_dropped, 1);
-    assert_eq!(
-        out.report.verification.adjusted,
-        AdjustedCheck::AwaitingSolver
-    );
+    assert!(matches!(
+        &out.report.verification.adjusted,
+        AdjustedCheck::Compared(a) if a.slots_checked == 2 && a.mismatches.is_empty()
+    ));
 }
 
 #[test]
@@ -482,7 +498,7 @@ fn the_speleodb_link_and_validation_state_are_carried() {
         ..LegacyExtras::default()
     };
     let legacy = open(&p, &extras);
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     let link = out.extras.speleo_link.as_ref().unwrap();
     assert_eq!(link.project_id, "00000000-0000-4000-8000-000000000002");
     assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
@@ -512,7 +528,7 @@ fn a_non_finite_reading_in_the_file_is_already_sanitised_by_the_legacy_load() {
     });
     let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
     assert_eq!(legacy.project.lines[0].shots[1].length, 0.0);
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     check(&legacy, &out).unwrap();
     assert_eq!(out.report.numbers_sanitized, 0);
     assert_eq!(out.project.line(a).unwrap().shots[1].length, 0.0);
@@ -550,7 +566,7 @@ fn a_fix_that_a_dangling_merge_row_held_places_its_own_piece_and_is_counted() {
         legacy.project.datum_entrances(),
         vec![Some(true), Some(false)]
     );
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     let r = &out.report;
     assert_eq!(r.merges_dropped_dangling, 1);
     // Datum 1 now places B's piece, held where 0.6.0 showed it; as a
@@ -577,7 +593,7 @@ fn a_datum_whose_gps_is_not_a_number_is_dropped_and_its_piece_held() {
     });
     let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
     assert!(legacy.project.zero_datums[0].gps.latitude.is_infinite());
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     assert_eq!(out.report.datums_dropped_invalid, 1);
     assert!(out.project.datums.is_empty());
     assert_eq!(out.project.placements.len(), 1);
@@ -603,7 +619,7 @@ fn a_drift_the_old_load_never_resolved_is_collapsed_and_reported_as_a_move() {
     p.adjust_line_offset(c, 5.0, 0.0);
     let bytes = dangling_merge_row(&write_v18(&p, &LegacyExtras::default()).unwrap(), a, b);
     let legacy = open_bytes(&bytes, &OpenOptions::default()).unwrap();
-    let out = migrate(&legacy).unwrap();
+    let out = migrate(&legacy, &ClosureAdjustmentConfig::default()).unwrap();
     let r = &out.report;
     assert_eq!(r.merges_collapsed_torn, 1);
     assert!((r.merges_collapsed_torn_max_m - 5.0).abs() < 1e-9);

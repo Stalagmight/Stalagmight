@@ -27,7 +27,8 @@
 //!    (held gauge, else default gauge) at its legacy position.
 //! 6. **Entrances** (7.2.6): an explicit override wherever the new default
 //!    would differ from what 0.6.0 derived.
-//! 7. **Verification** (7.2.7): see [`verify`].
+//! 7. **Verification** (7.2.7): raw positions and the Closures Computed View
+//!    (with the least-squares config the legacy open used), see [`verify`].
 //! 8. **History** (7.2.8): never migrated; [`Migrated::had_history`] says
 //!    whether the file held any (the app shows its "history discarded"
 //!    banner).
@@ -82,12 +83,14 @@ use std::path::Path;
 
 use stalagmight_legacy::{LegacyError, LegacySurvey, OpenOptions};
 
+use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::survey::{Project, Violation};
 use crate::models::{LineId, SpeleoLink};
 
 pub use ignores::IgnoredWarning;
 pub use report::{
-    AdjustedCheck, Axis, ClassStats, ExpectedClass, MigrationReport, Mismatch, Verification,
+    AdjustedCheck, AdjustedVerification, Axis, ClassStats, ExpectedClass, MigrationReport,
+    Mismatch, Verification,
 };
 
 /// A migrated legacy project.
@@ -183,7 +186,10 @@ pub fn migrate_path(path: &Path) -> Result<Migrated, MigrateError> {
 /// [`migrate_path`] with the legacy reader's options.
 pub fn migrate_path_with(path: &Path, options: &OpenOptions) -> Result<Migrated, MigrateError> {
     let legacy = stalagmight_legacy::open_path(path, options)?;
-    let mut migrated = migrate(&legacy)?;
+    let mut migrated = migrate(
+        &legacy,
+        &convert::closure_adjustment(&options.closure_adjustment),
+    )?;
     migrated.project.file_path = Some(path.to_path_buf());
     Ok(migrated)
 }
@@ -196,17 +202,26 @@ pub fn migrate_bytes(bytes: &[u8]) -> Result<Migrated, MigrateError> {
 /// [`migrate_bytes`] with the legacy reader's options.
 pub fn migrate_bytes_with(bytes: &[u8], options: &OpenOptions) -> Result<Migrated, MigrateError> {
     let legacy = stalagmight_legacy::open_bytes(bytes, options)?;
-    migrate(&legacy)
+    migrate(
+        &legacy,
+        &convert::closure_adjustment(&options.closure_adjustment),
+    )
 }
 
 /// Convert a legacy project, opened by the frozen reader, into the
 /// station-graph model, and verify it against the legacy positions.
+/// `adjustment` is the least-squares config the legacy open solved the
+/// Closures Computed View with (`OpenOptions::closure_adjustment`), so the
+/// two views are compared like for like.
 ///
 /// Deterministic: the same legacy survey always gives the same project and
 /// report. Fails only on states the model cannot hold (ids out of range, a
 /// repeated line id) or on a migration bug (the result does not validate);
 /// position differences are reported, not refused.
-pub fn migrate(legacy: &LegacySurvey) -> Result<Migrated, MigrateError> {
+pub fn migrate(
+    legacy: &LegacySurvey,
+    adjustment: &ClosureAdjustmentConfig,
+) -> Result<Migrated, MigrateError> {
     let mut report = MigrationReport {
         schema_version: legacy.schema_version,
         history_rows_dropped: legacy.history.undo_rows + legacy.history.redo_rows,
@@ -227,7 +242,7 @@ pub fn migrate(legacy: &LegacySurvey) -> Result<Migrated, MigrateError> {
         return Err(MigrateError::Invalid(violations));
     }
     report.stations = built.project.stations.len();
-    report.verification = verify::verify(&built, legacy);
+    report.verification = verify::verify(&built, legacy, adjustment);
 
     let ignored_warnings = ignores::rekey(legacy, &built.final_uuid, &mut report);
     let lp = &legacy.project;

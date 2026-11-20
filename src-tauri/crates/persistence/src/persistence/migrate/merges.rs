@@ -52,12 +52,12 @@ pub(super) struct MergePlan {
 
 impl MergePlan {
     /// The demoted merges, in merge list order, as their two dense slots.
-    pub(super) fn ties(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    pub(super) fn ties(&self) -> impl Iterator<Item = (usize, usize, Fate)> + '_ {
         self.fates
             .iter()
             .zip(&self.ends)
             .filter(|(fate, _)| matches!(fate, Fate::DemotedCycle | Fate::DemotedSameLine))
-            .filter_map(|(_, ends)| *ends)
+            .filter_map(|(&fate, ends)| ends.map(|(a, b)| (a, b, fate)))
     }
 
     pub(super) fn count(&self, fate: Fate) -> usize {

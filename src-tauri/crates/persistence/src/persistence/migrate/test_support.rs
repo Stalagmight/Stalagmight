@@ -21,7 +21,8 @@ use stalagmight_legacy::{
 
 use crate::models::survey::ClosureStrategy;
 
-use super::{migrate, ExpectedClass, Migrated};
+use crate::models::config::ClosureAdjustmentConfig;
+use super::{migrate, AdjustedCheck, ExpectedClass, Migrated};
 
 /// SplitMix64: small, fast, and the same on every platform.
 pub(super) struct Rng(u64);
@@ -808,8 +809,43 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
         return Err("a merge the legacy load kept torn was collapsed".to_string());
     }
 
+    // The Closures Computed View (plan 7.2.7): every slot within tolerance
+    // of 0.6.0's, or explained by a declared rule (D10, D11); the same
+    // components fall back to measured.
+    let AdjustedCheck::Compared(a) = &v.adjusted else {
+        return Err("the Closures Computed View was not compared".to_string());
+    };
+    if let Some(m) = a.mismatches.first() {
+        return Err(format!(
+            "{} unexplained Computed View mismatches, first {}:{} {:?} {:e} m",
+            a.mismatches.len(),
+            m.line_id,
+            m.station_index,
+            m.axis,
+            m.displacement_m
+        ));
+    }
+    if let Some(lines) = a.failure_mismatches.first() {
+        return Err(format!(
+            "{} least-squares fallbacks differ, first on lines {lines:?}",
+            a.failure_mismatches.len()
+        ));
+    }
+    if a.slots_checked != r.slots {
+        return Err("not every slot's Computed View position was verified".to_string());
+    }
+    let ties = r.merges_demoted_cycle + r.merges_demoted_same_line + r.aligned_closures_to_tie;
+    if a.expected.contains_key(&ExpectedClass::TieSolved) && ties == 0 {
+        return Err("a Computed View difference blamed on a Tie, without one".to_string());
+    }
+    if a.expected.contains_key(&ExpectedClass::TieNoLongerFails)
+        && r.merges_demoted_cycle + r.merges_demoted_same_line == 0
+    {
+        return Err("a Computed View difference blamed on a demoted merge, without one".to_string());
+    }
+
     // Deterministic.
-    let again = migrate(legacy).map_err(|e| format!("second migrate: {e}"))?;
+    let again = migrate(legacy, &ClosureAdjustmentConfig::default()).map_err(|e| format!("second migrate: {e}"))?;
     if again.project != migrated.project
         || again.report != migrated.report
         || again.extras != migrated.extras
