@@ -204,6 +204,35 @@ describe('SpeleoExitDialog', () => {
     expect(settled).toBe(false);
   });
 
+  // H-frontend-wire-9: a coded save failure never reaches the prompt raw, and a
+  // copy another program changed goes to the save prompt, where it is resolved.
+  it('a copy another program changed hands the save to the save prompt and abandons the exit', async () => {
+    useProjectStore.setState({ isDirty: true });
+    saveProject.mockResolvedValue({
+      ...ok, success: false,
+      error: 'EXTERNALLY_MODIFIED: /synthetic/cache/project.stalx was changed by another program since it was opened',
+    });
+    const answer = raise();
+    await userEvent.click(screen.getByTestId('speleodb-exit-keep'));
+    expect(await answer).toBe(false);
+    expect(useUIStore.getState().activeDialog).toBe('save-conflict');
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('speleodb-exit-dialog')).toBeNull();
+  });
+
+  it('a read-only or unreachable copy is worded, never shown with its code', async () => {
+    useProjectStore.setState({ isDirty: true });
+    saveProject.mockResolvedValue({
+      ...ok, success: false, error: 'FS_PATH_NOT_FOUND: Failed to open database /gone/project.stalx',
+    });
+    void raise();
+    await userEvent.click(screen.getByTestId('speleodb-exit-keep'));
+    const shown = await screen.findByTestId('speleodb-exit-error');
+    expect(shown).toHaveTextContent('the folder no longer exists');
+    expect(shown.textContent).not.toContain('FS_PATH_NOT_FOUND');
+    expect(closeProject).not.toHaveBeenCalled();
+  });
+
   it('Discard needs a second "lost forever" confirmation, then discards the local copy', async () => {
     const answer = raise();
     await userEvent.click(screen.getByTestId('speleodb-exit-discard'));

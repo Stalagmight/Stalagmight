@@ -414,6 +414,8 @@ async function keepLockThenRestart(): Promise<void> {
     return;
   }
   abandonUpdateRestart();
+  // The save prompt already took over (a file another program changed).
+  if (kept.handedOff) return;
   useUIStore.getState().openDialog('error', {
     title: i18n.t('speleoExitPrompt.restart.failedTitle'),
     message: kept.error,
