@@ -17,6 +17,7 @@ mod commands;
 mod config;
 mod display_settings;
 pub mod dive_plan;
+pub mod export_views;
 mod import_tracking;
 mod labels;
 mod open_file;

@@ -5,20 +5,17 @@ mod depth_colors;
 pub mod dive_profile;
 pub mod image;
 mod image_labels;
-mod image_scope;
 mod image_sketch;
 pub mod json;
 pub mod survey;
-pub mod tml;
+mod tml;
 mod tml_azimuth;
-mod tml_topology;
 
 pub use atomic_write::write_atomic;
 pub use csv::*;
 pub use dive_profile::*;
 pub use image::*;
 pub use json::*;
-pub use tml::*;
 
 use serde::{Deserialize, Serialize};
 

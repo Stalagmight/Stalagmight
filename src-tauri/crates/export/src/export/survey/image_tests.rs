@@ -8,7 +8,6 @@ use super::{export_image, export_value_histogram, generate_svg_string};
 use crate::export::color_scale::ExportValueKind;
 use crate::export::{ColorMode, ExportImageOptions, ImageFormat};
 use crate::models::survey::{StartAt, ZeroDatum};
-use crate::models::LineData;
 
 fn labelled(ids: bool) -> ExportImageOptions {
     ExportImageOptions {
@@ -84,11 +83,11 @@ fn comments_and_stars_are_drawn_once_per_station() {
 fn the_depth_histogram_counts_each_station_once() {
     let Cave { project, .. } = cave();
     let raw = project.raw_positions();
-    let h = export_value_histogram(&project, &raw, ExportValueKind::Depth, 8, false);
+    let h = export_value_histogram(&project, &raw, &raw, ExportValueKind::Depth, 8, false);
     let total: u32 = h.counts.iter().sum();
     assert_eq!(total as usize, project.stations.len());
     assert!(h.min <= 2.0 && h.max >= 9.0, "{h:?}");
-    let d = export_value_histogram(&project, &raw, ExportValueKind::Distance, 8, false);
+    let d = export_value_histogram(&project, &raw, &raw, ExportValueKind::Distance, 8, false);
     let reachable: u32 = d.counts.iter().sum();
     let field = project.distance_field(&raw, None, false);
     let expected = field.iter().filter(|(_, d)| d.is_finite()).count();
@@ -140,7 +139,13 @@ fn the_rendering_follows_the_positions_it_is_given() {
     let adjusted =
         project.adjusted_positions(&crate::models::config::ClosureAdjustmentConfig::default());
     let measured = generate_svg_string(&project, &options).unwrap();
-    let solved = super::generate_svg_string_with_positions(&project, &options, &adjusted).unwrap();
+    let solved = super::generate_svg_string_with_positions(
+        &project,
+        &options,
+        &adjusted,
+        &project.raw_positions(),
+    )
+    .unwrap();
     assert_ne!(
         measured, solved,
         "the Batch loop is solved in the Computed View"
@@ -148,35 +153,48 @@ fn the_rendering_follows_the_positions_it_is_given() {
 }
 
 /// A plain survey (one line, a datum at its start) renders exactly what the
-/// legacy renderer draws for the same survey.
+/// 0.6.0 renderer drew for the same survey: the pinned bytes below are the
+/// legacy renderer's output, captured before it was deleted (with station
+/// IDs, then with station names; this survey's names are its ids).
 #[test]
 fn a_simple_survey_renders_the_legacy_bytes() {
     let mut p = project("Simple");
     let shots = run(0, 3, 60.0, 10.0, 2.0, 1.0);
     let main = p
-        .add_line(meta("Main", "#336699"), StartAt::New, shots.clone())
+        .add_line(meta("Main", "#336699"), StartAt::New, shots)
         .unwrap();
     let start = p.line(main).unwrap().start;
     p.datums.push(ZeroDatum::new(start, gps_at(0.0, 0.0)));
     assert!(p.validate().is_empty());
 
-    let mut legacy = crate::models::Project::new("Simple".to_string(), None);
-    let line = legacy
-        .add_line(LineData {
-            name: Some("Main".to_string()),
-            color: "#336699".to_string(),
-            shots,
-            ..LineData::default()
-        })
-        .id;
-    legacy
-        .set_zero_datum(crate::models::StationRef::new(line, 0), gps_at(0.0, 0.0))
-        .unwrap();
-    legacy.ensure_station_identities();
-    for options in [labelled(true), labelled(false)] {
-        assert_eq!(
-            generate_svg_string(&p, &options).unwrap(),
-            crate::export::generate_svg_string(&legacy, &options).unwrap()
-        );
-    }
+    assert_eq!(
+        generate_svg_string(&p, &labelled(true)).unwrap(),
+        LEGACY_SIMPLE_IDS_SVG
+    );
+    assert_eq!(
+        generate_svg_string(&p, &labelled(false)).unwrap(),
+        LEGACY_SIMPLE_IDS_SVG.replace("station-labels", "station-names")
+    );
 }
+
+/// The 0.6.0 renderer's SVG of [`a_simple_survey_renders_the_legacy_bytes`]'s
+/// survey with station IDs labelled.
+const LEGACY_SIMPLE_IDS_SVG: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800.00" height="492.62" viewBox="-1.3 -16.2 28.4 17.5">
+<rect x="-1.3" y="-16.2" width="28.4" height="17.5" fill="#ffffff"/>
+<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">
+<polyline points="0.00,-0.00 8.62,-4.97 17.23,-9.95 25.85,-14.92" stroke-width="0.03554448137545405"/>
+</g>
+<g class="zero-datums" fill="#000000">
+<polygon points="0.00,-0.25 0.06,-0.09 0.24,-0.08 0.10,0.03 0.15,0.20 0.00,0.11 -0.15,0.20 -0.10,0.03 -0.24,-0.08 -0.06,-0.09"/>
+</g>
+<g class="station-labels" font-family="sans-serif" font-size="0.39" fill="#000000" stroke="#ffffff" stroke-width="0.11" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">
+<text x="8.78" y="-4.70">1</text>
+<text x="17.39" y="-9.67">2</text>
+<text x="26.13" y="-15.08">3</text>
+</g>
+<g class="line-names" font-family="sans-serif" font-size="0.39" fill="#000000" stroke="#ffffff" stroke-width="0.11" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">
+<text x="12.93" y="-7.46">Main</text>
+</g>
+</svg>
+"##;

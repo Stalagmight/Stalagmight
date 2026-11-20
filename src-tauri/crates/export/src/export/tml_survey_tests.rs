@@ -5,11 +5,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use super::super::{build_xml as legacy_build_xml, AzimuthExport, TmlProfile, SHORT};
+use super::super::{AzimuthExport, TmlProfile, SHORT};
 use super::{build_rows, build_xml};
 use crate::export::survey::test_helpers::{cave, gps_at, meta, project, run, Cave};
 use crate::models::survey::{Project, StartAt, ZeroDatum};
-use crate::models::{LineData, StationId};
+use crate::models::StationId;
 
 fn rows(project: &Project) -> Vec<super::ExportShot> {
     let decision = AzimuthExport::decide_from(
@@ -263,39 +263,144 @@ fn a_reversed_line_exports_every_shot_once() {
     assert_eq!(uuids.len(), 4 + 3 + 2 + 2 + 3 + 2);
 }
 
-/// A plain project (one line from its datum, a second one entered at its
-/// start) writes the same document as the legacy exporter: the Station IDs
-/// are the legacy positional ids there.
+/// A plain project (one line from its datum) writes the same document as the
+/// 0.6.0 exporter: the Station IDs are the legacy positional ids there. The
+/// pinned bytes are the legacy exporter's `.tmlu`, captured before it was
+/// deleted.
 #[test]
 fn a_simple_survey_matches_the_legacy_document_byte_for_byte() {
     let mut p = project("Simple");
     let shots = run(0, 3, 90.0, 10.0, 2.0, 1.0);
     let main = p
-        .add_line(meta("Main", "#336699"), StartAt::New, shots.clone())
+        .add_line(meta("Main", "#336699"), StartAt::New, shots)
         .unwrap();
     let start = p.line(main).unwrap().start;
     p.datums.push(ZeroDatum::new(start, gps_at(0.0, 0.0)));
     assert!(p.validate().is_empty());
 
-    let mut legacy = crate::models::Project::new("Simple".to_string(), Some("Synthetic".into()));
-    let line = legacy.add_line(LineData {
-        name: Some("Main".to_string()),
-        color: "#336699".to_string(),
-        shots,
-        ..LineData::default()
-    });
-    let line_id = line.id;
-    legacy
-        .set_zero_datum(crate::models::StationRef::new(line_id, 0), gps_at(0.0, 0.0))
-        .unwrap();
     let (ours, notes) = build_xml(&p, &SHORT, TmlProfile::User).unwrap();
-    let (theirs, legacy_notes) = legacy_build_xml(&legacy, &SHORT, TmlProfile::User).unwrap();
-    assert_eq!(notes, legacy_notes);
-    assert_eq!(
-        String::from_utf8(ours).unwrap(),
-        String::from_utf8(theirs).unwrap()
-    );
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(String::from_utf8(ours).unwrap(), LEGACY_SIMPLE_TMLU);
 }
+
+/// The 0.6.0 exporter's `.tmlu` of
+/// [`a_simple_survey_matches_the_legacy_document_byte_for_byte`]'s survey.
+const LEGACY_SIMPLE_TMLU: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<CaveFile>
+    <caveName>Simple</caveName>
+    <firstStartAbsoluteElevation>0.0</firstStartAbsoluteElevation>
+    <Data>
+        <SRVD>
+            <AZ>0.0</AZ>
+            <CID>-1</CID>
+            <CL>0x336699ff</CL>
+            <CM>START</CM>
+            <DT>2000-01-01</DT>
+            <DP>2.0</DP>
+            <DPI>2.0</DPI>
+            <D>0.0</D>
+            <EXC>false</EXC>
+            <EX>unknown</EX>
+            <FRID>-1</FRID>
+            <ID>0</ID>
+            <INC>0.0</INC>
+            <LT>20.5</LT>
+            <L>0.0</L>
+            <LG>0.0</LG>
+            <LCK>true</LCK>
+            <LGT>-87.25</LGT>
+            <NM>START</NM>
+            <PT>VERTICAL</PT>
+            <R>0.0</R>
+            <SC>Main</SC>
+            <TY>START</TY>
+            <U>0.0</U>
+        </SRVD>
+        <SRVD>
+            <AZ>90.0</AZ>
+            <CID>-1</CID>
+            <CL>0x336699ff</CL>
+            <CM></CM>
+            <DT>2000-01-01</DT>
+            <DP>3.0</DP>
+            <DPI>-1.0</DPI>
+            <D>0.0</D>
+            <EXC>false</EXC>
+            <EX>unknown</EX>
+            <FRID>0</FRID>
+            <ID>1</ID>
+            <INC>0.0</INC>
+            <LT>0.0</LT>
+            <L>0.0</L>
+            <LG>10.0</LG>
+            <LCK>false</LCK>
+            <LGT>0.0</LGT>
+            <NM></NM>
+            <PT>VERTICAL</PT>
+            <R>0.0</R>
+            <SC>Main</SC>
+            <TY>REAL</TY>
+            <U>0.0</U>
+            <UU>00000000-5a00-4000-8000-000000000000</UU>
+        </SRVD>
+        <SRVD>
+            <AZ>90.0</AZ>
+            <CID>-1</CID>
+            <CL>0x336699ff</CL>
+            <CM></CM>
+            <DT>2000-01-01</DT>
+            <DP>4.0</DP>
+            <DPI>-1.0</DPI>
+            <D>0.0</D>
+            <EXC>false</EXC>
+            <EX>unknown</EX>
+            <FRID>1</FRID>
+            <ID>2</ID>
+            <INC>0.0</INC>
+            <LT>0.0</LT>
+            <L>0.0</L>
+            <LG>10.0</LG>
+            <LCK>false</LCK>
+            <LGT>0.0</LGT>
+            <NM></NM>
+            <PT>VERTICAL</PT>
+            <R>0.0</R>
+            <SC>Main</SC>
+            <TY>REAL</TY>
+            <U>0.0</U>
+            <UU>01000000-5a00-4000-8000-000000000000</UU>
+        </SRVD>
+        <SRVD>
+            <AZ>90.0</AZ>
+            <CID>-1</CID>
+            <CL>0x336699ff</CL>
+            <CM></CM>
+            <DT>2000-01-01</DT>
+            <DP>5.0</DP>
+            <DPI>-1.0</DPI>
+            <D>0.0</D>
+            <EXC>false</EXC>
+            <EX>unknown</EX>
+            <FRID>2</FRID>
+            <ID>3</ID>
+            <INC>0.0</INC>
+            <LT>0.0</LT>
+            <L>0.0</L>
+            <LG>10.0</LG>
+            <LCK>false</LCK>
+            <LGT>0.0</LGT>
+            <NM></NM>
+            <PT>VERTICAL</PT>
+            <R>0.0</R>
+            <SC>Main</SC>
+            <TY>REAL</TY>
+            <U>0.0</U>
+            <UU>02000000-5a00-4000-8000-000000000000</UU>
+        </SRVD>
+    </Data>
+    <unit>m</unit>
+    <useMagneticAzimuth>true</useMagneticAzimuth>
+</CaveFile>"#;
 
 /// A migrated rigid tie (`Tie`, e.g. a cycle-closing merge) is a loop like
 /// any closure: it is written as a CLOSURE row (the legacy exporter dropped

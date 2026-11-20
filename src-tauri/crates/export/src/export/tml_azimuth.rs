@@ -4,7 +4,7 @@
 //! decision, and the export's only choice that can change a NUMBER rather than
 //! a label.
 
-use crate::models::{AzimuthReference, CorrectionSource, Line, NorthReference, Project};
+use crate::models::{AzimuthReference, CorrectionSource, NorthReference};
 
 /// How this document declares its azimuths (#438).
 ///
@@ -54,19 +54,9 @@ pub(super) enum AzimuthExport {
 }
 
 impl AzimuthExport {
-    pub(super) fn decide(project: &Project) -> Self {
-        Self::decide_from(
-            project
-                .lines
-                .iter()
-                .filter(|line| !line.shots.is_empty())
-                .map(|line| project.azimuth_reference_for(line)),
-        )
-    }
-
-    /// [`Self::decide`] over the resolved references of the lines that have
-    /// shots, in any order (the decision does not depend on it). Shared by
-    /// both models.
+    /// The declaration for a document whose lines with shots resolve to
+    /// `references` (`Project::azimuth_reference_for`), in any order (the
+    /// decision does not depend on it).
     pub(super) fn decide_from(references: impl IntoIterator<Item = AzimuthReference>) -> Self {
         let references: Vec<AzimuthReference> = references.into_iter().collect();
 
@@ -169,15 +159,9 @@ impl AzimuthExport {
         }
     }
 
-    /// The reference to push each of `line`'s azimuths through on the way
-    /// out. Identity except on the mixed path, so an ordinary export is
-    /// byte-for-byte what it always was.
-    pub(super) fn emit_reference(self, project: &Project, line: &Line) -> AzimuthReference {
-        self.emit(project.azimuth_reference_for(line))
-    }
-
-    /// [`Self::emit_reference`] for a line whose resolved reference is
-    /// `reference` (either model).
+    /// The reference to push each azimuth of a line whose resolved reference
+    /// is `reference` through on the way out. Identity except on the mixed
+    /// path, so an ordinary export is byte-for-byte what it always was.
     pub(super) fn emit(self, reference: AzimuthReference) -> AzimuthReference {
         match self {
             AzimuthExport::MixedToTrue => reference,

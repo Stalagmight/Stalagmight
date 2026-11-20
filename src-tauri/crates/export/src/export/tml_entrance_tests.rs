@@ -3,14 +3,23 @@
 //! Ariane keeps GPS on START rows only and reads every START's lat/lon as a
 //! hard fix. A GPS fix part-way through the survey has no START of its own, so
 //! the exporter writes one at the fix's GPS and ties it to the fix station with
-//! a zero-length CLOSURE. Synthetic data only.
+//! a zero-length CLOSURE. Synthetic data only, built on the station graph with
+//! the model's own operations (`Survey`).
 
+use super::datums::{stamp_starts_at, start_shot, DatumNodes};
+use super::survey::{build_rows, export_tml};
 use super::*;
-use crate::models::{GpsCoordinates, LineData, ShotData, StationMerge, ZeroDatum};
+use crate::export::survey::test_helpers::{meta, Survey};
+use crate::models::survey::{ClosureStrategy, Project, ZeroDatum};
+use crate::models::{DatumRole, GpsCoordinates, LineId, ShotData, StationId, StationRef};
 
 const PLACEMENT: (f64, f64) = (20.0, -87.5);
 const FIX_AT_LINE_START: (f64, f64) = (20.0003, -87.4995);
 const FIX_MID_LINE: (f64, f64) = (20.0006, -87.4985);
+
+fn gps((lat, lon): (f64, f64)) -> GpsCoordinates {
+    GpsCoordinates::new(lat, lon, 0.0).unwrap()
+}
 
 fn shots(count: usize, azimuth_in: f64) -> Vec<ShotData> {
     (0..count)
@@ -25,57 +34,66 @@ fn shots(count: usize, azimuth_in: f64) -> Vec<ShotData> {
         .collect()
 }
 
-fn merge(project: &mut Project, a: StationRef, b: StationRef) {
-    project.station_merges.push(StationMerge {
-        station_a: a.into(),
-        station_b: b.into(),
-        merged_at: chrono::Utc::now(),
-    });
+fn station(project: &Project, line: LineId, index: u32) -> StationId {
+    project.station_at(StationRef::new(line, index)).unwrap()
 }
 
-fn datum(project: &mut Project, sr: StationRef, (lat, lon): (f64, f64)) {
-    project.zero_datums.push(ZeroDatum::new(
-        sr.into(),
-        GpsCoordinates::new(lat, lon, 0.0).unwrap(),
-    ));
+fn gps_fixes(project: &Project) -> usize {
+    project.datums_with_role(DatumRole::GpsFix).len()
 }
 
-/// Main runs 4 x 50 m east (M0..M4). Side runs 3 x 50 m north off M2 (S0 is
-/// merged onto M2), and Loop runs 4 x 50 m north off M4 (L0 merged onto M4).
-/// One merge-connected cave with a placement datum on M0, a GPS fix on S0 (a
-/// line start, which the merge aliases onto M2) and a GPS fix on L2 (the
-/// middle of a line).
-fn three_entrance_cave(with_fixes: bool) -> Project {
-    let mut project = Project::new("Three entrances".to_string(), None);
-    for (name, count, azimuth) in [("Main", 4, 90.0), ("Side", 3, 0.0), ("Loop", 4, 0.0)] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(count, azimuth),
-            ..Default::default()
-        });
-    }
-    merge(&mut project, StationRef::new(0, 2), StationRef::new(1, 0));
-    merge(&mut project, StationRef::new(0, 4), StationRef::new(2, 0));
-    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+/// The lines of [`three_entrance_cave`].
+struct Cave {
+    project: Project,
+    main: LineId,
+    side: LineId,
+    lp: LineId,
+}
+
+/// Main runs 4 x 50 m east (M0..M4). Side runs 3 x 50 m north from M2 (it
+/// starts on that station), and Loop runs 4 x 50 m north from M4. One
+/// connected cave with a placement datum on M0, a GPS fix on S0 (a line
+/// start, which is the junction M2) and a GPS fix on L2 (the middle of a
+/// line).
+fn three_entrance_cave(with_fixes: bool) -> Cave {
+    let mut s = Survey::new("Three entrances");
+    let main = s.named("Main", "#3366ff", shots(4, 90.0));
+    let side = s.branch(meta("Side", "#3366ff"), (main, 2), shots(3, 0.0));
+    let lp = s.branch(meta("Loop", "#3366ff"), (main, 4), shots(4, 0.0));
+    s.datum((main, 0), gps(PLACEMENT));
     if with_fixes {
-        datum(&mut project, StationRef::new(1, 0), FIX_AT_LINE_START);
-        datum(&mut project, StationRef::new(2, 2), FIX_MID_LINE);
+        s.datum((side, 0), gps(FIX_AT_LINE_START));
+        s.datum((lp, 2), gps(FIX_MID_LINE));
+    }
+    let project = s.build();
+    if with_fixes {
         assert_eq!(
-            project.gps_fix_datums().len(),
+            gps_fixes(&project),
             2,
             "fixture rot: both later datums must be GPS fixes, or this proves nothing"
         );
     }
-    project
+    Cave {
+        project,
+        main,
+        side,
+        lp,
+    }
 }
 
 fn export(project: &Project, profile: TmlProfile) -> (Vec<ExportShot>, usize) {
-    build_export_shots_with_report(project, profile, AzimuthExport::decide(project))
+    let decision = AzimuthExport::decide_from(
+        project
+            .lines()
+            .iter()
+            .filter(|line| !line.shots.is_empty())
+            .map(|line| project.azimuth_reference_for(line)),
+    );
+    build_rows(project, profile, decision)
 }
 
-fn uuid_of(project: &Project, line: usize, shot: usize) -> Option<String> {
-    project.lines[line].shots[shot].uuid.clone()
+fn uuid_of(project: &Project, line: LineId, shot: usize) -> Option<String> {
+    project.line(line).map(|l| l.shots[shot].uuid.clone())
 }
 
 fn start_at(shots: &[ExportShot], (lat, lon): (f64, f64)) -> Vec<&ExportShot> {
@@ -106,8 +124,8 @@ fn fix_shape(shots: &[ExportShot], gps: (f64, f64)) -> (&ExportShot, &ExportShot
 
 #[test]
 fn every_datum_gets_a_start_carrying_its_own_gps() {
-    let project = three_entrance_cave(true);
-    let (shots, unwritten) = export(&project, TmlProfile::User);
+    let cave = three_entrance_cave(true);
+    let (shots, unwritten) = export(&cave.project, TmlProfile::User);
 
     assert_eq!(unwritten, 0, "every datum is written");
     for gps in [PLACEMENT, FIX_AT_LINE_START, FIX_MID_LINE] {
@@ -125,15 +143,15 @@ fn every_datum_gets_a_start_carrying_its_own_gps() {
 
 #[test]
 fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
-    let project = three_entrance_cave(true);
-    let (shots, _) = export(&project, TmlProfile::User);
+    let cave = three_entrance_cave(true);
+    let (shots, _) = export(&cave.project, TmlProfile::User);
 
-    // S0 is merged onto M2, so its node is the Main row that ends at M2.
+    // S0 is the junction M2, so its node is the Main row that ends at M2.
     let (start, tie, row) = fix_shape(&shots, FIX_AT_LINE_START);
-    assert_eq!(row.uuid, uuid_of(&project, 0, 1));
+    assert_eq!(row.uuid, uuid_of(&cave.project, cave.main, 1));
     // L2 is the end of Loop's second shot.
     let (mid_start, mid_tie, mid_row) = fix_shape(&shots, FIX_MID_LINE);
-    assert_eq!(mid_row.uuid, uuid_of(&project, 2, 1));
+    assert_eq!(mid_row.uuid, uuid_of(&cave.project, cave.lp, 1));
 
     for (start, tie, row) in [(start, tie, row), (mid_start, mid_tie, mid_row)] {
         assert_eq!(row.shot_type, "REAL");
@@ -156,73 +174,97 @@ fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
     }
 }
 
-/// A (placement on A0, a GPS fix on A1), then an empty line E bridging a
-/// merge from A1 to B0. E has no row, so B's first shot is left parentless: an
-/// orphan root the builder produces on its own, with no project closure.
-fn orphaned_cave_with_a_fix() -> Project {
-    let mut project = Project::new("Orphan".to_string(), None);
-    for (name, count) in [("A", 2), ("E", 0), ("B", 2)] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(count, 90.0),
-            ..Default::default()
-        });
-    }
-    merge(&mut project, StationRef::new(0, 1), StationRef::new(1, 0));
-    merge(&mut project, StationRef::new(1, 0), StationRef::new(2, 0));
-    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
-    datum(&mut project, StationRef::new(0, 1), FIX_MID_LINE);
-    assert_eq!(
-        project.gps_fix_datums().len(),
-        1,
-        "fixture rot: A1 is a fix"
+/// 0.6.0's orphan shape - A, then a shot-less line E bridging a merge from A1
+/// to B0, so E had no row and B's first shot was left parentless - cannot
+/// happen on the station graph: E, A and B meet at one station, and B hangs
+/// off A's row for it. The fix on A1 is written.
+#[test]
+fn a_shotless_line_at_a_junction_leaves_no_orphan_and_the_fix_is_written() {
+    let mut s = Survey::new("Bridged");
+    let a = s.named("A", "#3366ff", shots(2, 90.0));
+    s.branch(meta("E", "#3366ff"), (a, 1), Vec::new());
+    s.branch(meta("B", "#3366ff"), (a, 1), shots(2, 90.0));
+    s.datum((a, 0), gps(PLACEMENT));
+    s.datum((a, 1), gps(FIX_MID_LINE));
+    let project = s.build();
+    assert_eq!(gps_fixes(&project), 1, "fixture rot: A1 is a fix");
+
+    let (shots, unwritten) = export(&project, TmlProfile::User);
+    assert!(
+        !shots.iter().any(is_orphan_root),
+        "B hangs off the junction"
     );
-    assert!(project.loop_closures.is_empty());
-    project
+    assert_eq!(unwritten, 0);
+    fix_shape(&shots, FIX_MID_LINE);
+    let dir = tempfile::TempDir::new().unwrap();
+    assert!(export_tml(&project, &dir.path().join("cave.tml"))
+        .unwrap()
+        .is_empty());
+}
+
+/// A survey row: `id`, hanging off `from_id`, 50 m on 90 degrees at depth 0.
+fn plain_row(id: i64, from_id: i64) -> ExportShot {
+    let mut row = start_shot(
+        id,
+        "A".to_string(),
+        0.0,
+        None,
+        None,
+        "0x3366ffff".to_string(),
+    );
+    if from_id != -1 {
+        row.shot_type = "REAL";
+        row.from_id = from_id;
+        row.length = 50.0;
+        row.azimuth = 90.0;
+        row.locked = false;
+        row.comment = None;
+    }
+    row
 }
 
 #[test]
 fn an_orphan_with_a_fix_and_no_closures_still_exports() {
     // Ariane blanks its map for an orphan root alongside ANY CLOSURE row, and
     // a fix's tie is one. So the fix is left out and counted, rather than the
-    // export failing over "closures" the user never made.
-    let project = orphaned_cave_with_a_fix();
-    let (shots, unwritten) = export(&project, TmlProfile::User);
+    // export failing over "closures" the user never made. The station-graph
+    // walk produces no orphan (see above), so the rows are built by hand: A's
+    // START (0), A1 (1), and a parentless B (3, 4).
+    let mut rows = vec![
+        plain_row(0, -1),
+        plain_row(1, 0),
+        plain_row(3, -1),
+        plain_row(4, 3),
+    ];
+    rows[2].shot_type = "REAL";
+    rows[2].locked = false;
     assert!(
-        shots.iter().any(is_orphan_root),
-        "fixture rot: the builder must leave B orphaned, or this proves nothing"
+        rows.iter().any(is_orphan_root),
+        "fixture rot: B is orphaned"
     );
-    assert!(shots.iter().all(|s| s.shot_type != "CLOSURE"));
-    assert!(start_at(&shots, FIX_MID_LINE).is_empty());
-    assert_eq!(unwritten, 1, "the left-out fix is reported");
+    let nodes = DatumNodes {
+        gps: vec![gps(PLACEMENT), gps(FIX_MID_LINE)],
+        nodes: vec![Some(0), Some(1)],
+        frame: Some(0),
+        frame_xy: Some((0.0, 0.0)),
+    };
+    let stamped = stamp_starts_at(nodes, |_| Some((0.0, 0.0)), &mut rows, TmlProfile::User);
+    let unwritten = stamped.append_fix_starts(&mut rows, 10);
 
-    let dir = tempfile::TempDir::new().unwrap();
-    let exported = export_tml(&project, &dir.path().join("cave.tml"));
+    assert!(rows.iter().all(|s| s.shot_type != "CLOSURE"));
+    assert!(start_at(&rows, FIX_MID_LINE).is_empty());
+    assert_eq!(unwritten, 1, "the left-out fix is reported");
     assert!(
-        exported.is_ok(),
-        "an orphan with no closure must still export, as it did before fixes: {exported:?}"
+        ensure_rooted_chain(&rows, TmlProfile::User).is_ok(),
+        "an orphan with no closure must still export, as it did before fixes"
     );
-    assert!(exported
-        .unwrap()
-        .iter()
-        .any(|n| n == "gps-anchors-not-written"));
 
     // A real closure still takes the refusal, and it names the user's closures.
-    let mut closed = project;
-    closed.loop_closures.push(crate::models::LoopClosure {
-        id: 1,
-        station_a: StationRef::new(2, 2).into(),
-        station_b: StationRef::new(0, 2).into(),
-        path_length: 100.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: crate::models::ClosureStrategy::Batch,
-        is_aligned: false,
-    });
-    let refused = export_tml(&closed, &dir.path().join("closed.tml"));
+    let mut closure = plain_row(20, 4);
+    closure.shot_type = "CLOSURE";
+    closure.closure_to_id = 1;
+    rows.push(closure);
+    let refused = ensure_rooted_chain(&rows, TmlProfile::User);
     assert!(refused.unwrap_err().to_string().contains("loop closures"));
 }
 
@@ -233,11 +275,11 @@ fn a_fix_start_sits_at_its_rows_repaired_depth() {
     // survey says. The fix rows are appended AFTER the repair, so the START
     // takes the written depth; appended before it, the START would keep the
     // survey's depth and the zero-length tie would measure a 4 m drop.
-    let project = three_entrance_cave(true);
-    let surveyed = project.lines[2].shots[1].depth_out;
-    let (shots, _) = export(&project, TmlProfile::User);
+    let cave = three_entrance_cave(true);
+    let surveyed = cave.project.line(cave.lp).unwrap().shots[1].depth_out;
+    let (shots, _) = export(&cave.project, TmlProfile::User);
     let (start, tie, row) = fix_shape(&shots, FIX_MID_LINE);
-    assert_eq!(row.uuid, uuid_of(&project, 2, 1));
+    assert_eq!(row.uuid, uuid_of(&cave.project, cave.lp, 1));
     assert_eq!(
         (surveyed, row.depth),
         (2.0, 6.0),
@@ -252,8 +294,8 @@ fn a_fix_start_sits_at_its_rows_repaired_depth() {
 
 #[test]
 fn the_sidecar_leaves_the_fixes_out_and_counts_them() {
-    let project = three_entrance_cave(true);
-    let (shots, unwritten) = export(&project, TmlProfile::SpeleoDbSidecar);
+    let cave = three_entrance_cave(true);
+    let (shots, unwritten) = export(&cave.project, TmlProfile::SpeleoDbSidecar);
     assert_eq!(shots.iter().filter(|s| s.shot_type == "START").count(), 1);
     assert!(shots.iter().all(|s| s.shot_type != "CLOSURE"));
     assert_eq!(unwritten, 2);
@@ -261,12 +303,17 @@ fn the_sidecar_leaves_the_fixes_out_and_counts_them() {
 
 #[test]
 fn two_datums_on_one_station_still_count_one_as_unwritten() {
-    // M2 and S0 are one Ariane node: two GPS positions for one point is a
-    // conflict the file cannot carry, so the later datum is reported, not
-    // written as a START pinned somewhere the survey disagrees with.
-    let mut project = three_entrance_cave(true);
-    datum(&mut project, StationRef::new(0, 2), (20.1, -87.1));
-    let (shots, unwritten) = export(&project, TmlProfile::User);
+    // M2 is S0: two GPS positions for one point is a conflict the file
+    // cannot carry, so the later datum is reported, not written as a START
+    // pinned somewhere the survey disagrees with.
+    let mut cave = three_entrance_cave(true);
+    let m2 = station(&cave.project, cave.main, 2);
+    cave.project.datums.push(ZeroDatum {
+        via: Some(cave.main),
+        ..ZeroDatum::new(m2, gps((20.1, -87.1)))
+    });
+    assert!(cave.project.validate().is_empty());
+    let (shots, unwritten) = export(&cave.project, TmlProfile::User);
     assert_eq!(unwritten, 1);
     assert!(start_at(&shots, (20.1, -87.1)).is_empty());
     assert_eq!(start_at(&shots, FIX_AT_LINE_START).len(), 1);
@@ -295,8 +342,8 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
         ((lines, closures.len()), warnings)
     };
 
-    let (with_fixes, fix_warnings) = read_back(&three_entrance_cave(true));
-    let (without, plain_warnings) = read_back(&three_entrance_cave(false));
+    let (with_fixes, fix_warnings) = read_back(&three_entrance_cave(true).project);
+    let (without, plain_warnings) = read_back(&three_entrance_cave(false).project);
     assert_eq!(
         with_fixes, without,
         "the fix rows add no station and no leg"
@@ -327,9 +374,8 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
 
 /// Where `start` is, in local metres from the placement datum's GPS.
 fn local_of(start: &ExportShot) -> (f64, f64) {
-    let origin = GpsCoordinates::new(PLACEMENT.0, PLACEMENT.1, 0.0).unwrap();
     let at = GpsCoordinates::new(start.latitude, start.longitude, 0.0).unwrap();
-    crate::models::gps_to_local(&at, &origin)
+    crate::models::gps_to_local(&at, &gps(PLACEMENT))
 }
 
 fn start_of<'a>(shots: &'a [ExportShot], line: &str) -> &'a ExportShot {
@@ -339,36 +385,29 @@ fn start_of<'a>(shots: &'a [ExportShot], line: &str) -> &'a ExportShot {
         .unwrap()
 }
 
+/// Main (with the placement datum on M0) and a separate Detached piece,
+/// each two shots east; Detached's start is placed at `detached_at`.
+fn main_and_detached(detached_at: (f64, f64)) -> (Survey, LineId, LineId) {
+    let mut s = Survey::new("Datumless entrance");
+    let main = s.named("Main", "#3366ff", shots(2, 90.0));
+    let detached = s.named("Detached", "#3366ff", shots(2, 90.0));
+    let start = s.station(detached, 0);
+    s.project
+        .set_placement(start, detached_at.0, detached_at.1)
+        .unwrap();
+    s.datum((main, 0), gps(PLACEMENT));
+    (s, main, detached)
+}
+
 #[test]
 fn a_datumless_entrance_start_sits_where_the_survey_puts_it() {
     // Two STARTs with the same lat/lon are pinned onto one point, and Ariane
     // collapses any loop between them. A datum-less entrance used to repeat
-    // the frame datum's coordinates, so a loop back to the frame's entrance
-    // collapsed onto it.
-    use crate::models::{ClosureStrategy, LoopClosure};
-    let mut project = Project::new("Datumless entrance".to_string(), None);
-    for name in ["Main", "Detached"] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(2, 90.0),
-            ..Default::default()
-        });
-    }
-    project.line_offsets.insert(1, (100.0, 50.0));
-    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
-    project.loop_closures.push(LoopClosure {
-        id: 1,
-        station_a: StationRef::new(1, 2).into(),
-        station_b: StationRef::new(0, 2).into(),
-        path_length: 100.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::Batch,
-        is_aligned: false,
-    });
+    // the frame datum's coordinates. (A closure back from a datum-less piece,
+    // the shape 0.6.0 pinned this with, is refused on the station graph:
+    // closures across pieces join datum-held pieces only.)
+    let (s, _, _) = main_and_detached((100.0, 50.0));
+    let project = s.build();
 
     for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
         let (shots, unwritten) = export(&project, profile);
@@ -384,58 +423,30 @@ fn a_datumless_entrance_start_sits_where_the_survey_puts_it() {
 }
 
 #[test]
-fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
-    // A carries the datum, B is merged in, a closure ties B back to A, then B
-    // is unmerged. The model's unmerge removes only the closures of the
-    // unmerged pair, so B leaves as a datum-less piece with a loop back to A's
-    // entrance. The app would turn that lone closure into a merge after the
-    // command (`convert_orphan_closures_to_merges`), so this shape comes only
-    // from a project built outside it; what the app reaches is the separate
-    // piece without the closure, which must not land on A's entrance either.
-    use crate::models::ClosureStrategy;
-    let mut project = Project::new("Unmerged".to_string(), None);
-    for (name, azimuth) in [("A", 90.0), ("B", 0.0)] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(2, azimuth),
-            ..Default::default()
-        });
-    }
-    let (a2, b0) = (StationRef::new(0, 2), StationRef::new(1, 0));
-    project.merge_stations(a2, b0).unwrap();
-    // Through the mutator, so the survey is laid out against the datum: A0 on
-    // local (0, 0), which IS the datum's GPS.
-    project
-        .set_zero_datum(
-            StationRef::new(0, 0),
-            GpsCoordinates::new(PLACEMENT.0, PLACEMENT.1, 0.0).unwrap(),
-        )
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(1, 2),
-            StationRef::new(0, 1),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
+fn a_detached_piece_keeps_its_own_start_position() {
+    // A carries the datum and B starts on A's last station; then B is
+    // detached from that junction. B leaves as a datum-less piece where it
+    // was surveyed (placed there, nothing moves), and its START must not
+    // land on A's entrance. (0.6.0 also pinned a closure back from B to A
+    // here; on the station graph the detach's sweep promotes such a closure
+    // to a junction, so B would not be separate.)
+    let mut s = Survey::new("Unmerged");
+    let a = s.named("A", "#3366ff", shots(2, 90.0));
+    let b = s.branch(meta("B", "#3366ff"), (a, 2), shots(2, 0.0));
+    s.datum((a, 0), gps(PLACEMENT));
+    let mut project = s.build();
+    let junction = station(&project, a, 2);
+    project.detach_line(junction, b).unwrap();
+    assert!(project.validate().is_empty());
+    let b0 = station(&project, b, 0);
+    assert_ne!(b0, junction, "fixture rot: the detach must happen");
+    let surveyed = project.raw_positions().xy(b0).unwrap();
     assert!(
-        project.unmerge_stations(a2, b0).0,
-        "fixture rot: the unmerge must happen"
-    );
-    assert_eq!(
-        project.loop_closures.len(),
-        1,
-        "fixture rot: the closure B->A survives"
-    );
-    let surveyed = project.compute_station_raw_coords(b0).unwrap();
-    assert!(
-        surveyed.x.hypot(surveyed.y) > 1.0,
+        surveyed[0].hypot(surveyed[1]) > 1.0,
         "fixture rot: B must not sit on A's entrance, or nothing can collapse"
     );
 
     let (shots, _) = export(&project, TmlProfile::User);
-    assert!(shots.iter().any(|s| s.shot_type == "CLOSURE"));
     let a = start_of(&shots, "A");
     let b = start_of(&shots, "B");
     assert!(
@@ -444,26 +455,30 @@ fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
     );
     let (east, north) = local_of(b);
     assert!(
-        (east - surveyed.x).abs() < 1e-3 && (north - surveyed.y).abs() < 1e-3,
+        (east - surveyed[0]).abs() < 1e-3 && (north - surveyed[1]).abs() < 1e-3,
         "B's START differs from A's by B's surveyed offset: got {east},{north}, \
          surveyed {},{}",
-        surveyed.x,
-        surveyed.y
+        surveyed[0],
+        surveyed[1]
     );
 }
 
-/// A datum built the way persistence loads one: no `GpsCoordinates::new`
-/// validation, so any f64 can arrive.
-fn raw_datum(project: &mut Project, sr: StationRef, latitude: f64, longitude: f64) {
-    project.zero_datums.push(ZeroDatum {
-        station_ref: sr.into(),
-        gps: GpsCoordinates {
-            latitude,
-            longitude,
-            depth_reference: 0.0,
-        },
-        accuracy_m: None,
-        entrance: None,
+/// A datum as a decoded file can hold one: `validate` checks only that the
+/// numbers are finite, so a GPS off the globe arrives as it was written.
+/// Pushed after the build, so a non-finite one (no file can hold it) still
+/// shows the export stays total.
+fn raw_datum(project: &mut Project, line: LineId, index: u32, latitude: f64, longitude: f64) {
+    let at = station(project, line, index);
+    project.datums.push(ZeroDatum {
+        via: Some(line),
+        ..ZeroDatum::new(
+            at,
+            GpsCoordinates {
+                latitude,
+                longitude,
+                depth_reference: 0.0,
+            },
+        )
     });
 }
 
@@ -476,18 +491,18 @@ fn starts_are_on_the_globe(shots: &[ExportShot]) -> bool {
 
 #[test]
 fn a_fix_gps_off_the_globe_is_unwritten() {
-    let mut project = three_entrance_cave(false);
-    raw_datum(&mut project, StationRef::new(2, 2), f64::INFINITY, -87.0);
-    raw_datum(&mut project, StationRef::new(2, 1), 500.0, -87.0);
-    raw_datum(&mut project, StationRef::new(1, 2), 20.0, 1e300);
+    let mut cave = three_entrance_cave(false);
+    raw_datum(&mut cave.project, cave.lp, 2, f64::INFINITY, -87.0);
+    raw_datum(&mut cave.project, cave.lp, 1, 500.0, -87.0);
+    raw_datum(&mut cave.project, cave.side, 2, 20.0, 1e300);
     assert_eq!(
-        project.gps_fix_datums().len(),
+        gps_fixes(&cave.project),
         3,
         "fixture rot: all three must be GPS fixes, or this proves nothing"
     );
 
     for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
-        let (shots, unwritten) = export(&project, profile);
+        let (shots, unwritten) = export(&cave.project, profile);
         assert_eq!(unwritten, 3, "{profile:?}: every bad fix is counted");
         assert_eq!(
             shots.iter().filter(|s| s.shot_type == "START").count(),
@@ -501,18 +516,23 @@ fn a_fix_gps_off_the_globe_is_unwritten() {
 
 #[test]
 fn an_entrance_datum_off_the_globe_is_unwritten_and_its_start_is_surveyed() {
-    let mut project = Project::new("Bad entrance".to_string(), None);
-    for name in ["Main", "Detached"] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(2, 90.0),
-            ..Default::default()
-        });
-    }
-    project.line_offsets.insert(1, (100.0, 50.0));
-    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
-    raw_datum(&mut project, StationRef::new(1, 0), 500.0, -87.0);
+    // Detached is held by a datum whose GPS is off the globe, its correction
+    // keeping the piece where it was surveyed (100, 50) from the frame (the
+    // "measure, do not re-derive" rule).
+    let (s, _, detached) = main_and_detached((100.0, 50.0));
+    let mut project = s.build();
+    project.placements.clear();
+    raw_datum(&mut project, detached, 0, 500.0, -87.0);
+    let bad = project.datums.len() - 1;
+    let derived = project.datum_anchor_position(bad).unwrap();
+    project.datums[bad].correction = Some([100.0 - derived[0], 50.0 - derived[1]]);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    let start = station(&project, detached, 0);
+    let at = project.raw_positions().xy(start).unwrap();
+    assert!(
+        (at[0] - 100.0).abs() < 1e-6 && (at[1] - 50.0).abs() < 1e-6,
+        "fixture rot: Detached must sit at (100, 50), got {at:?}"
+    );
 
     for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
         let (shots, unwritten) = export(&project, profile);
@@ -528,22 +548,16 @@ fn an_entrance_datum_off_the_globe_is_unwritten_and_its_start_is_surveyed() {
 
 #[test]
 fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
-    // A legacy project need not keep the frame datum's station on raw (0, 0).
-    let mut project = Project::new("Offset frame".to_string(), None);
-    for name in ["Main", "Detached"] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            shots: shots(2, 90.0),
-            ..Default::default()
-        });
-    }
-    project.line_offsets.insert(0, (30.0, -20.0));
-    project.line_offsets.insert(1, (130.0, 30.0));
-    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+    // The frame datum's station need not sit on raw (0, 0): a correction
+    // (kept by a frame change or an Add .stalx) puts it elsewhere.
+    let (s, main, _) = main_and_detached((130.0, 30.0));
+    let mut project = s.build();
+    project.datums[0].correction = Some([30.0, -20.0]);
+    assert!(project.validate().is_empty());
+    let frame = station(&project, main, 0);
     assert_eq!(
-        project.compute_station_raw_xy(StationRef::new(0, 0)),
-        Some((30.0, -20.0)),
+        project.raw_positions().xy(frame),
+        Some([30.0, -20.0]),
         "fixture rot: the frame station must sit off the origin"
     );
 
@@ -559,37 +573,28 @@ fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
 /// back onto Main, and a GPS fix on Side's middle. Both CLOSURE rows hang off a
 /// mid-line row, so each re-imports as a branch line of its own.
 fn dated_cave_with_mid_line_closures() -> Project {
-    let date = chrono::NaiveDate::from_ymd_opt(2015, 6, 1).unwrap();
-    let mut project = Project::new("Dated".to_string(), None);
-    for (name, count, azimuth) in [("Main", 4, 90.0), ("Side", 3, 0.0)] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            color: "#3366ff".to_string(),
-            date: Some(date),
-            surveyor: Some("Ann".to_string()),
-            shots: shots(count, azimuth),
-            ..Default::default()
-        });
-    }
-    project
-        .merge_stations(StationRef::new(0, 4), StationRef::new(1, 0))
-        .unwrap();
-    let gps = |(lat, lon)| GpsCoordinates::new(lat, lon, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps(PLACEMENT))
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(1, 2),
-            StationRef::new(0, 2),
-            crate::models::ClosureStrategy::Batch,
-        )
-        .unwrap();
-    project
-        .set_zero_datum(StationRef::new(1, 1), gps(FIX_MID_LINE))
-        .unwrap();
+    let date = chrono::NaiveDate::from_ymd_opt(2015, 6, 1);
+    let credit = crate::models::SurveyCredit::from_legacy(Some("Ann"), date)
+        .stored()
+        .map(std::sync::Arc::new);
+    let dated = |count, azimuth| -> Vec<ShotData> {
+        shots(count, azimuth)
+            .into_iter()
+            .map(|shot| ShotData {
+                credit: credit.clone(),
+                ..shot
+            })
+            .collect()
+    };
+    let mut s = Survey::new("Dated");
+    let main = s.named("Main", "#3366ff", dated(4, 90.0));
+    let side = s.branch(meta("Side", "#3366ff"), (main, 4), dated(3, 0.0));
+    s.datum((main, 0), gps(PLACEMENT));
+    s.closure((side, 2), (main, 2), ClosureStrategy::Batch);
+    s.datum((side, 1), gps(FIX_MID_LINE));
+    let project = s.build();
     assert_eq!(
-        project.gps_fix_datums().len(),
+        gps_fixes(&project),
         1,
         "fixture rot: the datum on Side must be a GPS fix"
     );
@@ -657,17 +662,21 @@ fn a_mid_line_closure_does_not_move_the_reimport_declination_epoch() {
 fn a_frame_gps_off_the_globe_leaves_the_fixes_out() {
     // The frame's entrance stays at 0,0. A fix START at its real GPS, tied into
     // the same survey, would have Ariane bend it across the globe.
-    let mut project = three_entrance_cave(false);
-    project.zero_datums[0].gps.latitude = 95.0;
-    datum(&mut project, StationRef::new(2, 2), FIX_MID_LINE);
+    let mut cave = three_entrance_cave(false);
+    cave.project.datums[0].gps.latitude = 95.0;
+    let l2 = station(&cave.project, cave.lp, 2);
+    cave.project.datums.push(ZeroDatum {
+        via: Some(cave.lp),
+        ..ZeroDatum::new(l2, gps(FIX_MID_LINE))
+    });
     assert_eq!(
-        project.gps_fix_datums().len(),
+        gps_fixes(&cave.project),
         1,
         "fixture rot: the datum on L2 must be a GPS fix"
     );
 
     for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
-        let (shots, unwritten) = export(&project, profile);
+        let (shots, unwritten) = export(&cave.project, profile);
         assert_eq!(unwritten, 2, "{profile:?}: the frame and the fix");
         assert!(
             shots.iter().all(|s| s.shot_type != "CLOSURE"),

@@ -1,5 +1,5 @@
 //! CSV and JSON on the station-graph model: one row (record) per shot, in line
-//! order then shot order, exactly the legacy layouts (`super::super::csv`,
+//! order then shot order, exactly 0.6.0's layouts (`super::super::csv`,
 //! `super::super::json`), with each shot's two stations read through the
 //! chain. A junction is one station, so every line through it names it with
 //! the same name and Station ID.
@@ -102,7 +102,7 @@ pub fn write_json(
     Ok(())
 }
 
-/// The JSON records of the project (the legacy [`JsonExport`] layout).
+/// The JSON records of the project (0.6.0's [`JsonExport`] layout).
 pub fn json_export(project: &Project, exported_at: DateTime<Utc>) -> JsonExport {
     JsonExport {
         project: JsonProjectMeta {
