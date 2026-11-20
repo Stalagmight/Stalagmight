@@ -196,6 +196,15 @@ impl FileState {
             self.extras.local.speleodb = LocalSync::default();
             return;
         };
+        let same_project =
+            self.extras.speleodb.as_ref().is_some_and(|old| {
+                old.endpoint == link.endpoint && old.project_id == link.project_id
+            });
+        if !same_project {
+            // A newer build's sync keys describe the link they were kept
+            // with, never another project's.
+            self.extras.local.speleodb.preserved.clear();
+        }
         self.extras.speleodb = Some(SpeleoDbLink {
             endpoint: link.endpoint.clone(),
             project_id: link.project_id.clone(),

@@ -144,15 +144,15 @@ impl<'a, 'w> Fields<'a, 'w> {
         self.pairs.into_iter().flatten().collect()
     }
 
-    /// Note every member not taken as unknown structural content (tier 1),
-    /// counted against the preserved-content cap.
-    pub(super) fn unknown_to(self, ctx: &mut Ctx<'_>) -> Result<(), DecodeError> {
+    /// Note every member not taken as unknown structural content (tier 1).
+    /// Not held, so not counted against the preserved-content cap (review
+    /// finding C-file-format-1): the object itself is bounded by
+    /// [`MAX_SMALL_MEMBERS`] when it is split.
+    pub(super) fn unknown_to(self, ctx: &mut Ctx<'_>) {
         let at = self.at.clone();
         for (key, _) in self.rest() {
-            ctx.count_typed(Limit::Preserved, 1)?;
             ctx.unknown(|_| format!("{at} key {key:?}"));
         }
-        Ok(())
     }
 }
 
@@ -308,7 +308,7 @@ pub(super) fn read_counters(
         section: fields.opt("section")?,
     };
     // Their id-space bounds are `validate`'s (`CounterOutOfRange`).
-    fields.unknown_to(ctx)?;
+    fields.unknown_to(ctx);
     Ok(counters)
 }
 
@@ -330,13 +330,19 @@ pub(super) fn read_speleodb(
     Ok((link, preserved))
 }
 
-/// The lenient `local` member (tier 3): what cannot be read is dropped with a
-/// note and a log line, never refused.
+/// The lenient `local` member (tier 3): an unreadable value of a known key is
+/// dropped with a note and a log line, never refused. An unknown key (a newer
+/// build's per-machine state) is kept verbatim (`LocalState::preserved`,
+/// `LocalSync::preserved`), at most `limits.preserved` of them; past that, or
+/// nested too deeply, it is dropped like an unreadable value.
 pub(super) fn read_local(raw: &RawValue, limits: &CountLimits) -> (LocalState, Vec<DecodeNote>) {
     let mut notes = Vec::new();
     let mut drop = |what: String| {
         tracing::info!(what = %what, "Dropped unreadable per-machine state from a .stalx file");
         notes.push(DecodeNote::LocalDropped { what });
+    };
+    let mut keep = Keep {
+        left: limits.preserved,
     };
     let mut local = LocalState::default();
     let Ok(pairs) = members(raw.get(), MAX_SMALL_MEMBERS) else {
@@ -358,14 +364,35 @@ pub(super) fn read_local(raw: &RawValue, limits: &CountLimits) -> (LocalState, V
                 }
                 Err(_) => drop("the display settings".to_string()),
             },
-            "speleodb" => local.speleodb = read_local_sync(value, &mut drop),
-            other => drop(format!("local key {other:?}")),
+            "speleodb" => local.speleodb = read_local_sync(value, &mut keep, &mut drop),
+            other => match keep.take(value) {
+                Some(kept) => local.preserved.push((other.to_string(), kept)),
+                None => drop(format!("local key {other:?}")),
+            },
         }
     }
     (local, notes)
 }
 
-fn read_local_sync(raw: &RawValue, drop: &mut impl FnMut(String)) -> LocalSync {
+/// The budget of unknown `local` keys kept verbatim.
+struct Keep {
+    left: usize,
+}
+
+impl Keep {
+    /// The canonical copy of `value`, or `None` when the budget is spent or
+    /// the value is nested too deeply.
+    fn take(&mut self, value: &RawValue) -> Option<RawJson> {
+        if self.left == 0 {
+            return None;
+        }
+        let text = canonical_checked(value.get()).ok()?;
+        self.left -= 1;
+        Some(RawJson::from_canonical(text))
+    }
+}
+
+fn read_local_sync(raw: &RawValue, keep: &mut Keep, drop: &mut impl FnMut(String)) -> LocalSync {
     let mut sync = LocalSync::default();
     let Ok(pairs) = members(raw.get(), MAX_SMALL_MEMBERS) else {
         drop("local.speleodb (not an object)".to_string());
@@ -392,7 +419,10 @@ fn read_local_sync(raw: &RawValue, drop: &mut impl FnMut(String)) -> LocalSync {
             "inherited_through" => time_value(text)
                 .map(|v| sync.inherited_through = Some(v))
                 .is_some(),
-            _ => false,
+            other => keep
+                .take(value)
+                .map(|kept| sync.preserved.push((other.to_string(), kept)))
+                .is_some(),
         };
         if !ok {
             drop(format!("local.speleodb key {key:?}"));
@@ -523,7 +553,7 @@ pub(super) fn read_section(
         name: f.req("name")?,
         color: f.req("color")?,
     };
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     Ok(section)
 }
 
@@ -546,7 +576,7 @@ pub(super) fn read_datum(
         entrance: f.opt("entrance")?,
         correction: f.opt("correction")?,
     };
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     Ok(datum)
 }
 
@@ -562,7 +592,7 @@ pub(super) fn read_placement(
         x: f.req("x")?,
         y: f.req("y")?,
     };
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     Ok(placement)
 }
 
@@ -589,7 +619,7 @@ pub(super) fn read_closure(
             ClosureStrategy::Batch
         }),
     };
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     Ok(LoopClosure {
         id,
         a,
@@ -613,7 +643,7 @@ pub(super) fn read_ignore(
         at: f.req_time("at")?,
         comment: f.opt("comment")?,
     };
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     Ok(warning)
 }
 
@@ -629,7 +659,7 @@ pub(super) fn read_imports(
             *list = read_strings(value, "imports", Limit::ImportHashes, ctx, whole)?;
         }
     }
-    f.unknown_to(ctx)?;
+    f.unknown_to(ctx);
     let [files, lines] = lists;
     Ok((files, lines))
 }

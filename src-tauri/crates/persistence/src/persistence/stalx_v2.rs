@@ -139,6 +139,13 @@ mod format_v2_limits_tests;
 
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_forward_tests;
+
+#[cfg(test)]
+#[expect(
     clippy::panic,
     clippy::print_stderr,
     reason = "fuzz test: a failing seed prints its replay line, a sweep its verdicts"

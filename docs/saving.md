@@ -254,7 +254,9 @@ undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
 `useEditingBlocked` reports it as a project-level block, a refused save is
 worded for it, and autosave pauses. The
 local-only durable saves still work on it and copy the survey members byte for
-byte.
+byte; the keys of `local` a newer build wrote and this one does not know are
+written back as read, so a display toggle never erases that build's
+per-machine or sync state.
 
 ## Upgrading a legacy file
 

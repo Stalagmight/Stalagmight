@@ -253,7 +253,9 @@ Present when the project is a SpeleoDB-managed copy. It rides every upload.
 ### 5.6 `local`
 
 Per-machine state. Never in an upload, never in a detached copy, and lenient:
-a reader drops what it does not understand.
+a reader drops a value of a known key it cannot read, and keeps a key it does
+not know (another build's per-machine or sync state, at `local` or inside
+`local.speleodb`) verbatim, written back after the known keys.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -482,11 +484,15 @@ reader does depends on where they are:
 2. **Header objects** (`project`, `settings`, `settings.validation`,
    `speleodb`, `summary`) and unknown top-level members: kept verbatim and
    written back after the known keys, in their original order.
-3. **`local` and `history`**: unknown or unreadable keys of `local` are
-   dropped; a `history` this build cannot read is not loaded (the project
-   opens with nothing to undo) but stays in the file until a save of an edit
-   writes the new history: a local-only rewrite copies it byte for byte. The
-   project always opens.
+3. **`local` and `history`**: a value of a known `local` key that cannot
+   be read is dropped; an unknown key of `local` or `local.speleodb` is kept
+   verbatim and written back after the known keys, by a save and by a
+   local-only rewrite, so a newer build's per-machine and sync state survives
+   an older build's display toggle (a detached copy and an upload carry no
+   per-machine state, so neither has them). A `history` this build cannot
+   read is not loaded (the project opens with nothing to undo) but stays in
+   the file until a save of an edit writes the new history: a local-only
+   rewrite copies it byte for byte. The project always opens.
 
 Arrays have a fixed number of positions; a row with extra positions is an
 error, not unknown content. New fields go in the objects.
@@ -643,8 +649,12 @@ Stalagmight refuses, while it reads (before holding them in memory), files
 over 256 MiB and files holding more than 2,100,000 stations or aliases or
 hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
 ignored warnings, import hashes or credited people, 50,000 closures, 10,000
-unknown keys and members (and `requires` names) in all, or an object with
-more than 10,100 members. The id and per-line bounds of section 6 (rule 1 and
+preserved unknown keys and members (tier 2, section 7, and `requires` names)
+in all, or an object with more than 10,100 members (known and unknown keys
+together). Unknown keys of survey records (tier 1) are not held, so they count
+only against their object's 10,100: a newer writer that adds a key to every
+shot gives a file that opens read-only at any size. Up to 10,000 unknown
+`local` keys are kept; more are dropped (tier 3 never refuses). The id and per-line bounds of section 6 (rule 1 and
 rule 9) are validity rules: a file breaking them is refused after reading,
 with the repair offer, and is never written.
 Preserved unknown content nested deeper than 128 levels is refused. A history
@@ -684,9 +694,10 @@ For context; nothing here changes the format. The app's side is
   member byte for byte, even when the file is open read-only. When the
   history did not load (unreadable entries, a newer history format, a
   read-only file), the rewrite copies `history` byte for byte too, so a
-  display toggle never erases what another build can still undo. Renaming a
-  project from its Recent Projects card rewrites `project.name` and
-  `summary.name` the same way.
+  display toggle never erases what another build can still undo; unknown
+  keys of `local` are written back as read (section 7). Renaming a project
+  from its Recent Projects card rewrites `project.name` and `summary.name`
+  the same way.
 - **A legacy (SQLite) file** is converted in memory when opened; its first save
   writes version 2 over it. Before that write the original is made whole (a hot
   `-journal` an old build left is rolled back into it, a `-wal` checkpointed,

@@ -73,6 +73,11 @@ pub struct LocalSync {
     /// The inherited-history watermark: undo entries at or before this instant
     /// came with a pulled revision.
     pub inherited_through: Option<DateTime<Utc>>,
+    /// Keys of `local.speleodb` this build does not know (a newer build's
+    /// sync state), kept verbatim in file order and written after the known
+    /// keys (review finding H-frontend-wire-2). Cleared with the rest of the
+    /// sync state when the link goes or changes project.
+    pub preserved: Vec<(String, RawJson)>,
 }
 
 impl LocalSync {
@@ -82,17 +87,24 @@ impl LocalSync {
     }
 }
 
-/// The `local` member: per-machine state. Lenient on read (tier 3).
+/// The `local` member: per-machine state. Lenient on read (tier 3): an
+/// unreadable value of a known key is dropped, an unknown key is kept.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalState {
     /// Display settings (view toggles), key to stored text.
     pub display: BTreeMap<String, String>,
     pub speleodb: LocalSync,
+    /// Keys of `local` this build does not know (a newer build's per-machine
+    /// state), kept verbatim in file order and written after the known keys,
+    /// so a local-only rewrite by this build never erases them (review
+    /// finding H-frontend-wire-2). Not in a detached copy, like
+    /// `local.speleodb`.
+    pub preserved: Vec<(String, RawJson)>,
 }
 
 impl LocalState {
     pub fn is_empty(&self) -> bool {
-        self.display.is_empty() && self.speleodb.is_empty()
+        self.display.is_empty() && self.speleodb.is_empty() && self.preserved.is_empty()
     }
 }
 

@@ -309,8 +309,10 @@ pub(super) fn write_local(out: &mut Vec<u8>, local: &LocalState) {
         if let Some(at) = sync.inherited_through {
             time(s.key("inherited_through"), at);
         }
+        s.preserved(&sync.preserved);
         s.close();
     }
+    o.preserved(&local.preserved);
     o.close();
     out.extend_from_slice(b",\n");
 }
