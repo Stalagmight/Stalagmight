@@ -1,8 +1,8 @@
 [package]
 name = "stalagmight-legacy"
-version = "0.0.0"
-description = "Frozen copy of the pre-station-graph Stalagmight model, SQLite reader and load pipeline: opens every old SQLite .stalx exactly as the 0.6.0 app did, for migration and as a test oracle."
-publish = false
+version = "0.1.0"
+description = "Frozen copy of the pre-station-graph Stalagmight model, SQLite reader and load pipeline: opens every old SQLite .stalx exactly as the 0.6.0 app did, for migration and as a test oracle. Internal to Stalagmight, published only so `stalagmight-persistence` and `stalx-reader` can depend on it; no semver promise - use stalx-reader."
+repository = "https://github.com/Stalagmight/Stalagmight"
 edition.workspace = true
 license.workspace = true
 

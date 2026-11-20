@@ -4,10 +4,9 @@
 //! an export.
 //!
 //! These tests pin the contract at each place identity could be dropped or
-//! forged: the shot commands and the delete/split recipes (run now), the
-//! undo, and the import funnel, the exporters and Merge Projects (other
-//! packages' doors: ported onto the station-graph API and `#[ignore]`d until
-//! those packages land; their reasons say which).
+//! forged: the shot commands, the delete/split recipes, the undo, the
+//! import funnel, the exporters and Merge Projects (all on the
+//! station-graph API; every case runs).
 //!
 //! What changed with the station graph: a cross-reference is a station id,
 //! not a `(line, anchor uuid)` key, so "the anchor still resolves" becomes
