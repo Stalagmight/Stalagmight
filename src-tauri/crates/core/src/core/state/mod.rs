@@ -246,7 +246,7 @@ mod merge_projects_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod meta_moves_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(sg_unported)]
 #[expect(
