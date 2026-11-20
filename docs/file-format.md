@@ -288,7 +288,7 @@ One row per station, in ascending id order:
 Extras keys: `comment` (string), `aliases` (ids merged into this station, each
 `[id]` or `[id, "name"]`, oldest first; an alias id is never a live station's
 id), `external` (string: the identity an importer gave the station, e.g. a
-Compass or Walls name; an attribute only).
+Compass or Walls station name or an Ariane station ID; an attribute only).
 
 ### 5.9 `lines`
 
@@ -438,7 +438,8 @@ Always `true`, always last.
 ## 6. What makes a survey valid
 
 Stalagmight refuses to open a file whose survey breaks these rules (and offers
-a repair into a copy), and never writes one:
+a repair that keeps the damaged file as a backup copy, section 12), and never
+writes one:
 
 1. Ids are unique: station ids, line ids, shot uuids (project-wide), closure
    ids, Section ids. Alias ids are not live station ids and appear once.

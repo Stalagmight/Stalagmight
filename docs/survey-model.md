@@ -396,7 +396,8 @@ canonical form, so `RawJson::parse` leaves it unchanged):
   SpeleoDB watermark cut).
 - `k`, `label`, `refs`, `preview` are the core's: the command kind (icon),
   the label resolved at record time, the stable ids it names (never session
-  ids or slots), and rows worded at record time for what the changeset
+  ids or slots; at most `MAX_LISTED_SHOTS`, 16, shot uuids, as many as a
+  preview lists), and rows worded at record time for what the changeset
   cannot say (a batch's sub-commands, an offset). The forward `Command` is
   never persisted.
 - `decode_entry` is for untrusted input: a byte limit, the version, a strict
@@ -658,7 +659,7 @@ The deviations each package made from the plan are in the plan's "Deviations
 - `name_conflicts(station)`, `conflicts_with_name(station, name)` (a rename
   check), `names_around(station)`: every line the station is on.
 - `uniquify_station_name(station)`: the letter-suffix rule
-  (`project::station_naming::name_with_free_letter`), free on all its lines.
+  (`crate::station_naming::name_with_free_letter`), free on all its lines.
 - `uniquify_line_names(line)`: first holder keeps a name, later ones get a
   suffix free on all their lines.
 - `is_shot_uuid_taken`, `shot_by_uuid`, `duplicate_shot_uuids`, `mint_shot_uuid`.
@@ -675,10 +676,10 @@ The deviations each package made from the plan are in the plan's "Deviations
 | `graph_tests.rs` | Roles, entrances, GPS gaps and far fixes against the legacy model (30 random legacy surveys). The penetration, distance-field and ruler comparisons were retired with `models::project`: the frozen crate has no such queries. |
 | `adjust_tests.rs` | The Computed View per slot within 1e-6 m of `compute_adjusted_stations` (150 random legacy surveys), skip set, failures, alignment, new-closure verdicts, misclosures, path length, spurs, gauge, determinism, scale. |
 | `adjust_floor_tests.rs` | The per-axis sigma floor (`ShotSigmas`, plan Deviations G9): its value, that no shot at least `sigma_len` long is floored (20,000 random shots keep 0.6.0's sigmas bit for bit), and that a zero-length connector on a grid axis keeps its two ends together in the Computed View. |
-| `gama_tests.rs` | The GNU Gama gold standard (`tests/fixtures/gama_golden.json`) on networks built directly on the new model. |
-| `derived_tests.rs` | Frozen shots, rigid groups, anchored lines, immovable stations, stats against the legacy model; derived views bit-identical under shuffled lines. |
-| `gas/tests.rs`, `gas/differential_tests.rs` | The 112 ported gas-engine tests and the old-vs-new differential run (36 surveys x 8 rigs x 5 argument sets). |
-| `edit/shots_tests.rs`, `lines_tests.rs`, `ranges_tests.rs`, `reverse_tests.rs`, `split_tests.rs`, `combine_tests.rs` | Each line and shot operation: names, uuids and ids, which side stays, refusals in today's words, junctions kept, datums / comments / closures leaving with a station, promotions, #737 removals, previews. The junction member rules (S13), the range shift's anchored walk and the `Tie`-group closure join are also checked against the same survey built with `models::project` (0.6.0). |
+| `gama_tests.rs` | The GNU Gama gold standard (`src-tauri/tests/fixtures/gama_golden.json`) on networks built directly on the new model. |
+| `derived_tests.rs` | Rigid groups, anchored lines and immovable stations against the legacy model; frozen shots on a hand-checked fixture; derived views bit-identical under shuffled lines. The frozen-shot and stats comparisons were retired with `models::project` (the frozen crate has no such queries); the K goldens dump both. |
+| `gas/tests.rs`, `gas/differential_tests.rs` | The 116 ported gas-engine tests (expectations set by the 0.6.0 engine, fixtures built with the frozen model), and determinism: 12 random surveys with their lines and closures reordered give bit-identical results for every rig. The old-vs-new differential run was retired with `models::project` (the frozen crate has no gas engine). |
+| `edit/shots_tests.rs`, `shots_closure_promotion_tests.rs`, `lines_tests.rs`, `ranges_tests.rs`, `reverse_tests.rs`, `split_tests.rs`, `combine_tests.rs` | Each line and shot operation: names, uuids and ids, which side stays, refusals in today's words, junctions kept, datums / comments / closures leaving with a station, promotions, #737 removals, previews. The junction member rules (S13), the range shift's anchored walk and the `Tie`-group closure join are also checked against the same survey built with the frozen 0.6.0 model (`stalagmight-legacy`). Delete Shot's closure decisions after an earlier promotion (#776) are `shots_closure_promotion_tests.rs`. |
 | `edit/combine_port_*_tests.rs` | The legacy combine tests ported (lines, closures, snaps, hand moves, residuals, realign, dedupe), each legacy test's fate in the module doc; two random-network sweeps (about 8,700 combines). |
 | `edit/edit_fuzz_tests.rs` | 32 seeds x 80 random operations: valid after every step, refusals change nothing, previews equal results, seeds replay bit for bit. |
 | `wire/ts_tests.rs`, `wire/wire_tests.rs` | The wire types generate today's TS files (less `line_offsets`); JSON keys as today's payloads; junction identity, derived merge pairs, closure references and chains, datum flags, `Tie` as aligned `Batch`, slot resolution, delete impact at a junction, line relationships, the envelope input; an ignored timing run on 78k slots. |
