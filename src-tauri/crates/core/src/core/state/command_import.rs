@@ -56,10 +56,20 @@ fn receipt_line_name(config: &crate::models::ImportLineConfig, idx: usize) -> St
     )
 }
 
+/// Why a command refused a line, as a receipt entry carries it. The reason
+/// names the line and its stations from the file's own text (`create_line`'s
+/// `Shot Main: 1 → 2 has zero length`), so it is file-controlled too and gets
+/// the same filter and bound as the line's name: no bidi override or control
+/// character reaches the receipt or the failure message built from it.
+fn receipt_reason(reason: &str) -> String {
+    crate::models::sanitize_display_text(reason, crate::core::command::MAX_FILE_NAME_LEN)
+}
+
 /// The receipt entry for a line that imported but whose placement failed.
 fn unplaced_problem(line_name: &str, what: &str, error: Option<String>) -> String {
     match error {
         Some(reason) if !reason.is_empty() => {
+            let reason = receipt_reason(&reason);
             format!("Line \"{line_name}\" was imported, but {what}: {reason}")
         }
         _ => format!("Line \"{line_name}\" was imported, but {what}"),
@@ -1010,7 +1020,7 @@ impl AppState {
                 // line, never the rest of the file (#814). `create_line`
                 // refuses before it adds anything, so there is nothing to undo:
                 // skip it, say so in the receipt, and import the others.
-                let reason = create_result.error.unwrap_or_default();
+                let reason = receipt_reason(&create_result.error.unwrap_or_default());
                 tracing::debug!(
                     line = idx,
                     %reason,

@@ -97,9 +97,11 @@ pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
 /// separate piece on purpose. A project with no zero datum at all gets none -
 /// every piece would float, and there is nothing to connect them to.
 ///
-/// The code keeps the spelling it was introduced with, from before the
-/// Section -> Line rename: an Ignore stores the code in the project file, so an
-/// Ignore made by a build that predates the rename still matches here.
+/// The code keeps master's spelling, from before the Section -> Line rename,
+/// because it is stored: an Ignore saves the code in the project file, so an
+/// Ignore made by a master build (and by a 0.5.x release cut from master)
+/// still matches here. The frontend's `WarningResolution` matches the same
+/// string, and `the_not_connected_code_keeps_masters_spelling` pins it.
 pub const LINE_NOT_CONNECTED: &str = "SECTION_NOT_CONNECTED";
 
 /// `CommandResult` warning code for a loop closure a delete-with-shift removed

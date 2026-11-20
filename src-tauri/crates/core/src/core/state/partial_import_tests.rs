@@ -526,3 +526,91 @@ fn the_unconnected_warning_sanitises_the_line_name() {
         message.chars().count()
     );
 }
+
+/// A refused line's reason names the line and its stations from the file's
+/// own text (`Shot <name>: 1 → 2 has zero length`), so its receipt entry, and
+/// the failure message an all-refused import builds from the entries, filter
+/// that text like the line's name: no bidi override reaches the dialog.
+#[test]
+fn a_refused_lines_reason_is_filtered_like_its_name() {
+    let hostile = "Bad\u{202e}name";
+
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            line(0, "Good", 5.0, ImportPlacement::Origin),
+            line(1, hostile, 0.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let entry = &problems(&result)[0];
+    assert!(entry.contains("has zero length"), "{entry:?}");
+    assert!(
+        !entry.contains('\u{202e}'),
+        "bidi override survived: {entry:?}"
+    );
+
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![line(0, hostile, 0.0, ImportPlacement::Origin)],
+        Vec::new(),
+    );
+    assert!(!result.success);
+    let error = result.error.unwrap_or_default();
+    assert!(error.starts_with("Nothing was imported"), "{error:?}");
+    assert!(
+        !error.contains('\u{202e}'),
+        "bidi override survived: {error:?}"
+    );
+}
+
+/// The unplaced-piece warning's code is stored with every Ignore, and master
+/// (0.5.x) builds store it as `SECTION_NOT_CONNECTED`, the spelling from before
+/// the Section -> Line rename; the frontend matches the same string. An Ignore
+/// stored under that literal code must still resolve the warning here.
+#[test]
+fn the_not_connected_code_keeps_masters_spelling() {
+    assert_eq!(crate::models::LINE_NOT_CONNECTED, "SECTION_NOT_CONNECTED");
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let state = new_state();
+    let result = import(
+        &state,
+        vec![
+            line(0, "Placed", 5.0, datum_at_origin()),
+            line(1, "Loose", 3.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("cave.stalx")),
+            })
+            .success
+    );
+    let warnings = not_connected(&state);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(!warnings[0].is_resolved);
+
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            line_id: warnings[0].line_id,
+            shot_id: warnings[0].shot_id,
+            warning_code: "SECTION_NOT_CONNECTED".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: warnings[0].shot_uuid.clone(),
+        })
+        .unwrap();
+    let warnings = not_connected(&state);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].is_resolved,
+        "an Ignore stored under the literal code resolves the warning"
+    );
+}
