@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use super::speleodb_cache::LocalEditsPolicy;
 use super::speleodb_cached::SpeleoCacheOwnership;
 use super::speleodb_local_state::{cache_path_in, TestCacheRoot};
+use super::stalx_v2_fixtures::{link_at, relink, seed_linked, seed_unlinked};
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 use crate::speleodb::{SpeleoDbAction, SpeleoReadOnlyOpen};
 
 const MINE: &str = "11111111-1111-1111-1111-111111111111";
@@ -30,21 +30,20 @@ const ME: &str = "diver@example.com";
 /// A cached copy of `id` under `root`, linked to `endpoint`.
 fn seed(root: &Path, id: &str, endpoint: &str, dirty: bool) -> PathBuf {
     let path = cache_path_in(root, id);
-    std::fs::create_dir_all(path.parent().expect("parent")).expect("cache dir");
-    let mut db = Database::open(&path).expect("open db");
-    db.save_project(&Project::new(format!("Cave {id}"), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: endpoint.to_owned(),
-        project_id: id.to_owned(),
-        project_name: format!("Remote {}", id.get(..4).unwrap_or(id)),
-        base_commit_sha: Some("abc1234".to_owned()),
-        has_unpushed_edits: dirty,
-        last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
+    seed_linked(
+        &path,
+        &format!("Cave {id}"),
+        &SpeleoLink {
+            endpoint: endpoint.to_owned(),
+            project_id: id.to_owned(),
+            project_name: format!("Remote {}", id.get(..4).unwrap_or(id)),
+            base_commit_sha: Some("abc1234".to_owned()),
+            has_unpushed_edits: dirty,
+            last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
+            last_verify_at: None,
+            undo_mode: None,
+        },
+    );
     path
 }
 
@@ -637,10 +636,7 @@ fn history_server() -> (String, Arc<Mutex<Vec<String>>>) {
     let native = {
         let temp = tempfile::tempdir().expect("temp");
         let path = temp.path().join("server.stalx");
-        let mut db = Database::open(&path).expect("server db");
-        db.save_project(&Project::new("Server".to_owned(), None))
-            .expect("save project");
-        drop(db);
+        seed_unlinked(&path, "Server");
         std::fs::read(&path).expect("server bytes")
     };
     let history = super::tests_support::sdk_fixture(r#"{"commits":[{"id":"abc1234"}]}"#);
@@ -745,11 +741,7 @@ fn another_accounts_un_uploaded_work_on_the_tip_takes_the_prompt_and_keeps_its_o
         );
         assert_eq!(downloads(&seen), 1, "it went the guarded-download way");
         assert_eq!(owner_bytes(&copy), Some(before), "owner.json unchanged");
-        let link = Database::open_for_metadata(&copy)
-            .expect("open")
-            .load_speleo_link()
-            .expect("read")
-            .expect("linked");
+        let link = link_at(&copy).expect("linked");
         assert!(
             link.has_unpushed_edits,
             "the other account's work is intact"
@@ -1164,8 +1156,7 @@ fn a_copy_that_could_not_be_removed_keeps_its_lock() {
 /// gone. From then on it is a plain project, which the user may have edited and
 /// saved since.
 fn unlink(path: &Path) {
-    let db = Database::open(path).expect("open db");
-    db.save_speleo_link(None).expect("unlink");
+    relink(path, None);
 }
 
 /// The pre-PR finding: the listing drops an unlinked `.stalx`, but the purge
