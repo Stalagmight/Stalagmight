@@ -253,7 +253,6 @@ fn assert_unique(p: &Project) {
 /// The file's `<UUID>` values come back out of the export verbatim, for both
 /// extensions.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn ariane_shot_uuids_survive_import_then_export_verbatim() {
     const U1: &str = "11111111-1111-4111-8111-111111111111";
     const U2: &str = "22222222-2222-4222-8222-222222222222";
@@ -301,7 +300,6 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
     const MID: &str = "44444444-4444-4444-8444-444444444444";
     let dir = tempfile::tempdir().unwrap();
@@ -333,7 +331,6 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
 /// rejected: the FIRST occurrence keeps the foreign value and the rest are
 /// re-minted, so the model's uniqueness invariant holds.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn a_repeated_uuid_inside_one_line_is_repaired_keeping_the_first() {
     const DUP: &str = "55555555-5555-4555-8555-555555555555";
     let dir = tempfile::tempdir().unwrap();
@@ -363,7 +360,6 @@ fn a_repeated_uuid_inside_one_line_is_repaired_keeping_the_first() {
 /// The import-time reverse (#24) moves each shot to the mirrored position;
 /// identity travels inside the `ShotData` being reversed.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn the_import_reverse_carries_each_id_with_its_own_shot() {
     const FIRST: &str = "66666666-6666-4666-8666-666666666666";
     const LAST: &str = "77777777-7777-4777-8777-777777777777";
@@ -469,7 +465,6 @@ fn a_line_split_keeps_the_ids_on_both_halves_and_the_references_on_their_station
 /// copy verbatim and re-mints the second's, so the merged project holds each
 /// once.
 #[test]
-#[ignore = "C8: Merge Projects (execute_merge_projects) is ported by the add/merge package"]
 fn merging_two_projects_with_the_same_ids_keeps_the_first_copy() {
     const IDS: [&str; 3] = [
         "bbbbbbbb-0000-4000-8000-000000000001",
@@ -558,7 +553,6 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
 /// Adopting the same Ariane file twice must give the same shot identities
 /// (`speleodb_pull::adopt_build_into` re-imports `ariane.tml` from scratch).
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     const IDS: [&str; 3] = [
         "eeeeeeee-0000-4000-8000-000000000001",
@@ -643,7 +637,6 @@ fn undoing_a_shot_delete_restores_the_shots_own_identity() {
 /// The import's own undo and redo bring the file's identities back, not
 /// fresh mints.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn undoing_and_redoing_an_import_keeps_the_files_identities() {
     const IDS: [&str; 3] = [
         "dddddddd-1111-4000-8000-000000000001",
@@ -765,7 +758,6 @@ fn client_named_identities_are_stripped_at_the_shot_doors() {
 /// `CreateLine` carries a whole `Vec<ShotData>` off IPC, alone and in a
 /// batch; neither may adopt a client-named identity.
 #[test]
-#[ignore = "C3: CreateLine is ported by the lines package (command_line.rs)"]
 fn create_line_takes_no_client_named_identity() {
     const ID: &str = "ffffffff-0000-4000-8000-000000000021";
     let (p, _) = survey_with_uuids(&[ID]);
@@ -844,7 +836,6 @@ fn create_shot_cannot_move_a_reference_onto_a_new_shot() {
 /// A control character or an over-long value in `<UUID>` falls back to a
 /// fresh mint, and the export stays valid XML 1.0 (asserted on the bytes).
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_formed() {
     const GOOD: &str = "abcdabcd-0000-4000-8000-000000000001";
     // `&#1;` unescapes to a real U+0001.
@@ -886,7 +877,6 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
 
 /// A NUL never reaches the model, so save and reload agree exactly.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
     let dir = tempfile::tempdir().unwrap();
     let xml = cave_file_xml(&[Row::new(1, 0, Some("aa\u{0}bb")), Row::new(2, 1, None)]);
@@ -949,7 +939,6 @@ fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
 
 /// An empty or whitespace-only element is "no identity": a mint.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn an_empty_or_whitespace_uuid_element_means_no_identity() {
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
@@ -975,7 +964,6 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
 /// A repeat across TWO lines of one file: the first line keeps the file's
 /// id and the second gets a replacement, as the uniqueness invariant needs.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
     const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
     let dir = tempfile::tempdir().unwrap();
@@ -999,7 +987,6 @@ fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
 /// Entity-escaped text is one value after unescaping and is stored whole;
 /// the export re-escapes it.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
@@ -1039,7 +1026,6 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
 /// characters: such an id falls back to a mint, and the export holds only
 /// characters XML allows (asserted on the bytes).
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
     const GOOD: &str = "beefbeef-0000-4000-8000-000000000001";
     let dir = tempfile::tempdir().unwrap();

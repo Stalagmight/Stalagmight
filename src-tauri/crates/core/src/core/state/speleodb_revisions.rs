@@ -307,15 +307,6 @@ impl AppState {
         newest.map_or(now, |newest| newest.max(now))
     }
 
-    /// [#303] Stamp the watermark for a stack that has just been loaded (see
-    /// [`Self::speleodb_loaded_history_watermark`]) and make it durable. Takes
-    /// `project`: a caller holding that guard sets the field and saves with
-    /// `persist_local_state_at` instead (`speleodb_after_swap`).
-    pub(super) fn speleodb_stamp_inherited_watermark(&self) {
-        let watermark = self.speleodb_loaded_history_watermark();
-        self.speleodb_set_inherited_through(Some(&watermark.to_rfc3339()));
-    }
-
     /// [#303] A forward edit means the working copy is no longer where the Unwind walk
     /// left it, so the chain pointer stops describing it - and, more to the point, stops
     /// EXCUSING the dirty bit.

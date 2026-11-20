@@ -893,7 +893,6 @@ fn a_merge_chain_lays_every_line_out_from_its_junctions() {
 /// are stations, so they stay where they were: A:1 is B:1 and B:2 is C:0
 /// afterwards, with nothing to shift.
 #[test]
-#[ignore = "C2: Create Shot (prepend) is not ported on this branch"]
 fn a_prepend_on_the_middle_line_of_a_chain_keeps_both_junctions() {
     let mut p = empty("ShiftChain");
     let a = line_at(&mut p, "A", [0.0, 0.0], vec![shot(90.0, 10.0)]);

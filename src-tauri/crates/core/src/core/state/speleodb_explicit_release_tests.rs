@@ -91,7 +91,6 @@ fn assert_never_blind(state: &AppState, case: &str, seen: &Log, failed: bool) {
 }
 
 #[test]
-#[ignore = "C11: Done reads the link through speleodb_push_project_guard, which the SpeleoDB sync package ports"]
 fn done_with_nothing_to_upload_never_frees_another_accounts_lock() {
     for (case, (server, seen)) in servers() {
         let temp = tempfile::TempDir::new().expect("temp");
@@ -243,7 +242,6 @@ fn every_explicit_verb_still_releases_this_accounts_own_lock() {
 }
 
 #[test]
-#[ignore = "C11: Done reads the link through speleodb_push_project_guard, which the SpeleoDB sync package ports"]
 fn done_still_releases_this_accounts_own_lock() {
     let temp = tempfile::TempDir::new().expect("temp");
     let (server, seen) = lock_server(ID, Some(ADMIN.to_owned()));

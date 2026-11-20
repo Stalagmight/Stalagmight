@@ -84,7 +84,7 @@ fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId
         .map(|s| s.name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());
-    format!("Split line \"{line_name}\" at {at}")
+    super::labels::split_line_label(line_name, &at)
 }
 
 impl AppState {

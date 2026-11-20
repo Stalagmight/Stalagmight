@@ -166,7 +166,6 @@ fn merging_two_placed_pieces_and_undo_restores_both_placements() {
 }
 
 #[test]
-#[ignore = "C10: the project warnings are not ported on this branch"]
 fn a_fix_past_the_threshold_gets_one_datum_gps_gap_warning() {
     // 500 m of survey between the datums: the threshold is 25 m.
     for (east, warned) in [(24.9, false), (25.1, true), (40.0, true)] {
@@ -223,7 +222,6 @@ fn ignore_datum_row(state: &AppState, station: u32) {
 }
 
 #[test]
-#[ignore = "C10: the project warnings are not ported on this branch"]
 fn fixes_on_stations_0_and_1_of_one_line_are_ignored_independently() {
     // Both stations touch shot 0 of B; the codes keep their Ignores apart.
     // B:0 is the junction with A:5, so its fix is the junction's: the
@@ -618,7 +616,6 @@ fn an_accuracy_only_edit_never_moves_a_piece() {
 }
 
 #[test]
-#[ignore = "C10: the project warnings are not ported on this branch"]
 fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
     // An Ignore says "this GPS reading is far off, and I know". A new reading
     // is not covered by it; undoing the change brings the Ignore back (#741 U2).
@@ -675,7 +672,6 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
 }
 
 #[test]
-#[ignore = "C2: Delete Shot is not ported on this branch"]
 fn deleting_the_first_shot_promotes_the_next_stations_fix_onto_its_gps() {
     // Frame A:0 and a fix on A:1, 30 m east of where the survey puts A:1.
     // Deleting A's first shot removes A:0 with the frame: the fix is the
@@ -755,7 +751,6 @@ fn removing_the_frame_promotes_a_fix_that_shares_its_gps() {
 }
 
 #[test]
-#[ignore = "C2: Delete Shot is not ported on this branch"]
 fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
     // The entrance GPS copied onto A:1 as well: once A's first shot is
     // deleted, the fix places A on that GPS: A:1, now A:0, moves 50 m south
@@ -896,13 +891,11 @@ fn combine_the_fix_onto_its_twin(fix_acc: Option<f64>, twin_acc: Option<f64>) {
 }
 
 #[test]
-#[ignore = "C4: Combine Lines is not ported on this branch"]
 fn a_combine_that_moves_a_twin_onto_the_fix_still_promotes_the_fix() {
     combine_the_twin_onto_the_fix(Some(5.0), Some(0.5));
 }
 
 #[test]
-#[ignore = "C4: Combine Lines is not ported on this branch"]
 fn a_combine_that_moves_the_fix_onto_its_twin_still_promotes_the_fix() {
     combine_the_fix_onto_its_twin(Some(5.0), Some(0.5));
 }
@@ -910,14 +903,12 @@ fn a_combine_that_moves_the_fix_onto_its_twin_still_promotes_the_fix() {
 /// #778: twins with one stored value (no accuracy typed on either), so
 /// nothing stored tells them apart; only the list order does.
 #[test]
-#[ignore = "C4: Combine Lines is not ported on this branch"]
 fn twins_with_one_stored_value_a_combine_moving_the_twin_still_promotes_the_fix() {
     combine_the_twin_onto_the_fix(None, None);
     combine_the_twin_onto_the_fix(Some(2.0), Some(2.0));
 }
 
 #[test]
-#[ignore = "C4: Combine Lines is not ported on this branch"]
 fn twins_with_one_stored_value_a_combine_moving_the_fix_still_promotes_the_fix() {
     combine_the_fix_onto_its_twin(None, None);
     combine_the_fix_onto_its_twin(Some(2.0), Some(2.0));

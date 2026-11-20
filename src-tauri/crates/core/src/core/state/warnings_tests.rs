@@ -803,7 +803,6 @@ fn a_computed_view_failure_is_reported_only_from_a_current_solve() {
 // ----- command refusals (0.6.0 "Validation Tests" / "Edge Case Tests") --------------
 
 #[test]
-#[ignore = "C3: Create Line is not ported on this branch"]
 fn create_line_refuses_a_zero_length_shot() {
     let (p, _) = checked_line();
     let o = open(&p, &Extras::default());

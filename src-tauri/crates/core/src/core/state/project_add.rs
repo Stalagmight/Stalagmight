@@ -31,7 +31,6 @@ use super::project_source::SourceProject;
 use super::AppState;
 use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_LEN};
 use crate::core::{Command, CommandResult};
-use crate::models::survey::changeset::{PreviewRow, RecordedPreview};
 use crate::models::survey::{AppendSummary, Project};
 use crate::models::{
     warning_is_ignorable, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID, MAX_STATION_ID,
@@ -178,23 +177,6 @@ fn carried_ignores(source: &SourceProject, summary: &AppendSummary) -> Vec<Ignor
     carried
 }
 
-/// 0.6.0's preview rows of an add: the file, the lines and the shots added.
-fn add_preview(label: &str, report: &AddReport) -> RecordedPreview {
-    let row = |field: &str, new: String| PreviewRow {
-        field: field.to_string(),
-        old: String::new(),
-        new,
-    };
-    RecordedPreview {
-        rows: vec![
-            row("File", label.to_string()),
-            row("Lines added", report.summary.line_map.len().to_string()),
-            row("Shots added", report.shot_count.to_string()),
-        ],
-        more: 0,
-    }
-}
-
 fn add_receipt(label: &str, source: &SourceProject, report: &AddReport) -> ImportReceipt {
     let mut warnings = Vec::new();
     if let Some(why) = report.duplicate {
@@ -291,7 +273,11 @@ impl AppState {
                 }
                 let report = append_into(project, &source)?;
                 record.refs.lines = report.summary.new_lines();
-                record.preview = add_preview(&label, &report);
+                record.preview = super::labels::add_project_file_preview(
+                    &label,
+                    report.summary.line_map.len(),
+                    report.shot_count,
+                );
                 // Under the same project guard as the copy, so a save never
                 // sees the lines without their ignores (lock order: project,
                 // then file).

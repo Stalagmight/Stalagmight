@@ -115,7 +115,6 @@ fn a_new_line_numbers_and_names_its_stations() {
 }
 
 #[test]
-#[ignore = "C2: Create Shot is not ported on this branch"]
 fn an_append_takes_the_next_number_and_id() {
     let (opened, main) = main_line(3);
     let state = &opened.state;
@@ -134,7 +133,6 @@ fn an_append_takes_the_next_number_and_id() {
 }
 
 #[test]
-#[ignore = "C2: Create Shot is not ported on this branch"]
 fn undo_redo_of_an_insert_gives_the_station_back_exactly() {
     let (opened, main) = main_line(3);
     let state = &opened.state;
@@ -174,7 +172,6 @@ fn undo_redo_of_an_insert_gives_the_station_back_exactly() {
 }
 
 #[test]
-#[ignore = "C2: Delete Shot is not ported on this branch"]
 fn undo_of_a_delete_gives_the_station_back_exactly() {
     let (opened, main) = main_line(4);
     let state = &opened.state;
@@ -192,7 +189,6 @@ fn undo_of_a_delete_gives_the_station_back_exactly() {
 }
 
 #[test]
-#[ignore = "C2 and C4: Insert Station, Split Line Here and Combine Lines are not ported on this branch"]
 fn undo_redo_of_insert_station_split_and_combine_are_exact() {
     let (opened, main) = main_line(4);
     let state = &opened.state;
@@ -251,7 +247,6 @@ fn undo_redo_of_insert_station_split_and_combine_are_exact() {
 }
 
 #[test]
-#[ignore = "C3: Create Line is not ported on this branch"]
 fn undo_redo_of_create_line_keeps_its_ids() {
     let (opened, _main) = main_line(2);
     let state = &opened.state;
@@ -273,7 +268,6 @@ fn undo_redo_of_create_line_keeps_its_ids() {
 }
 
 #[test]
-#[ignore = "C6: Set Station Name is not ported on this branch"]
 fn a_station_name_is_validated_and_undoable() {
     let mut p = empty("Identity");
     let main = line_at(&mut p, "Main Line", [0.0, 0.0], shots(3));
@@ -321,7 +315,6 @@ fn a_station_name_is_validated_and_undoable() {
 }
 
 #[test]
-#[ignore = "C3: line renames and Create Line are not ported on this branch"]
 fn a_user_line_rename_must_be_unique_and_non_empty() {
     let mut p = empty("Identity");
     let main = line_at(&mut p, "Main", [0.0, 0.0], shots(1));
@@ -437,7 +430,6 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
 }
 
 #[test]
-#[ignore = "C8: Add .stalx is not ported on this branch"]
 fn add_stalx_offsets_the_incoming_ids_and_dedupes_line_names() {
     // The source: one line named like the target's, ids 0..=2.
     let mut source = empty("Source");

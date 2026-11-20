@@ -309,27 +309,6 @@ fn a_file_with_an_unknown_required_feature_opens_read_only() {
 }
 
 #[test]
-fn an_unported_command_refuses_with_a_typed_failure() {
-    let dir = TempDir::new().unwrap();
-    let original = survey();
-    let path = write_v2(dir.path(), &original, &Extras::default());
-    let state = open(&path);
-    // Any family that is still a stub; DeleteShot was the example until the
-    // shot family was ported. Retire the test when the last stub goes.
-    let (line_id, _) = first_shot(&original);
-    let r = state.execute(Command::UnmergeStations {
-        station_ref: crate::models::StationRef::new(line_id, 2),
-    });
-    assert!(!r.success);
-    assert!(r
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .starts_with("not yet ported: "));
-    assert_eq!(canonical(&project_of(&state)), canonical(&original));
-}
-
-#[test]
 fn the_project_state_and_the_binary_envelope_are_the_wire_projection() {
     let dir = TempDir::new().unwrap();
     let original = survey();

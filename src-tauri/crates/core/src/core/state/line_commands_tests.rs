@@ -1168,7 +1168,6 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
 // === Other families' refusals (their commands port elsewhere) ===
 
 #[test]
-#[ignore = "needs C6: the MoveLine / MoveSegment arms are not ported on this branch"]
 fn move_line_and_segment_reject_non_finite_offset() {
     let state = new_state();
     let a = create(&state, "A", vec![shot(5.0)]);
@@ -1200,7 +1199,6 @@ fn move_line_and_segment_reject_non_finite_offset() {
 }
 
 #[test]
-#[ignore = "needs C6: the MoveStation arm is not ported on this branch"]
 fn move_station_rejects_non_finite_offset() {
     let state = new_state();
     let a = create(&state, "A", vec![shot(5.0)]);
@@ -1220,7 +1218,7 @@ fn move_station_rejects_non_finite_offset() {
 /// then line 001 (overlap shots removed) with `existing_shot_updates` that
 /// interpolate 002's overlap shots, all in one import call.
 #[test]
-#[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry; and C7's import funnel"]
+#[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry"]
 fn kb5_import_overlap_interpolation_integration() {
     use crate::models::{
         ExistingShotUpdate, ImportLineConfig, ImportPlacement, ShotId, ShotUpdates,

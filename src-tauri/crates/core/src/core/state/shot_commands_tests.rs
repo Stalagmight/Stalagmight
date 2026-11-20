@@ -1948,7 +1948,6 @@ fn deleting_the_last_shot_takes_the_lines_own_stations_and_keeps_a_junction() {
 // ===== Coverage gaps: refusals on the values a shot edit sets ===============
 
 #[test]
-#[ignore = "C3: CreateLine is ported by the lines package (command_line.rs)"]
 fn a_new_line_with_a_negative_length_shot_is_refused() {
     let state = Build::new().state();
     let error = refused(&state.execute(Command::CreateLine {

@@ -10,13 +10,13 @@ use std::collections::HashMap;
 
 use super::commands::Record;
 use super::import_funnel::{
-    self, history_text, ImportOutcome, ImportRequest, LineBuilder, LineError,
+    self, ImportOutcome, ImportRequest, LineBuilder, LineError,
 };
 use super::AppState;
 use crate::core::command::ImportReceipt;
 use crate::core::{CommandResult, ValidationWarning};
 use crate::models::survey::changeset::HistoryRefs;
-use crate::models::survey::{EditContext, Project};
+use crate::models::survey::EditContext;
 use crate::models::{
     ClosureStrategy, ExistingShotUpdate, ImportClosure, ImportLineConfig, ImportPlacement,
     SectionId, ShotData, StationRef,
@@ -54,46 +54,6 @@ fn capped<T: Ord + Copy>(ids: impl IntoIterator<Item = T>) -> Vec<T> {
     ids.dedup();
     ids.truncate(MAX_REFS);
     ids
-}
-
-/// A line as a history label names it, quoted (`"Main"`), or `a line`.
-fn quoted_line(project: &Project, line: crate::models::LineId) -> String {
-    if project.line(line).is_some() {
-        format!("\"{}\"", project.line_label_of(line))
-    } else {
-        "a line".to_string()
-    }
-}
-
-/// `A`, `A and B`, `A, B and C`, `A, B, C and 2 more` (0.6.0's `listed`).
-fn listed(names: &[String]) -> String {
-    const LISTED: usize = 3;
-    if names.len() > LISTED {
-        return format!(
-            "{} and {} more",
-            names.get(..LISTED).unwrap_or_default().join(", "),
-            names.len() - LISTED
-        );
-    }
-    match names.split_last() {
-        None => String::new(),
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
-/// 0.6.0's import label, by the lines it made (import order): `Import line
-/// "A"`, `Import lines "A", "B" and "C"`, `Import 5 lines ("A", "B", "C"
-/// and 2 more)`.
-fn import_label(project: &Project, lines: &[crate::models::LineId]) -> String {
-    let names: Vec<String> = lines.iter().map(|&id| quoted_line(project, id)).collect();
-    let label = match names.len() {
-        0 => "Import".to_string(),
-        1 => format!("Import line {}", listed(&names)),
-        n if n <= 3 => format!("Import lines {}", listed(&names)),
-        n => format!("Import {n} lines ({})", listed(&names)),
-    };
-    history_text(&label)
 }
 
 /// The receipt of a successful import (0.6.0's fields; the importer adds its
@@ -274,14 +234,8 @@ impl AppState {
                     }
                 }
                 project.settle_anchors(&before, &ctx);
-                let target_text = project.topology().station_at(target_station).map_or_else(
-                    || "a station".to_string(),
-                    |s| project.station_text(s, Some(target_station.line_id)),
-                );
-                record.label = history_text(&format!(
-                    "Create line {} at {target_text}",
-                    quoted_line(project, built.id)
-                ));
+                record.label =
+                    super::labels::create_line_at_label(project, built.id, target_station);
                 record.refs = HistoryRefs {
                     lines: capped([built.id, target_station.line_id]),
                     stations: capped(built.junction.map(|(_, s, _)| s)),
@@ -412,7 +366,7 @@ impl AppState {
             },
             |project, record| {
                 let outcome = import_funnel::import_lines(project, &request)?;
-                record.label = import_label(project, &outcome.labelled_lines);
+                record.label = super::labels::import_lines_label(project, &outcome.labelled_lines);
                 record.refs = HistoryRefs {
                     lines: capped(outcome.line_ids.iter().copied()),
                     stations: capped(outcome.junctions.iter().copied()),

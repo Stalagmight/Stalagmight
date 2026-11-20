@@ -842,7 +842,6 @@ fn comment_at(p: &Project, slot: StationRef) -> Option<String> {
 /// wizard's placement indices address the final order. `station_comments`
 /// indices are given in the FILE's order and mirrored backend-side.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_applies_before_placement_and_comments_resolve() {
     let state = new_state("Import");
     let mut config = import_config(
@@ -886,7 +885,6 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
 /// Ticking the import toggle changes the numbering, never where the passage
 /// lands.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_lands_the_line_in_the_same_place() {
     let shots = vec![
         shot(0.0, 10.0, 0.0, 2.0),
@@ -977,7 +975,6 @@ fn import_one(reverse: bool, placement: fn(LineId) -> ImportPlacement) -> Vec<Co
 /// hands over ALREADY MIRRORED for a reversed import: the mirrored index must
 /// land on the physical station the user clicked.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
     let cases: [(
         &str,
@@ -1088,7 +1085,6 @@ fn import_two(
 /// The cross-line connection, with BOTH lines reversed and DIFFERENT shot
 /// counts: each index addresses the post-reverse numbering of its OWN line.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_connects_two_reversed_lines_by_the_stations_the_user_picked() {
     let (trunk_plain, branch_plain) = import_two(false, 2, 1);
     let (trunk_reversed, branch_reversed) = import_two(true, 0, 2);
@@ -1112,7 +1108,6 @@ fn import_reverse_connects_two_reversed_lines_by_the_stations_the_user_picked() 
 /// The mirror is `shot_count - station_index`, so an index past the last
 /// station has no mirror: the comment is dropped, not parked on station 0.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_reverse_drops_an_out_of_range_station_comment() {
     let state = new_state("Import");
     let mut config = import_config(

@@ -100,7 +100,7 @@ impl AppState {
 
     /// Merge `source_paths` into a NEW project file at `output_path` (the
     /// `.stalx` extension added when missing) named `output_name`.
-    fn merge_projects(
+    pub(super) fn merge_projects(
         &self,
         source_paths: &[PathBuf],
         output_path: PathBuf,

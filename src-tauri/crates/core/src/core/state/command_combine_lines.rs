@@ -8,6 +8,7 @@
 //! and the warnings naming the removed closures as the dialog listed them.
 
 use super::commands::Record;
+use super::labels::combine_lines_label;
 use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::survey::changeset::{HistoryRefs, PreviewRow, RecordedPreview};
@@ -19,15 +20,6 @@ use crate::models::{
 
 /// 0.6.0's refusal of an empty combined name (a rename's).
 const EMPTY_NAME: &str = "A line name cannot be empty";
-
-/// A line as a history label names it, quoted (`"Main Line"`), or `a line`
-/// when it is gone.
-fn quoted_line(project: &Project, line: LineId) -> String {
-    project.line(line).map_or_else(
-        || "a line".to_string(),
-        |_| format!("\"{}\"", project.line_label_of(line)),
-    )
-}
 
 /// A station as the user reads it on its slot, `Line name / station name`,
 /// `a station of Line name` when the slot names no station, `a station` when
@@ -52,25 +44,6 @@ fn station_text(project: &Project, at: StationRef) -> String {
                 }
             },
         )
-}
-
-/// `Combine lines "Main Line" and "Downstream"`, with ` into "Name"` when
-/// the combined line takes a name neither had. Read before the combine.
-fn combine_label(project: &Project, kept: LineId, other: LineId, combined: &str) -> String {
-    let combined = combined.trim();
-    let label = format!(
-        "Combine lines {} and {}",
-        quoted_line(project, kept),
-        quoted_line(project, other)
-    );
-    let taken = [kept, other]
-        .iter()
-        .any(|&id| project.line(id).is_some() && project.line_label_of(id) == combined);
-    if combined.is_empty() || taken {
-        label
-    } else {
-        format!("{label} into \"{combined}\"")
-    }
 }
 
 /// The warnings a combine reports for the ties it removed because, combined,
@@ -237,7 +210,7 @@ impl AppState {
                     // Both lines by the names they have before the combine
                     // (the other one is gone after it, and the kept one may
                     // be renamed).
-                    label: combine_label(project, kept, other, &options.name),
+                    label: combine_lines_label(project, kept, other, &options.name),
                     refs: HistoryRefs {
                         lines,
                         ..HistoryRefs::default()

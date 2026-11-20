@@ -139,7 +139,6 @@ fn the_plain_open_refuses_a_newer_project() {
 }
 
 #[test]
-#[ignore = "C8: Merge Projects is not ported on this branch"]
 fn a_merge_with_a_newer_source_writes_nothing() {
     let dir = TempDir::new().unwrap();
     let current = project_file(&dir, "current.stalx", 2);
@@ -149,9 +148,9 @@ fn a_merge_with_a_newer_source_writes_nothing() {
     let state = AppState::new().unwrap();
 
     let result = state.merge_projects(
-        vec![current.clone(), newer.clone()],
+        &[current.clone(), newer.clone()],
         output.clone(),
-        "Merged".to_string(),
+        "Merged",
         true,
     );
 

@@ -113,7 +113,6 @@ fn import_config(index: u32) -> ImportLineConfig {
 /// The LAST id is usable: 42_948 * 100_000 + 99_999 = 4_294_899_999, which
 /// still fits `u32`. An off-by-one guard would refuse this one.
 #[test]
-#[ignore = "C3: CreateLine is ported by the lines package (command_line.rs)"]
 fn the_last_encodable_line_id_is_still_minted() {
     let state = state_with_spent_line_ids(MAX_LINE_ID);
     let result = create_one_line(&state);
@@ -127,7 +126,6 @@ fn the_last_encodable_line_id_is_still_minted() {
 
 /// One past it is refused.
 #[test]
-#[ignore = "C3: CreateLine is ported by the lines package (command_line.rs)"]
 fn minting_one_line_past_the_encode_is_refused() {
     let state = state_with_spent_line_ids(MAX_LINE_ID + 1);
     let result = create_one_line(&state);
@@ -148,7 +146,6 @@ fn minting_one_line_past_the_encode_is_refused() {
 /// An import is refused as a WHOLE when its line count would cross the
 /// bound, before any mutation. One id is left here and the file declares two.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn an_import_that_would_cross_the_bound_is_refused_atomically() {
     let state = state_with_spent_line_ids(MAX_LINE_ID);
     let result = state.execute_import_lines(
@@ -178,7 +175,6 @@ fn an_import_that_would_cross_the_bound_is_refused_atomically() {
 
 /// The same import, one line smaller, lands: the batch check is exact.
 #[test]
-#[ignore = "C7: the import funnel (execute_import_lines_inner) is ported by the imports package"]
 fn an_import_that_exactly_fills_the_id_space_is_accepted() {
     let state = state_with_spent_line_ids(MAX_LINE_ID);
     let result = state.execute_import_lines(
@@ -286,25 +282,71 @@ fn a_split_with_the_last_line_id_left_still_succeeds() {
     assert!(project.line(MAX_LINE_ID).is_some());
 }
 
+/// The encoder's text for a project of `lines` shot-less placed lines named
+/// `L<i>`, written row by row. Building that many lines through the model
+/// re-derives the topology and rescans the placements on every
+/// `set_placement`, which is quadratic and takes minutes at the id-space
+/// bound; [`the_bulk_source_text_is_the_encoders`] pins this text to the
+/// encoder's own output, and the merge's read decodes and validates it.
+fn bulk_source_text(name: &str, lines: usize) -> String {
+    let rows = |row: &dyn Fn(usize) -> String| (0..lines).map(row).collect::<Vec<_>>().join(",\n");
+    let settings = r#"{"validation":{"warn_shot_length_min":0.3,"warn_shot_length_max":50.0,"warn_depth_change_per_shot_max":10.0,"warn_azimuth_deviation_max":30.0,"azimuth_diff_threshold":20.0,"pitch_diff_threshold":10.0,"inclination_depth_diff_threshold":15.0}}"#;
+    format!(
+        concat!(
+            "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n",
+            "\"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",",
+            "\"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",",
+            "\"temperature\":\"degC\"}},\n",
+            "\"generator\":\"Stalagmight\",\n",
+            "\"summary\":{{\"name\":\"{name}\",\"lines\":{lines},\"stations\":{lines},\"shots\":0,\"length\":-0.0}},\n",
+            "\"project\":{{\"name\":\"{name}\",\"created\":\"2026-01-01T00:00:00.000000000Z\",",
+            "\"modified\":\"2026-01-01T00:00:00.000000000Z\"}},\n",
+            "\"settings\":{settings},\n",
+            "\"counters\":{{\"station\":{lines},\"closure\":1,\"section\":0}},\n",
+            "\"stations\":[\n{stations}\n],\n",
+            "\"lines\":[\n{line_rows}\n],\n",
+            "\"placements\":[\n{placements}\n],\n",
+            "\"end\":true}}\n"
+        ),
+        name = name,
+        lines = lines,
+        settings = settings,
+        stations = rows(&|i| format!("[{i},\"0\"]")),
+        line_rows = rows(&|i| format!(
+            "{{\"id\":{i},\"name\":\"L{i}\",\"color\":\"#4ecdc4\",\"direction\":\"in\",\"quality\":1.0,\"start\":{i}}}"
+        )),
+        placements = rows(&|i| format!("{{\"station\":{i},\"x\":0.0,\"y\":0.0}}")),
+    )
+}
+
+/// [`bulk_source_text`] is byte for byte what the encoder writes for the same
+/// survey built through the model (small enough for the builder).
+#[test]
+fn the_bulk_source_text_is_the_encoders() {
+    let created = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let mut project = Project::new_at("a", None, created);
+    for i in 0..3 {
+        let line = project
+            .add_line(meta(&format!("L{i}")), StartAt::New, Vec::new())
+            .unwrap();
+        let start = project.line(line).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
+    }
+    let bytes = stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap();
+    assert_eq!(String::from_utf8(bytes).unwrap(), bulk_source_text("a", 3));
+}
+
 /// A merge whose sources hold more lines between them than the id space
 /// allows is refused before any line is appended, and writes no output file.
 /// Real lines, because the check sums the sources' line counts. They are
 /// shot-less, so the cost is one station each.
 #[test]
-#[ignore = "C8: Merge Projects (execute_merge_projects) is ported by the add/merge package"]
 fn a_merge_past_the_id_space_is_refused_and_writes_no_output() {
     fn source(name: &str, lines: usize, dir: &TempDir) -> std::path::PathBuf {
-        let mut project = Project::new(name, None);
-        for i in 0..lines {
-            let line = project
-                .add_line(meta(&format!("L{i}")), StartAt::New, Vec::new())
-                .unwrap();
-            let start = project.line(line).unwrap().start;
-            project.set_placement(start, 0.0, 0.0).unwrap();
-        }
         let path = dir.path().join(format!("{name}.stalx"));
-        let bytes = stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap();
-        std::fs::write(&path, bytes).unwrap();
+        std::fs::write(&path, bulk_source_text(name, lines)).unwrap();
         path
     }
 
@@ -337,3 +379,4 @@ fn a_merge_past_the_id_space_is_refused_and_writes_no_output() {
         "nor a temp file"
     );
 }
+

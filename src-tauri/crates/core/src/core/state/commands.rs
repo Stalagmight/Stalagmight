@@ -22,7 +22,6 @@
 //!    dirty bit and Unwind position updated.
 
 use super::AppState;
-use crate::core::stub::NotPorted;
 use crate::core::{Command, CommandResult, IntegrityCheckResult, ReversedLine, ValidationWarning};
 use crate::models::survey::changeset::{capture, HistoryRefs, RecordedPreview};
 use crate::models::survey::{HistoryEntry, Project};
@@ -104,15 +103,6 @@ fn net_reversed(reversed: Vec<ReversedLine>) -> Vec<ReversedLine> {
         .into_iter()
         .filter(|r| counts.get(&r.line_id).is_some_and(|n| n % 2 == 1) && seen.insert(r.line_id))
         .collect()
-}
-
-/// The failure text of a command family C0 has not ported.
-pub(crate) fn not_ported(what: &'static str) -> String {
-    tracing::warn!(
-        what,
-        "reached a command the station-graph switch has not ported yet"
-    );
-    NotPorted(what).to_string()
 }
 
 /// The message a frozen shot's geometry edit is refused with (S12: the

@@ -1657,10 +1657,11 @@ mod tests {
                 bumping.push(name.clone());
             }
             // The slot-commit spellings in this tree: a load/create commit
-            // (`= Some(project`), the rollback restore (`= Some(restored`), and
+            // (`= Some(project)`; with the paren, so `project_name = Some(project.name`
+            // is not one), the rollback restore (`= Some(restored`), and
             // the close clear (`*project = None`). Space-prefixed so a
             // `== Some(project_id)` comparison does not read as an assignment.
-            if src.contains(" = Some(project")
+            if src.contains(" = Some(project)")
                 || src.contains(" = Some(restored")
                 || src.contains("*project = None")
             {
@@ -1763,18 +1764,72 @@ mod tests {
         // span reopens the torn-middle interleaving where the delete tears down
         // a half-built session and the loader finishes building into an empty
         // world. Every open (the IPC load, the executor's open, the SpeleoDB
-        // installs) commits through `commit_opened`, every create through
-        // `commit_new_project`.
+        // installs) commits through `commit_opened_locked` under its caller's
+        // guard, every create through `commit_new_project`.
+        let src = state_source("project_load.rs");
+        assert_eq!(
+            src.matches(" = Some(project);").count(),
+            1,
+            "project_load.rs: the slot is committed in commit_opened_locked and nowhere else"
+        );
+        let fn_body = |func: &str| -> String {
+            let start = src
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} is present in project_load.rs"));
+            let body = &src[start..];
+            body[..body.find("\n    }\n").expect("fn body terminates")].to_owned()
+        };
+        // The commit itself runs on the caller's guard (a `&mut` to the slot
+        // the guard derefs to, so it cannot let go of it), in this order.
+        let body = fn_body("fn commit_opened_locked(");
+        let at = |needle: &str, what: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("commit_opened_locked {what} (`{needle}`)"))
+        };
+        let guard = at("proj_guard: &mut Option<Project>", "runs on the caller's guard");
+        let slot = at(" = Some(project);", "commits the project slot");
+        let file_state = at(" = file;", "commits the file state");
+        let undo = at("load_persisted(", "commits the undo stack");
+        assert!(
+            guard < slot && slot < file_state && file_state < undo,
+            "commit_opened_locked must commit slot, file state and undo history in \
+             that order (guard {guard}, slot {slot}, file state {file_state}, undo {undo})"
+        );
+        assert!(
+            !body.contains("drop(proj_guard)"),
+            "the caller releases the guard, never the commit"
+        );
+        // Every caller takes the guard, commits, and releases it once, after.
+        let callers = ["fn commit_opened(", "fn open_project_download("];
+        assert_eq!(
+            src.matches("self.commit_opened_locked(&mut proj_guard").count(),
+            callers.len(),
+            "a new caller of commit_opened_locked: add it here once it holds one guard span"
+        );
+        for func in callers {
+            let body = fn_body(func);
+            let at = |needle: &str, what: &str| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{func} {what} (`{needle}`)"))
+            };
+            let guard = at("let mut proj_guard", "takes the project guard by name");
+            let commit = at(
+                "self.commit_opened_locked(&mut proj_guard",
+                "commits under that guard",
+            );
+            let released = at("drop(proj_guard)", "releases the guard explicitly");
+            assert!(
+                guard < commit && commit < released,
+                "{func} must take the guard, commit, then release it (guard at {guard}, \
+                 commit {commit}, drop {released})"
+            );
+            assert_eq!(
+                body.matches("drop(proj_guard)").count(),
+                1,
+                "{func}: one release, at the end of the finalization"
+            );
+        }
         for (file, func, guard_name, slot_commit, file_commit, undo_commit, release) in [
-            (
-                "project_load.rs",
-                "fn commit_opened(",
-                "let mut proj_guard",
-                " = Some(project);",
-                " = file;",
-                "load_persisted(",
-                "drop(proj_guard)",
-            ),
             (
                 "project_create.rs",
                 "fn commit_new_project(",

@@ -3,24 +3,11 @@
 //! (`survey::Project::split_shot_at_distance` on `run_recorded`).
 
 use super::command_delete_split::recipe_record;
+use super::labels::insert_station_label;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::PreviewRow;
-use crate::models::survey::Project;
-use crate::models::{LineId, ShotData, ShotId, ShotUpdates, StationId};
-
-/// `Insert station Main Line / 4a`: the history label, read after the split
-/// (the station's name is the one the split gave it).
-fn insert_station_label(project: &Project, line: LineId, station: StationId) -> String {
-    if project.line(line).is_some() && project.stations.contains_key(&station) {
-        format!(
-            "Insert station {}",
-            project.station_text(station, Some(line))
-        )
-    } else {
-        format!("Insert station in line \"{}\"", project.line_label_of(line))
-    }
-}
+use crate::models::{LineId, ShotData, ShotId, ShotUpdates};
 
 /// 0.6.0's batch preview detail of the new head shot.
 fn created_details(data: &ShotData) -> String {

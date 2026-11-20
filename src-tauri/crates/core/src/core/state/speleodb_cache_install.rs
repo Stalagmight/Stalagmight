@@ -31,18 +31,6 @@ use crate::speleodb::SpeleoDbError;
 /// The name a downloaded project goes by in a refusal the user reads.
 const DOWNLOADED_FILE: &str = "project.stalx";
 
-/// Preserve the shared newer-schema refusal through the legacy SQLite opens
-/// that still read a downloaded file directly (the revision undo-mode probe).
-pub(super) fn downloaded_file_error(error: anyhow::Error) -> SpeleoDbError {
-    if let Some(newer) = error.downcast_ref::<crate::persistence::NewerSchema>() {
-        return SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
-            file: DOWNLOADED_FILE.into(),
-            ..newer.clone()
-        });
-    }
-    SpeleoDbError::Io(format!("could not open downloaded project: {error}"))
-}
-
 /// The refusal of a version 2 download the decoder would not take.
 fn decode_refusal(error: &DecodeError) -> SpeleoDbError {
     match error {

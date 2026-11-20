@@ -667,9 +667,12 @@ fn test_import_tracking_fails_when_project_lock_poisoned() {
     let err = state.check_duplicate_import("hash").unwrap_err();
     assert_eq!(err.to_string(), "Failed to lock project");
 
+    // Tracking is a recorded edit now (C7), and the edit pipeline takes the
+    // project lock poison-tolerantly like every recorded edit: with no project
+    // open it refuses as any edit does.
     let result = state.track_imported_file("hash".to_string());
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error.as_deref(), Some("No project open"));
 }
 
 /// A Save As onto something that cannot take the file (a folder) fails, and

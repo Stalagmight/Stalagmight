@@ -30,7 +30,6 @@ fn link_at(path: &std::path::Path) -> Option<(String, bool)> {
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 #[test]
-#[ignore = "C11: publish (speleodb_publish) is C12's stub on this branch; un-ignore at integration"]
 fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_after_creation() {
     let temp = tempfile::tempdir().expect("temporary app directories");
     stalagmight_lib::models::app_dirs::init_paths(

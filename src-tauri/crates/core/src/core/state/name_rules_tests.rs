@@ -266,7 +266,6 @@ fn control_and_invisible_characters_are_refused_in_station_names() {
 }
 
 #[test]
-#[ignore = "needs C3: UpdateLineMetadata and CreateCaveSection are not ported on this branch"]
 fn control_and_invisible_characters_are_refused_in_line_and_section_names() {
     let state = new_state();
     let main = create_line(&state, "Main", 2);
@@ -322,7 +321,6 @@ fn station_names_are_stored_trimmed_and_line_names_compared_trimmed() {
 }
 
 #[test]
-#[ignore = "needs C3: CreateLine and UpdateLineMetadata are not ported on this branch"]
 fn line_names_are_stored_trimmed() {
     let state = new_state();
     let main = ok(state.execute(Command::CreateLine {
@@ -450,7 +448,6 @@ fn a_rename_survives_save_and_reopen_and_undoes_there() {
 // === Split and Combine names ===
 
 #[test]
-#[ignore = "needs C4: Split Line Here is not ported on this branch"]
 fn split_refuses_a_taken_or_empty_half_name_like_a_rename() {
     let state = new_state();
     let main = create_line(&state, "Main", 4);
@@ -501,7 +498,6 @@ fn split_refuses_a_taken_or_empty_half_name_like_a_rename() {
 }
 
 #[test]
-#[ignore = "needs C2: delete-and-split is not ported on this branch"]
 fn delete_and_split_refuse_a_taken_or_empty_half_name() {
     let state = new_state();
     let main = create_line(&state, "Main", 5);
@@ -538,7 +534,6 @@ fn delete_and_split_refuse_a_taken_or_empty_half_name() {
 }
 
 #[test]
-#[ignore = "needs C4: Split Line Here and Combine are not ported on this branch"]
 fn combine_refuses_a_name_a_third_line_holds_and_takes_either_own_name() {
     let state = new_state();
     let main = create_line(&state, "Main", 4);
@@ -621,7 +616,6 @@ fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: Lin
 }
 
 #[test]
-#[ignore = "needs C4: Combine is not ported on this branch"]
 fn the_combine_candidate_names_the_renames_and_the_joined_station() {
     // The contract's example: `0 1 2 3` + `0 1 2` collide.
     let state = new_state();
@@ -664,7 +658,6 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
 }
 
 #[test]
-#[ignore = "needs C4: Combine is not ported on this branch"]
 fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
     // Main `0 1 Junction Sump 4 .. 8`, Side `0 1 Sump 3` joined at Main's
     // end: the digits collide and are lettered, Main's custom names stay, and
@@ -722,7 +715,6 @@ fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
 }
 
 #[test]
-#[ignore = "needs C4: Split Line Here and Combine are not ported on this branch"]
 fn a_combine_that_renames_nothing_says_nothing() {
     // A line split from one letter family and combined back keeps its names.
     let state = new_state();

@@ -418,7 +418,6 @@ fn config_writes_do_not_wait_behind_an_instance_change_release() {
 // --- Switch to Read Only Mode -------------------------------------------------------
 
 #[test]
-#[ignore = "C11: Switch to Read Only (speleodb_release_current_lock) is C12's stub on this branch; un-ignore at integration"]
 fn switching_to_read_only_holds_no_guard_across_the_release_post() {
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
@@ -465,7 +464,6 @@ fn switching_to_read_only_holds_no_guard_across_the_release_post() {
 }
 
 #[test]
-#[ignore = "C11: Switch to Read Only (speleodb_release_current_lock) is C12's stub on this branch; un-ignore at integration"]
 fn a_failed_read_only_release_gives_the_session_its_gate_back() {
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
@@ -504,7 +502,6 @@ fn a_failed_read_only_release_gives_the_session_its_gate_back() {
 }
 
 #[test]
-#[ignore = "C11: Switch to Read Only (speleodb_release_current_lock) is C12's stub on this branch; un-ignore at integration"]
 fn a_failed_read_only_release_after_the_session_ended_keeps_the_claim_for_the_janitor() {
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {

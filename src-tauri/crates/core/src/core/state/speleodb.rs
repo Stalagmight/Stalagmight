@@ -2747,7 +2747,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "C11: counts BASE writes across the family, and the publish tip recovery is in C12's speleodb_publish (a stub on this branch); un-ignore at integration"]
     fn base_commit_sha_advances_only_at_sanctioned_sites() {
         // Tripwire (mirrors the MUTATION_ENTRYPOINTS guard): BASE may change ONLY
         // via the sanctioned triggers. If a count below changes, a base write was
@@ -2763,6 +2762,8 @@ mod tests {
         //     4. speleodb_publish recovery - adopt the server tip when the
         //        best-effort initial push did not confirm, so a just-published
         //        project does not open the divergence prompt on its first edit
+        //        (spelled `link.base_commit_sha.clone_from(&tip)`: it stamps the
+        //        in-memory link under the held project guard, then saves it)
         //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
         //     1. speleodb_open_project - stamp BASE on pull
         //     2. speleodb_fast_forward - re-stamp BASE = tip after a clean FF
@@ -2779,7 +2780,8 @@ mod tests {
         // that move to a sibling module must keep being counted here, or the split
         // that moved them would silently retire the guard (#275).
         assert_eq!(
-            speleodb_prod_matches("base_commit_sha =", &[]),
+            speleodb_prod_matches("base_commit_sha =", &[])
+                + speleodb_prod_matches("base_commit_sha.clone_from(", &[]),
             4,
             "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2, publish tip recovery)"
         );
@@ -3254,7 +3256,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "C11: the cold-file access probe (speleodb_admin) is C12's and still reads SQLite on this branch; un-ignore at integration"]
     fn local_only_access_inspection_never_contacts_the_current_server() {
         let (base, _listener, seen) = recording_stub("{}");
         let (temp, state) = editing_fixture(&base);
@@ -3278,7 +3279,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "C11: the cold-file access probe (speleodb_admin) is C12's and still reads SQLite on this branch; un-ignore at integration"]
     fn cold_file_open_preflight_reads_link_and_remote_access_without_switching() {
         let (base, _listener, seen) = recording_stub(
             r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Restricted","permission":"READ_ONLY","active_mutex":{"user":"other@x"}}"#,
@@ -3444,7 +3444,6 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    #[ignore = "C11: the pre-push name fold (speleodb_fold_local_name) is C12's stub on this branch; un-ignore at integration"]
     fn a_late_metadata_response_cannot_rename_a_different_open_project() {
         let (_temp, state) = editing_fixture("https://unused.example/");
         let original = state

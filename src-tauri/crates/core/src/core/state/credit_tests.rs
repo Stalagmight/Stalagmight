@@ -593,7 +593,6 @@ fn import_config(shots: Vec<ShotData>, surveyors: Option<Vec<Person>>) -> Import
 }
 
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn import_overrides_replace_every_shots_credit() {
     let state = state_with_project();
     let mut file_shot = shot(1.0);
@@ -624,7 +623,6 @@ fn import_overrides_replace_every_shots_credit() {
 /// #719 review, item 5a: an import that gives every shot of a survey ONE
 /// credit (a Compass or Walls team line) costs one allocation.
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn an_imported_team_credit_stays_one_shared_allocation() {
     for overrides in [false, true] {
         let state = state_with_project();

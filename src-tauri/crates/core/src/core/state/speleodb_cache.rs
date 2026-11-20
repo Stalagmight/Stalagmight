@@ -292,8 +292,6 @@ mod tests {
     ///
     /// A diff that adds a second `Keep` site fails here and has to justify itself.
     #[test]
-    #[ignore = "C11: the scan stops at `#[cfg(test)]`, and speleodb_revisions.rs's test module \
-                is still parked (C12 flips it), so its doc comment counts; un-ignore at integration"]
     fn undo_history_keep_is_unwind_only() {
         let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
         assert_eq!(

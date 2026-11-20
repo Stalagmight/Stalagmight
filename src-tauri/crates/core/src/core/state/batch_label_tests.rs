@@ -118,7 +118,6 @@ fn batch(state: &AppState, commands: Vec<Command>) {
 }
 
 #[test]
-#[ignore = "needs C2: execute_split_shot_at_distance"]
 fn insert_station_names_the_station_it_made() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Main Line", 4)])));
@@ -133,7 +132,6 @@ fn insert_station_names_the_station_it_made() {
 }
 
 #[test]
-#[ignore = "needs C4: execute_combine_lines"]
 fn combine_lines_names_both_lines() {
     let dir = TempDir::new().unwrap();
     let mut p = survey(&[("Main Line", 2)]);
@@ -178,7 +176,6 @@ fn combine_lines_names_both_lines() {
 }
 
 #[test]
-#[ignore = "needs C7: execute_create_and_merge"]
 fn create_line_and_merge_names_the_line_and_the_station() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Main Line", 3)])));
@@ -215,7 +212,6 @@ fn split_options() -> SplitLineOptions {
 }
 
 #[test]
-#[ignore = "needs C4: execute_split_line"]
 fn split_line_names_the_line_and_the_station() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Main Line", 4)])));
@@ -229,7 +225,6 @@ fn split_line_names_the_line_and_the_station() {
 }
 
 #[test]
-#[ignore = "needs C4: execute_split_line"]
 fn split_line_inside_a_shot_names_the_station_it_made() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Main Line", 4)])));
@@ -252,7 +247,6 @@ fn split_line_inside_a_shot_names_the_station_it_made() {
 }
 
 #[test]
-#[ignore = "needs C2: execute_delete_shot_and_split"]
 fn delete_and_split_names_the_shots_and_the_line() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Main Line", 5)])));
@@ -271,7 +265,6 @@ fn delete_and_split_names_the_shots_and_the_line() {
 }
 
 #[test]
-#[ignore = "needs C2: the range-delete recipes"]
 fn range_deletes_name_the_span_and_the_line() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(
@@ -333,7 +326,6 @@ fn import_config(index: u32, name: &str) -> ImportLineConfig {
 }
 
 #[test]
-#[ignore = "needs C7: execute_import_lines"]
 fn an_import_names_the_lines_it_made() {
     let dir = TempDir::new().unwrap();
     let state = open(&write(dir.path(), &survey(&[("Existing", 1)])));

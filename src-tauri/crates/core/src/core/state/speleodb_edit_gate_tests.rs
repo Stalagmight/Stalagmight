@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::speleodb_cache::{InheritedUndo, OpenProjectToken};
+use super::speleodb_cache_install::PreparedDownload;
 use super::speleodb_edit_gate::OpenProjectGate;
 use super::synthetic_stalx_tests::write_v2;
 use super::AppState;
@@ -91,15 +93,28 @@ fn assert_gate_needs_a_bound_claim(state: &AppState, label: &str) {
 }
 
 /// The open project's bytes and generation, for a prepared in-place reload.
-fn reload_of(state: &AppState, dir: &Path, name: &str) -> (PathBuf, PathBuf, (u64, Vec<u8>)) {
+fn reload_of(
+    state: &AppState,
+    dir: &Path,
+    name: &str,
+) -> (PreparedDownload, PathBuf, OpenProjectToken) {
     let dest = state.open_project_path().expect("open path");
     let source = dir.join(format!("{name}.download"));
     seed_linked(&source, UNREACHABLE, name);
-    let expected = (
-        state.speleodb_session_generation(),
-        serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot"),
-    );
-    (source, dest, expected)
+    let link = state.speleodb_open_link().expect("linked");
+    let prepared = state
+        .prepare_download(
+            &source,
+            link,
+            InheritedUndo::Drop,
+            &super::speleodb_pull::download_decode_options(),
+        )
+        .expect("prepare");
+    let expected = {
+        let _guard = state.project.lock().expect("project");
+        state.open_project_token_locked()
+    };
+    (prepared, dest, expected)
 }
 
 #[test]
@@ -189,7 +204,6 @@ fn every_way_out_of_an_edit_session_leaves_the_gate_shut() {
 }
 
 #[test]
-#[ignore = "C11: drives open_project_download, which the SpeleoDB sync package ports"]
 fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
     // data#3, structurally: the in-place reload behind a fast-forward, Reload,
     // Restore and Take remote may CARRY a session into the generation it bumps to,
@@ -215,15 +229,12 @@ fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
             end_the_claim(&state);
         }
         let (source, dest, expected) = reload_of(&state, temp.path(), "Server version");
-        let before = expected.0;
+        let before = expected.generation;
         // `true`: the caller asks to keep editing, as Take remote's reload did.
-        assert!(
-            state
-                .open_project_download(source, dest, expected, true)
-                .expect("install")
-                .success,
-            "{label}: the reload itself succeeds"
-        );
+        state
+            .open_project_download(source, dest, expected, true)
+            .map_err(|e| format!("{label}: {e:?}"))
+            .expect("the reload itself succeeds");
         assert_ne!(state.speleodb_session_generation(), before, "a boundary");
         assert_eq!(
             state.get_project_state().expect("open").name,
@@ -235,19 +246,15 @@ fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
 }
 
 #[test]
-#[ignore = "C11: drives open_project_download, which the SpeleoDB sync package ports"]
 fn a_view_reload_never_keeps_the_gate_open() {
     // A revision View reloads with `editing: false`: whatever session was open
     // before, the view is read-only - and the claim stays as the lock's pointer.
     let temp = tempfile::TempDir::new().expect("temp");
     let (state, _path) = open_editing(temp.path(), UNREACHABLE);
     let (source, dest, expected) = reload_of(&state, temp.path(), "Revision");
-    assert!(
-        state
-            .open_project_download(source, dest, expected, false)
-            .expect("install")
-            .success
-    );
+    state
+        .open_project_download(source, dest, expected, false)
+        .expect("install");
     assert!(!state.edit_enabled());
     assert!(
         state.speleodb_holds_claim(ID),

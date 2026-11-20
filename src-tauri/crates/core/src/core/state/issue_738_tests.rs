@@ -338,7 +338,6 @@ fn merged_ends_messages(result: &CommandResult) -> Vec<String> {
 
 /// The merge's own warning for the closure it folds (0.6.0's wording).
 #[test]
-#[ignore = "C5-topology: MergeStations does not report the closures it folds on this branch"]
 fn merging_two_placed_pieces_reports_the_closure_it_folds() {
     for batched in [false, true] {
         let (p, a, b, _) = two_placed_pieces();
@@ -367,7 +366,6 @@ fn promoted_away(a: &str, b: &str) -> String {
 /// the second, reporting it by its stations before the edit; one undo
 /// brings both back.
 #[test]
-#[ignore = "C2-shots: execute_delete_shot_and_split is not ported on this branch"]
 fn delete_shot_and_split_leaves_no_closure_between_merged_stations() {
     let (p, s, _, _) = survey(&["S", "T"]);
     let north = p.line(s).unwrap().shots[1].id;
@@ -396,7 +394,6 @@ fn delete_shot_and_split_leaves_no_closure_between_merged_stations() {
 /// Delete Shot Range & Split on the issue's survey (the north shot alone):
 /// the same removal, reported the same way.
 #[test]
-#[ignore = "C2-shots: execute_delete_shot_range_split is not ported on this branch"]
 fn delete_shot_range_and_split_reports_the_closure_it_removes() {
     let (p, s, _, _) = survey(&["S", "T"]);
     let north = p.line(s).unwrap().shots[1].id;
@@ -457,7 +454,6 @@ fn branch_survey() -> (Project, [LineId; 4]) {
 /// every line; the first-shot delete renumbers X:3 to X:2, the name stays
 /// 3), and one undo brings both closures back.
 #[test]
-#[ignore = "C2-shots, C3-lines, C5-topology: these commands' sweep warnings are not ported on this branch"]
 fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
     for what in ["unmerge", "delete line", "delete shot", "delete last shot"] {
         let (p, [_, _, x, y]) = branch_survey();
@@ -498,7 +494,6 @@ fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
 /// C:0} twice; once B's datum goes, the first closure becomes the merge and
 /// the second is removed and reported.
 #[test]
-#[ignore = "C5-topology: RemoveZeroDatum is not ported on this branch"]
 fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
     let mut p = empty("datums");
     let a = line_at(&mut p, "A", [0.0, 0.0], vec![shot(90.0, 10.0)]);

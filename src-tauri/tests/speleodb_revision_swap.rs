@@ -325,7 +325,6 @@ fn swap(
 /// its revision in its place. Now the reply finds the session moved, refuses,
 /// and leaves the project the user switched to (or reopened) exactly as it is.
 #[test]
-#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn a_late_revision_reply_never_touches_the_project_open_now() {
     for (case, restore, reopen_p) in [
         ("view, switched to Q", false, false),
@@ -426,7 +425,6 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
 /// The unraced swap still does its job: a View opens the revision read-only and
 /// clean, a Restore opens it editable and un-pushed on top of the server tip.
 #[test]
-#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn an_unraced_view_and_restore_still_swap_the_open_tree() {
     for (id, restore) in [
         ("22222222-2222-2222-2222-222222222221", false),
@@ -471,7 +469,6 @@ fn an_unraced_view_and_restore_still_swap_the_open_tree() {
 /// (the server still says it is ours, so the release is sent) and the project it
 /// reopens is read-only.
 #[test]
-#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn take_remote_reopens_the_server_version_read_only() {
     let id = "33333333-3333-3333-3333-333333333331";
     let temp = tempfile::tempdir().expect("temp");

@@ -12,35 +12,14 @@
 //! edit, the placeholder sub-command rows worded after it), and the
 //! warnings naming the closures the edit removed.
 
-use super::command_shot::{any_shot_frozen, closure_warnings, station_name_at, ClosureNames};
+use super::command_shot::{any_shot_frozen, closure_warnings, ClosureNames};
 use super::commands::Record;
+use super::labels::{delete_shots_label, ShotsDeleted};
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::PreviewRow;
 use crate::models::survey::{Project as Survey, RangeDeleteMode};
-use crate::models::{
-    LineId, Project, ShotId, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
-};
-
-/// The legacy model's line-id budget refusal, kept for Split Line Here's
-/// legacy cut validation (`command_split_line.rs`) until that file moves to
-/// the station graph, whose split operations refuse the same budget
-/// themselves (`survey::Project::split_line_budget_refusal`, same words).
-pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<CommandResult> {
-    if project.next_line_id <= MAX_LINE_ID {
-        return None;
-    }
-    Some(CommandResult::failure(format!(
-        "Cannot split {}: to split it into two lines needs \
-         a new line id, but the project has reached the maximum number of lines \
-         (limit = {MAX_LINES_IN_ID_SPACE}); shot ids encode as \
-         line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
-         past {MAX_LINE_ID} cannot hold shots",
-        project
-            .line_label(line_id)
-            .map_or_else(|| "the line".to_string(), |name| format!("line \"{name}\""))
-    )))
-}
+use crate::models::{LineId, ShotId};
 
 /// The history kind 0.6.0 recorded every composite edit under (the icon the
 /// frontend maps): its undo entry was a labelled `Command::Batch`.
@@ -58,52 +37,6 @@ pub(super) fn recipe_record(project: &Survey, label: String, line: LineId) -> Re
         record.refs.lines.push(line);
     }
     record
-}
-
-/// What a range delete does with the line besides deleting the shots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShotsDeleted {
-    /// The line is split in two around the gap.
-    Split,
-    /// The line closes up (the rest stays one line).
-    CloseUp,
-    /// The line's last shot goes, and the line with it.
-    LastOfLine,
-}
-
-/// `Delete shot 4 \u{2192} 5 and split line "Main Line"`, `Delete 3 shots
-/// (4 \u{2192} 7) from line "Main Line"`, `Delete line "Main Line" with its
-/// last shot`: the shots at positions `first..=last` of `line`, read before
-/// the delete (0.6.0's `history_batch::delete_shots`).
-fn delete_shots_label(
-    project: &Survey,
-    line: LineId,
-    first: usize,
-    last: usize,
-    then: ShotsDeleted,
-) -> String {
-    let quoted = match project.line(line) {
-        Some(_) => format!("\"{}\"", project.line_label_of(line)),
-        None => "a line".to_string(),
-    };
-    if then == ShotsDeleted::LastOfLine {
-        return format!("Delete line {quoted} with its last shot");
-    }
-    let count = last.saturating_sub(first) + 1;
-    let span = format!(
-        "{} \u{2192} {}",
-        station_name_at(project, line, first),
-        station_name_at(project, line, last + 1)
-    );
-    let shots = if count == 1 {
-        format!("shot {span}")
-    } else {
-        format!("{count} shots ({span})")
-    };
-    match then {
-        ShotsDeleted::Split => format!("Delete {shots} and split line {quoted}"),
-        _ => format!("Delete {shots} from line {quoted}"),
-    }
 }
 
 /// One preview row of a placeholder sub-command, as 0.6.0's batch preview

@@ -20,7 +20,6 @@ fn workspace_context(state: &AppState) -> crate::speleodb::SpeleoReleaseContext 
 }
 
 #[test]
-#[ignore = "C11: Switch to Read Only (speleodb_release_current_lock) is C12's stub on this branch; un-ignore at integration"]
 fn workspace_readonly_refuses_pending_work_and_stale_consent_before_network() {
     for pending in ["unsaved", "unuploaded", "newer edit", "account", "session"] {
         let (_temp, state) = editing_fixture("https://unreachable.invalid/");
@@ -58,7 +57,6 @@ fn workspace_readonly_refuses_pending_work_and_stale_consent_before_network() {
 }
 
 #[test]
-#[ignore = "C11: the un-acknowledged reload's clean check (speleodb_require_clean_project) is C12's stub on this branch; un-ignore at integration"]
 fn workspace_reload_requires_consent_and_rejects_stale_project_versions() {
     let (_temp, state) = editing_fixture("https://unreachable.invalid/");
     let expected = workspace_context(&state);
@@ -154,7 +152,6 @@ fn workspace_local_settings_refuses_linked_rename_through_direct_calls() {
 }
 
 #[test]
-#[ignore = "C11: Switch to Read Only (speleodb_release_current_lock) is C12's stub on this branch; un-ignore at integration"]
 fn workspace_readonly_releases_only_a_clean_own_lock_and_closes_the_mutation_gate() {
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = editing_fixture(&base);

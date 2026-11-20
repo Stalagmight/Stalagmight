@@ -642,7 +642,6 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
 /// the create-and-merge step: ONE undo removes the line, its junction and
 /// its membership; one redo brings all three back.
 #[test]
-#[ignore = "needs C7: execute_create_and_merge_in_cave_section is not ported on this branch"]
 fn a_snapped_new_line_joins_its_section_in_one_undo_step() {
     let state = new_state();
     let (a, _, _) = three_lines(&state);
@@ -705,7 +704,6 @@ fn import_config(index: u32, name: &str, section: Option<String>) -> ImportLineC
 }
 
 #[test]
-#[ignore = "needs C7: the import funnel is not ported on this branch"]
 fn an_import_groups_by_name_and_reuses_a_same_name_section() {
     let state = new_state();
     let own = create(&state, "Own", vec![shot(0.0, 3.0)]);
@@ -746,7 +744,6 @@ fn an_import_groups_by_name_and_reuses_a_same_name_section() {
 }
 
 #[test]
-#[ignore = "needs C8: Add .stalx is not ported on this branch"]
 fn an_added_project_brings_its_sections_with_fresh_ids_and_deduped_names() {
     let dir = tempfile::TempDir::new().unwrap();
     let source_path = dir.path().join("source.stalx");
