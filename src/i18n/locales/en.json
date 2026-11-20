@@ -2319,7 +2319,7 @@
       "columns": {
         "name": "Name",
         "path": "Path",
-        "sections": "Lines",
+        "lines": "Lines",
         "length": "Length",
         "edited": "Edited"
       },
