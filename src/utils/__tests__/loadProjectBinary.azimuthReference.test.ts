@@ -45,7 +45,7 @@ function envelope(overrides: {
   });
 
   return {
-    version: 8,
+    version: 9,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -65,7 +65,6 @@ function envelope(overrides: {
       station_merges: [],
       zero_datums: [],
       loop_closures: [],
-      line_offsets: [],
       station_offsets: [],
       station_comments_map: [],
       imported_file_hashes: [],

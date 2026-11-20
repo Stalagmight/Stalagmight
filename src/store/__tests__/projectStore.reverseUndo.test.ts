@@ -89,7 +89,6 @@ function projectWith(stations: Station[]) {
     loop_closures: [],
     file_path: '/tmp/reverse.stalx',
     next_line_id: 5,
-    line_offsets: {},
     imported_file_hashes: [],
     imported_line_hashes: [],
   };
