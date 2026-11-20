@@ -18,33 +18,33 @@
 //!
 //! # The pipeline, as measured
 //!
-//! `AppState::save_project` (`core/state/project_io.rs:602`), with the line that
+//! `AppState::save_project` (`core/state/project_io.rs:572`), with the line that
 //! performs each step. Only the steps that TOUCH THE DISK are listed; the heals
 //! and snapshots before them are in-memory:
 //!
 //! ```text
-//!  :749   temp_path = save_path.with_extension("stalx.tmp")   <- the name, exactly
-//!  :1083  remove a leftover <stem>.stalx.tmp from a previous failed save
-//!  :1089  Database::open_staging(&temp_path)  - creates the temp database,
+//!  :719   temp_path = save_path.with_extension("stalx.tmp")   <- the name, exactly
+//!  :1053  remove a leftover <stem>.stalx.tmp from a previous failed save
+//!  :1059  Database::open_staging(&temp_path)  - creates the temp database,
 //!                                               SQLite's per-commit syncs off
-//!  :1098  db.save_project(project)            - the survey, in one transaction
-//!  :1116  display settings, one row at a time
-//!  :1128  resolved warnings
-//!  :1150  speleo_link / undo chain / watermark
-//!  :1190  the undo and redo stacks
-//!  :1217  drop(db)                            - the temp database is closed
-//!  :1225  sync_staged_save(&temp_path)        - the save's one sync of the file
-//!  :1277  close the LIVE handle on the destination (Windows rename hazard)
-//!  :1285  std::fs::rename(&temp_path, &save_path)   <- the atomic moment
-//!  :1310  sync_dir(&save_path)                - the folder, so the rename lasts
-//!  :1337  Database::open(&save_path)          - reopen for continued editing
-//!  :1382  note_recent_project(&save_path)
+//!  :1068  db.save_project(project)            - the survey, in one transaction
+//!  :1086  display settings, one row at a time
+//!  :1098  resolved warnings
+//!  :1120  speleo_link / undo chain / watermark
+//!  :1160  the undo and redo stacks
+//!  :1187  drop(db)                            - the temp database is closed
+//!  :1195  sync_staged_save(&temp_path)        - the save's one sync of the file
+//!  :1247  close the LIVE handle on the destination (Windows rename hazard)
+//!  :1255  std::fs::rename(&temp_path, &save_path)   <- the atomic moment
+//!  :1280  sync_dir(&save_path)                - the folder, so the rename lasts
+//!  :1307  Database::open(&save_path)          - reopen for continued editing
+//!  :1352  note_recent_project(&save_path)
 //! ```
 //!
 //! Two facts fall out of it and shape everything below.
 //!
 //! **The destination is only ever touched by the rename.** Every write before
-//! `:1285` goes into `<stem>.stalx.tmp`. So for every pre-rename boundary the
+//! `:1255` goes into `<stem>.stalx.tmp`. So for every pre-rename boundary the
 //! destination still holds the OLD file, BYTE for byte - which is why the
 //! expectation for those is not "old or new" but the strictly stronger "exactly
 //! old".
@@ -57,14 +57,14 @@
 //!
 //! **The temp is written without syncs, then synced once.** The staging
 //! connection runs with `synchronous = OFF` (`Database::open_staging`), and
-//! `:1225` syncs the closed file before the rename. Neither changes what a KILL
+//! `:1195` syncs the closed file before the rename. Neither changes what a KILL
 //! leaves: a killed process's writes are already in the OS, synced or not, so
 //! every state below is reachable exactly as before. What `synchronous = OFF`
 //! does change is the journal HEADER a staging write lays down, so the temp's
 //! interrupted writes are built through a staging connection
 //! ([`Writer::Staging`]) and replayed by the oracle like any other.
 //!
-//! A POWER LOSS before `:1225` can leave the temp in states a kill cannot (a
+//! A POWER LOSS before `:1195` can leave the temp in states a kill cannot (a
 //! journal that never reached the disk beside pages that did). Those are not
 //! injected: the destination is untouched in all of them, and the temp is the
 //! scratch file the torn-temp sweep below already treats as such. The sync is
@@ -89,16 +89,16 @@
 //!
 //! | injected state | the kill lands |
 //! |---|---|
-//! | destination only | before `:1089`, or after any failure cleanup (`:1093`, `:1101`, `:1194`, `:1226`, `:1286`) |
-//! | destination + temp truncated to N bytes | inside `:1098`-`:1214` |
-//! | destination + temp mid-transaction + its hot journal | inside `:1116`-`:1214`, after the survey committed |
-//! | destination + whole temp | between `:1217` and `:1285` (before or after the sync: a kill leaves the same bytes) |
-//! | new destination | between `:1285` and `:1337`/`:1382` |
+//! | destination only | before `:1059`, or after any failure cleanup (`:1063`, `:1071`, `:1164`, `:1196`, `:1256`) |
+//! | destination + temp truncated to N bytes | inside `:1068`-`:1184` |
+//! | destination + temp mid-transaction + its hot journal | inside `:1086`-`:1184`, after the survey committed |
+//! | destination + whole temp | between `:1187` and `:1255` (before or after the sync: a kill leaves the same bytes) |
+//! | new destination | between `:1255` and `:1307`/`:1352` |
 //! | new destination + an orphaned `<stem>.stalx.tmp-journal` | see below |
-//! | destination mid-transaction + its hot journal | inside a write through the handle reopened at `:1337` |
+//! | destination mid-transaction + its hot journal | inside a write through the handle reopened at `:1307` |
 //!
 //! The orphaned-journal row is the one that is not obvious, and it is the reason
-//! the journal cases are here at all. `:1083` removes a leftover
+//! the journal cases are here at all. `:1053` removes a leftover
 //! `<stem>.stalx.tmp` before the next save starts - but NOT that temp's
 //! `-journal`. So a save killed mid-transaction leaves two files; the next save
 //! deletes one of them, creates a fresh temp database at that same name, and
@@ -132,7 +132,7 @@
 //!    or recoverable by SQLite's own journal replay, so a clean refusal is NOT
 //!    an acceptable answer: it would mean a crash cost the user their file.
 //! 4. **Recovery forward.** The reopened project is saved again. That save must
-//!    succeed, and it must leave NO `.stalx.tmp` behind - `:1083` promises the
+//!    succeed, and it must leave NO `.stalx.tmp` behind - `:1053` promises the
 //!    leftover is removed, and this is what walks the fresh temp into the
 //!    orphaned journal described above.
 //! 5. **The leftover staging file.** A temp cannot BE the project by accident -
@@ -193,7 +193,7 @@
 //! be an artifact of the injection rather than a defect. The INTACT hot journal
 //! is the faithful case and is injected.
 //!
-//! **The recent-projects config write.** `:1382` is the pipeline's one write to a
+//! **The recent-projects config write.** `:1352` is the pipeline's one write to a
 //! file that is not the `.stalx`, and it has its own atomic-write scheme with its
 //! own abandoned-temp sweep and its own tests (`config/atomic_write.rs:239`,
 //! `config/tests.rs:3049-3361`). Duplicating that here would test the same code
@@ -264,7 +264,7 @@ struct Reference {
 }
 
 /// Where the pipeline stages its write: `save_path.with_extension("stalx.tmp")`
-/// (`project_io.rs:749`). Spelled the same way here on purpose, and pinned by
+/// (`project_io.rs:719`). Spelled the same way here on purpose, and pinned by
 /// `the_engine_injects_at_the_temp_path_the_pipeline_uses` - an engine that
 /// injected at a name the pipeline does not use would pass vacuously forever.
 fn temp_path_of(save_path: &Path) -> PathBuf {
@@ -406,16 +406,16 @@ enum Shape {
     /// The new destination, alone.
     Renamed,
     /// The new destination, plus the `-journal` of a temp two saves ago that
-    /// `:1083`'s cleanup does not remove.
+    /// `:1053`'s cleanup does not remove.
     RenamedWithOrphanedJournal,
     /// The destination caught mid-transaction with its own hot journal - a kill
-    /// during a write through the handle reopened at `:1337`.
+    /// during a write through the handle reopened at `:1307`.
     HotJournal,
 }
 
 /// Where to truncate the temp file, for a database of `len` bytes.
 ///
-/// Not arbitrary: 0 is a temp the `Database::open_staging` at `:1089` created and nothing
+/// Not arbitrary: 0 is a temp the `Database::open_staging` at `:1059` created and nothing
 /// was written to; 1 is a single byte of the magic string; 100 is exactly
 /// SQLite's file header, so the header is complete and every page is missing;
 /// 4096 is one default page; then the midpoint and one byte short of the whole
@@ -432,49 +432,49 @@ fn truncation_points(len: usize) -> Vec<usize> {
 fn crashes(reference: &Reference) -> Vec<Crash> {
     let mut out = vec![Crash {
         id: "destination-only".to_string(),
-        after: "before the temp database is created (project_io.rs:1089), or after any of \
-                the failure cleanups removed it (:1093, :1101, :1194, :1226, :1286)",
+        after: "before the temp database is created (project_io.rs:1059), or after any of \
+                the failure cleanups removed it (:1063, :1071, :1164, :1196, :1256)",
         shape: Shape::Untouched,
         expect: Expect::Old,
     }];
     for bytes in truncation_points(reference.new.len()) {
         out.push(Crash {
             id: format!("temp-truncated-at-{bytes}"),
-            after: "part-way through writing the staged file (project_io.rs:1098-:1214)",
+            after: "part-way through writing the staged file (project_io.rs:1068-:1184)",
             shape: Shape::TornTemp { bytes },
             expect: Expect::Old,
         });
     }
     out.push(Crash {
         id: "temp-mid-transaction-with-a-hot-journal".to_string(),
-        after: "a write into the already-committed staged file (project_io.rs:1116-:1214)",
+        after: "a write into the already-committed staged file (project_io.rs:1086-:1184)",
         shape: Shape::TempMidTransaction,
         expect: Expect::Old,
     });
     out.push(Crash {
         id: "temp-complete-but-not-renamed".to_string(),
-        after: "the staged database was closed (project_io.rs:1217), synced or not yet (:1225), \
-                and before the rename (:1285)",
+        after: "the staged database was closed (project_io.rs:1187), synced or not yet (:1195), \
+                and before the rename (:1255)",
         shape: Shape::StagedTemp,
         expect: Expect::Old,
     });
     out.push(Crash {
         id: "renamed".to_string(),
-        after: "the rename (project_io.rs:1285), before the reopen (:1337) or the recents \
-                update (:1382)",
+        after: "the rename (project_io.rs:1255), before the reopen (:1307) or the recents \
+                update (:1352)",
         shape: Shape::Renamed,
         expect: Expect::New,
     });
     out.push(Crash {
         id: "renamed-over-an-orphaned-temp-journal".to_string(),
-        after: "a save that followed an interrupted one: :1083 removed the leftover temp but \
-                not its -journal, and :1285 renamed the fresh temp over the destination",
+        after: "a save that followed an interrupted one: :1053 removed the leftover temp but \
+                not its -journal, and :1255 renamed the fresh temp over the destination",
         shape: Shape::RenamedWithOrphanedJournal,
         expect: Expect::New,
     });
     out.push(Crash {
         id: "destination-mid-transaction-with-a-hot-journal".to_string(),
-        after: "a write through the handle the save reopened at project_io.rs:1337",
+        after: "a write through the handle the save reopened at project_io.rs:1307",
         shape: Shape::HotJournal,
         expect: Expect::Old,
     });
@@ -806,14 +806,14 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
     }
 
     // ORACLE 4: recovery forward. Saving again must work, and must clear the
-    // leftover temp `:1083` promises to remove.
+    // leftover temp `:1053` promises to remove.
     let saved = state.save_project(None);
     if saved.success {
         let strays = stray_temps(dir);
         if !strays.is_empty() {
             problems.push(label(&format!(
                 "the recovery save succeeded but left a staging file behind: {strays:?} \
-                 (project_io.rs:1083 removes a leftover temp before starting, and :1285 renames its \
+                 (project_io.rs:1053 removes a leftover temp before starting, and :1255 renames its \
                  own away)"
             )));
         }
@@ -824,7 +824,7 @@ fn inspect(seed: u32, dir: &Path, reference: &Reference, crash: &Crash) -> Outco
             ));
         }
         // Measured, not asserted: what became of the orphaned journal. Nothing
-        // promises it is cleaned up - `:1083` removes the temp and says nothing
+        // promises it is cleaned up - `:1053` removes the temp and says nothing
         // about its journal - so a survivor would be a leak rather than a broken
         // promise. Both outcomes are counted, so the summary distinguishes
         // "measured, and it is cleaned up" from "never looked".

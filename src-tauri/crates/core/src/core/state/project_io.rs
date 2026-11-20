@@ -179,36 +179,6 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
-/// Sync a closed staging file to disk, through a handle that may write it:
-/// Windows flushes a file's buffers only through a handle opened for writing.
-fn sync_staged_save(path: &Path) -> std::io::Result<()> {
-    #[cfg(test)]
-    if let Some(hook) = STAGED_SYNC_HOOK.with(|slot| slot.borrow_mut().take()) {
-        hook(path)?;
-    }
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?
-        .sync_all()
-}
-
-#[cfg(test)]
-type StagedSyncHook = Box<dyn FnOnce(&Path) -> std::io::Result<()>>;
-
-#[cfg(test)]
-thread_local! {
-    static STAGED_SYNC_HOOK: std::cell::RefCell<Option<StagedSyncHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Test-only: run `hook` at the start of the next staged-file sync on this
-/// thread, with the staging path. An `Err` from it fails that sync.
-#[cfg(test)]
-pub(super) fn set_staged_sync_hook(hook: impl FnOnce(&Path) -> std::io::Result<()> + 'static) {
-    STAGED_SYNC_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
-
 /// The undo-less heals a save applies to the LIVE project, in one place.
 ///
 /// Every one of them mutates the open project with **no undo entry of its own**,
@@ -1655,4 +1625,38 @@ pub(super) fn same_file(a: &Path, b: &Path) -> bool {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,
     }
+}
+
+/// Sync a closed staging file to disk, through a handle that may write it:
+/// Windows flushes a file's buffers only through a handle opened for writing.
+///
+/// At the end of the file with its test hook, below every production item:
+/// `speleodb_session`'s bump-site scan reads a file only up to its first
+/// `#[cfg(test)]`.
+fn sync_staged_save(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(hook) = STAGED_SYNC_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook(path)?;
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()
+}
+
+#[cfg(test)]
+type StagedSyncHook = Box<dyn FnOnce(&Path) -> std::io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    static STAGED_SYNC_HOOK: std::cell::RefCell<Option<StagedSyncHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: run `hook` at the start of the next staged-file sync on this
+/// thread, with the staging path. An `Err` from it fails that sync.
+#[cfg(test)]
+pub(super) fn set_staged_sync_hook(hook: impl FnOnce(&Path) -> std::io::Result<()> + 'static) {
+    STAGED_SYNC_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
