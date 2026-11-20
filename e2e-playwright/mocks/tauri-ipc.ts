@@ -59,7 +59,6 @@ interface MockProject {
   lines: MockLine[];
   station_merges: unknown[];
   zero_datums: unknown[];
-  line_offsets: Record<string, [number, number]>;
 }
 
 interface MockLine {
@@ -95,7 +94,6 @@ function createMockProject(overrides?: Partial<MockProject>): MockProject {
     lines: [],
     station_merges: [],
     zero_datums: [],
-    line_offsets: {},
     ...overrides,
   };
 }
@@ -202,7 +200,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         station_merges: unknown[];
         zero_datums: unknown[];
         loop_closures: unknown[];
-        line_offsets: Record<string, unknown>;
         // Sections (#327): named groupings of lines.
         cave_sections?: Array<{ id: number; name: string; color: string }>;
         next_cave_section_id?: number;
@@ -481,53 +478,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return null;
       };
 
-      // `line_offsets` reaches the mock in TWO shapes, so nothing may index it
-      // directly. `create_project_full` / `import_lines` / `execute_gpx_import`
-      // build the JS `Record<lineId, [dx, dy]>`, while the binary envelope
-      // (`load_project_full_binary`, mirroring `core/load_binary.rs`) and anything
-      // injected through `__E2E_MOCKS__.setCurrentProject` carry the backend's
-      // `Array<[lineId, [dx, dy]]>` pairs. `offsets["1"] = [dx, dy]` on the
-      // array form sets ELEMENT 1 - silently clobbering a neighbouring line's
-      // pair with a bare coordinate - so every read/write goes through these.
-      const lineOffsetPairs = (offsets: unknown): Array<[number, [number, number]]> => {
-        if (Array.isArray(offsets)) {
-          return (offsets as Array<[number, [number, number]]>).map(
-            ([k, v]) => [Number(k), v] as [number, [number, number]],
-          );
-        }
-        return Object.entries((offsets ?? {}) as Record<string, [number, number]>).map(
-          ([k, v]) => [Number(k), v] as [number, [number, number]],
-        );
-      };
-      const readLineOffset = (offsets: unknown, lineId: number): [number, number] => {
-        if (Array.isArray(offsets)) {
-          const entry = (offsets as Array<[number, [number, number]]>).find(
-            ([k]) => Number(k) === lineId,
-          );
-          return entry?.[1] ?? [0, 0];
-        }
-        return (
-          (offsets as Record<string, [number, number] | undefined> | null | undefined)?.[
-            String(lineId)
-          ] ?? [0, 0]
-        );
-      };
-      const writeLineOffset = (
-        offsets: unknown,
-        lineId: number,
-        value: [number, number],
-      ): void => {
-        if (Array.isArray(offsets)) {
-          const pairs = offsets as Array<[number, [number, number]]>;
-          const at = pairs.findIndex(([k]) => Number(k) === lineId);
-          if (at >= 0) pairs[at] = [lineId, value];
-          else pairs.push([lineId, value]);
-          return;
-        }
-        if (offsets && typeof offsets === 'object') {
-          (offsets as Record<string, [number, number]>)[String(lineId)] = value;
-        }
-      };
 
       // Cache mock state - tracks cache operations for verification
       // Use explicit types so providers can be empty and keys can be deleted
@@ -898,6 +848,145 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockStationNames[`${lineId}:${stationIndex}`] ?? String(stationIndex);
       const mockStationId = (lineId: number, stationIndex: number): number =>
         lineId * 100_000 + stationIndex;
+      // The station graph (`.stalx` v2, plan 9.2): a merge is ONE station that
+      // two or more lines pass. The mock keeps its merges as stored pairs, but
+      // derives what the backend's wire shows from their union: every slot of
+      // a junction lists every other slot of it in `merged_with` (transitively),
+      // they share one Station ID, name and comment (the junction's first slot
+      // in line order then index is its representative), and `station_merges`
+      // goes out as star pairs from that first slot.
+      const mockSlotKey = (ref: MockStationRef): string => `${ref.line_id}:${ref.station_index}`;
+      const mockJunctions = (
+        lines: ReadonlyArray<{ id: number }>,
+        merges: ReadonlyArray<{ station_a: MockStationRef; station_b: MockStationRef }>,
+      ): Map<string, MockStationRef[]> => {
+        const parent = new Map<string, string>();
+        const refOf = new Map<string, MockStationRef>();
+        const root = (k: string): string => {
+          let r = k;
+          while (parent.has(r) && parent.get(r) !== r) r = parent.get(r)!;
+          return r;
+        };
+        for (const m of merges) {
+          const a = mockSlotKey(m.station_a);
+          const b = mockSlotKey(m.station_b);
+          refOf.set(a, { line_id: m.station_a.line_id, station_index: m.station_a.station_index });
+          refOf.set(b, { line_id: m.station_b.line_id, station_index: m.station_b.station_index });
+          const ra = root(a);
+          const rb = root(b);
+          if (ra !== rb) parent.set(rb, ra);
+        }
+        const order = new Map<number, number>();
+        lines.forEach((line, i) => order.set(line.id, i));
+        const groups = new Map<string, MockStationRef[]>();
+        for (const [k, ref] of refOf) {
+          const r = root(k);
+          const members = groups.get(r) ?? [];
+          members.push(ref);
+          groups.set(r, members);
+        }
+        const bySlot = new Map<string, MockStationRef[]>();
+        for (const members of groups.values()) {
+          if (members.length < 2) continue;
+          members.sort(
+            (x, y) =>
+              (order.get(x.line_id) ?? Number.MAX_SAFE_INTEGER) -
+                (order.get(y.line_id) ?? Number.MAX_SAFE_INTEGER) ||
+              x.line_id - y.line_id ||
+              x.station_index - y.station_index,
+          );
+          for (const m of members) bySlot.set(mockSlotKey(m), members);
+        }
+        return bySlot;
+      };
+      /** What a slot shows on the wire: its junction's other slots, and the
+       *  identity the junction shares (the representative's). */
+      const mockSlotIdentity = (
+        junctions: Map<string, MockStationRef[]>,
+        ref: MockStationRef,
+      ): { merged_with: MockStationRef[]; id: number; name: string; comment: string | undefined } => {
+        const members = junctions.get(mockSlotKey(ref));
+        const rep = members?.[0] ?? ref;
+        const others = members
+          ? members.filter((m) => m.line_id !== ref.line_id || m.station_index !== ref.station_index)
+          : [];
+        let comment = mockStationComments[mockSlotKey(rep)];
+        for (const m of members ?? []) {
+          if (comment !== undefined) break;
+          comment = mockStationComments[mockSlotKey(m)];
+        }
+        return {
+          merged_with: others.map((m) => ({ line_id: m.line_id, station_index: m.station_index })),
+          id: mockStationId(rep.line_id, rep.station_index),
+          name: mockStationName(rep.line_id, rep.station_index),
+          comment,
+        };
+      };
+      /** The wire's `station_merges`: star pairs from each junction's first slot,
+       *  stamped with the project's creation time (`merged_at`, plan W4). */
+      const mockStarMerges = (
+        junctions: Map<string, MockStationRef[]>,
+        createdAt: string | undefined,
+      ): Array<{ station_a: MockStationRef; station_b: MockStationRef; merged_at: string }> => {
+        const seen = new Set<MockStationRef[]>();
+        const pairs: Array<{ station_a: MockStationRef; station_b: MockStationRef; merged_at: string }> = [];
+        for (const members of junctions.values()) {
+          if (seen.has(members)) continue;
+          seen.add(members);
+          const [first, ...rest] = members;
+          for (const m of rest) {
+            pairs.push({
+              station_a: { ...first! },
+              station_b: { ...m },
+              merged_at: createdAt ?? new Date(0).toISOString(),
+            });
+          }
+        }
+        return pairs;
+      };
+      /** Every slot of the junction `ref` is on (itself when it is on no other line). */
+      const mockJunctionSlots = (ref: MockStationRef): MockStationRef[] => {
+        const merges = (currentProject?.station_merges ?? []) as Array<{
+          station_a: MockStationRef;
+          station_b: MockStationRef;
+        }>;
+        const lines = (currentProject?.lines ?? []) as Array<{ id: number }>;
+        return mockJunctions(lines, merges).get(mockSlotKey(ref)) ?? [ref];
+      };
+      /** Detach `ref`'s line from its junction (plan 5.2): the slot leaves, the
+       *  other slots stay ONE station (stored again as a star). */
+      const mockDetachSlot = (ref: MockStationRef): boolean => {
+        if (!currentProject) return false;
+        const merges = currentProject.station_merges as Array<{
+          station_a: MockStationRef;
+          station_b: MockStationRef;
+        }>;
+        const lines = currentProject.lines as Array<{ id: number }>;
+        const members = mockJunctions(lines, merges).get(mockSlotKey(ref));
+        if (!members) return false;
+        const inGroup = new Set(members.map(mockSlotKey));
+        const kept = merges.filter(
+          (m) => !inGroup.has(mockSlotKey(m.station_a)) && !inGroup.has(mockSlotKey(m.station_b)),
+        );
+        const rest = members.filter((m) => mockSlotKey(m) !== mockSlotKey(ref));
+        for (const m of rest.slice(1)) kept.push({ station_a: { ...rest[0]! }, station_b: { ...m } });
+        currentProject.station_merges = kept;
+        return true;
+      };
+      /** The project as the wire sends it: `station_merges` derived as star
+       *  pairs (the stored pairs stay the mock's own bookkeeping). */
+      const withWireMerges = <
+        P extends { lines?: unknown[]; station_merges?: unknown[]; created_at?: string } | null,
+      >(
+        project: P,
+      ): P => {
+        if (!project) return project;
+        const junctions = mockJunctions(
+          (project.lines ?? []) as Array<{ id: number }>,
+          (project.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
+        );
+        return { ...project, station_merges: mockStarMerges(junctions, project.created_at) };
+      };
       (window as unknown as Record<string, unknown>).__MOCK_SET_STATION_NAME__ = (
         lineId: number,
         stationIndex: number,
@@ -964,6 +1053,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
       (window as unknown as Record<string, unknown>).__MOCK_HISTORY_DISCARDED_CALLS__ = () =>
         mockHistoryDiscardedCalls;
+
+      // `.stalx` v2 file status (plan 6.4, 6.5, 7.2.10). All default to the
+      // ordinary case (an editable file nobody else touched, no conversion), so
+      // no existing spec sees a banner or a save prompt it did not ask for.
+      // - __MOCK_SET_EXTERNALLY_MODIFIED__(true): the next saves to the open
+      //   file are refused with `EXTERNALLY_MODIFIED: ...`, as the guard does,
+      //   until `save_project_overwriting` writes over it (or the spec clears it).
+      // - __MOCK_SET_READ_ONLY_REASON__(text): the file was made with a newer
+      //   Stalagmight; `project_read_only_reason` answers `text`, saves are
+      //   refused with `READ_ONLY_FILE: ...`.
+      // - __MOCK_SET_CONVERSION_NOTICE__(text): the next `take_conversion_notice`
+      //   hands `text` over, once.
+      let mockExternallyModified = false;
+      let mockReadOnlyReason: string | null = null;
+      let mockConversionNotice: string | null = null;
+      let mockBackendDirty = false;
+      const mockSaveCalls: Array<{ command: string; path: string | null }> = [];
+      (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean) => {
+        mockExternallyModified = !!on;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_READ_ONLY_REASON__ = (reason: string | null) => {
+        mockReadOnlyReason = reason;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_CONVERSION_NOTICE__ = (notice: string | null) => {
+        mockConversionNotice = notice;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_SAVE_CALLS__ = () => [...mockSaveCalls];
 
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
@@ -1347,7 +1463,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
-              line_offsets: {},
             };
 
             // Return CreateProjectFullResult format
@@ -1424,7 +1539,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
-              line_offsets: {},
             };
 
             // Phase 2: Loading project data
@@ -1459,12 +1573,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               name: string;
             }> = [];
 
-            // Collect all line IDs for merged station setup
-            const lineIds = (currentProject.lines as Array<{ id: number }>).map(s => s.id);
             const currentMerges = (currentProject.station_merges ?? []) as Array<{
               station_a: { line_id: number; station_index: number };
               station_b: { line_id: number; station_index: number };
             }>;
+            const loadJunctions = mockJunctions(
+              currentProject.lines as Array<{ id: number }>,
+              currentMerges,
+            );
             const currentClosures = (currentProject.loop_closures ?? []) as Array<{
               id: bigint;
               station_a: { line_id: number; station_index: number };
@@ -1492,34 +1608,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
               for (let i = 0; i < depths.length; i++) {
                 const stationRef = { line_id: line.id, station_index: i };
-                let mergedWith: Array<{ line_id: number; station_index: number }> = currentMerges
-                  .flatMap((merge) => {
-                    const isA =
-                      merge.station_a.line_id === stationRef.line_id &&
-                      merge.station_a.station_index === stationRef.station_index;
-                    const isB =
-                      merge.station_b.line_id === stationRef.line_id &&
-                      merge.station_b.station_index === stationRef.station_index;
-                    if (isA) return [merge.station_b];
-                    if (isB) return [merge.station_a];
-                    return [];
-                  });
-
-                const lineIndex = lineIds.indexOf(line.id);
-                const isLastStation = i === depths.length - 1;
-                const isFirstStation = i === 0;
-
-                // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
-                if (mergedWith.length === 0 && currentMerges.length === 0) {
-                  if (lineIndex === 0 && isLastStation && lineIds.length > 1) {
-                    mergedWith = [{ line_id: lineIds[1]!, station_index: 0 }];
-                  }
-                  if (lineIndex === 1 && isFirstStation && lineIds.length > 1) {
-                    const firstLine = currentProject.lines[0] as { shots: unknown[] } | undefined;
-                    const firstLineLastStationIndex = firstLine ? (firstLine.shots?.length ?? 0) : 0;
-                    mergedWith = [{ line_id: lineIds[0]!, station_index: firstLineLastStationIndex }];
-                  }
-                }
+                const identity = mockSlotIdentity(loadJunctions, stationRef);
 
                 // Derive is_zero_datum and gps_coordinates from project zero_datums
                 const loadDatum = loadDatums.find(
@@ -1556,12 +1645,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
                   is_zero_datum: !!loadDatum,
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
-                  merged_with: mergedWith,
+                  merged_with: identity.merged_with,
                   ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
-                  // Station identity: the backend gives every station a
-                  // project-unique Station ID and a line-unique name.
-                  id: mockStationId(line.id as number, i),
-                  name: mockStationName(line.id as number, i),
+                  ...(identity.comment !== undefined ? { comment: identity.comment } : {}),
+                  // Station identity: a junction's slots share one Station ID
+                  // and name (the station graph's wire, plan 9.2).
+                  id: identity.id,
+                  name: identity.name,
                 });
               }
             }
@@ -1607,7 +1697,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return LoadProjectFullResult format
             return {
               loadingId,
-              project: withShotCredit(currentProject),
+              project: withWireMerges(withShotCredit(currentProject)),
               stations: mockStations,
               stats: {
                 line_count: currentProject.lines.length,
@@ -1681,7 +1771,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   }>;
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
-                loop_closures?: unknown[]; line_offsets?: Record<string, [number, number]>;
+                loop_closures?: unknown[];
                 // Present once `update_project_settings` has stored per-project
                 // thresholds on the mock project (#57).
                 validation?: Record<string, number>;
@@ -1859,8 +1949,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
               // line header); 6 to 7 for per-shot survey credit; 7 to 8 for
-              // station identity (dense `stations_ids`, every station named).
-              version: 8,
+              // station identity (dense `stations_ids`, every station named);
+              // 8 to 9 for the station graph (no `line_offsets`; a junction's
+              // slots share one Station ID, name and comment).
+              version: 9,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1881,7 +1973,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_merges: jsonResult.project.station_merges ?? [],
                 zero_datums: jsonResult.project.zero_datums ?? [],
                 loop_closures: jsonResult.project.loop_closures ?? [],
-                line_offsets: lineOffsetPairs(jsonResult.project.line_offsets),
                 // The mock has no `station_offsets` state: no mocked command ever
                 // writes one, so there is nothing for a reverse to mirror either
                 // (the backend's `for_each_station_ref` does mirror them). Give
@@ -1962,7 +2053,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return Array.from(bytes);
           }
 
-          case 'save_project': {
+          case 'save_project':
+          case 'save_project_overwriting': {
+            mockSaveCalls.push({ command: cmd, path: (args?.path as string | null | undefined) ?? null });
+            // A file made with a newer Stalagmight never takes a body save
+            // (plan 6.4), Overwrite or not.
+            if (mockReadOnlyReason !== null) {
+              return {
+                success: false,
+                error: 'READ_ONLY_FILE: this project was made with a newer Stalagmight; it is open read-only and cannot be saved',
+                warnings: [],
+                line_ids: [],
+              };
+            }
+            // The external-modification guard (plan 6.5): a save to the OPEN
+            // file is refused while another program's change is on disk; an
+            // explicit Save As destination and the Overwrite answer write.
+            const toOpenFile = !args?.path || args.path === projectPath;
+            if (cmd === 'save_project' && mockExternallyModified && toOpenFile) {
+              return {
+                success: false,
+                error: `EXTERNALLY_MODIFIED: ${projectPath ?? 'the project file'} was changed by another program since it was opened`,
+                warnings: [],
+                line_ids: [],
+              };
+            }
+            if (cmd === 'save_project_overwriting' || !toOpenFile) mockExternallyModified = false;
+            mockBackendDirty = false;
             // Mirror the backend's Save-a-Copy contract: an EXPLICIT destination
             // on a SpeleoDB-managed project writes a detached unlinked copy - the
             // session does NOT move (projectPath/file_path untouched) and the
@@ -2027,12 +2144,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               name: string;
             }> = [];
 
-            // Collect all line IDs for merged station setup
-            const lineIdList = (currentProject?.lines as Array<{ id: number }> ?? []).map(s => s.id);
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
               station_a: { line_id: number; station_index: number };
               station_b: { line_id: number; station_index: number };
             }>;
+            const stateJunctions = mockJunctions(
+              (currentProject?.lines ?? []) as Array<{ id: number }>,
+              stateMerges,
+            );
             const stateClosures = (currentProject?.loop_closures ?? []) as Array<{
               id: bigint;
               station_a: { line_id: number; station_index: number };
@@ -2049,36 +2168,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               for (const line of currentProject.lines as Array<{ id: number; shots: unknown[] }>) {
                 // Each line gets (shots.length + 1) stations
                 const shotCount = line.shots?.length ?? 0;
-                const lineIndex = lineIdList.indexOf(line.id);
 
                 for (let i = 0; i <= shotCount; i++) {
                   const stationRef = { line_id: line.id, station_index: i };
-                  let mergedWith: Array<{ line_id: number; station_index: number }> = stateMerges
-                    .flatMap((merge) => {
-                      const isA =
-                        merge.station_a.line_id === stationRef.line_id &&
-                        merge.station_a.station_index === stationRef.station_index;
-                      const isB =
-                        merge.station_b.line_id === stationRef.line_id &&
-                        merge.station_b.station_index === stationRef.station_index;
-                      if (isA) return [merge.station_b];
-                      if (isB) return [merge.station_a];
-                      return [];
-                    });
-                  const isLastStation = i === shotCount;
-                  const isFirstStation = i === 0;
-
-                  // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
-                  if (mergedWith.length === 0 && stateMerges.length === 0) {
-                    if (lineIndex === 0 && isLastStation && lineIdList.length > 1) {
-                      mergedWith = [{ line_id: lineIdList[1]!, station_index: 0 }];
-                    }
-                    if (lineIndex === 1 && isFirstStation && lineIdList.length > 1) {
-                      const firstLine = currentProject.lines[0] as { shots?: unknown[] } | undefined;
-                      const firstLineLastStationIndex = firstLine?.shots?.length ?? 0;
-                      mergedWith = [{ line_id: lineIdList[0]!, station_index: firstLineLastStationIndex }];
-                    }
-                  }
+                  const identity = mockSlotIdentity(stateJunctions, stationRef);
 
                   // Derive is_zero_datum and gps_coordinates from project zero_datums
                   const matchingDatum = zeroDatums.find(
@@ -2110,18 +2203,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return [];
                   });
 
-                  const storedComment = mockStationComments[`${line.id}:${i}`];
-                  const storedName = mockStationNames[`${line.id}:${i}`];
                   mockStations.push({
                     station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
                     is_zero_datum: !!matchingDatum,
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
-                    merged_with: mergedWith,
+                    merged_with: identity.merged_with,
                     ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
-                    ...(storedComment !== undefined ? { comment: storedComment } : {}),
-                    id: mockStationId(line.id as number, i),
-                    name: storedName ?? String(i),
+                    ...(identity.comment !== undefined ? { comment: identity.comment } : {}),
+                    id: identity.id,
+                    name: identity.name,
                   });
                 }
               }
@@ -2157,7 +2248,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the lines one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? withDatumRoles(withShotCredit(structuredClone(currentProject))) : currentProject,
+              project: currentProject ? withWireMerges(withDatumRoles(withShotCredit(structuredClone(currentProject)))) : currentProject,
               stations: mockStations,
               stats: {
                 line_count: currentProject?.lines.length ?? 0,
@@ -2983,7 +3074,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                line_offsets: {},
               };
             }
             const importedLines = rawLines.map((lineData) => {
@@ -3156,7 +3246,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                line_offsets: {},
               };
             }
 
@@ -3355,7 +3444,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                line_offsets: {},
               };
             }
 
@@ -3947,7 +4035,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // The real execute_batch is all-or-nothing: it snapshots the WHOLE
             // project (`capture_project_snapshot`) and restores on any
             // sub-command failure. Snapshot the whole thing here too - a
-            // lines-only snapshot would leave `line_offsets`, the station
+            // lines-only snapshot would leave the station
             // refs and the comment map half-mirrored after a failed multi-line
             // reverse (#24), i.e. exactly the half-applied state the batching
             // exists to prevent, in the mock that is supposed to pin it.
@@ -4157,62 +4245,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, line_ids: [] };
           }
 
-          case 'unmerge_stations':
-            // Mock unmerge stations - return success
+          case 'unmerge_stations': {
+            // Detach the slot's line from the station it shares with other
+            // lines (plan 5.2): the slot gets a station of its own, the other
+            // lines stay joined. A slot on no junction is a no-op (E6).
             console.log('[Mock IPC] unmerge_stations called with:', args);
-            if (currentProject && args) {
-              const stationRef = (args.stationRef ?? args.station_ref) as { line_id: number; station_index: number } | undefined;
-              if (stationRef) {
-                const stationMerges = currentProject.station_merges as Array<{
-                  station_a: { line_id: number; station_index: number };
-                  station_b: { line_id: number; station_index: number };
-                }>;
-
-                const removedPairs: Array<{
-                  station_a: { line_id: number; station_index: number };
-                  station_b: { line_id: number; station_index: number };
-                }> = [];
-
-                for (let i = stationMerges.length - 1; i >= 0; i -= 1) {
-                  const merge = stationMerges[i]!;
-                  const touchesStation =
-                    (merge.station_a.line_id === stationRef.line_id && merge.station_a.station_index === stationRef.station_index) ||
-                    (merge.station_b.line_id === stationRef.line_id && merge.station_b.station_index === stationRef.station_index);
-                  if (touchesStation) {
-                    removedPairs.push(merge);
-                    stationMerges.splice(i, 1);
-                  }
-                }
-
-                if (removedPairs.length > 0 && Array.isArray(currentProject.loop_closures)) {
-                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
-                  currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const stationA = closure.station_a as { line_id: number; station_index: number } | undefined;
-                    const stationB = closure.station_b as { line_id: number; station_index: number } | undefined;
-                    if (!stationA || !stationB) {
-                      return true;
-                    }
-
-                    const matchesRemovedPair = removedPairs.some((pair) => {
-                      const direct =
-                        pair.station_a.line_id === stationA.line_id &&
-                        pair.station_a.station_index === stationA.station_index &&
-                        pair.station_b.line_id === stationB.line_id &&
-                        pair.station_b.station_index === stationB.station_index;
-                      const reverse =
-                        pair.station_b.line_id === stationA.line_id &&
-                        pair.station_b.station_index === stationA.station_index &&
-                        pair.station_a.line_id === stationB.line_id &&
-                        pair.station_a.station_index === stationB.station_index;
-                      return direct || reverse;
-                    });
-
-                    return !matchesRemovedPair;
-                  });
-                }
-              }
-            }
+            const stationRef = (args?.stationRef ?? args?.station_ref) as MockStationRef | undefined;
+            if (stationRef) mockDetachSlot(stationRef);
             return { success: true, line_ids: [] };
+          }
 
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
@@ -4224,55 +4265,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             unmergeStationPairCalls.push({ stationA, stationB });
 
-            if (currentProject) {
-              const stationMerges = currentProject.station_merges as Array<{
-                station_a: { line_id: number; station_index: number };
-                station_b: { line_id: number; station_index: number };
-              }>;
-
-              const matchIndex = stationMerges.findIndex((merge) => {
-                const direct =
-                  merge.station_a.line_id === stationA.line_id &&
-                  merge.station_a.station_index === stationA.station_index &&
-                  merge.station_b.line_id === stationB.line_id &&
-                  merge.station_b.station_index === stationB.station_index;
-                const reverse =
-                  merge.station_b.line_id === stationA.line_id &&
-                  merge.station_b.station_index === stationA.station_index &&
-                  merge.station_a.line_id === stationB.line_id &&
-                  merge.station_a.station_index === stationB.station_index;
-                return direct || reverse;
-              });
-
-              if (matchIndex >= 0) {
-                stationMerges.splice(matchIndex, 1);
-
-                if (Array.isArray(currentProject.loop_closures)) {
-                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
-                  currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const closureA = closure.station_a as { line_id: number; station_index: number } | undefined;
-                    const closureB = closure.station_b as { line_id: number; station_index: number } | undefined;
-                    if (!closureA || !closureB) {
-                      return true;
-                    }
-                    const direct =
-                      closureA.line_id === stationA.line_id &&
-                      closureA.station_index === stationA.station_index &&
-                      closureB.line_id === stationB.line_id &&
-                      closureB.station_index === stationB.station_index;
-                    const reverse =
-                      closureA.line_id === stationB.line_id &&
-                      closureA.station_index === stationB.station_index &&
-                      closureB.line_id === stationA.line_id &&
-                      closureB.station_index === stationA.station_index;
-                    return !(direct || reverse);
-                  });
-                }
-                return { success: true, line_ids: [] };
-              }
+            // Any two slots of one station are a pair (E6); the pair form
+            // detaches the PARTNER's line, stationB's (plan 9.3).
+            const sameStation =
+              mockSlotKey(stationA) !== mockSlotKey(stationB) &&
+              mockJunctionSlots(stationA).some((m) => mockSlotKey(m) === mockSlotKey(stationB));
+            if (!currentProject || !sameStation) {
+              return { success: false, error: 'Stations are not directly merged' };
             }
-
-            return { success: false, error: 'Stations are not directly merged' };
+            mockDetachSlot(stationB);
+            return { success: true, line_ids: [] };
           }
 
           case 'move_segment': {
@@ -4300,6 +4302,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'move_station': {
             console.log('[Mock IPC] move_station called with:', args);
+            // The station to move is a slot the backend resolves to its
+            // station (one move per station, plan 9.3); without it the real
+            // command fails to deserialize.
+            if (!args?.stationRef) {
+              return { success: false, error: 'invalid args `stationRef` for command `move_station`' };
+            }
             const win = window as unknown as Record<string, unknown>;
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_station', args: args ?? null });
@@ -4425,12 +4433,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] set_station_comment called with:', args);
             const stationRef = args?.stationRef as { line_id: number; station_index: number };
             const comment = (args?.comment as string | null | undefined) ?? null;
-            const key = `${stationRef.line_id}:${stationRef.station_index}`;
-            if (comment === null) {
-              delete mockStationComments[key];
-            } else {
-              mockStationComments[key] = comment;
-            }
+            // A junction's slots share one comment (plan 9.2): it is stored on
+            // the junction's representative slot, and a clear clears them all.
+            const slots = mockJunctionSlots(stationRef);
+            for (const slot of slots) delete mockStationComments[mockSlotKey(slot)];
+            if (comment !== null) mockStationComments[mockSlotKey(slots[0]!)] = comment;
             return { success: true, line_ids: [] };
           }
 
@@ -4440,19 +4447,35 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (name === '') {
               return { success: false, error: 'A station name cannot be empty', line_ids: [] };
             }
-            const line = (currentProject?.lines as Array<{ id: number; name?: string | null; shots: unknown[] }> | undefined)
-              ?.find((l) => l.id === stationRef.line_id);
-            if (!line) return { success: false, error: `Line ${stationRef.line_id} not found`, line_ids: [] };
-            for (let i = 0; i <= line.shots.length; i++) {
-              if (i !== stationRef.station_index && mockStationName(line.id, i) === name) {
-                return {
-                  success: false,
-                  error: `Line "${line.name ?? ''}" already has a station named "${name}"`,
-                  line_ids: [],
-                };
+            const lines = (currentProject?.lines ?? []) as Array<{ id: number; name?: string | null; shots: unknown[] }>;
+            if (!lines.some((l) => l.id === stationRef.line_id)) {
+              return { success: false, error: `Line ${stationRef.line_id} not found`, line_ids: [] };
+            }
+            // A junction is ONE station: its name must be free on every line
+            // through it (plan 5.3), and it is stored once, on the junction's
+            // representative slot.
+            const junctions = mockJunctions(
+              lines,
+              (currentProject?.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
+            );
+            const slots = junctions.get(mockSlotKey(stationRef)) ?? [stationRef];
+            const own = new Set(slots.map(mockSlotKey));
+            for (const slot of slots) {
+              const line = lines.find((l) => l.id === slot.line_id);
+              if (!line) continue;
+              for (let i = 0; i <= line.shots.length; i++) {
+                const other = { line_id: line.id, station_index: i };
+                if (own.has(mockSlotKey(other))) continue;
+                if (mockSlotIdentity(junctions, other).name === name) {
+                  return {
+                    success: false,
+                    error: `Line "${line.name ?? ''}" already has a station named "${name}"`,
+                    line_ids: [],
+                  };
+                }
               }
             }
-            const nameKey = `${stationRef.line_id}:${stationRef.station_index}`;
+            const nameKey = mockSlotKey(slots[0]!);
             mockNameUndo.push({ key: nameKey, before: mockStationNames[nameKey], after: name });
             mockNameRedo.length = 0;
             mockStationNames[nameKey] = name;
@@ -5365,6 +5388,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             mockHistoryDiscardedCalls += 1;
             return mockHistoryDiscarded;
 
+          case 'take_conversion_notice': {
+            // Taken once, like the backend's: a second ask answers null.
+            const notice = mockConversionNotice;
+            mockConversionNotice = null;
+            return notice;
+          }
+
+          case 'project_read_only_reason':
+            // A peek: the condition lasts as long as the project is open.
+            return mockReadOnlyReason;
+
+          case 'resolve_warning':
+          case 'unresolve_warning':
+            // A warning ignore is survey content on the station graph: it marks
+            // the project dirty and rides the next save, with no undo entry
+            // (plan 6.5). The mock has no warnings to hide, so only the dirty
+            // flag moves.
+            mockBackendDirty = true;
+            return null;
+
+          case 'has_unsaved_changes':
+            // The backend's dirty flag. Only a warning ignore sets it in the
+            // mock (every other edit goes through executeCommand, which dirties
+            // the frontend itself); a save clears it.
+            return mockBackendDirty;
+
           case 'history_discarded_from_earlier_version':
             // Whether the discarded history was written by an earlier version of the
             // app (the format before compact undo entries) rather than unreadable.
@@ -6193,38 +6242,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sh.id = ids[i];
             });
 
-            // Station 0 is now the far end, so the line anchor gains the
-            // displacement the line used to span or the whole passage
-            // teleports. Measured on the PRE-reverse order, like the backend.
-            let dx = 0;
-            let dy = 0;
-            for (const sh of line.shots) {
-              const azIn = num(sh.azimuth_in);
-              const azOut = num(sh.azimuth_out);
-              // Circular mean of two FORWARD readings (models::average_azimuth_of),
-              // wrapped with rem_euclid for the reason above - the truncated form
-              // returns the antipode for a pair more than 540 apart, which would
-              // send the offset compensation the wrong way and move the cave.
-              const diff = mod360(azOut - azIn + 540) - 180;
-              const meanRad = (mod360(azIn + diff / 2) * Math.PI) / 180;
-              const dz = num(sh.depth_out) - num(sh.depth_in);
-              const lenSq = num(sh.length) ** 2 - dz ** 2;
-              const horizontal = lenSq <= 0 ? 0 : Math.sqrt(lenSq);
-              dx += horizontal * Math.sin(meanRad);
-              dy += horizontal * Math.cos(meanRad);
-            }
+            // The station graph derives every position from its piece's
+            // anchor, so a reverse moves nothing: there is no line offset to
+            // compensate (plan 4.4).
             line.shots = reversed;
-
-            // Finiteness first, like `reverse_line`: `NaN !== 0` is TRUE, so a
-            // bare `!== 0` admits a non-finite displacement into `line_offsets`,
-            // which has no other finite guard - and `save_project` rewrites a
-            // non-finite offset to 0.0, teleporting the line to the origin. See
-            // the backend's `reverse_refuses_to_write_a_non_finite_offset`.
-            if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
-              const offsets = currentProject!.line_offsets;
-              const [ox, oy] = readLineOffset(offsets, lineId);
-              writeLineOffset(offsets, lineId, [ox + dx, oy + dy]);
-            }
 
             // Station i became station shotCount - i, so every external ref into
             // this line moves with it - otherwise a merge, closure or datum
@@ -7157,7 +7178,6 @@ export async function setupTauriMocksWithProject(
         lines: projectData.lines ?? [],
         station_merges: projectData.station_merges ?? [],
         zero_datums: projectData.zero_datums ?? [],
-        line_offsets: projectData.line_offsets ?? {},
       };
 
       const mockHandler = (cmd: string, args?: Record<string, unknown>): unknown => {

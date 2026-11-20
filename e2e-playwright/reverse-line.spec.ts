@@ -123,18 +123,6 @@ async function readShots(page: Page, lineId: number): Promise<ShotSnapshot[]> {
   }, lineId);
 }
 
-/** The line's map anchor, which a reverse must move to keep the cave still. */
-async function readLineOffset(page: Page, lineId: number): Promise<[number, number]> {
-  return page.evaluate((id) => {
-    const state = (window as any).__E2E_TEST__.projectStore.getState();
-    const offsets = state.project?.line_offsets ?? {};
-    const entry = Array.isArray(offsets)
-      ? (offsets as Array<[number, [number, number]]>).find(([k]) => Number(k) === id)?.[1]
-      : (offsets as Record<string, [number, number]>)[String(id)];
-    return (entry ?? [0, 0]) as [number, number];
-  }, lineId);
-}
-
 async function readComment(
   page: Page,
   lineId: number,
@@ -351,96 +339,6 @@ test.describe('Reverse Line', () => {
     }
   });
 
-  test('compensates the anchor with the true circular mean of out-of-range readings', async ({
-    page,
-  }) => {
-    // 600 degrees is 240; paired with 0 the true circular mean is 300, the short
-    // way round. Rust's `%` - and JS's - truncate toward zero and return the
-    // ANTIPODE 120 for a pair this far apart, which is the bug #24 fixed in
-    // `average_azimuth_of`. The anchor compensation would then point the wrong
-    // way and the passage would jump by twice its own span on every reverse.
-    await setupMockedPage(page);
-    await createProject(page, 'Reverse Out Of Range');
-    await seedProjectWithLines(page, [
-      {
-        name: 'Far out of range',
-        direction: 'in',
-        shots: [{ azimuth_in: 600, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 0 }],
-      },
-    ]);
-    await waitForMapReady(page);
-    await waitForNoDialogs(page);
-
-    const lineId = await page.evaluate(
-      () => (window as any).__E2E_TEST__.projectStore.getState().project.lines[0].id as number
-    );
-    const offsetBefore = await readLineOffset(page, lineId);
-
-    await reverseFromLineMenu(page, lineId);
-
-    const meanRad = (300 * Math.PI) / 180;
-    await expect
-      .poll(async () => (await readLineOffset(page, lineId))[0] - offsetBefore[0])
-      .toBeCloseTo(10 * Math.sin(meanRad), 4);
-    const offsetAfter = await readLineOffset(page, lineId);
-    expect(offsetAfter[1] - offsetBefore[1]).toBeCloseTo(10 * Math.cos(meanRad), 4);
-  });
-
-  test('never writes a non-finite line offset', async ({ page }) => {
-    // `NaN !== 0` is TRUE, so a bare "did it move?" check admits a non-finite
-    // displacement into `line_offsets`, which has no other finite guard - and
-    // save rewrites a non-finite offset to 0.0, teleporting the line to the
-    // origin (the exact opposite of what the compensation is for). A finite
-    // length is enough to produce one: squaring 1e200 overflows to Infinity, and
-    // `Infinity * sin(0)` is NaN.
-    await setupMockedPage(page);
-    await createProject(page, 'Reverse Overflow');
-    await seedProjectWithLines(page, [
-      {
-        name: 'Overflowing',
-        direction: 'in',
-        shots: [{ azimuth_in: 0, azimuth_out: 0, length: 1e200, depth_in: 0, depth_out: 0 }],
-      },
-    ]);
-    await waitForMapReady(page);
-    await waitForNoDialogs(page);
-
-    const lineId = await page.evaluate(
-      () => (window as any).__E2E_TEST__.projectStore.getState().project.lines[0].id as number
-    );
-
-    await reverseFromLineMenu(page, lineId);
-
-    const offset = await readLineOffset(page, lineId);
-    expect(Number.isFinite(offset[0])).toBe(true);
-    expect(Number.isFinite(offset[1])).toBe(true);
-  });
-
-  test('writes the anchor without clobbering a neighbouring line', async ({ page }) => {
-    // `line_offsets` reaches the backend-facing mock in two shapes: the JS
-    // Record the create/import paths build, and the `[lineId, [dx, dy]]` pairs
-    // the binary load path (and `__E2E_MOCKS__.setCurrentProject`) carry.
-    // `offsets["2"] = [dx, dy]` on the pair form sets ELEMENT 2 - silently
-    // replacing another line's entry with a bare coordinate.
-    const ids = await setup(page, 2);
-    await page.evaluate((lineIds) => {
-      const project = (window as any).__E2E_MOCKS__.getCurrentProject();
-      project.line_offsets = [
-        [lineIds[0], [1, 2]],
-        [lineIds[1], [3, 4]],
-      ];
-    }, ids);
-
-    await reverseFromLineMenu(page, ids[0]!);
-
-    // The reversed line's anchor moved...
-    await expect
-      .poll(async () => (await readLineOffset(page, ids[0]!))[0])
-      .not.toBe(1);
-    // ...and its neighbour's is exactly as it was.
-    expect(await readLineOffset(page, ids[1]!)).toEqual([3, 4]);
-  });
-
   test('offers a separate entry for a multi-line selection', async ({ page }) => {
     const ids = await setup(page, 2);
 
@@ -493,10 +391,12 @@ test.describe('Reverse Line', () => {
     expect(batches![0]).toHaveLength(2);
   });
 
-  test('moves the anchor and the station comment with the line', async ({ page }) => {
+  test('moves the station comment with the line', async ({ page }) => {
     // The dialog promises "the cave does not move ... comments stay on the
-    // station they were set on". Both live outside the shot vec, so a reverse
-    // that only reciprocated the shots would pass every test above.
+    // station they were set on". The comment lives outside the shot vec, so a
+    // reverse that only reciprocated the shots would pass every test above.
+    // (Nothing else moves on the station graph: positions are derived from the
+    // piece's anchor, so there is no line offset to compensate.)
     const [lineId] = await setup(page);
 
     await page.evaluate(
@@ -510,24 +410,15 @@ test.describe('Reverse Line', () => {
       .poll(() => readComment(page, lineId, 0))
       .toBe('at the entrance');
 
-    const offsetBefore = await readLineOffset(page, lineId);
-
     await reverseFromLineMenu(page, lineId);
-
-    // Station 0 is now the far end, so the anchor gained the line's span.
-    const offsetAfter = await readLineOffset(page, lineId);
-    expect(offsetAfter).not.toEqual(offsetBefore);
 
     // The comment travelled to the same physical station, now numbered 3.
     await expect.poll(() => readComment(page, lineId, 3)).toBe('at the entrance');
     expect(await readComment(page, lineId, 0)).toBeUndefined();
 
-    // And reversing back restores both - the transform is its own inverse.
+    // And reversing back restores it - the transform is its own inverse.
     await reverseFromLineMenu(page, lineId);
     await expect.poll(() => readComment(page, lineId, 0)).toBe('at the entrance');
-    const offsetRestored = await readLineOffset(page, lineId);
-    expect(offsetRestored[0]).toBeCloseTo(offsetBefore[0], 9);
-    expect(offsetRestored[1]).toBeCloseTo(offsetBefore[1], 9);
   });
 
   test('shift-clicking sections panel rows reaches the multi-line entry', async ({ page }) => {
