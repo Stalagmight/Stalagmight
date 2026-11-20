@@ -1,16 +1,17 @@
 //! A revision View / Restore whose reply lands after the user moved to another
 //! project leaves that project alone; an unraced one still swaps the tree.
 //!
-//! Synthetic throughout: a loopback SpeleoDB stub and databases built here. This
-//! separate process owns its temporary app dirs (the cache path is global).
-// Parked by the station-graph switch (C0): written against the 0.6.0 model,
-// the SQLite database handle and the old undo engine; ported by a work
-// package of the C0 breakdown.
-#![cfg(sg_unported)]
+//! Synthetic throughout: a loopback SpeleoDB stub and version 2 files written
+//! here. This separate process owns its temporary app dirs (the cache path is
+//! global).
+//!
+//! Every case installs the downloaded revision through the SpeleoDB sync
+//! package's install path (`stamp_downloaded_link`, `stage_download`,
+//! `open_project_download`), so each is ignored until that package lands.
 #![expect(
     clippy::expect_used,
     clippy::panic,
-    reason = "synthetic HTTP and SQLite test setup"
+    reason = "synthetic HTTP and file test setup"
 )]
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -20,9 +21,11 @@ use std::sync::{mpsc, Arc, OnceLock};
 
 use serde_json::json;
 use stalagmight_lib::core::events::EventSink;
-use stalagmight_lib::models::{Project, SpeleoLink};
+use stalagmight_lib::core::{AppState, Command};
+use stalagmight_lib::models::survey::Project;
+use stalagmight_lib::models::SpeleoLink;
+use stalagmight_lib::persistence::stalx_v2::{self, Extras, LocalSync, Mode, SpeleoDbLink};
 use stalagmight_lib::speleodb::SpeleoDbAction;
-use stalagmight_lib::{core::AppState, persistence::Database};
 
 /// The revision being viewed / restored.
 const REV: &str = "1111111111111111111111111111111111111111";
@@ -193,14 +196,39 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
     }
 }
 
-/// The bytes the server hands out for [`REV`].
-fn revision_bytes(dir: &Path) -> Vec<u8> {
-    let path = dir.join("revision.stalx");
-    Database::open(&path)
-        .expect("revision")
-        .save_project(&Project::new("Revision X".into(), None))
-        .expect("save");
-    std::fs::read(&path).expect("bytes")
+/// A version 2 file of an empty project named `name`, carrying `link`.
+fn v2_bytes(name: &str, link: Option<&SpeleoLink>) -> Vec<u8> {
+    let mut extras = Extras::default();
+    if let Some(link) = link {
+        extras.speleodb = Some(SpeleoDbLink {
+            endpoint: link.endpoint.clone(),
+            project_id: link.project_id.clone(),
+            project_name: link.project_name.clone(),
+            undo_mode: link.undo_mode,
+        });
+        extras.local.speleodb = LocalSync {
+            base_commit: link.base_commit_sha.clone(),
+            unpushed_edits: link.has_unpushed_edits,
+            ..LocalSync::default()
+        };
+    }
+    stalx_v2::encode(&Project::new(name, None), &extras, Mode::Normal).expect("encode")
+}
+
+/// The project name and link a file on disk holds now.
+fn on_disk(path: &Path) -> (String, Option<SpeleoDbLink>, LocalSync) {
+    let bytes = std::fs::read(path).expect("bytes");
+    let decoded = stalx_v2::decode(&bytes, &Default::default()).expect("a v2 project");
+    (
+        decoded.project.name,
+        decoded.extras.speleodb,
+        decoded.extras.local.speleodb,
+    )
+}
+
+/// The bytes the server hands out for [`REV`] (a push carries no `local`).
+fn revision_bytes(_dir: &Path) -> Vec<u8> {
+    v2_bytes("Revision X", None)
 }
 
 /// A signed-in state with linked project `P` open from its cache copy, edit gate
@@ -221,26 +249,31 @@ fn open_p(state: &AppState, project_id: &str, base: &str) -> PathBuf {
         .expect("sign in");
     let cache = cache_root().join(project_id).join("project.stalx");
     std::fs::create_dir_all(cache.parent().expect("parent")).expect("mkdir");
-    {
-        let mut db = Database::open(&cache).expect("cache");
-        db.save_project(&Project::new("P".into(), None))
-            .expect("save");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: base.to_owned(),
-            project_id: project_id.to_owned(),
-            project_name: "P".into(),
-            base_commit_sha: Some(TIP.into()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("link");
-    }
-    let mut p = Project::new("P".into(), None);
-    p.file_path = Some(cache.clone());
-    state.set_project_for_tests(p);
-    state.set_database_for_tests(Database::open_existing(&cache).expect("open P"));
+    std::fs::write(
+        &cache,
+        v2_bytes(
+            "P",
+            Some(&SpeleoLink {
+                endpoint: base.to_owned(),
+                project_id: project_id.to_owned(),
+                project_name: "P".into(),
+                base_commit_sha: Some(TIP.into()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        ),
+    )
+    .expect("write P");
+    assert!(
+        state
+            .execute(Command::OpenProject {
+                path: cache.clone()
+            })
+            .success,
+        "open P"
+    );
     // The edit gate opens only through a lock claim, so take the lock the way the
     // app does: BASE is the server tip, so the reconcile is UpToDate.
     assert!(
@@ -262,7 +295,7 @@ fn open_name(state: &AppState) -> Option<String> {
 fn gate_open(state: &AppState) -> bool {
     let project = state.get_project_state().expect("open project");
     state
-        .update_project_settings(project.name, project.validation)
+        .update_project_settings(project.name, project.settings.validation)
         .success
 }
 
@@ -291,6 +324,7 @@ fn swap(
 /// its revision in its place. Now the reply finds the session moved, refuses,
 /// and leaves the project the user switched to (or reopened) exactly as it is.
 #[test]
+#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn a_late_revision_reply_never_touches_the_project_open_now() {
     for (case, restore, reopen_p) in [
         ("view, switched to Q", false, false),
@@ -325,12 +359,9 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
             // The user opens a local project Q and edits it; the edit is only in
             // memory (autosave has not run).
             let q_path = temp.path().join("q.stalx");
-            Database::open(&q_path)
-                .expect("q")
-                .save_project(&Project::new("Q saved".into(), None))
-                .expect("save q");
+            std::fs::write(&q_path, v2_bytes("Q saved", None)).expect("save q");
             state.do_load_project_full(q_path.clone()).expect("open Q");
-            let validation = state.get_project_state().expect("Q").validation;
+            let validation = state.get_project_state().expect("Q").settings.validation;
             assert!(
                 state
                     .update_project_settings("Q with unsaved edit".into(), validation)
@@ -370,10 +401,7 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
                 assert!(gate_open(state), "{case}: Q's edit gate is untouched");
             }
             assert_eq!(
-                Database::open_existing(&q_path)
-                    .and_then(|db| db.load_project())
-                    .expect("Q on disk")
-                    .name,
+                on_disk(&q_path).0,
                 "Q saved",
                 "{case}: nothing saved or replaced Q"
             );
@@ -381,15 +409,11 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
                 std::fs::read(&cache).expect("P bytes") == cache_before,
                 "{case}: the refused swap replaced nothing"
             );
-            let cached = Database::open_existing(&cache).expect("P on disk");
-            assert_eq!(cached.load_project().expect("project").name, "P");
+            let (name, link, sync) = on_disk(&cache);
+            assert_eq!(name, "P");
+            assert!(link.is_some(), "{case}: P's cache is still linked");
             assert_eq!(
-                cached
-                    .load_speleo_link()
-                    .expect("link")
-                    .expect("linked")
-                    .base_commit_sha
-                    .as_deref(),
+                sync.base_commit.as_deref(),
                 Some(TIP),
                 "{case}: P's cache still holds P, not the revision"
             );
@@ -401,6 +425,7 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
 /// The unraced swap still does its job: a View opens the revision read-only and
 /// clean, a Restore opens it editable and un-pushed on top of the server tip.
 #[test]
+#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn an_unraced_view_and_restore_still_swap_the_open_tree() {
     for (id, restore) in [
         ("22222222-2222-2222-2222-222222222221", false),
@@ -424,16 +449,15 @@ fn an_unraced_view_and_restore_still_swap_the_open_tree() {
             restore,
             "a View is read-only, a Restore keeps editing"
         );
-        let db = Database::open_existing(&cache).expect("installed");
-        assert_eq!(db.load_project().expect("project").name, "Revision X");
-        let link = db.load_speleo_link().expect("link").expect("linked");
-        assert_eq!(link.project_id, id);
+        let (name, link, sync) = on_disk(&cache);
+        assert_eq!(name, "Revision X");
+        assert_eq!(link.expect("linked").project_id, id);
         if restore {
-            assert_eq!(link.base_commit_sha.as_deref(), Some(TIP));
-            assert!(link.has_unpushed_edits, "a restore is an un-pushed edit");
+            assert_eq!(sync.base_commit.as_deref(), Some(TIP));
+            assert!(sync.unpushed_edits, "a restore is an un-pushed edit");
         } else {
-            assert_eq!(link.base_commit_sha.as_deref(), Some(REV));
-            assert!(!link.has_unpushed_edits, "a View is clean");
+            assert_eq!(sync.base_commit.as_deref(), Some(REV));
+            assert!(!sync.unpushed_edits, "a View is clean");
         }
         drop(stub);
     }
@@ -446,6 +470,7 @@ fn an_unraced_view_and_restore_still_swap_the_open_tree() {
 /// (the server still says it is ours, so the release is sent) and the project it
 /// reopens is read-only.
 #[test]
+#[ignore = "C11: installs through open_project_download, which the SpeleoDB sync package ports"]
 fn take_remote_reopens_the_server_version_read_only() {
     let id = "33333333-3333-3333-3333-333333333331";
     let temp = tempfile::tempdir().expect("temp");
