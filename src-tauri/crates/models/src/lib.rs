@@ -27,6 +27,7 @@ pub mod section;
 pub mod shot;
 pub mod speleo_link;
 pub mod station;
+pub mod survey;
 pub mod undo_mode;
 pub mod warning;
 
