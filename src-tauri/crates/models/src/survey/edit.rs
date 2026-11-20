@@ -31,6 +31,8 @@
 //! - `edit/lines.rs` - create, delete, metadata, reorder.
 //! - `edit/ranges.rs` - delete a shot range (gap-close, split, prefix,
 //!   suffix) and its preview.
+//! - `edit/junction_leave.rs` - what a delete does with the closures its line
+//!   kept at a junction it leaves (0.6.0's member semantics, S13).
 //! - `edit/reverse.rs` - reverse a line (plan 4.4).
 //! - `edit/split.rs` - Split Line Here (the halves share the split station).
 //! - `edit/combine/` - Combine Lines (candidates, plan preview, the join).
@@ -46,11 +48,12 @@ use std::fmt;
 use crate::LineId;
 
 use super::{
-    AnchorReport, AnchorSnapshot, ClosureId, EditContext, LoopClosure, Project, RawPositions,
-    StaleAttachments, SweepReport, Violation,
+    AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, LoopClosure, Project,
+    RawPositions, StaleAttachments, SweepReport, Violation,
 };
 
 mod combine;
+mod junction_leave;
 mod lines;
 mod ranges;
 mod reverse;
@@ -227,6 +230,9 @@ pub(super) struct Epilogue {
     pub(super) sweep: bool,
     /// Remove the closures the edit newly left across one shot (#737).
     pub(super) remove_across_one_shot: bool,
+    /// Closure ends on a junction the edited line left: the sweep moves
+    /// their piece on promotion (`edit/junction_leave.rs`).
+    pub(super) moving_ends: Vec<(ClosureId, ClosureEnd)>,
 }
 
 impl Epilogue {
@@ -245,6 +251,16 @@ impl Epilogue {
             ctx,
             sweep: true,
             remove_across_one_shot: true,
+            moving_ends: Vec::new(),
+        }
+    }
+
+    /// A delete that took its line off junctions: [`Self::topology`] with
+    /// the closure ends the line left there (`edit/junction_leave.rs`).
+    pub(super) fn delete(ctx: EditContext, moving_ends: Vec<(ClosureId, ClosureEnd)>) -> Self {
+        Self {
+            moving_ends,
+            ..Self::topology(ctx)
         }
     }
 }
@@ -297,7 +313,7 @@ impl Project {
         let stale = self.drop_stale_attachments();
         let anchors = self.settle_anchors(before, &epilogue.ctx);
         let sweep = if epilogue.sweep {
-            self.sweep_orphan_closures()
+            self.sweep_orphan_closures_moving(&epilogue.moving_ends)
         } else {
             SweepReport::default()
         };

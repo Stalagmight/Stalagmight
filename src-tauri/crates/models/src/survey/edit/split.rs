@@ -242,6 +242,6 @@ fn split_epilogue(line: LineId) -> Epilogue {
     Epilogue {
         ctx: EditContext::line(line),
         sweep: true,
-        remove_across_one_shot: false,
+        ..Epilogue::default()
     }
 }

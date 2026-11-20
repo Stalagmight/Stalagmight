@@ -1,7 +1,8 @@
 //! The orphan-closure sweep (plan 5.5), run after topology edits (merge,
 //! detach, datum removal, every delete), never on load.
 //!
-//! One pass over the closures in list order, so a later closure sees what an
+//! One pass over the closures in list order (after a delete, the closures on
+//! a junction its line left come first), so a later closure sees what an
 //! earlier one did:
 //!
 //! - a closure whose two ends are one station closes nothing and is removed
@@ -9,9 +10,11 @@
 //! - a closure whose ends are in different pieces is their sole connection,
 //!   i.e. a merge, not a loop: it is **promoted**, the two stations merged
 //!   (plan 5.1) with the movable piece moving onto the other (plan 4.2: the
-//!   piece of end `a` moves unless `a`'s piece is placed and `b`'s is not).
-//!   Between two placed pieces a promotion would double-anchor, so the
-//!   closure is kept (invariant 7 allows it there).
+//!   piece of end `a` moves unless `a`'s piece is placed and `b`'s is not;
+//!   a delete names the end that moves instead when it left that end's
+//!   junction, `edit/junction_leave.rs`). Between two placed pieces a
+//!   promotion would double-anchor, so the closure is kept (invariant 7
+//!   allows it there).
 //!
 //! A promotion only joins pieces that were apart, so a closure the pass kept
 //! as a loop can never become one station later in the pass, and one pass
@@ -23,7 +26,7 @@
 use crate::StationId;
 
 use super::ops_merge::CommentRule;
-use super::{ClosureId, EditContext, LoopClosure, Project};
+use super::{ClosureEnd, ClosureId, EditContext, LoopClosure, Project};
 
 /// What the sweep did, as warning data for the command's result.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -71,10 +74,28 @@ impl Project {
     /// closures to merges (see the module docs). Owned by M2; M1's deletes
     /// call it after settling their own anchors.
     pub fn sweep_orphan_closures(&mut self) -> SweepReport {
+        self.sweep_orphan_closures_moving(&[])
+    }
+
+    /// [`Self::sweep_orphan_closures`] for a delete that took its line off
+    /// junctions (`edit/junction_leave.rs`): the closures named in `moving`
+    /// are judged first (in list order, then the rest), as today's delete
+    /// promoted the closures on the removed member before its sweep, and the
+    /// named end is the one whose piece moves on promotion (unless it is held
+    /// by a datum and the other end's piece is not). A closure named by both
+    /// ends moves end `a`'s, as an unnamed one does.
+    pub(super) fn sweep_orphan_closures_moving(
+        &mut self,
+        moving: &[(ClosureId, ClosureEnd)],
+    ) -> SweepReport {
         let mut report = SweepReport::default();
         let original = self.closures.clone();
         let mut fates = vec![Fate::Keep; self.closures.len()];
-        for (position, fate) in fates.iter_mut().enumerate() {
+        let named = |c: &LoopClosure| moving.iter().any(|(id, _)| *id == c.id);
+        let (first, rest): (Vec<usize>, Vec<usize>) =
+            (0..original.len()).partition(|&i| named(&original[i]));
+        for position in first.into_iter().chain(rest) {
+            let fate = &mut fates[position];
             let closure = self.closures[position];
             if closure.a == closure.b {
                 *fate = Fate::Removed;
@@ -97,10 +118,11 @@ impl Project {
                 report.kept_between_placed.push(closure.id);
                 continue;
             }
-            let (survivor, retired) = if held_a {
-                (closure.a, closure.b)
-            } else {
-                (closure.b, closure.a)
+            let b_moves = moving.contains(&(closure.id, ClosureEnd::B))
+                && !moving.contains(&(closure.id, ClosureEnd::A));
+            let (survivor, retired) = match (b_moves, held_a, held_b) {
+                (true, _, false) | (false, true, _) => (closure.a, closure.b),
+                _ => (closure.b, closure.a),
             };
             let before = self.anchor_snapshot();
             if self

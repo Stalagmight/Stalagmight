@@ -184,7 +184,7 @@ impl Project {
             let epilogue = Epilogue {
                 ctx: EditContext::none(),
                 sweep: true,
-                remove_across_one_shot: false,
+                ..Epilogue::default()
             };
             Ok((deleted, epilogue))
         })

@@ -12,12 +12,14 @@
 //!   surveyor and date, which the line then lets go (as today's executor).
 //! - **Delete** removes one station from the line exactly as today: station 0
 //!   for the first shot, else the shot's end station (the following shot
-//!   re-attaches to the shot's start). A junction stays for its other lines;
-//!   a station on no other line is deleted with its comment, datums and
-//!   closures. Then the orphan-closure sweep runs and closures newly across
-//!   one shot are removed (#737). A mid-line delete is refused when it would
-//!   close a loop or both sides are held by a placement datum (today's
-//!   `shift_blocked`).
+//!   re-attaches to the shot's start). A junction stays for its other lines
+//!   (the line simply leaves it, as today; its new end is not merged to the
+//!   junction); a station on no other line is deleted with its comment,
+//!   datums and closures. At a junction the closures attached via the line
+//!   follow today's member rules (`edit/junction_leave.rs`, S13). Then the
+//!   orphan-closure sweep runs and closures newly across one shot are
+//!   removed (#737). A mid-line delete is refused when it would close a loop
+//!   or both sides are held by a placement datum (today's `shift_blocked`).
 //! - **Split at distance** turns one shot into two collinear ones: a new head
 //!   (fresh id and uuid) and the old shot as the tail (its id, uuid, comment
 //!   and marker), with a new station between them (Mid rule), using today's
@@ -80,7 +82,8 @@ pub struct DeletedShot {
     pub station_deleted: bool,
     /// The datums deleted with it.
     pub datums_removed: Vec<ZeroDatum>,
-    /// The closures deleted with it, as they were.
+    /// The closures deleted with it, as they were, then the `Tie`s the
+    /// line's slot carried at a junction it left (S13).
     pub closures_removed: Vec<LoopClosure>,
     /// Its comment, deleted with it.
     pub comment_removed: Option<String>,
@@ -110,10 +113,13 @@ pub struct DeleteShotPreview {
     pub removed_datums: Vec<ZeroDatum>,
     /// The comment deleted with the station.
     pub removed_comment: Option<String>,
-    /// Closures deleted with the station, as they were.
+    /// Closures deleted with the station, as they were; at a junction, the
+    /// `Tie`s (demoted 0.6.0 merges) on this line's slot, which leave with
+    /// it as today's merge did unless today re-stitched them (S13).
     pub removed_closures: Vec<LoopClosure>,
     /// Closures the sweep then promotes to a merge (the loop they closed is
-    /// broken), as they were, with the piece that moves.
+    /// broken), as they were, with the piece that moves (a closure on this
+    /// line's slot at a junction moves the junction's piece, as today).
     pub promoted_closures: Vec<Promotion>,
     /// Closures the sweep removes because their two ends became one station.
     pub swept_closures: Vec<LoopClosure>,
@@ -565,35 +571,33 @@ impl Project {
                 reasons.join(" ")
             )));
         }
-        self.apply_edit(|p| {
-            let deleted = p.remove_shot_station(line, index)?;
-            Ok((deleted, Epilogue::topology(EditContext::geometry(line))))
-        })
+        self.apply_edit(|p| p.remove_shot_station(line, index))
     }
 
     /// The mutation of a delete: take shot `index` and its station off
-    /// `line`, and delete that station if no other line has it.
+    /// `line`, and delete that station if no other line has it; at a
+    /// junction, what the line kept there follows today's member rules
+    /// (`edit/junction_leave.rs`).
     fn remove_shot_station(
         &mut self,
         line: LineId,
         index: usize,
-    ) -> Result<DeletedShot, EditError> {
+    ) -> Result<(DeletedShot, Epilogue), EditError> {
+        let l = self.line_or_refuse(line)?;
+        let removed = l.shots.get(index).ok_or_else(EditError::shot_gone)?;
+        let station = if index == 0 { l.start } else { removed.to };
+        let layout = self.member_tie_layout(line, &[station]);
         let Some(l) = self.line_mut(line) else {
             return Err(EditError::line_gone());
         };
-        if index >= l.shots.len() {
-            return Err(EditError::shot_gone());
+        let shot = l.shots.remove(index);
+        if index == 0 {
+            l.start = shot.to;
         }
-        let (shot, station) = if index == 0 {
-            let shot = l.shots.remove(0);
-            let station = std::mem::replace(&mut l.start, shot.to);
-            (shot, station)
-        } else {
-            let shot = l.shots.remove(index);
-            (shot.clone(), shot.to)
-        };
-        let gone = self.delete_stations_off_lines(&[station]);
-        Ok(DeletedShot {
+        let mut gone = self.delete_stations_off_lines(&[station]);
+        let left = self.leave_junctions(line, &[station], layout.as_ref());
+        gone.closures.extend(left.ties.iter().copied());
+        let deleted = DeletedShot {
             shot,
             index,
             station,
@@ -601,7 +605,11 @@ impl Project {
             datums_removed: gone.datums,
             closures_removed: gone.closures,
             comment_removed: gone.comments.into_iter().next().map(|(_, text)| text),
-        })
+        };
+        Ok((
+            deleted,
+            Epilogue::delete(EditContext::geometry(line), left.moving_ends),
+        ))
     }
 
     /// What Delete Shot would do (see [`DeleteShotPreview`]): the delete run
@@ -624,10 +632,7 @@ impl Project {
             .collect();
         let reasons = self.delete_shift_blocked_reasons(line, index);
         let mut copy = self.clone();
-        let edited = copy.run_edit(self, |p| {
-            let deleted = p.remove_shot_station(line, index)?;
-            Ok((deleted, Epilogue::topology(EditContext::geometry(line))))
-        })?;
+        let edited = copy.run_edit(self, |p| p.remove_shot_station(line, index))?;
         Ok(DeleteShotPreview {
             line,
             index,

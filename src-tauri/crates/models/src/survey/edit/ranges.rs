@@ -13,10 +13,11 @@
 //!   leave.
 //!
 //! The whole line is refused (delete the line instead). Each removed station
-//! follows the delete rule: a junction stays for its other lines; any other is
-//! deleted with its comment, datums and closures. Then the orphan-closure
-//! sweep runs; the shift forms also remove closures they newly leave across
-//! one shot (#737).
+//! follows the delete rule: a junction stays for its other lines (the closures
+//! attached there via the line follow today's member rules,
+//! `edit/junction_leave.rs`); any other is deleted with its comment, datums
+//! and closures. Then the orphan-closure sweep runs; the shift forms also
+//! remove closures they newly leave across one shot (#737).
 //!
 //! Today's refusals of the shift: an interior range whose two sides are still
 //! connected without it (over shots and junctions: a loop), whose two sides
@@ -261,19 +262,22 @@ impl Project {
         line: LineId,
         range: Range,
     ) -> Result<(DeletedRange, Epilogue), EditError> {
-        let Some(l) = self.line_mut(line) else {
-            return Err(EditError::line_gone());
-        };
-        let chain: Vec<StationId> = l.stations().collect();
-        if range.kind == RangeDeleteKind::Prefix {
-            l.start = l.shots[range.end].to;
-        }
-        l.shots.drain(range.start..=range.end);
+        let chain: Vec<StationId> = self.line_or_refuse(line)?.stations().collect();
         let off: Vec<StationId> = range
             .shift_indices()
             .filter_map(|i| chain.get(i).copied())
             .collect();
-        let gone = self.delete_stations_off_lines(&off);
+        let layout = self.member_tie_layout(line, &off);
+        let Some(l) = self.line_mut(line) else {
+            return Err(EditError::line_gone());
+        };
+        if range.kind == RangeDeleteKind::Prefix {
+            l.start = l.shots[range.end].to;
+        }
+        l.shots.drain(range.start..=range.end);
+        let mut gone = self.delete_stations_off_lines(&off);
+        let left = self.leave_junctions(line, &off, layout.as_ref());
+        gone.closures.extend(left.ties.iter().copied());
         let deleted = DeletedRange {
             line,
             kind: range.kind,
@@ -286,7 +290,10 @@ impl Project {
             closures_removed: gone.closures,
             comments_removed: gone.comments,
         };
-        Ok((deleted, Epilogue::topology(EditContext::geometry(line))))
+        Ok((
+            deleted,
+            Epilogue::delete(EditContext::geometry(line), left.moving_ends),
+        ))
     }
 
     /// The split mutation: the line keeps its shots before the range, a new
@@ -299,10 +306,15 @@ impl Project {
         names: Option<(String, String)>,
     ) -> Result<(DeletedRange, Epilogue), EditError> {
         let new_id = self.next_line_id();
+        let chain: Vec<StationId> = self.line_or_refuse(line)?.stations().collect();
+        let off: Vec<StationId> = range
+            .split_indices()
+            .filter_map(|i| chain.get(i).copied())
+            .collect();
+        let layout = self.member_tie_layout(line, &off);
         let Some(l) = self.line_mut(line) else {
             return Err(EditError::line_gone());
         };
-        let chain: Vec<StationId> = l.stations().collect();
         let tail_shots = l.shots.split_off(range.end + 1);
         l.shots.truncate(range.start);
         let tail_start = chain[range.end + 1];
@@ -337,11 +349,9 @@ impl Project {
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &tail_stations);
 
-        let off: Vec<StationId> = range
-            .split_indices()
-            .filter_map(|i| chain.get(i).copied())
-            .collect();
-        let gone = self.delete_stations_off_lines(&off);
+        let mut gone = self.delete_stations_off_lines(&off);
+        let left = self.leave_junctions(line, &off, layout.as_ref());
+        gone.closures.extend(left.ties.iter().copied());
         let deleted = DeletedRange {
             line,
             kind: range.kind,
@@ -358,6 +368,7 @@ impl Project {
             ctx: EditContext::line(line),
             sweep: true,
             remove_across_one_shot: false,
+            moving_ends: left.moving_ends,
         };
         Ok((deleted, epilogue))
     }
