@@ -59,13 +59,12 @@ epilogue (sweep, anchor settle, validate).
   counters may stand higher. Pinned by the property tests and the size
   gates.
 
-**C:** `UndoEntry { command, undo_data, timestamp, command_bytes }` becomes
-an entry holding a `HistoryEntry` (time, kind, record-time label, refs,
-recorded preview rows, changeset). Decide how to hold it: the `Changeset`
-itself (session ids exact; heap a few times its JSON) or its encoded text
-(the byte budget counts exactly what is held, like #808's `RawValue`; a
-step then decodes it and mints session ids). The byte budget counts
-`encode_entry(..).len()` either way.
+**Held (C0):** an `UndoEntry` (`core/undo.rs`) keeps the decoded
+`HistoryEntry` (time, kind, record-time label, refs, recorded preview rows,
+changeset; session shot ids exact for an in-session capture) AND its
+canonical text (`encode_entry`, once at push or as read from the file). The
+byte budget counts the text, which is what a save writes and a push carries;
+a save copies it rather than re-encoding the history.
 
 ### The execute pipeline
 
