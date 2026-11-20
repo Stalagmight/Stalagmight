@@ -19,6 +19,7 @@
 //! | COUNTERS | the station, closure and Section counters never go down, across any move |
 //! | DERIVED VIEWS | the memoised raw layout and Computed View (`AppState::raw_positions_of`, `adjusted_positions`) are the fresh ones, bit for bit, and each depth's views are the ones recorded there |
 //! | ENTRY CONTENT | every `UndoHistoryItem` on both stacks (label, kind, timestamp, preview) is the one recorded when its entry was pushed, at the depth the stacks put it, and survives a save and a reopen unchanged |
+//! | ENTRIES FIT | right after a reopen, every entry the history kept steps (on a clone) onto the state recorded at the depth it leads to, and leaves the survey valid - the whole undo stack and the whole redo stack, so an entry a later push clears unstepped is checked too |
 //! | REFUSALS | a refused command, a refused batch, an undo past the floor or a redo past the top, and a step through an entry whose preconditions a tamper broke (`testkit::tamper`) change NOTHING: not the survey, not its session ids or `modified_at`, not the stacks, and the refused entry stays where it was |
 //! | NO-OPS | a command that succeeds without recording anything changed nothing and kept the redo branch |
 //! | JUMPS | `undo_to` / `redo_to` of N land where N single steps do, with the same reversed lines |
@@ -1518,6 +1519,8 @@ pub(super) struct CoverageCounts {
     pub(super) saves_in_place: usize,
     pub(super) double_crossings: usize,
     pub(super) extended: usize,
+    /// Kept entries stepped on a clone right after a reopen.
+    pub(super) fit_checked: usize,
 }
 
 /// The largest each unbounded-in-principle collection got during a run.
@@ -4003,7 +4006,8 @@ fn describe_coverage(outcome: &Outcome) -> String {
     let c = outcome.coverage;
     format!(
         "; knobs={} corrupted={} dropped={} kept-corrupted={} refused-corrupted={} \
-         trimmed-crossings={} window-cut={} saves-in-place={} double-crossings={} extended={}",
+         trimmed-crossings={} window-cut={} saves-in-place={} double-crossings={} extended={} \
+         fit-checked={}",
         outcome.knobs.describe(),
         c.corrupted,
         c.dropped,
@@ -4014,6 +4018,7 @@ fn describe_coverage(outcome: &Outcome) -> String {
         c.saves_in_place,
         c.double_crossings,
         c.extended,
+        c.fit_checked,
     )
 }
 

@@ -15,7 +15,7 @@
 //!   reopen kept) is refused, changes nothing and KEEPS its entry.
 
 use super::fuzz_corrupt_tests::{self, Corruption};
-use super::{item_text, Fuzzer};
+use super::{canonical_bytes, item_text, Fuzzer};
 use crate::core::Command;
 use crate::models::survey::changeset::{testkit, Direction};
 
@@ -182,6 +182,74 @@ impl Fuzzer {
             }
         }
         self.expect_stacks("reload");
+        self.expect_entries_fit("reload");
+    }
+
+    /// ALWAYS ON, after every reopen that kept the history: every entry it
+    /// kept steps, on a clone of the live survey, onto the state recorded at
+    /// the depth it leads to - the whole undo stack newest first, the whole
+    /// redo stack next first - and leaves the survey valid, so no kept entry
+    /// "loads, then refuses" (except the one a `line-hash` damage walls off,
+    /// which must refuse). The closing walk executes the reachable ones for
+    /// real; this also covers the ones a later push clears unstepped.
+    fn expect_entries_fit(&mut self, what: &str) {
+        let (undo, redo) = {
+            let stack = self.state.undo_stack.lock().unwrap();
+            (
+                stack
+                    .undo_entries()
+                    .map(|e| e.entry().changes.clone())
+                    .collect::<Vec<_>>(),
+                stack
+                    .redo_entries()
+                    .map(|e| e.entry().changes.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let live = self.live();
+        for (direction, entries) in [(Direction::Undo, undo), (Direction::Redo, redo)] {
+            let mut survey = live.clone();
+            for (i, changes) in entries.iter().enumerate() {
+                let (entry_depth, target) = match direction {
+                    Direction::Undo => (self.cursor - i, self.cursor - i - 1),
+                    Direction::Redo => (self.cursor + 1 + i, self.cursor + 1 + i),
+                };
+                let stepped =
+                    crate::models::survey::changeset::step(&mut survey, changes, direction);
+                if self.walls.contains(&entry_depth) {
+                    if stepped.is_ok() {
+                        self.fail(
+                            &format!("{what} kept a damaged entry that still steps"),
+                            &format!("  the entry into depth {entry_depth}"),
+                        );
+                    }
+                    break;
+                }
+                if let Err(refusal) = stepped {
+                    self.fail(
+                        &format!("{what} kept an entry that does not fit the state it applies to"),
+                        &format!(
+                            "  {direction:?} through the entry into depth {entry_depth}: {refusal}"
+                        ),
+                    );
+                }
+                let violations = survey.validate();
+                if !violations.is_empty() {
+                    self.fail(
+                        &format!("{what} kept an entry whose step leaves the survey invalid"),
+                        &format!("  {direction:?} into depth {target}: {}", violations[0]),
+                    );
+                }
+                self.outcome.coverage.fit_checked += 1;
+                let recorded = self.depth(target);
+                if canonical_bytes(&survey, recorded.project.counters) != recorded.bytes {
+                    self.fail(
+                        &format!("{what} kept an entry that steps somewhere else"),
+                        &format!("  {direction:?} into depth {target} misses its record"),
+                    );
+                }
+            }
+        }
     }
 
     /// `TRIM_CROSSINGS`: only the newest `undo_persist_limit` entries of each
