@@ -148,7 +148,11 @@ fn assert_exact_undo_and_redo_after_reopen(
         after_uuids,
         "{what}: the reopen changed a shot uuid"
     );
-    assert_eq!(survey(state), moved, "{what}: the reopen changed the survey");
+    assert_eq!(
+        survey(state),
+        moved,
+        "{what}: the reopen changed the survey"
+    );
 
     let r = state.undo();
     assert!(r.success, "{what}: undo after the reopen: {:?}", r.error);
@@ -473,8 +477,14 @@ fn open(path: &Path) -> AppState {
 
 /// The entry text with its `"v":1` version swapped for `version`.
 fn with_version(entry: &RawJson, version: u32) -> RawJson {
-    let text = entry.as_str().replacen("{\"v\":1,", &format!("{{\"v\":{version},"), 1);
-    assert_ne!(text, entry.as_str(), "setup: the entry starts with its version");
+    let text = entry
+        .as_str()
+        .replacen("{\"v\":1,", &format!("{{\"v\":{version},"), 1);
+    assert_ne!(
+        text,
+        entry.as_str(),
+        "setup: the entry starts with its version"
+    );
     RawJson::parse(&text).unwrap()
 }
 
@@ -528,7 +538,9 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
             let replaced = match damage {
                 0 => with_version(&undo, 2),
                 1 => {
-                    let text = undo.as_str().replacen("\"label\":", "\"label\":5,\"was\":", 1);
+                    let text = undo
+                        .as_str()
+                        .replacen("\"label\":", "\"label\":5,\"was\":", 1);
                     RawJson::parse(&text).unwrap()
                 }
                 _ => {
@@ -601,13 +613,11 @@ fn a_legacy_history_is_dropped_with_the_earlier_version_banner() {
         .join("../../../e2e/fixtures/fractal_plant_iter3.stalx");
     let path = dir.path().join("legacy.stalx");
     std::fs::copy(&fixture, &path).unwrap();
-    let rows: i64 = rusqlite::Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap()
-        .query_row("SELECT COUNT(*) FROM undo_stack", [], |row| row.get(0))
-        .unwrap();
+    let rows: i64 =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM undo_stack", [], |row| row.get(0))
+            .unwrap();
     assert!(rows > 0, "setup: the legacy file holds a history");
     let state = open(&path);
     assert!(state.history_discarded());
@@ -626,5 +636,9 @@ fn a_legacy_history_is_dropped_with_the_earlier_version_banner() {
     assert!(!reopened.history_discarded(), "the upgraded file is clean");
     assert_eq!(reopened.get_undo_stack().len(), 1);
     assert!(reopened.undo().success);
-    assert_eq!(survey(&reopened), before, "the edit made after the open undoes");
+    assert_eq!(
+        survey(&reopened),
+        before,
+        "the edit made after the open undoes"
+    );
 }

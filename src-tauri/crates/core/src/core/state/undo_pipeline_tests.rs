@@ -331,7 +331,10 @@ fn a_poisoned_undo_stack_still_undoes_and_redoes() {
             .success
     );
     poison(&state.undo_stack);
-    assert!(state.can_undo(), "the poisoned stack still reports its entries");
+    assert!(
+        state.can_undo(),
+        "the poisoned stack still reports its entries"
+    );
     assert_eq!(state.get_undo_stack().len(), 2);
     assert_round_trip(&state, &before, "undo and redo through a poisoned stack");
     assert!(state.undo().success);
@@ -471,7 +474,10 @@ fn lifecycle_commands_record_no_entry_and_edits_record_one() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("lifecycle.stalx");
     let state = new_state();
-    assert!(state.get_undo_stack().is_empty(), "CreateProject records nothing");
+    assert!(
+        state.get_undo_stack().is_empty(),
+        "CreateProject records nothing"
+    );
     let line_id = create(&state, "Line", vec![test_shot_data(5.0)]);
     assert_eq!(state.get_undo_stack().len(), 1, "CreateLine records one");
     let r = state.execute(Command::CreateShot {
@@ -483,7 +489,11 @@ fn lifecycle_commands_record_no_entry_and_edits_record_one() {
     assert!(r.success);
     assert_eq!(state.get_undo_stack().len(), 2, "CreateShot records one");
     save_as(&state, &path);
-    assert_eq!(state.get_undo_stack().len(), 2, "SaveProject records nothing");
+    assert_eq!(
+        state.get_undo_stack().len(),
+        2,
+        "SaveProject records nothing"
+    );
     assert!(state.execute(Command::DeleteLine { line_id }).success);
     assert_eq!(state.get_undo_stack().len(), 3, "DeleteLine records one");
     assert!(state.execute(Command::SaveProject { path: None }).success);
@@ -496,12 +506,14 @@ fn lifecycle_commands_record_no_entry_and_edits_record_one() {
         3,
         "OpenProject loads the file's history and records nothing of its own"
     );
-    assert!(state
-        .execute(Command::CreateProject {
-            name: "Fresh".to_string(),
-            location: None,
-        })
-        .success);
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Fresh".to_string(),
+                location: None,
+            })
+            .success
+    );
     assert!(
         state.get_undo_stack().is_empty(),
         "CreateProject starts an empty history"
@@ -543,7 +555,10 @@ fn path_bearing_commands_never_enter_shared_undo_history() {
             commands: vec![command],
             label: None,
         });
-        assert!(!r.success, "a batch holding a path-bearing command is refused");
+        assert!(
+            !r.success,
+            "a batch holding a path-bearing command is refused"
+        );
     }
     assert!(state.get_undo_stack().is_empty());
 
@@ -767,7 +782,11 @@ fn test_undo_delete_shot_restores_at_correct_position() {
     assert_round_trip(&state, &before, "delete the middle shot");
     assert!(state.undo().success);
     assert_eq!(lengths(&state, line_id), vec![5.0, 7.0, 9.0]);
-    assert_eq!(shot_ids(&state, line_id), ids, "at its position, its own id");
+    assert_eq!(
+        shot_ids(&state, line_id),
+        ids,
+        "at its position, its own id"
+    );
 }
 
 #[test]
@@ -840,8 +859,16 @@ fn test_execute_create_line_command() {
 #[test]
 fn test_execute_merge_stations_command() {
     let state = new_state();
-    let a = create(&state, "Line A", vec![test_shot_data(5.0), test_shot_data(7.0)]);
-    let b = create(&state, "Line B", vec![test_shot_data(4.0), test_shot_data(6.0)]);
+    let a = create(
+        &state,
+        "Line A",
+        vec![test_shot_data(5.0), test_shot_data(7.0)],
+    );
+    let b = create(
+        &state,
+        "Line B",
+        vec![test_shot_data(4.0), test_shot_data(6.0)],
+    );
     let before = snapshot(&state);
     let stations_before = project(&state).stations.len();
     let r = state.execute(Command::MergeStations {
@@ -1006,7 +1033,10 @@ fn test_update_shot_rejects_non_finite_nested_field_atomically() {
     });
     assert!(!r.success, "a non-finite nested field must be rejected");
     assert!(
-        r.error.as_deref().unwrap_or_default().contains("non-finite"),
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("non-finite"),
         "{:?}",
         r.error
     );
@@ -1036,7 +1066,11 @@ fn test_update_shot_rejects_positive_infinity() {
         },
     });
     assert!(!r.success, "+inf must be rejected");
-    assert!(r.error.as_deref().unwrap_or_default().contains("non-finite"));
+    assert!(r
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("non-finite"));
     assert_same(&snapshot(&state), &before, "poisoned left not written");
 }
 
@@ -1121,7 +1155,10 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
             },
         ],
     );
-    assert!(!r.success, "a batch with one poisoned update must be rejected");
+    assert!(
+        !r.success,
+        "a batch with one poisoned update must be rejected"
+    );
     assert_same(&snapshot(&state), &before, "neither update applied");
     assert_eq!(state.get_undo_stack().len(), 1, "no entry");
 }
@@ -1193,14 +1230,21 @@ fn test_execute_delete_shot_command() {
     assert!(r.success, "{:?}", r.error);
     assert_eq!(shot_ids(&state, line_id), vec![ids[0], ids[2]]);
     assert_eq!(lengths(&state, line_id), vec![5.0, 9.0]);
-    assert!(project(&state).validate().is_empty(), "the line stays a chain");
+    assert!(
+        project(&state).validate().is_empty(),
+        "the line stays a chain"
+    );
     assert_round_trip(&state, &before, "delete shot");
 }
 
 #[test]
 fn test_execute_create_shot_command() {
     let state = new_state();
-    let line_id = create(&state, "Line", vec![test_shot_data(5.0), test_shot_data(10.0)]);
+    let line_id = create(
+        &state,
+        "Line",
+        vec![test_shot_data(5.0), test_shot_data(10.0)],
+    );
     let first = shot_ids(&state, line_id)[0];
     let before = snapshot(&state);
     let r = state.execute(Command::CreateShot {
@@ -1238,7 +1282,10 @@ fn test_execute_delete_line_command() {
     let p = project(&state);
     assert_eq!(line_ids(&state), vec![b]);
     assert_eq!(p.lines()[0].name.as_deref(), Some("Line B"));
-    assert!(p.datums.is_empty(), "the datum on the deleted line went with it");
+    assert!(
+        p.datums.is_empty(),
+        "the datum on the deleted line went with it"
+    );
     assert!(p.validate().is_empty());
     assert_round_trip(&state, &before, "delete a datum line");
 }
@@ -1292,7 +1339,11 @@ fn test_execute_update_line_metadata_command() {
 #[test]
 fn test_undo_delete_shot() {
     let state = new_state();
-    let line_id = create(&state, "Line", vec![test_shot_data(5.0), test_shot_data(10.0)]);
+    let line_id = create(
+        &state,
+        "Line",
+        vec![test_shot_data(5.0), test_shot_data(10.0)],
+    );
     let ids = shot_ids(&state, line_id);
     assert!(
         state
@@ -1311,10 +1362,22 @@ fn test_undo_delete_shot() {
 #[test]
 fn test_undo_merge_stations() {
     let state = new_state();
-    let a = create(&state, "Line A", vec![test_shot_data(5.0), test_shot_data(7.0)]);
-    let b = create(&state, "Line B", vec![test_shot_data(4.0), test_shot_data(6.0)]);
+    let a = create(
+        &state,
+        "Line A",
+        vec![test_shot_data(5.0), test_shot_data(7.0)],
+    );
+    let b = create(
+        &state,
+        "Line B",
+        vec![test_shot_data(4.0), test_shot_data(6.0)],
+    );
     let p = project(&state);
-    assert!(p.topology().stations().iter().all(|&s| !p.topology().is_junction(s)));
+    assert!(p
+        .topology()
+        .stations()
+        .iter()
+        .all(|&s| !p.topology().is_junction(s)));
     let before = snapshot(&state);
     assert!(
         state
@@ -1328,8 +1391,16 @@ fn test_undo_merge_stations() {
     assert_eq!(station_at(&p, a, 1), station_at(&p, b, 0));
     assert!(state.undo().success);
     let p = project(&state);
-    assert_ne!(station_at(&p, a, 1), station_at(&p, b, 0), "the merge is gone");
-    assert!(p.topology().stations().iter().all(|&s| !p.topology().is_junction(s)));
+    assert_ne!(
+        station_at(&p, a, 1),
+        station_at(&p, b, 0),
+        "the merge is gone"
+    );
+    assert!(p
+        .topology()
+        .stations()
+        .iter()
+        .all(|&s| !p.topology().is_junction(s)));
     assert_same(&snapshot(&state), &before, "exactly");
 }
 
@@ -1400,7 +1471,9 @@ fn set_length(state: &AppState, line_id: LineId, shot_id: ShotId, length: f64) {
 }
 
 fn set_live_length(state: &AppState, line_id: LineId, index: usize, length: f64) {
-    tamper(state, |p| p.line_mut(line_id).unwrap().shots[index].length = length);
+    tamper(state, |p| {
+        p.line_mut(line_id).unwrap().shots[index].length = length
+    });
 }
 
 #[test]
@@ -1415,7 +1488,10 @@ fn test_undo_failure_preserves_entry_on_undo_stack() {
     let r = state.undo();
     assert!(!r.success);
     assert!(
-        r.error.as_deref().unwrap_or_default().starts_with("Undo failed: "),
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Undo failed: "),
         "{:?}",
         r.error
     );
@@ -1437,7 +1513,10 @@ fn test_redo_failure_preserves_entry_on_redo_stack() {
     let r = state.redo();
     assert!(!r.success);
     assert!(
-        r.error.as_deref().unwrap_or_default().starts_with("Redo failed: "),
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Redo failed: "),
         "{:?}",
         r.error
     );
@@ -1455,7 +1534,11 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
     let top = top_undo(&state);
     set_live_length(&state, line_id, 0, 20.0);
     assert!(!state.undo().success);
-    assert_eq!(state.get_undo_stack().len(), 3, "every entry is still there");
+    assert_eq!(
+        state.get_undo_stack().len(),
+        3,
+        "every entry is still there"
+    );
     assert_eq!(top_undo(&state), top, "the refused entry is still on top");
 }
 
@@ -1469,7 +1552,11 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
     let top = top_redo(&state);
     set_live_length(&state, line_id, 0, 20.0);
     assert!(!state.redo().success);
-    assert_eq!(state.get_redo_stack().len(), 2, "every entry is still there");
+    assert_eq!(
+        state.get_redo_stack().len(),
+        2,
+        "every entry is still there"
+    );
     assert_eq!(top_redo(&state), top, "the refused entry is still on top");
 }
 
@@ -1526,7 +1613,8 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
     assert_eq!(state.get_undo_stack().len(), 2);
     assert_eq!(state.get_redo_stack().len(), 1);
     assert_eq!(
-        state.get_undo_stack()[0].description, refused_entry,
+        state.get_undo_stack()[0].description,
+        refused_entry,
         "the refused entry is on top"
     );
 }
@@ -1554,7 +1642,8 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
     assert_eq!(state.get_redo_stack().len(), 2);
     assert_eq!(state.get_undo_stack().len(), 1);
     assert_eq!(
-        state.get_redo_stack()[0].description, refused_entry,
+        state.get_redo_stack()[0].description,
+        refused_entry,
         "the refused entry is on top"
     );
 }
@@ -1573,7 +1662,10 @@ fn a_decoded_entry_that_would_leave_an_invalid_survey_is_refused_and_kept() {
     // A station on no line (invariant 4).
     let id = invalid.counters.next_station_id;
     invalid.insert_station(Station::new(id, "orphan")).unwrap();
-    assert!(!invalid.validate().is_empty(), "setup: the target is invalid");
+    assert!(
+        !invalid.validate().is_empty(),
+        "setup: the target is invalid"
+    );
     let mut changes = capture(&before_project, &invalid);
     changes.forget_session_ids();
     let entry = UndoEntry::new(HistoryEntry {
@@ -1765,11 +1857,19 @@ fn create_line_and_delete_line_entries_name_their_kind_and_line() {
     let line_id = create(&state, "Check Variant", vec![test_shot_data(1.0)]);
     let item = &state.get_undo_stack()[0];
     assert_eq!(item.command_type, "create_line");
-    assert!(item.description.contains("Check Variant"), "{}", item.description);
+    assert!(
+        item.description.contains("Check Variant"),
+        "{}",
+        item.description
+    );
     assert!(state.execute(Command::DeleteLine { line_id }).success);
     let item = &state.get_undo_stack()[0];
     assert_eq!(item.command_type, "delete_line");
-    assert!(item.description.contains("Check Variant"), "{}", item.description);
+    assert!(
+        item.description.contains("Check Variant"),
+        "{}",
+        item.description
+    );
 }
 
 #[test]
@@ -1935,7 +2035,11 @@ fn create_shot_and_delete_shot_entries_name_their_kind() {
     assert!(r.success);
     assert_eq!(state.get_undo_stack()[0].command_type, "create_shot");
     let shot_id = r.shot_id.unwrap();
-    assert!(state.execute(Command::DeleteShot { line_id, shot_id }).success);
+    assert!(
+        state
+            .execute(Command::DeleteShot { line_id, shot_id })
+            .success
+    );
     assert_eq!(state.get_undo_stack()[0].command_type, "delete_shot");
 }
 
@@ -2020,7 +2124,11 @@ fn test_delete_shot_undo_redo_still_works() {
     );
     let shot_id = shot_ids(&state, line_id)[0];
     let before = snapshot(&state);
-    assert!(state.execute(Command::DeleteShot { line_id, shot_id }).success);
+    assert!(
+        state
+            .execute(Command::DeleteShot { line_id, shot_id })
+            .success
+    );
     assert_eq!(lengths(&state, line_id), vec![10.0]);
     assert!(state.undo().success);
     assert_eq!(shot_ids(&state, line_id)[0], shot_id);
@@ -2154,7 +2262,11 @@ fn batched_line_deletes_are_one_undo_entry() {
 #[test]
 fn a_batch_may_reverse_a_line_and_then_delete_it() {
     let state = new_state();
-    let doomed = create(&state, "Doomed", vec![test_shot_data(5.0), test_shot_data(7.0)]);
+    let doomed = create(
+        &state,
+        "Doomed",
+        vec![test_shot_data(5.0), test_shot_data(7.0)],
+    );
     let keeper = create(&state, "Keeper", vec![test_shot_data(9.0)]);
     let before = snapshot(&state);
     let r = state.execute(Command::Batch {
@@ -2200,7 +2312,10 @@ fn a_batch_that_reverses_a_line_after_deleting_it_rolls_back() {
     });
     assert!(!r.success);
     assert!(
-        r.error.as_deref().unwrap_or_default().contains("no longer exists"),
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no longer exists"),
         "{:?}",
         r.error
     );
@@ -2220,7 +2335,10 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
     let expected_b = crate::models::gps_to_local(&gps_b, &gps_a);
     assert!(expected_b.0.hypot(expected_b.1) > 100.0, "setup: far apart");
     let a1 = xyz(&project(&state), a, 1);
-    assert!((a1[1] - 10.0).abs() < 1e-9, "setup: A's station 1 is off the origin");
+    assert!(
+        (a1[1] - 10.0).abs() < 1e-9,
+        "setup: A's station 1 is off the origin"
+    );
     let before = snapshot(&state);
     let r = state.execute(Command::Batch {
         commands: vec![
@@ -2278,5 +2396,9 @@ fn test_undo_actually_works_after_project_reopen() {
         !line_ids(&state).contains(&line_id),
         "the line is undone after the reopen"
     );
-    assert_same(&snapshot(&state), &before, "the reopened undo lands exactly");
+    assert_same(
+        &snapshot(&state),
+        &before,
+        "the reopened undo lands exactly",
+    );
 }

@@ -330,7 +330,11 @@ fn undo_after_reload_deletes_the_shot_it_created() {
     }
     let reopened = reopen(&path);
     let undone = reopened.undo();
-    assert!(undone.success, "undo after reopen failed: {:?}", undone.error);
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
     let remaining: Vec<String> = project(&reopened)
         .lines()
         .iter()
@@ -391,7 +395,11 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
     }
     let reopened = reopen(&path);
     let undone = reopened.undo();
-    assert!(undone.success, "undo after reopen failed: {:?}", undone.error);
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
     let p = project(&reopened);
     let marked = p
         .line(line_id)
@@ -400,7 +408,11 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
         .iter()
         .find(|s| s.uuid == marked_uuid)
         .expect("the marked shot vanished");
-    assert_eq!(marked.kind, ShotKind::Normal, "the undo reset the shot it changed");
+    assert_eq!(
+        marked.kind,
+        ShotKind::Normal,
+        "the undo reset the shot it changed"
+    );
     assert!(
         shot_kinds(&reopened, line_id)
             .iter()
@@ -643,7 +655,11 @@ fn unwinding_the_history_leaves_no_displaced_line_behind() {
     assert!(created.success);
     assert!(state.undo().success, "undo of CreateShot failed");
     assert!(state.undo().success, "undo of UpdateShot failed");
-    assert_eq!(xy(&state, empty, 0), start, "the empty line is where it was");
+    assert_eq!(
+        xy(&state, empty, 0),
+        start,
+        "the empty line is where it was"
+    );
     assert_same(&snapshot(&state), &before, "the whole survey");
 }
 
@@ -703,7 +719,11 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
     let removed = state.execute(Command::RemoveLoopClosure {
         closure_id: before_ids[0],
     });
-    assert!(removed.success, "RemoveLoopClosure failed: {:?}", removed.error);
+    assert!(
+        removed.success,
+        "RemoveLoopClosure failed: {:?}",
+        removed.error
+    );
     assert_round_trip(&state, &before, "remove the first closure");
     assert!(state.undo().success);
     assert_eq!(closure_ids(&state), before_ids, "back at its index");
@@ -729,7 +749,11 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
     let removed = state.execute(Command::RemoveZeroDatum {
         station_ref: StationRef::new(first, 0),
     });
-    assert!(removed.success, "RemoveZeroDatum failed: {:?}", removed.error);
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
     assert_round_trip(&state, &before, "remove the first datum");
     assert!(state.undo().success);
     assert_eq!(datum_stations(&state), order, "back at its index");
@@ -752,7 +776,11 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
     });
-    assert!(closed.success, "loop-closing closure failed: {:?}", closed.error);
+    assert!(
+        closed.success,
+        "loop-closing closure failed: {:?}",
+        closed.error
+    );
     let before = snapshot(&state);
     let first_shot_of_a = shot_ids(&state, a)[0];
     let created = state.execute(Command::CreateShot {
@@ -864,7 +892,11 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
             station_b: StationRef::new(b, 1),
             closure_strategy: ClosureStrategy::default(),
         });
-        assert!(closure.success, "CreateLoopClosure failed: {:?}", closure.error);
+        assert!(
+            closure.success,
+            "CreateLoopClosure failed: {:?}",
+            closure.error
+        );
         let undo_to = snapshot(&state);
         let bridge_shot = shot_ids(&state, bridge)[0];
         let deleted = state.execute_delete_last_shot_and_line(bridge, bridge_shot);
@@ -924,7 +956,11 @@ fn undo_of_a_pre_save_entry_is_route_independent() {
     // The other route to the same depth: reopen the saved file and undo.
     let reopened = reopen(&path);
     assert!(reopened.undo().success);
-    assert_eq!(text(&reopened), depth_1.0, "the same state by the other route");
+    assert_eq!(
+        text(&reopened),
+        depth_1.0,
+        "the same state by the other route"
+    );
 }
 
 // ===========================================================================
@@ -1039,14 +1075,20 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
         station_b: StationRef::new(b, 2),
         closure_strategy: ClosureStrategy::LeastSquaresWeighted,
     });
-    assert!(closure.success, "CreateLoopClosure failed: {:?}", closure.error);
+    assert!(
+        closure.success,
+        "CreateLoopClosure failed: {:?}",
+        closure.error
+    );
     let survey_before = snapshot(&state);
     let base = adjusted_bits(&state);
     let raw: std::collections::HashMap<StationRef, (f64, f64)> =
         all_slot_xy(&state).into_iter().collect();
-    let solved = state.get_adjusted_stations().unwrap().iter().any(|s| {
-        gap(raw[&s.station_ref], (s.coordinates.x, s.coordinates.y)) > 1e-6
-    });
+    let solved = state
+        .get_adjusted_stations()
+        .unwrap()
+        .iter()
+        .any(|s| gap(raw[&s.station_ref], (s.coordinates.x, s.coordinates.y)) > 1e-6);
     assert!(solved, "setup: the closure moves something, so a solve ran");
     let mut differing = 0;
     for _ in 0..64 {
@@ -1227,7 +1269,12 @@ fn two_datum_survey(state: &AppState, second: (f64, f64), floater: bool) -> (Lin
     if floater {
         create_line(state, "Floater", vec![shot(300.0, 12.0)]);
     }
-    set_datum(state, StationRef::new(origin, 0), ORIGIN_GPS.0, ORIGIN_GPS.1);
+    set_datum(
+        state,
+        StationRef::new(origin, 0),
+        ORIGIN_GPS.0,
+        ORIGIN_GPS.1,
+    );
     set_datum(state, StationRef::new(anchored, 1), second.0, second.1);
     (origin, anchored)
 }
@@ -1272,7 +1319,11 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     let removed = state.execute(Command::RemoveZeroDatum {
         station_ref: StationRef::new(origin, 0),
     });
-    assert!(removed.success, "RemoveZeroDatum failed: {:?}", removed.error);
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
     assert_at_origin(&state, anchored, 1, "after the removal");
     assert_edit_holds_the_anchor(&state, anchored);
 }
@@ -1306,7 +1357,11 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
         shot_id: first_shot,
     });
     assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
-    assert_eq!(project(&state).datums.len(), 1, "the datum left with its station");
+    assert_eq!(
+        project(&state).datums.len(),
+        1,
+        "the datum left with its station"
+    );
     assert_at_origin(&state, anchored, 1, "after the delete");
     assert_round_trip(&state, &before, "the delete");
     assert_edit_holds_the_anchor(&state, anchored);
@@ -1325,12 +1380,20 @@ fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
     let removed = state.execute(Command::RemoveZeroDatum {
         station_ref: StationRef::new(origin, 0),
     });
-    assert!(removed.success, "RemoveZeroDatum failed: {:?}", removed.error);
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
     assert_at_origin(&state, anchored, 1, "the promoted datum");
     let p = project(&state);
     let frame = p.frame_datum().expect("a frame datum");
     let gps = p.datums[frame].gps;
-    assert_eq!((gps.latitude, gps.longitude), NEAR_GPS, "the second was promoted");
+    assert_eq!(
+        (gps.latitude, gps.longitude),
+        NEAR_GPS,
+        "the second was promoted"
+    );
     let shift = gps_to_local(
         &GpsCoordinates::new(NEAR_GPS.0, NEAR_GPS.1, 0.0).unwrap(),
         &GpsCoordinates::new(ORIGIN_GPS.0, ORIGIN_GPS.1, 0.0).unwrap(),
@@ -1359,7 +1422,11 @@ fn undoing_the_primary_datum_removal_restores_every_placement() {
         station_ref: StationRef::new(origin, 0),
     });
     assert!(removed.success);
-    assert_ne!(snapshot(&state).0, before.0, "setup: the removal moved things");
+    assert_ne!(
+        snapshot(&state).0,
+        before.0,
+        "setup: the removal moved things"
+    );
     assert_round_trip(&state, &before, "remove the frame datum");
 }
 
@@ -1377,7 +1444,12 @@ fn the_first_datum_entry_records_every_piece_it_re_frames() {
     let before = snapshot(&state);
     let placements = project(&state).placements;
     assert_eq!(placements.len(), 3, "setup: three free pieces");
-    set_datum(&state, StationRef::new(anchored, 1), ORIGIN_GPS.0, ORIGIN_GPS.1);
+    set_datum(
+        &state,
+        StationRef::new(anchored, 1),
+        ORIGIN_GPS.0,
+        ORIGIN_GPS.1,
+    );
     assert_at_origin(&state, anchored, 1, "the first datum");
     let digest = state
         .undo_stack
@@ -1392,7 +1464,11 @@ fn the_first_datum_entry_records_every_piece_it_re_frames() {
     for line in [one, two] {
         let station = p.line(line).unwrap().start;
         let old = placements.iter().find(|pl| pl.station == station).unwrap();
-        let new = p.placements.iter().find(|pl| pl.station == station).unwrap();
+        let new = p
+            .placements
+            .iter()
+            .find(|pl| pl.station == station)
+            .unwrap();
         assert_ne!((old.x, old.y), (new.x, new.y), "premise: line {line} moved");
         assert!(digest.placements.removed.contains(old), "the old placement");
         assert!(digest.placements.added.contains(new), "the new placement");
@@ -1426,7 +1502,12 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_placement() {
     let datum_before = xy(&state, anchored, 1);
     let floater_before = xy(&state, floater, 0);
     assert!(gap(datum_before, (0.0, 0.0)) > 1.0, "setup: off the origin");
-    set_datum(&state, StationRef::new(anchored, 1), ORIGIN_GPS.0, ORIGIN_GPS.1);
+    set_datum(
+        &state,
+        StationRef::new(anchored, 1),
+        ORIGIN_GPS.0,
+        ORIGIN_GPS.1,
+    );
     assert_at_origin(&state, anchored, 1, "the first datum");
     let floater_after = xy(&state, floater, 0);
     let expected = (
@@ -1459,7 +1540,12 @@ fn the_delete_last_shot_path_renormalises_the_frame() {
     let state = state_with_project();
     let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0)]);
     let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-    set_datum(&state, StationRef::new(origin, 0), ORIGIN_GPS.0, ORIGIN_GPS.1);
+    set_datum(
+        &state,
+        StationRef::new(origin, 0),
+        ORIGIN_GPS.0,
+        ORIGIN_GPS.1,
+    );
     set_datum(&state, StationRef::new(anchored, 1), NEAR_GPS.0, NEAR_GPS.1);
     let before = snapshot(&state);
     let only_shot = shot_ids(&state, origin)[0];
@@ -1501,10 +1587,7 @@ fn the_renormalised_frame_survives_save_and_reopen() {
 
 fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<bool> {
     let p = project(state);
-    let (sa, sb) = (
-        p.topology().station_at(a)?,
-        p.topology().station_at(b)?,
-    );
+    let (sa, sb) = (p.topology().station_at(a)?, p.topology().station_at(b)?);
     let index = p
         .closures
         .iter()
@@ -1541,7 +1624,11 @@ fn snapped_loop(state: &AppState, anchored: bool) -> (LineId, LineId) {
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::Move,
     });
-    assert!(closed.success, "CreateLoopClosure failed: {:?}", closed.error);
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
     (a, b)
 }
 
@@ -1554,7 +1641,11 @@ fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::Move,
     });
-    assert!(closed.success, "CreateLoopClosure failed: {:?}", closed.error);
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
     let apart = gap(xy(&state, a, 0), xy(&state, b, 1));
     assert!(apart > 1.0, "setup: the ends are metres apart ({apart} m)");
     assert_eq!(
@@ -1595,7 +1686,11 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
         ],
         label: None,
     });
-    assert!(batched.success, "snap-to-merge batch failed: {:?}", batched.error);
+    assert!(
+        batched.success,
+        "snap-to-merge batch failed: {:?}",
+        batched.error
+    );
     assert!(gap(xy(&state, a, 0), xy(&state, b, 1)) < 1e-6);
     assert_eq!(
         closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
@@ -1615,7 +1710,11 @@ fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
         let closed = all_slot_xy(&state);
         let before = snapshot(&state);
         let ends = (StationRef::new(a, 0), StationRef::new(b, 1));
-        assert_eq!(closure_alignment(&state, ends.0, ends.1), Some(true), "setup");
+        assert_eq!(
+            closure_alignment(&state, ends.0, ends.1),
+            Some(true),
+            "setup"
+        );
         let torn = if narrow {
             state.execute(Command::UpdateShot {
                 line_id: b,
@@ -1663,7 +1762,11 @@ fn drifting_back_into_coincidence_re_promotes_the_closure() {
                 z: 0.0,
             },
         });
-        assert!(moved.success, "MoveStation({offset}) failed: {:?}", moved.error);
+        assert!(
+            moved.success,
+            "MoveStation({offset}) failed: {:?}",
+            moved.error
+        );
         assert_eq!(
             closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
             Some(expected),
@@ -1684,13 +1787,20 @@ fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
     for line in [a, c] {
         set_datum(&state, StationRef::new(line, 0), ORIGIN_GPS.0, ORIGIN_GPS.1);
     }
-    assert!(gap(xy(&state, a, 0), xy(&state, c, 0)) < 1e-6, "setup: one point");
+    assert!(
+        gap(xy(&state, a, 0), xy(&state, c, 0)) < 1e-6,
+        "setup: one point"
+    );
     let closed = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(c, 0),
         closure_strategy: ClosureStrategy::Move,
     });
-    assert!(closed.success, "CreateLoopClosure failed: {:?}", closed.error);
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
     let ends = (StationRef::new(a, 0), StationRef::new(c, 0));
     assert_eq!(closure_alignment(&state, ends.0, ends.1), Some(false));
     let commented = state.execute(Command::SetStationComment {
@@ -1885,7 +1995,10 @@ fn a_reloaded_entry_displays_the_length_it_was_given() {
     );
     assert!(reopened.undo().success);
     assert!(reopened.redo().success);
-    assert_eq!(shot_lengths(&reopened, line_id)[0].to_bits(), length.to_bits());
+    assert_eq!(
+        shot_lengths(&reopened, line_id)[0].to_bits(),
+        length.to_bits()
+    );
 }
 
 // ===========================================================================
@@ -1907,7 +2020,11 @@ fn detached_anchored_closure() -> (AppState, LineId, LineId) {
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
     });
-    assert!(closure.success, "CreateLoopClosure failed: {:?}", closure.error);
+    assert!(
+        closure.success,
+        "CreateLoopClosure failed: {:?}",
+        closure.error
+    );
     (state, a, b)
 }
 
@@ -1924,7 +2041,11 @@ fn removing_a_zero_datum_converts_the_closure_it_makes_convertible() {
     let removed = state.execute(Command::RemoveZeroDatum {
         station_ref: StationRef::new(b, 0),
     });
-    assert!(removed.success, "RemoveZeroDatum failed: {:?}", removed.error);
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
     let p = project(&state);
     assert!(p.closures.is_empty(), "the sole bridge was promoted");
     assert_eq!(station_at(&p, a, 1), station_at(&p, b, 1), "to a junction");
@@ -1951,7 +2072,11 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
         saved = text(&state);
     }
     let reopened = reopen(&path);
-    assert_eq!(text(&reopened), saved, "the file gives back what the session held");
+    assert_eq!(
+        text(&reopened),
+        saved,
+        "the file gives back what the session held"
+    );
 }
 
 /// The state after [`detached_anchored_closure`] lost its second datum: the
@@ -2035,20 +2160,32 @@ fn a_crafted_history_with_an_over_bound_line_id_is_refused() {
     let line_id = project(&reopen(&path)).lines()[0].id;
     let hostile_id = crate::models::MAX_LINE_ID + 1;
     let needle = format!("\"id\":{line_id}");
-    assert!(entry.as_str().contains(&needle), "setup: {}", entry.as_str());
-    let hostile_text = entry.as_str().replace(&needle, &format!("\"id\":{hostile_id}"));
+    assert!(
+        entry.as_str().contains(&needle),
+        "setup: {}",
+        entry.as_str()
+    );
+    let hostile_text = entry
+        .as_str()
+        .replace(&needle, &format!("\"id\":{hostile_id}"));
     assert!(
         decode_entry(&hostile_text, &EntryLimits::default()).is_err(),
         "the decoder refuses an over-bound line id"
     );
-    extras.history.undo.push(RawJson::parse(&hostile_text).unwrap());
+    extras
+        .history
+        .undo
+        .push(RawJson::parse(&hostile_text).unwrap());
     std::fs::write(
         &path,
         stalx_v2::encode(&decoded.project, &extras, stalx_v2::Mode::Normal).unwrap(),
     )
     .unwrap();
     let state = reopen(&path);
-    assert!(state.history_discarded(), "the history is dropped with the banner");
+    assert!(
+        state.history_discarded(),
+        "the history is dropped with the banner"
+    );
     assert!(state.get_undo_stack().is_empty());
     assert_eq!(text(&state), saved, "the survey opens as saved");
     assert!(project(&state)
@@ -2076,6 +2213,15 @@ fn the_snapshot_oracle_sees_a_change_of_one_bit() {
     let line_id = create_line(&state, "Bits", vec![shot(0.0, 5.0)]);
     let before: Snapshot = snapshot(&state);
     let shot_id = shot_ids(&state, line_id)[0];
-    set_length(&state, line_id, shot_id, f64::from_bits(5.0f64.to_bits() + 1));
-    assert_ne!(snapshot(&state).0, before.0, "one ulp is a different survey");
+    set_length(
+        &state,
+        line_id,
+        shot_id,
+        f64::from_bits(5.0f64.to_bits() + 1),
+    );
+    assert_ne!(
+        snapshot(&state).0,
+        before.0,
+        "one ulp is a different survey"
+    );
 }

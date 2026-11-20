@@ -564,7 +564,11 @@ fn large_credit_actions() -> Vec<(&'static str, Action)> {
 /// Every action's row, and every action that could not be measured - or,
 /// when `exact`, whose undo or redo did not land exactly on the state it
 /// records (a small entry that restores the wrong survey is no saving).
-fn measure(gate: &Gate, exact: bool, actions: Vec<(&'static str, Action)>) -> (Vec<Row>, Vec<String>) {
+fn measure(
+    gate: &Gate,
+    exact: bool,
+    actions: Vec<(&'static str, Action)>,
+) -> (Vec<Row>, Vec<String>) {
     let mut rows = Vec::new();
     let mut failed = Vec::new();
     for (action, run) in actions {

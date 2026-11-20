@@ -79,9 +79,9 @@ use crate::core::Command;
 use crate::models::survey::changeset::testkit::Rng;
 use crate::models::survey::Project;
 use crate::models::{
-    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId,
-    Person, ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationId,
-    StationRef, SurveyCredit,
+    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId, Person,
+    ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationId, StationRef,
+    SurveyCredit,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -362,10 +362,16 @@ impl Comparison {
 /// The one place two routes are DOCUMENTED to disagree (module docs): the
 /// partner lines of a range delete that removes a junction.
 struct Documented {
-    /// The lines the two routes may place differently: every other line of
-    /// a junction the range removes, plus everything tied to those through
-    /// junctions without passing through the edited line.
+    /// The partner lines: every other line of a junction the range removes,
+    /// plus everything tied to those through junctions without passing
+    /// through the edited line.
     partners: BTreeSet<LineId>,
+    /// The lines the two routes may place differently: the partners, and
+    /// the lines of every piece the atomic route cut loose and placed (the
+    /// edited line's own head, when the junction it leaves was what tied it
+    /// to a datum: the single deletes drag it by the first gap-close while
+    /// it is still attached, the same divergence seen from the other side).
+    allowed: BTreeSet<LineId>,
     /// The measured layout before either route ran (the twins are asserted
     /// equal there), so "the atomic route is the one that did not move it"
     /// is decidable. Measured, not the Computed View: a partner cut out of a
@@ -379,7 +385,7 @@ impl Documented {
     /// (a placement names its piece by a station).
     fn without_partner_placements(&self, observed: &Observed) -> serde_json::Value {
         let partner_stations: BTreeSet<StationId> = self
-            .partners
+            .allowed
             .iter()
             .filter_map(|line| observed.project.line_stations(*line))
             .flatten()
@@ -457,9 +463,8 @@ fn differences(
     let keys: BTreeSet<&String> = left.adjusted.keys().chain(right.adjusted.keys()).collect();
     let mut geometry = Vec::new();
     for key in keys {
-        let allowed = documented.is_some_and(|doc| {
-            line_of_key(key).is_some_and(|line| doc.partners.contains(&line))
-        });
+        let allowed = documented
+            .is_some_and(|doc| line_of_key(key).is_some_and(|line| doc.allowed.contains(&line)));
         match (left.adjusted.get(key), right.adjusted.get(key)) {
             (Some(a), Some(b)) => {
                 let worst = (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0_f64, f64::max);
@@ -526,7 +531,9 @@ fn baseline_differences(baseline: &Observed, now: &Observed) -> Vec<String> {
     }
     for (key, was) in &baseline.adjusted {
         match now.adjusted.get(key) {
-            Some(is) if !differ_in_plane(*was, *is) && (was[2] - is[2]).abs() <= POSITION_TOLERANCE_M => {}
+            Some(is)
+                if !differ_in_plane(*was, *is)
+                    && (was[2] - is[2]).abs() <= POSITION_TOLERANCE_M => {}
             other => problems.push(format!("unwound slot {key}: {was:?} vs {other:?}")),
         }
     }
@@ -931,6 +938,9 @@ struct Pair {
 }
 
 const DOOMED_ANCHOR_SHAPE: &str = "doomed-anchor-range";
+/// The doomed-anchor shape where the piece cut loose is the edited line's
+/// own head.
+const CUT_LOOSE_HEAD_SHAPE: &str = "cut-loose-head";
 
 const PAIRS: &[Pair] = &[
     Pair {
@@ -1024,6 +1034,7 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     }
     let partners = doomed_anchor_partners(&twins.left, line_id, ids[start], ids[end]);
     let before = raw_of(&twins.left);
+    let pre = twins.left.get_project_state()?;
     let ranged = twins
         .left
         .execute_delete_shot_range_shift(line_id, ids[start], ids[end]);
@@ -1043,15 +1054,38 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
             return None;
         }
     }
-    let documented = partners.map(|partners| Documented { partners, before });
-    let mut found = twins.compare_allowing(Mask::Strict, documented.as_ref());
-    if let Some(documented) = documented.as_ref() {
+    let mut cut_loose = Vec::new();
+    let documented = partners.map(|partners| {
+        let (lines, problems) = pieces_cut_loose(&pre, &twins.left);
+        cut_loose = problems;
+        let edited_head = lines.contains(&line_id);
+        let mut allowed = partners.clone();
+        allowed.extend(lines);
+        (
+            Documented {
+                partners,
+                allowed,
+                before,
+            },
+            edited_head,
+        )
+    });
+    let mut found = twins.compare_allowing(Mask::Strict, documented.as_ref().map(|(doc, _)| doc));
+    if let Some((documented, edited_head)) = documented.as_ref() {
         *found.shapes.entry(DOOMED_ANCHOR_SHAPE).or_insert(0) += 1;
+        if *edited_head {
+            *found.shapes.entry(CUT_LOOSE_HEAD_SHAPE).or_insert(0) += 1;
+        }
         found
             .problems
             .extend(documented_divergence_problems(twins, documented));
+        found.problems.extend(cut_loose);
     }
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1096,6 +1130,45 @@ fn doomed_anchor_partners(
         }
     }
     Some(partners)
+}
+
+/// The pieces the atomic route cut loose and placed: every placement of
+/// the survey after the route (`now`) on a station that held none before
+/// (`pre`), with the lines of its piece. The positive assertion: a piece cut
+/// loose is placed exactly where its placement station was measured before
+/// the delete (the anchors settled once, after the whole range was gone).
+fn pieces_cut_loose(pre: &Project, now: &AppState) -> (BTreeSet<LineId>, Vec<String>) {
+    let Some(p) = now.get_project_state() else {
+        return (BTreeSet::new(), Vec::new());
+    };
+    let had: BTreeSet<StationId> = pre.placements.iter().map(|pl| pl.station).collect();
+    let raw_before = pre.raw_positions();
+    let topology = p.topology();
+    let mut lines = BTreeSet::new();
+    let mut problems = Vec::new();
+    for placement in p.placements.iter().filter(|pl| !had.contains(&pl.station)) {
+        if let Some(component) = topology.component_of(placement.station) {
+            for line in p.lines() {
+                if line
+                    .stations()
+                    .any(|s| topology.component_of(s) == Some(component))
+                {
+                    lines.insert(line.id);
+                }
+            }
+        }
+        if let Some(was) = raw_before.xy(placement.station) {
+            let moved = (placement.x - was[0]).hypot(placement.y - was[1]);
+            if moved > POSITION_TOLERANCE_M {
+                problems.push(format!(
+                    "the range delete cut a piece loose and placed it {moved:.6} m from where \
+                     station {} was measured: {was:?} -> ({}, {})",
+                    placement.station, placement.x, placement.y
+                ));
+            }
+        }
+    }
+    (lines, problems)
 }
 
 /// The two positive assertions the documented divergence carries.
@@ -1148,10 +1221,7 @@ fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec
 
 /// A ONE-SHOT range split against the single delete-and-split it
 /// generalizes. Strictly interior: both refuse a first or last shot.
-fn pair_range_split_of_one_vs_delete_and_split(
-    twins: &Twins,
-    rng: &mut Rng,
-) -> Option<Comparison> {
+fn pair_range_split_of_one_vs_delete_and_split(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
     let line_id = line_with_shots(&twins.left, rng, 3)?;
     let ids = shot_ids(&twins.left, line_id);
     let target = ids[1 + rng.below(ids.len() - 2)];
@@ -1228,7 +1298,11 @@ fn pair_batch_vs_sequential(twins: &Twins, rng: &mut Rng) -> Option<Comparison> 
         }
     }
     let mut found = twins.compare(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1282,7 +1356,11 @@ fn pair_poisoned_batch_is_a_no_op(twins: &Twins, rng: &mut Rng) -> Option<Compar
         shapes: BTreeMap::new(),
     };
     // The singles unwind to the start, and so does the untouched left twin.
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1300,7 +1378,11 @@ fn pair_reverse_twice_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Compar
         }
     }
     let mut found = twins.compare(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1361,7 +1443,11 @@ fn pair_split_line_then_undo_is_identity(twins: &Twins, rng: &mut Rng) -> Option
         )));
     }
     let mut found = twins.compare_after_undo(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1483,10 +1569,11 @@ fn combinable_pair(twins: &Twins, rng: &mut Rng) -> Option<(LineId, LineId)> {
 fn pair_combine_lines_then_undo_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
     let (a, b) = combinable_pair(twins, rng)?;
     let (kept, other) = if rng.chance(0.5) { (a, b) } else { (b, a) };
-    let combined =
-        twins
-            .right
-            .execute_combine_lines(kept, other, combine_options("c", "#333333", rng.chance(0.5)));
+    let combined = twins.right.execute_combine_lines(
+        kept,
+        other,
+        combine_options("c", "#333333", rng.chance(0.5)),
+    );
     if !combined.success {
         // The candidate can be blocked for one keep direction only
         // (`blocked_keeping_*`): the other order is the one to try.
@@ -1500,7 +1587,11 @@ fn pair_combine_lines_then_undo_is_identity(twins: &Twins, rng: &mut Rng) -> Opt
         )));
     }
     let mut found = twins.compare_after_undo(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1521,9 +1612,10 @@ fn pair_split_then_combine_at_the_join_is_identity(
     if candidate.blocked_reason.is_some() {
         return None;
     }
-    let combined = twins
-        .right
-        .execute_combine_lines(first, second, combine_options(&name, &color, false));
+    let combined =
+        twins
+            .right
+            .execute_combine_lines(first, second, combine_options(&name, &color, false));
     if !combined.success {
         return Some(Comparison::problem(format!(
             "the candidate said the halves combine, but the combine failed: {:?}",
@@ -1540,7 +1632,11 @@ fn pair_split_then_combine_at_the_join_is_identity(
             .into_iter()
             .map(|p| format!("split then combine: {p}")),
     );
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1592,7 +1688,11 @@ fn pair_combine_end_to_end_is_reverse_then_combine(
         )));
     }
     let mut found = twins.compare(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1619,7 +1719,11 @@ fn pair_move_out_and_back_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Co
         )));
     }
     let mut found = twins.compare(Mask::Strict);
-    found.absorb(twins.unwind_and_compare(Mask::Strict).prefixed("AFTER UNWIND: "));
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
     Some(found)
 }
 
@@ -1806,13 +1910,23 @@ fn metamorphic_gate() {
 fn the_metamorphic_oracles_see_what_they_compare() {
     let _config = crate::test_helpers::isolated_config();
     let twins = Twins::build(1, false, GATE_PRELUDE).expect("twins");
-    assert!(twins.compare(Mask::Strict).problems.is_empty(), "equal twins");
+    assert!(
+        twins.compare(Mask::Strict).problems.is_empty(),
+        "equal twins"
+    );
     let (line, shot) = {
         let p = twins.right.get_project_state().unwrap();
         let l = p.lines().iter().find(|l| !l.shots.is_empty()).unwrap();
         (l.id, l.shots[0].id)
     };
-    let length = twins.right.get_project_state().unwrap().line(line).unwrap().shots[0].length;
+    let length = twins
+        .right
+        .get_project_state()
+        .unwrap()
+        .line(line)
+        .unwrap()
+        .shots[0]
+        .length;
     let r = twins.right.execute(Command::UpdateShot {
         line_id: line,
         shot_id: shot,
@@ -1824,7 +1938,10 @@ fn the_metamorphic_oracles_see_what_they_compare() {
     assert!(r.success, "{:?}", r.error);
     let found = twins.compare(Mask::Strict);
     assert!(
-        found.problems.iter().any(|p| p.contains("stored surveys differ")),
+        found
+            .problems
+            .iter()
+            .any(|p| p.contains("stored surveys differ")),
         "a different length is a stored difference: {:?}",
         found.problems
     );
@@ -1971,4 +2088,3 @@ fn metamorphic_fuzz() {
         dirty.len()
     );
 }
-
