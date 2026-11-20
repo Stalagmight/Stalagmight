@@ -340,3 +340,73 @@ fn the_station_query_offers_each_partner_ending_at_the_point() {
         (a, LineEnd::End, LineEnd::Start)
     );
 }
+
+#[test]
+fn shotless_lines_join_across_a_closure_their_tie_group_reaches() {
+    // Main m0..m6 east; S1 shot-less on m1, S2 shot-less on m6; a `Tie`
+    // m1 - m3 (a 0.6.0 same-line merge the migration demoted) and a closure
+    // m3 - m6. Today the merge group of S1's station holds m3, so the two
+    // lines meet across that closure (wire equivalence seeds 11 and 36).
+    let mut p = empty();
+    let m = line(&mut p, "Main", run("m", 90.0, 10.0, 6));
+    let (m1, m3, m6) = (st(&p, m, 1), st(&p, m, 3), st(&p, m, 6));
+    let s1 = line_from(&mut p, "S1", m1, Vec::new());
+    let s2 = line_from(&mut p, "S2", m6, Vec::new());
+    p.push_closure(m1, Some(m), m3, Some(m), ClosureStrategy::Tie);
+    p.push_closure(m3, Some(m), m6, Some(s2), ClosureStrategy::Batch);
+    assert_valid(&p);
+    let candidate = p.combine_candidate_for_lines(s1, s2).unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(
+        (candidate.station_a, candidate.station_b),
+        (m1, m6),
+        "joined at the two lines' own stations"
+    );
+    assert_eq!(
+        (candidate.end_a, candidate.end_b),
+        (LineEnd::End, LineEnd::Start)
+    );
+    // Without the `Tie` the two stations are not tied at all.
+    let mut q = p.clone();
+    q.closures.retain(|c| c.strategy != ClosureStrategy::Tie);
+    let none = q.combine_candidate_for_lines(s1, s2).unwrap();
+    assert!(none.blocked_reason.is_some());
+
+    // Today (0.6.0), the same survey offers the same join.
+    let mut old = crate::Project::new("legacy".to_string(), None);
+    let flat = crate::ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        ..crate::ShotData::default()
+    };
+    let mut add = |shots: Vec<crate::ShotData>| {
+        old.add_line(crate::LineData {
+            shots,
+            quality: 1.0,
+            ..crate::LineData::default()
+        })
+        .id
+    };
+    let (om, o1, o2) = (add(vec![flat; 6]), add(Vec::new()), add(Vec::new()));
+    let at = crate::StationRef::new;
+    old.merge_stations(at(o1, 0), at(om, 1)).unwrap();
+    old.merge_stations(at(o2, 0), at(om, 6)).unwrap();
+    let key = |old: &crate::Project, slot| old.key_for_ref(slot).unwrap();
+    let same_line = crate::StationMerge {
+        station_a: key(&old, at(om, 1)),
+        station_b: key(&old, at(om, 3)),
+        merged_at: old.created_at,
+    };
+    old.station_merges.push(same_line);
+    old.create_loop_closure(at(om, 3), at(o2, 0), crate::ClosureStrategy::Batch)
+        .unwrap();
+    let legacy = old.combine_candidate_for_lines(o1, o2).unwrap();
+    assert_eq!(legacy.join_kind, CombineJoinKind::Closure);
+    assert_eq!(legacy.blocked_reason, None);
+    assert_eq!(
+        (legacy.end_a, legacy.end_b),
+        (candidate.end_a, candidate.end_b)
+    );
+}

@@ -9,7 +9,7 @@ use crate::{
     COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
 };
 
-use super::super::super::{Project, RawPositions};
+use super::super::super::{ClosureStrategy, Project, RawPositions};
 use super::super::{EditError, EditReport, Edited};
 use super::plan::end_station;
 use super::{CombineCandidate, CombineJoin, CombineReport};
@@ -65,6 +65,44 @@ impl Project {
         }
     }
 
+    /// `station` and every station tied to it by `Tie` closures,
+    /// transitively: today's merge group of a slot (a 0.6.0 merge the
+    /// migration demoted, because it closed a cycle or joined a line to
+    /// itself, is a `Tie`; the station itself holds the rest of the group).
+    fn tie_group(&self, station: StationId) -> BTreeSet<StationId> {
+        let mut group = BTreeSet::from([station]);
+        let mut queue = vec![station];
+        while let Some(at) = queue.pop() {
+            for c in self
+                .closures
+                .iter()
+                .filter(|c| c.strategy == ClosureStrategy::Tie)
+            {
+                let far = if c.a == at {
+                    c.b
+                } else if c.b == at {
+                    c.a
+                } else {
+                    continue;
+                };
+                if group.insert(far) {
+                    queue.push(far);
+                }
+            }
+        }
+        group
+    }
+
+    /// Whether a loop closure ties `sa`'s merge group to `sb`'s (today's
+    /// closure join, [`Self::tie_group`]): directly, or through the `Tie`s a
+    /// shot-less line's one station often carries.
+    fn closure_between_tie_groups(&self, sa: StationId, sb: StationId) -> bool {
+        let (ga, gb) = (self.tie_group(sa), self.tie_group(sb));
+        self.closures.iter().any(|c| {
+            (ga.contains(&c.a) && gb.contains(&c.b)) || (gb.contains(&c.a) && ga.contains(&c.b))
+        })
+    }
+
     /// The chain position of `line`'s `end` station.
     fn end_chain(&self, positions: &RawPositions, line: LineId, end: LineEnd) -> Option<[f64; 2]> {
         let station = end_station(self, line, end)?;
@@ -94,11 +132,7 @@ impl Project {
             CombineJoinKind::Merged
         } else if distance(pa, pb) <= COMBINE_TOLERANCE_M {
             CombineJoinKind::CoLocated
-        } else if self
-            .closures
-            .iter()
-            .any(|c| (c.a == sa && c.b == sb) || (c.a == sb && c.b == sa))
-        {
+        } else if self.closure_between_tie_groups(sa, sb) {
             CombineJoinKind::Closure
         } else {
             return None;
