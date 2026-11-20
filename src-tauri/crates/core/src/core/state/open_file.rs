@@ -322,8 +322,18 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
-        let path = self.open_file_path();
-        self.persist_local_state_at(path)
+        // Under the `project` guard, for the whole save: every change of the
+        // survey, of the stacks and of the dirty flag happens under it (an
+        // undo pops its entry before it marks the project dirty), so only
+        // under it do the flag and the stacks describe the body on disk.
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = guard.as_ref().and_then(|p| p.file_path.clone());
+        let result = self.persist_local_state_at(path);
+        drop(guard);
+        result
     }
 
     /// [`Self::persist_local_state`] for a caller that already holds the

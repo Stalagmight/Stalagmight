@@ -491,6 +491,77 @@ pub(super) fn open_fresh(path: &Path) -> Option<AppState> {
         .then_some(state)
 }
 
+/// The full load's progress events go nowhere.
+pub(super) struct NullSink;
+
+impl crate::core::events::EventSink for NullSink {
+    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+        false
+    }
+}
+
+/// Whether the derived views the app memoised for the open project are the
+/// ones a fresh computation gives (the raw layout per slot, bit for bit, and
+/// the Computed View); `Err` says what differs. `Ok(false)` with no project.
+pub(super) fn derived_cache_is_coherent(state: &AppState) -> Result<bool, String> {
+    let config = state.get_config().closure_adjustment;
+    let before = state.current_revision();
+    let cached_adjusted = adjusted_geometry_of(state);
+    let guard = state
+        .project
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(project) = guard.as_ref() else {
+        return Ok(false);
+    };
+    // The revision only grows: equal means no edit landed since `before`, so
+    // the memoised Computed View read above describes this project.
+    let unchanged = state.current_revision() == before;
+    let cached = state.raw_positions_of(project);
+    let fresh = project.raw_positions();
+    let rows = |raw: &crate::models::survey::RawPositions| -> Vec<String> {
+        raw.slots(project)
+            .iter()
+            .map(|s| format!("{:?} {:?} {:?} {:?}", s.slot, s.x, s.y, s.z))
+            .collect()
+    };
+    let (cached_rows, fresh_rows) = (rows(&cached), rows(&fresh));
+    if cached_rows != fresh_rows {
+        return Err(format!(
+            "the memoised raw layout is not the survey's (revision {}): {}",
+            state.current_revision(),
+            first_difference(&fresh_rows.join("\n"), &cached_rows.join("\n"))
+        ));
+    }
+    let adjusted = project.adjusted_positions_from(&fresh, &config);
+    let mut fresh_adjusted: Vec<String> = project
+        .adjusted_stations_wire(&adjusted)
+        .iter()
+        .map(|s| {
+            format!(
+                "{}:{} {:?} {:?} {:?}",
+                s.station_ref.line_id,
+                s.station_ref.station_index,
+                s.coordinates.x,
+                s.coordinates.y,
+                s.coordinates.z
+            )
+        })
+        .collect();
+    fresh_adjusted.sort();
+    drop(guard);
+    let fresh_adjusted = fresh_adjusted.join("\n");
+    if unchanged && cached_adjusted != fresh_adjusted {
+        return Err(format!(
+            "the memoised Computed View is not the survey's (revision {before}): {}",
+            first_difference(&fresh_adjusted, &cached_adjusted)
+        ));
+    }
+    Ok(true)
+}
+
 /// Every file in `dir` (not descending), sorted.
 pub(super) fn entries(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)

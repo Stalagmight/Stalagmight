@@ -446,9 +446,17 @@ impl AppState {
         progress.complete_phase(LoadingPhase::LoadingSettings);
         progress.start_phase(LoadingPhase::Finalizing);
         cancelled(progress)?;
-        self.commit_opened(opened);
-        // The raw layout of the committed revision.
+        // `commit_opened`, with the raw layout of the committed revision
+        // seeded under the same `project` guard: the load does not take
+        // `command_lock`, so an edit landing between the commit and a later
+        // seed would have the opened survey's layout cached as its own.
+        self.speleodb_release_held_lock_detached();
         {
+            let mut proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.commit_opened_locked(&mut proj_guard, opened, None);
             let revision = self.current_revision();
             *self
                 .derived
@@ -460,6 +468,7 @@ impl AppState {
                     adjusted: None,
                 });
         }
+        self.persist_pending_local_state();
         self.note_recent_project(&path);
         progress.complete_phase(LoadingPhase::Finalizing);
         tracing::info!(path = ?path, purpose = "load project for workspace", "Project loaded via load_project_full");

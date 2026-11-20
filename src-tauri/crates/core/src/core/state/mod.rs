@@ -109,7 +109,12 @@ mod characterization_dump_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_lines_tests;
-#[cfg(sg_unported)]
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "a fuzzer's summary IS its output, and a failed setup step is the point"
+)]
 mod concurrency_tests;
 #[cfg(sg_unported)]
 mod crash_property_tests;
