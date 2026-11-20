@@ -142,29 +142,98 @@ On a project with ~500 lines, undo operations that previously stalled due to
 `compute_frozen_shots()` dominating CPU no longer show the function in profiling
 hotspots.
 
-## Per-Command Geometry Reconcile
+## The edit pipeline, and the benchmark against 0.6.0
 
-Every command whose `Command::affects_geometry()` returns true runs a
-`reconcile_geometry()` pass in the `execute()` epilogue
-(`remeasure_closure_alignment` + `realign_merges` +
-`remeasure_closure_alignment`, with `realign_merges` reaching
-`check_merge_alignment` and the offsets re-solve internally). That pass is
-O(total shots + total merges) and allocates two whole-project maps
-(`line_local_coords` and the resolved station offsets) - it is **not** cached
-between calls.
+**Where one edit's time goes.** Every recorded edit runs one pipeline
+(`AppState::run_recorded`, `core/state/commands.rs`): the survey is cloned (the
+rollback and the undo capture read it), the command's model operation runs its
+own protocol (a working copy, the anchor pass, validation; `survey/edit.rs`),
+the result is validated, and the changeset is captured by a diff. Each step is
+O(survey): on the 20,000-shot gate survey a clone is about 3 ms, `validate`
+about 2.5 ms (12 ms before its fast paths) and the capture under 1 ms
+(`perf_parts_20k`). That floor is why a
+one-cell edit costs milliseconds where 0.6.0 took a tenth of one; the refresh
+that follows every edit (`get_project_state`) costs more on both sides, and an
+undo or redo (a changeset step) costs a fraction of 0.6.0's.
 
-`UpdateShot` is in this group (a length/azimuth/depth edit moves stations, and
-the bespoke `realign_after_shot_edit` no-ops on a merge group with no zero
-datum, so without the reconcile a shot edit upstream of a datum-less merge would
-leave the partners drifted). The cost is one O(N) pass **per discrete edit** -
-acceptable because the Edit Shot dialog commits a single `UpdateShot` on save,
-not one per keystroke, and it matches the per-command cost every other geometry
-command (`MergeStations`, `MoveStation`, `SetZeroDatum`, …) already pays.
+**Shot edits are one pass per command.** `UpdateShot`, alone or as a batch's
+run of them (a data-table paste), goes through one `ShotEditRun`
+(`survey/edit/shot_run.rs`). Each update keeps exactly the semantics of
+`Project::update_shot` (the same refusals at the same cell, the same stored
+model to the bit: `shot_run_tests.rs`, and the metamorphic "a batch is its
+commands in order" pair), but the run keeps the raw layout of the current state
+and updates it after each cell instead of taking a working copy, two layouts, a
+frozen-shot computation and a validation per cell: a datum-held piece is
+re-walked downstream of the edited line (`Project::fold_line` is the one
+arithmetic of both walks), a free piece is re-walked from its new placement when
+next read, and the frozen set is recomputed only when a closure's alignment
+changed. A paste of N cells costs one survey pass plus N small walks.
 
-Watch this if a future bulk/Excel-style data-entry surface (see roadmap #61)
-fires an `UpdateShot` per cell: that would multiply the reconcile by the edit
-count and should batch the edits (the `Batch` command already finalizes once)
-or debounce the reconcile.
+**Also:** `validate` uses sorted fast paths and a dense union-find (the same
+reports, pinned by a differential test); the gas reach field runs on the
+revision's cached layout and a per-revision copy of the project, outside the
+project lock, and the last field per revision is kept; Combine Lines judges its
+refusal without the dialog's two dry-run plans and reads the pipeline's snapshot
+instead of cloning again; a SpeleoDB-linked project rewrites its file when the
+dirty bit flips, not on every edit.
+
+**Running the comparison.** `perf_bench_5k` / `perf_bench_20k`
+(`core/state/perf_bench_tests.rs`, ignored) time the `AppState` entry points the
+IPC commands call, on the size gate's surveys, median of
+`STALAGMIGHT_PERF_RUNS` runs; `STALAGMIGHT_PERF_REPORT` appends the rows to a
+file. The 0.6.0 side is the same file dropped into a release/0.6.0 checkout (it
+builds the survey with 0.6.0's own model and saves it with 0.6.0's save) and
+pointed at the same `STALAGMIGHT_PERF_LEGACY_DIR`, so both open one legacy
+file:
+
+```bash
+cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
+  perf_bench -- --ignored --nocapture --test-threads=1
+```
+
+**Results** (2026-11-20, release builds, a 16-core host under load from other
+builds, so the ratios matter more than the milliseconds; do / undo / redo):
+
+| Operation | 0.6.0, 5k | now, 5k | ratio | 0.6.0, 20k | now, 20k | ratio |
+|---|---|---|---|---|---|---|
+| open (0.6.0: its file; now: upgrade-open of that file) | 17.5 | 38.6 | 2.20 | 80.1 | 197 | 2.46 |
+| open a version 2 file | 17.5 | 9.8 | 0.56 | 80.1 | 45.1 | 0.56 |
+| binary envelope encode | 1.52 | 0.57 | 0.37 | 8.59 | 3.06 | 0.36 |
+| save (0.6.0: one-sync SQLite; now: v2) | 29.2 | 5.83 | 0.20 | 125 | 25.2 | 0.20 |
+| get_project_state (+ JSON) | 8.05 | 7.07 | 0.88 | 40.8 | 32.1 | 0.79 |
+| gas reach field | 3.94 | 1.76 | 0.45 | 23.0 | 8.82 | 0.38 |
+| update shot (comment) | 0.05 / 0.93 / 0.93 | 1.49 / 0.03 / 0.02 | 28 | 0.14 / 4.22 / 4.03 | 9.25 / 0.09 / 0.04 | 66 |
+| update shot (length) | 0.62 / 1.03 / 1.13 | 2.19 / 0.03 / 0.02 | 3.6 | 2.42 / 4.65 / 4.70 | 12.9 / 0.09 / 0.04 | 5.3 |
+| insert shot | 8.95 / 2.43 / 1.14 | 4.76 / 0.03 / 0.02 | 0.53 | 42.8 / 10.5 / 5.08 | 26.8 / 0.10 / 0.04 | 0.63 |
+| delete shot | 15.5 / 12.1 / 12.4 | 7.43 / 0.03 / 0.02 | 0.48 | 70.3 / 54.2 / 54.5 | 36.4 / 0.09 / 0.04 | 0.52 |
+| split line | 16.6 / 13.8 / 13.6 | 3.71 / 0.04 / 0.02 | 0.22 | 76.0 / 61.0 / 59.7 | 21.5 / 0.09 / 0.05 | 0.28 |
+| combine lines | 21.0 / 15.3 / 15.3 | 12.6 / 0.05 / 0.03 | 0.60 | 94.6 / 67.5 / 65.4 | 68.5 / 0.12 / 0.06 | 0.72 |
+| merge stations | 10.4 / 11.2 / 11.0 | 4.37 / 0.85 / 0.84 | 0.42 | 44.6 / 52.2 / 52.4 | 26.5 / 4.76 / 4.25 | 0.60 |
+| detach | 10.1 / 11.3 / 11.1 | 3.46 / 0.85 / 0.85 | 0.34 | 43.2 / 52.3 / 50.9 | 21.9 / 4.62 / 4.14 | 0.51 |
+| move station | 11.1 / 12.9 / 12.1 | 3.96 / 0.03 / 0.02 | 0.36 | 42.9 / 50.7 / 50.1 | 23.6 / 0.10 / 0.04 | 0.55 |
+| datum edit (entrance GPS) | 0.67 / 1.03 / 1.17 | 3.15 / 0.58 / 0.58 | 4.7 | 2.41 / 4.51 / 5.17 | 20.0 / 3.17 / 2.85 | 8.3 |
+| reverse line | 13.6 / 14.3 / 14.1 | 3.84 / 0.03 / 0.02 | 0.28 | 55.0 / 58.9 / 58.5 | 23.9 / 0.10 / 0.04 | 0.43 |
+| paste 1,000 cells (LRUD) | 22.5 / 25.8 / 26.0 | 2.36 / 0.32 / 0.31 | 0.10 | 68.1 / 65.8 / 64.9 | 11.1 / 0.44 / 0.36 | 0.16 |
+| paste 1,000 cells (length) | 202 / 26.6 / 25.8 | 24.1 / 0.34 / 0.31 | 0.12 | 764 / 66.8 / 66.6 | 27.1 / 0.43 / 0.35 | 0.04 |
+| Compass import (50 / 200 surveys) | 23.4 / 33.9 / 37.2 | 7.56 / 0.90 / 0.98 | 0.32 | 111 / 164 / 181 | 33.7 / 5.02 / 4.55 | 0.30 |
+
+Before this work the 1,000-cell length paste took 13.2 s (5k) and 31.8 s (20k)
+in release, and Combine Lines 132 ms and 527 ms.
+
+**Still slower than 0.6.0, and why:**
+- *Opening a legacy file* (once per file: the first save writes version 2, and
+  a version 2 open is about half 0.6.0's). It is the frozen 0.6.0 reader
+  itself plus the migration, which converts and then verifies the result
+  against the legacy positions and both Closures Computed Views (plan 7.3).
+- *A single shot edit and a datum edit* pay the pipeline floor above (a clone,
+  one or two validations, a capture: about 9 ms on 20k), where 0.6.0 patched
+  one shot and kept no undo snapshot. The edit plus the refresh that follows it
+  is within 7% of 0.6.0's on both surveys for shot edits, and within 21% for a
+  datum GPS edit; the undo and redo of a shot edit are 30 to 120 times faster
+  (of a datum edit, 1.4 to 1.8 times). Getting
+  the edit itself under 0.6.0's needs the survey shared copy-on-write (lines and
+  stations behind `Arc`, so the snapshot and the capture cost what the edit
+  touched), which is a model-wide change.
 
 ## Profiling Guide
 
