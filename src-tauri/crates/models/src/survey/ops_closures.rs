@@ -121,8 +121,7 @@ impl Project {
     pub fn closure_preview(&self, a: StationId, b: StationId) -> Result<ClosurePreview, OpError> {
         self.existing_station(a)?;
         self.existing_station(b)?;
-        self.closure_metrics(a, b)
-            .ok_or(OpError::UnknownStation(a))
+        self.closure_metrics(a, b).ok_or(OpError::UnknownStation(a))
     }
 
     /// The first closure (list order) joining `a` and `b`, either way round.

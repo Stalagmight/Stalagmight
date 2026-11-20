@@ -273,7 +273,10 @@ fn verify_adjusted(
         };
         for index in 0..line.station_count() {
             let slot = old_slot(StationRef::new(line.id, index as u32));
-            if legacy.adjusted_positions.as_ref().and_then(|a| a.get(&slot))
+            if legacy
+                .adjusted_positions
+                .as_ref()
+                .and_then(|a| a.get(&slot))
                 != legacy.raw_positions.get(&slot)
             {
                 facts[k].legacy_measured = false;

@@ -229,7 +229,10 @@ fn the_merge_the_old_cascade_left_torn_is_the_one_demoted() {
         panic!("the Computed View was compared");
     };
     let solved = view.expected[&ExpectedClass::TieSolved];
-    assert!(solved.slots > 0 && solved.slots < out.report.slots, "the gauge stays: {solved:?}");
+    assert!(
+        solved.slots > 0 && solved.slots < out.report.slots,
+        "the gauge stays: {solved:?}"
+    );
     assert!(
         solved.max_displacement_m > 1.0 && solved.max_displacement_m < 17.5,
         "{solved:?}"

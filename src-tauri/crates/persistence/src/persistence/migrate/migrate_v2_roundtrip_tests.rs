@@ -54,7 +54,10 @@ fn round_trip(bytes: &[u8], what: &str) {
     let first = encode(&migrated.project, &extras, Mode::Normal).unwrap();
     let decoded = decode(&first, &DecodeOptions::default()).unwrap();
     assert!(decoded.read_only().is_none(), "{what}: opens writable");
-    assert_eq!(decoded.project, migrated.project, "{what}: the decoded model");
+    assert_eq!(
+        decoded.project, migrated.project,
+        "{what}: the decoded model"
+    );
     let mut ignores = extras.ignored_warnings.clone();
     ignores.sort_by(|a, b| (&a.shot, &a.code).cmp(&(&b.shot, &b.code)));
     assert_eq!(

@@ -760,11 +760,7 @@ fn a_piece_whose_only_closure_is_skipped_keeps_its_gauge_but_is_not_adjusted() {
     let (skipped, k, o, id) = build(Some(1));
     let (control, ..) = build(Some(2));
     let (without, ..) = build(None);
-    assert_eq!(
-        skipped_ids(&skipped),
-        vec![id.unwrap()],
-        "setup"
-    );
+    assert_eq!(skipped_ids(&skipped), vec![id.unwrap()], "setup");
     assert!(skipped_ids(&control).is_empty(), "setup");
 
     // The gauge ignores the closures.
@@ -920,11 +916,7 @@ fn a_closure_already_across_one_shot_is_left_alone() {
             vec![Some(torn_in_passage(&p, (k, x, o), keep_o).0)],
             "{what}: K moves exactly when O is kept"
         );
-        assert_eq!(
-            skipped_ids(&combined),
-            vec![id],
-            "{what}: the user's stays"
-        );
+        assert_eq!(skipped_ids(&combined), vec![id], "{what}: the user's stays");
     }
 }
 

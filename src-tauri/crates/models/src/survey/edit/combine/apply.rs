@@ -8,10 +8,10 @@ use crate::{
     normalize_azimuth, CombineLinesOptions, CombinePick, LineEnd, LineId, StationId, StationRef,
 };
 
+use super::super::super::ops_merge::CommentRule;
 use super::super::super::{
     ClosureId, ClosureStrategy, EditContext, LoopClosure, Placement, Project, RawPositions,
 };
-use super::super::super::ops_merge::CommentRule;
 use super::super::lines::absorb_legacy_credit;
 use super::super::EditError;
 use super::plan::{moving_side, Decision, DUST_M};

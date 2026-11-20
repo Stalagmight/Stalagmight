@@ -103,7 +103,10 @@ impl Project {
                 (closure.b, closure.a)
             };
             let before = self.anchor_snapshot();
-            if self.merge_ids(survivor, retired, CommentRule::Join).is_err() {
+            if self
+                .merge_ids(survivor, retired, CommentRule::Join)
+                .is_err()
+            {
                 continue;
             }
             let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);

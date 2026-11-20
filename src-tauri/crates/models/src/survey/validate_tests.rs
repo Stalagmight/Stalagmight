@@ -536,7 +536,11 @@ fn an_alias_id_outside_the_station_id_space_is_reported() {
 #[test]
 fn a_line_holds_at_most_99999_shots() {
     let mut p = project();
-    let full = add(&mut p, StartAt::New, vec![flat(0.0, 1.0); MAX_SHOTS_PER_LINE]);
+    let full = add(
+        &mut p,
+        StartAt::New,
+        vec![flat(0.0, 1.0); MAX_SHOTS_PER_LINE],
+    );
     p.set_placement(at(&p, full, 0), 0.0, 0.0).unwrap();
     assert_eq!(p.validate(), Vec::new(), "99,999 shots is the most");
     let over = add(
@@ -559,7 +563,11 @@ fn station_and_section_counters_stay_within_their_id_spaces() {
     let (mut p, _) = three_line_junction();
     p.counters.next_station_id = MAX_STATION_ID;
     p.counters.next_section_id = MAX_SECTION_ID;
-    assert_eq!(p.validate(), Vec::new(), "at the bound: the ids are used up");
+    assert_eq!(
+        p.validate(),
+        Vec::new(),
+        "at the bound: the ids are used up"
+    );
     expect_violation(
         |p| p.counters.next_station_id = MAX_STATION_ID + 1,
         &Violation::CounterOutOfRange {

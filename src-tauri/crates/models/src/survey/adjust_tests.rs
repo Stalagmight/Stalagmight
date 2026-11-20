@@ -538,7 +538,11 @@ fn solve_hold_names_the_station_the_least_squares_holds() {
         let adjusted = p.adjusted_positions_from(&raw, &config);
         assert!(adjusted.failures().is_empty(), "{strategy:?}");
         assert_eq!(adjusted.xy(s0), raw.xy(s0), "{strategy:?}: the gauge stays");
-        assert_ne!(adjusted.xy(b), raw.xy(b), "{strategy:?}: the loop is solved");
+        assert_ne!(
+            adjusted.xy(b),
+            raw.xy(b),
+            "{strategy:?}: the loop is solved"
+        );
     }
 
     let mut p = base.clone();

@@ -2,7 +2,6 @@
 //! Station (today's shot rewrite, generalised to every line through the
 //! station), and the rigid / anchored / co-located / immovable sets.
 
-
 use crate::StationRef;
 
 use super::ops_test_helpers::{
@@ -255,7 +254,11 @@ fn rigid_groups_follow_aligned_closures_and_anchored_lines_every_datum() {
     let (p, [a, d, b]) = tied_survey();
     let aligned = p.closure_alignment(&p.raw_positions());
     let groups = p.rigid_groups(&aligned);
-    assert_eq!(p.rigid_lines_of(a, &groups), vec![a, d], "the Tie joins A and D");
+    assert_eq!(
+        p.rigid_lines_of(a, &groups),
+        vec![a, d],
+        "the Tie joins A and D"
+    );
     assert_eq!(p.rigid_lines_of(b, &groups), vec![b]);
     let group_of_line = |line| groups.group_of(at(&p, line, 0)).unwrap();
     assert!(groups.has_datum(group_of_line(d)));

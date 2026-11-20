@@ -1475,10 +1475,7 @@ fn keeping_the_higher_id_leaves_the_adjusted_geometry_in_place() {
         let (l1, h2) = (st(&p, low, 1), st(&p, high, 2));
         p.push_closure(l1, Some(low), h2, Some(high), ClosureStrategy::Batch);
         assert_valid(&p);
-        assert!(
-            skipped_ids(&p).is_empty(),
-            "the solve takes it"
-        );
+        assert!(skipped_ids(&p).is_empty(), "the solve takes it");
         let (g, g_at) = gauge(&p, low);
         let before = p.raw_positions();
 

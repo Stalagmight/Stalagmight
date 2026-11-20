@@ -21,8 +21,8 @@ use stalagmight_legacy::{
 
 use crate::models::survey::ClosureStrategy;
 
-use crate::models::config::ClosureAdjustmentConfig;
 use super::{migrate, AdjustedCheck, ExpectedClass, Migrated};
+use crate::models::config::ClosureAdjustmentConfig;
 
 /// SplitMix64: small, fast, and the same on every platform.
 pub(super) struct Rng(u64);
@@ -841,11 +841,14 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     if a.expected.contains_key(&ExpectedClass::TieNoLongerFails)
         && r.merges_demoted_cycle + r.merges_demoted_same_line == 0
     {
-        return Err("a Computed View difference blamed on a demoted merge, without one".to_string());
+        return Err(
+            "a Computed View difference blamed on a demoted merge, without one".to_string(),
+        );
     }
 
     // Deterministic.
-    let again = migrate(legacy, &ClosureAdjustmentConfig::default()).map_err(|e| format!("second migrate: {e}"))?;
+    let again = migrate(legacy, &ClosureAdjustmentConfig::default())
+        .map_err(|e| format!("second migrate: {e}"))?;
     if again.project != migrated.project
         || again.report != migrated.report
         || again.extras != migrated.extras

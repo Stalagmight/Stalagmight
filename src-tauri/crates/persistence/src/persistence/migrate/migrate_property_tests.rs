@@ -53,7 +53,8 @@ impl Coverage {
 fn run_seed(seed: u64) -> Result<(MigrationReport, bool), String> {
     let case = random_case(seed);
     let legacy = case.open();
-    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default()).map_err(|e| format!("migrate: {e}"))?;
+    let migrated = migrate(&legacy, &ClosureAdjustmentConfig::default())
+        .map_err(|e| format!("migrate: {e}"))?;
     check(&legacy, &migrated).map_err(|e| format!("{e}\n{}", migrated.report.summary()))?;
     Ok((migrated.report, case.shape == FileShape::Release055))
 }

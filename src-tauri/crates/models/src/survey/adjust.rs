@@ -44,9 +44,9 @@ use crate::{
 };
 
 use super::closures::ClosureAcrossOneShot;
-use super::topology::find;
 use super::graph::{ShotEdge, StationPositions};
 use super::lsq::solve_reduced_laplacian;
+use super::topology::find;
 use super::{Anchor, Project, RawPositions, SlotPosition};
 
 /// An accuracy below this many metres is a hard pin (today's
