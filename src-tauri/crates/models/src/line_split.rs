@@ -74,20 +74,6 @@ pub struct SplitLineOptions {
     pub datum_side: SplitSide,
 }
 
-impl SplitLineOptions {
-    /// Why these choices cannot make a split, if they cannot: a half with no
-    /// name (empty or only whitespace), or a zero datum asked to stay on both
-    /// halves. The model, the command and the dialog's preview all refuse on
-    /// it, so they agree.
-    pub fn refusal(&self) -> Option<String> {
-        if self.name_a.trim().is_empty() || self.name_b.trim().is_empty() {
-            return Some("Each half of a split needs a name".to_string());
-        }
-        (self.datum_side == SplitSide::Both)
-            .then(|| "A zero datum can stay on only one half of a split".to_string())
-    }
-}
-
 /// Minimum length (meters) either child of a split may end up with (issue
 /// #59). A split is only accepted when both `distance` and
 /// `shot.length - distance` are at least this floor, so a shot must be at

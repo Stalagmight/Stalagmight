@@ -2,7 +2,7 @@
 //!
 //! A Section is an arbitrary region of a cave the user (or an importer) groups
 //! lines into - "Upper level", "Downstream sump". Each line belongs to at most
-//! one Section ([`crate::Line::section_id`]); a line in none is "ungrouped".
+//! one Section ([`crate::survey::LineMeta::section_id`]); a line in none is "ungrouped".
 //! A Section holds no survey data of its own, so nothing geometric reads it.
 //!
 //! Before the rename to Line, "section" was the name of the survey line

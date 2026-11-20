@@ -12,7 +12,7 @@ use crate::{GpsBounds, LineId, ShotId, StationRef};
 /// Apply the Ariane `.tml`/`.tmlu` no-data convention to a raw
 /// `firstStartAbsoluteElevation` value: Ariane encodes "no elevation
 /// recorded" as exactly `0.0`, so an exact zero is treated as absent here
-/// (see `Project::surface_elevation`'s doc comment above). This is
+/// (the project's `surface_elevation`). This is
 /// format-forced, not a design choice: a genuine entrance at exactly 0.0 m
 /// above mean sea level is not representable, while any near-zero but
 /// nonzero value passes through unchanged.
@@ -118,8 +118,7 @@ pub struct ProjectStats {
     /// Surveyed length: the sum of [`crate::LineStats::total_length`], which leaves
     /// out Reference shots (#689).
     pub total_length: f64,
-    /// Shallowest absolute station z. Filled by the caller from
-    /// [`Project::depth_range`], never by [`Project::stats`] (#481).
+    /// Shallowest absolute station z, from the station positions (#481).
     pub min_depth: f64,
     /// Deepest absolute station z. Same source as
     /// [`min_depth`](Self::min_depth).

@@ -36,7 +36,8 @@
 //!   stations, merge pairs; `frozen`; `stats`; `graph` - distances and the
 //!   ruler; `gas` - the Plan-mode gas engine ([`GasReach`]).
 //!
-//! The legacy model ([`crate::project`]) is untouched and independent.
+//! Old SQLite files are read by the frozen 0.6.0 model
+//! (`stalagmight-legacy`) and migrated into this one.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

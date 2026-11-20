@@ -101,7 +101,7 @@ pub fn reversed_azimuths(azimuth_in: f64, azimuth_out: f64) -> (f64, f64) {
 ///
 /// Reverses the whole vec of shots as well, so the caller gets a line that
 /// is fully reversed.  This is THE reverse transform: both the in-app action
-/// ([`Project::reverse_line`]) and the import-time toggle route through it,
+/// ([`crate::survey::Project::reverse_line`]) and the import-time toggle route through it,
 /// so the two can never drift apart.
 ///
 /// Order-independent per shot, so it is safe to apply before or after the vec

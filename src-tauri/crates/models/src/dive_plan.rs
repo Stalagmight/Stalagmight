@@ -45,7 +45,7 @@ pub struct PlanAnchor {
     /// reverse-UNSAFE, which is what `parity` below repairs.
     #[serde(default)]
     pub after_a: bool,
-    /// The line's [`Line::reverse_parity`] when this anchor was written.
+    /// The line's reverse parity (0.6.0's record parity) when this anchor was written.
     ///
     /// This is what makes the single-neighbour case correct. `after_a` is expressed in traversal
     /// terms, and a reverse flips traversal - so the same observable state ("`a` is at position

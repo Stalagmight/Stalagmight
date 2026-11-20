@@ -5,18 +5,17 @@ use super::LineId;
 
 /// A station's project-unique, never-reused integer identity: the Station ID
 /// the user sees (the Station detail field, the Data table column, the
-/// "Station IDs" map and image-export label). Allocated from
-/// [`crate::Project::next_station_id`] in line order, station order, by
-/// [`crate::Project::ensure_station_identities`]; carried with its physical
-/// station through every structural edit by the same `StationKey` walkers that
-/// carry `station_names`. Never shown as the positional `line:index` handle,
-/// which stays an internal session address.
+/// "Station IDs" map and image-export label). Minted from the project's
+/// station counter ([`crate::survey::Counters`]) and kept by the station
+/// through every structural edit (a merge keeps a retired id as an alias).
+/// Never shown as the positional `line:index` handle, which stays an internal
+/// session address.
 pub type StationId = u32;
 
 /// Every valid Station ID is below this (2^31). A stored id at or above it
 /// (a crafted or corrupt file, a snapshot, an Add that would overflow) is
-/// invalid: the normalization re-mints it, and a counter past it is brought
-/// back ([`crate::Project::ensure_station_identities`]). The headroom above
+/// invalid (`survey::Project::validate`); the migration and salvage re-mint
+/// it, and a counter past it is brought back. The headroom above
 /// keeps `next_station_id` arithmetic far from `u32::MAX`, where saturating
 /// adds handed out one id twice.
 pub const MAX_STATION_ID: StationId = 1 << 31;
@@ -141,8 +140,7 @@ impl StationKey {
     }
 
     /// A positional key (index 0 → `LineStart`, else `Index`). Transitional /
-    /// test convenience; the library canonicalizes to `AfterShot` via
-    /// [`crate::Project::key_for_ref`].
+    /// test convenience; 0.6.0 canonicalized keys to `AfterShot`.
     pub fn positional(line_id: LineId, station_index: u32) -> Self {
         let anchor = if station_index == 0 {
             StationAnchor::LineStart
@@ -418,7 +416,7 @@ pub struct Station {
     pub id: StationId,
     /// The station's name, unique within its line (e.g. `"17"`, `"A3"`, or
     /// the MNemo station number a DMP import recorded). Every station has one
-    /// once the project is normalized ([`crate::Project::ensure_station_identities`]);
+    /// once the project is normalized;
     /// empty only for a station the normalization could not key (a shot
     /// without a uuid), which a loaded project never has.
     #[serde(default)]
@@ -468,56 +466,6 @@ impl Station {
     }
 }
 
-/// Record of a station merge. Endpoints stored as position-independent
-/// [`StationKey`]s. Backend-only (no `TS`); the frontend/wire form is
-/// [`StationMergeWire`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationMerge {
-    pub station_a: StationKey,
-    pub station_b: StationKey,
-    pub merged_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
-///
-/// One list holds every datum. Its role is derived, never stored
-/// ([`DatumRole`], `Project::datum_roles`): the first resolvable datum of each
-/// merge-connected component PLACES that rigid group, and every later one in
-/// the same component is a GPS FIX that only the Closures Computed View solve
-/// reads (#741).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZeroDatum {
-    pub station_ref: StationKey,
-    pub gps: GpsCoordinates,
-    /// Horizontal accuracy of the GPS position in metres. `None` means
-    /// [`DEFAULT_GPS_ACCURACY_M`]; `Some(0.0)` is a hard pin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accuracy_m: Option<f64>,
-    /// The user's answer to "is this station a cave entrance?", or `None` for
-    /// the default rule (`Project::datum_entrances`): a placement datum is
-    /// always an entrance, a GPS fix is one when its station is the first or
-    /// last station of its line (#741).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entrance: Option<bool>,
-}
-
-impl ZeroDatum {
-    /// A datum with the default accuracy and the default entrance rule.
-    pub fn new(station_ref: StationKey, gps: GpsCoordinates) -> Self {
-        Self {
-            station_ref,
-            gps,
-            accuracy_m: None,
-            entrance: None,
-        }
-    }
-
-    /// The accuracy the solve uses: the stored one, or the default.
-    pub fn effective_accuracy_m(&self) -> f64 {
-        self.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M)
-    }
-}
-
 /// Default horizontal accuracy of a zero datum's GPS, in metres: 0, a hard pin.
 ///
 /// The survey bends to go exactly through the GPS, the way Ariane treats every
@@ -556,9 +504,9 @@ pub enum DatumRole {
     GpsFix,
 }
 
-/// Positional wire form of [`StationMerge`] for the frontend (which reasons by
-/// `station_index`). ts-rs exports it as `StationMerge` so the generated TS and
-/// the frontend stay positional; the backend resolves the stored keys when encoding.
+/// A merge pair on the wire, positional for the frontend (which reasons by
+/// `station_index`): two slots of one junction. ts-rs exports it as
+/// `StationMerge`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "StationMerge", export_to = "bindings/StationMerge.ts")]
 pub struct StationMergeWire {
@@ -568,7 +516,7 @@ pub struct StationMergeWire {
     pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Positional wire form of [`ZeroDatum`]; ts-rs exports it as `ZeroDatum`.
+/// A zero datum on the wire, on its slot; ts-rs exports it as `ZeroDatum`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "ZeroDatum", export_to = "bindings/ZeroDatum.ts")]
 pub struct ZeroDatumWire {
@@ -877,36 +825,7 @@ pub struct FrozenShotRef {
     pub shot_index: u32,
 }
 
-/// A detected loop closure in the survey. Endpoints stored as position-independent
-/// [`StationKey`]s. Backend-only (no `TS`); the wire form is [`LoopClosureWire`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoopClosure {
-    /// Unique identifier for this closure
-    #[serde(default)]
-    pub id: u64,
-    /// First station in the closure (merge point A)
-    pub station_a: StationKey,
-    /// Second station in the closure (merge point B)
-    pub station_b: StationKey,
-    /// Total path length along the loop (meters)
-    pub path_length: f64,
-    /// Misclosure distance (meters) - how far apart the two stations are
-    pub misclosure_distance: f64,
-    /// Closure error percentage (misclosure / path_length * 100)
-    pub error_percentage: f64,
-    /// Horizontal misclosure component (meters)
-    pub horizontal_misclosure: f64,
-    /// Vertical misclosure component (meters)
-    pub vertical_misclosure: f64,
-    /// Strategy for distributing the closure error
-    #[serde(default)]
-    pub strategy: ClosureStrategy,
-    /// Whether the closure endpoints have been aligned (post-adjustment or snap-to-merge)
-    #[serde(default)]
-    pub is_aligned: bool,
-}
-
-/// Positional wire form of [`LoopClosure`]; ts-rs exports it as `LoopClosure`.
+/// The wire form of a loop closure; ts-rs exports it as `LoopClosure`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
 pub struct LoopClosureWire {

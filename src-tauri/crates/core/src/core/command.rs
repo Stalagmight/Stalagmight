@@ -71,7 +71,7 @@ pub enum Command {
         updates: LineUpdates,
     },
     /// Reverse a line end-to-end so the far end becomes station 0, keeping
-    /// every station's world coordinate (see [`crate::models::Project::reverse_line`]).
+    /// every station's world coordinate (see [`crate::models::survey::Project::reverse_line`]).
     /// `swap_left_right` also mirrors the `left`/`right` passage dimensions; it
     /// is opt-in because whether LRUD was recorded facing along travel is a
     /// survey convention we cannot infer.
@@ -175,7 +175,7 @@ pub enum Command {
     },
     /// Rename a station. The name is trimmed and must be non-empty, free of
     /// control and invisible formatting characters, and unique within the
-    /// station's line ([`crate::models::Project::validate_station_name`]).
+    /// station's line (a name taken on any line through the station refuses).
     /// Metadata only: no geometry, no references. Undone by the inverse
     /// rename. The name the station already has (after trimming) succeeds as
     /// a no-op with no undo entry and no dirty flag (`execute()` returns

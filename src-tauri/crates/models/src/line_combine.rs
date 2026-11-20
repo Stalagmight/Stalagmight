@@ -202,16 +202,6 @@ pub struct CombineJoinedMove {
     pub shift_m: f64,
 }
 
-/// What `Project::combine_lines_reporting` did besides the join, for the
-/// command to report: the ties it removed across one shot (#746) and the
-/// closures it replaced (#749), each as the plan the dialog showed named
-/// them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CombineOutcome {
-    pub removed_across_one_shot: Vec<CombineRemovedClosure>,
-    pub replaced: Vec<CombineReplacedClosure>,
-}
-
 /// Why the kept line's side is the one that moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

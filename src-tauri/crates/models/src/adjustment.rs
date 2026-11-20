@@ -28,7 +28,7 @@ pub struct SkippedClosure {
 pub struct AdjustmentFailureReport {
     pub anchor: StationRef,
     pub line_ids: Vec<LineId>,
-    /// Plain-language reason ([`AdjustmentFailure::user_reason`]).
+    /// Plain-language reason ([`crate::survey::AdjustmentFailure::user_reason`]).
     pub reason: String,
 }
 
@@ -55,7 +55,7 @@ pub struct AdjustmentReport {
     /// project; empty when none has run since the last edit.
     pub failures: Vec<AdjustmentFailureReport>,
     /// GPS fixes that fail the gap check, largest gap first
-    /// ([`Project::far_gps_fixes`]). Always current.
+    /// ([`crate::survey::Project::far_gps_fixes`]). Always current.
     #[serde(default)]
     pub far_gps_fixes: Vec<FarGpsFix>,
 }

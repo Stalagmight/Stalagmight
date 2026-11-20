@@ -300,34 +300,6 @@ pub struct Shot {
     pub credit: Option<Arc<SurveyCredit>>,
 }
 
-/// A credit in the form a shot stores it ([`SurveyCredit::into_storable`])
-/// behind one allocation, for many shots to share ([`Shot::set_shared_credit`]):
-/// a line's legacy template, the fallback of every shot without a row. It
-/// is normalized once when made, so a long list over many shots is checked
-/// once, not once per shot.
-#[derive(Debug, Clone)]
-pub struct SharedCredit(Arc<SurveyCredit>);
-
-impl SharedCredit {
-    /// `credit` made storable, behind one allocation.
-    pub fn new(credit: SurveyCredit) -> Self {
-        Self(Arc::new(credit.into_storable()))
-    }
-
-    /// The shared allocation itself.
-    pub fn arc(&self) -> &Arc<SurveyCredit> {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for SharedCredit {
-    type Target = SurveyCredit;
-
-    fn deref(&self) -> &SurveyCredit {
-        &self.0
-    }
-}
-
 /// How a shot stores a credit that may be shared: the same allocation when it
 /// already is storable (shots given one credit keep sharing it), else a
 /// normalized copy of its own ([`SurveyCredit::into_storable`]); `None` for
@@ -387,8 +359,8 @@ pub struct ShotData {
     /// reverse, a project merge, an undo/redo round trip.
     ///
     /// **Any future clone/duplicate-shot path MUST clear this field.** The
-    /// uniqueness repair ([`crate::Project::ensure_unique_shot_uuids`],
-    /// and the same rule in [`crate::Line::new`]) keeps the FIRST
+    /// uniqueness repair of 0.6.0 files (the migration, and
+    /// [`crate::survey::Project::add_line`]'s refusal of a taken uuid) keeps the FIRST
     /// occurrence, so a copy that kept its source's identity would get the
     /// original re-minted instead of the copy - silently moving every station
     /// cross-reference anchored on it.
@@ -778,13 +750,6 @@ impl Shot {
         self.credit = stored_credit(credit.into_storable()).map(Arc::new);
     }
 
-    /// Give this shot a credit SHARED with other shots: one allocation for all
-    /// of them (an empty one is stored as `None`). The credit was made
-    /// storable once, when the [`SharedCredit`] was built, not once per shot.
-    pub fn set_shared_credit(&mut self, credit: &SharedCredit) {
-        self.credit = (!credit.is_empty()).then(|| Arc::clone(&credit.0));
-    }
-
     /// Apply partial updates to this shot
     pub fn apply_updates(&mut self, updates: &ShotUpdates) {
         if let Some(v) = updates.azimuth_in {
@@ -857,7 +822,7 @@ impl Shot {
     /// plus the line's declination correction (#438).
     ///
     /// `reference` is the line's resolved [`AzimuthReference`] - get it from
-    /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for)
+    /// [`crate::survey::Project::azimuth_reference_for`]
     /// once per line, not once per shot.
     pub fn average_azimuth_true(&self, reference: AzimuthReference) -> f64 {
         reference.to_true(self.average_azimuth_measured())
@@ -1644,24 +1609,10 @@ mod tests {
         );
         check(imported.credit(), "ShotData");
 
-        let shared = SharedCredit::new(dirty());
-        let mut shot = Shot::new(3, ShotData::default());
-        shot.set_shared_credit(&shared);
-        check(shot.credit(), "SharedCredit");
-
         let mut wire = serde_json::to_value(Shot::new(4, ShotData::default())).unwrap();
         wire["credit"] = serde_json::to_value(dirty()).unwrap();
         let restored: Shot = serde_json::from_value(wire).unwrap();
         check(restored.credit(), "deserialized");
-
-        // A shared credit is one allocation for every shot given it.
-        let clean = SharedCredit::new(SurveyCredit {
-            surveyors: vec![raw("Ann")],
-            ..SurveyCredit::default()
-        });
-        let mut shot = Shot::new(5, ShotData::default());
-        shot.set_shared_credit(&clean);
-        assert!(Arc::ptr_eq(shot.credit.as_ref().unwrap(), clean.arc()));
     }
 
     #[test]

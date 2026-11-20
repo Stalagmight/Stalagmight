@@ -127,9 +127,8 @@ pub struct DeleteShotRangeImpact {
     /// gone, they would tie the two ends of one shot together (#737) - e.g.
     /// closure A:1-A:5 with shots 1..=3 gap-closed would become A:1-A:2. Named
     /// by their stations BEFORE the delete, the ids the user created them with.
-    /// Predicted by running the very gap-close the command runs on a clone
-    /// ([`Project::preview_gap_close_closure_removals`]), so preview and
-    /// execution cannot disagree. `None` when no gap-close is offered (the
+    /// Predicted by running the very gap-close the command runs on a clone,
+    /// so preview and execution cannot disagree. `None` when no gap-close is offered (the
     /// whole line, or a blocked shift), or when it could not be simulated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
