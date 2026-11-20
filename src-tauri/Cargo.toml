@@ -56,6 +56,7 @@ svg2pdf = "0.12"
 usvg = "0.43"
 resvg = "0.43"
 sha2 = "0.10"
+ryu = "1"
 uuid = "1"
 # Pinned exact - rationale on the speleodb member's entry (crates/speleodb).
 ureq = "=3.1.4"
