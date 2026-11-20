@@ -478,10 +478,10 @@ impl AppState {
 )]
 mod tests {
     use super::*;
-    use crate::core::state::stalx_v2_fixtures::{
-        display_at, empty_survey, extras_for, link_at, name_at, relink, seed_linked, seed_unlinked,
-        set_display, write_file,
+    use crate::core::state::stalx_fixtures::{
+        display_at, extras_for, link_on_disk, name_at, relink, set_display, write_file, write_v2,
     };
+    use crate::models::survey::Project;
     use crate::models::{SpeleoLink, UndoMode};
     use crate::persistence::stalx_v2::temp_path;
 
@@ -504,8 +504,8 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            seed_linked(&source, "Remote", &link());
-            seed_linked(&dest, "Local", &link());
+            write_v2(&source, "Remote", Some(&link()));
+            write_v2(&dest, "Local", Some(&link()));
             let state = AppState::new().expect("state");
             assert!(state.open_project(dest.clone()).success);
             let generation = state.reserve_download_generation();
@@ -533,7 +533,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            seed_unlinked(&source, "New remote");
+            write_v2(&source, "New remote", None);
             let state = AppState::new().expect("state");
             let older = state.reserve_download_generation();
             let newer = state.reserve_download_generation();
@@ -570,7 +570,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
             let dest = dir.path().join("working.stalx");
-            seed_unlinked(&dest, "Unpushed local work");
+            write_v2(&dest, "Unpushed local work", None);
             let before = std::fs::read(&dest).expect("bytes");
             let state = AppState::new().expect("state");
             for case in [
@@ -589,29 +589,29 @@ mod tests {
                     "invalid" => std::fs::write(&source, b"not a project").expect("invalid"),
                     "bom" => {
                         let mut bytes = b"\xef\xbb\xbf".to_vec();
-                        seed_unlinked(&source, "X");
+                        write_v2(&source, "X", None);
                         bytes.extend(std::fs::read(&source).expect("seed"));
                         std::fs::write(&source, bytes).expect("bom");
                     }
                     "truncated" => {
-                        seed_unlinked(&source, "X");
+                        write_v2(&source, "X", None);
                         let bytes = std::fs::read(&source).expect("seed");
                         std::fs::write(&source, &bytes[..bytes.len() - 12]).expect("cut");
                     }
                     "nan" => {
-                        seed_unlinked(&source, "X");
+                        write_v2(&source, "X", None);
                         let text = std::fs::read_to_string(&source).expect("seed");
                         let text = text.replacen("\"settings\":{", "\"settings\":{\"x\":NaN,", 1);
                         std::fs::write(&source, text).expect("nan");
                     }
                     "size" => {
-                        seed_unlinked(&source, &"X".repeat(4096));
+                        write_v2(&source, &"X".repeat(4096), None);
                         limits.max_file_bytes = 1024;
                     }
                     "count" => {
                         write_file(
                             &source,
-                            &crate::core::state::stalx_v2_fixtures::line_survey("X"),
+                            &crate::core::state::stalx_fixtures::line_survey("X"),
                             &extras_for(None),
                         );
                         limits.limits.shots = 1;
@@ -655,8 +655,8 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            seed_linked(&source, "Remote replacement", &link());
-            seed_linked(&dest, "Newer local open", &link());
+            write_v2(&source, "Remote replacement", Some(&link()));
+            write_v2(&dest, "Newer local open", Some(&link()));
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
             let (download_started, started) = std::sync::mpsc::channel();
@@ -701,7 +701,7 @@ mod tests {
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
             for path in [&source, &dest] {
-                seed_linked(path, "Synthetic", &link());
+                write_v2(path, "Synthetic", Some(&link()));
             }
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
@@ -729,7 +729,7 @@ mod tests {
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
             for path in [&source, &dest] {
-                seed_linked(path, "Synthetic", &link());
+                write_v2(path, "Synthetic", Some(&link()));
             }
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
@@ -758,7 +758,7 @@ mod tests {
         let mut cached_link = link();
         cached_link.has_unpushed_edits = true;
         cached_link.last_edit_at = Some("2026-07-27T10:00:00+00:00".into());
-        seed_linked(&dest, "Cached", &cached_link);
+        write_v2(&dest, "Cached", Some(&cached_link));
         for cause in [
             TransportCause::Refused,
             TransportCause::Timeout,
@@ -834,7 +834,7 @@ mod tests {
             .is_none());
         }
         assert!(
-            link_at(&dest).expect("linked").has_unpushed_edits,
+            link_on_disk(&dest).expect("linked").has_unpushed_edits,
             "the probe never writes the copy"
         );
         relink(&dest, None);
@@ -864,7 +864,7 @@ mod tests {
         cached_link.endpoint = endpoint.into();
         let dir = tempfile::tempdir().expect("temp");
         let dest = dir.path().join("project.stalx");
-        seed_linked(&dest, "Cached", &cached_link);
+        write_v2(&dest, "Cached", Some(&cached_link));
 
         let refused = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
             .expect_err("a plain-http hostname is refused without the override");
@@ -901,7 +901,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("cache/speleodb/new-project/project.stalx");
-            seed_unlinked(&source, "First download");
+            write_v2(&source, "First download", None);
             assert!(!dest.parent().expect("cache directory").exists());
 
             let state = AppState::new().expect("state");
@@ -917,7 +917,7 @@ mod tests {
                 .expect("first download installs without a pre-existing cache");
 
             assert_eq!(name_at(&dest), "First download");
-            let installed = link_at(&dest).expect("linked");
+            let installed = link_on_disk(&dest).expect("linked");
             assert_eq!(installed.project_id, link().project_id);
             assert_eq!(installed.endpoint, link().endpoint);
         });
@@ -929,8 +929,8 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("project.stalx");
-            seed_unlinked(&source, "Downloaded");
-            seed_unlinked(&dest, "Previous");
+            write_v2(&source, "Downloaded", None);
+            write_v2(&dest, "Previous", None);
             // The install's write is refused (a directory holds its temp's name),
             // as a full disk or a permission denial would refuse it.
             std::fs::create_dir(temp_path(&dest)).expect("block the temp");
@@ -971,10 +971,10 @@ mod tests {
             old_link.undo_mode = Some(UndoMode::Disabled);
             write_file(
                 &source,
-                &empty_survey("Downloaded"),
+                &Project::new("Downloaded", None),
                 &extras_for(Some(&old_link)),
             );
-            seed_unlinked(&dest, "Previous");
+            write_v2(&dest, "Previous", None);
             set_display(&dest, "test_view", "local");
             let state = AppState::new().expect("state");
             state
@@ -987,7 +987,7 @@ mod tests {
                     DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
                 .expect("install");
-            let actual = link_at(&dest).expect("linked");
+            let actual = link_on_disk(&dest).expect("linked");
             assert_eq!(actual.endpoint, "https://example.com");
             assert_eq!(actual.base_commit_sha.as_deref(), Some("abc123"));
             assert_eq!(actual.undo_mode, Some(UndoMode::Disabled));

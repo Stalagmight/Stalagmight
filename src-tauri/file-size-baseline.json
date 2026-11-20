@@ -79,8 +79,6 @@
     "src-tauri/crates/core/src/core/state/speleodb_session.rs": 313,
     "src-tauri/crates/core/src/core/state/speleodb_sidecars.rs": 82,
     "src-tauri/crates/core/src/core/state/speleodb_write_guard.rs": 91,
-    "src-tauri/crates/core/src/core/state/split_combine_kit.rs": 230,
-    "src-tauri/crates/core/src/core/state/stalx_v2_fixtures.rs": 157,
     "src-tauri/crates/core/src/core/state/tests_support.rs": 57,
     "src-tauri/crates/core/src/core/state/topology_kit.rs": 258,
     "src-tauri/crates/core/src/core/state/undo.rs": 178,

@@ -1705,32 +1705,52 @@ impl Fuzzer {
                 .unwrap()
                 .set_history_limit(config.history_limit);
         }
-        let history_limit = state.undo_stack.lock().unwrap().history_limit();
-        let config = state.get_config();
-        let mut rng = Rng::new(seed);
-        let mut aux = Rng::new(seed ^ COVERAGE_STREAM);
-        let mut temp = None;
+        let mut fuzzer = Self::bare(state, seed, drawn, knobs);
         if legacy_origin {
             let dir = TempDir::new().unwrap();
             let path = fuzz_extended_tests::legacy_origin_file(seed, dir.path());
-            let opened = state.execute(Command::OpenProject { path });
+            let opened = fuzzer.state.execute(Command::OpenProject { path });
             assert!(
                 opened.success,
                 "the legacy origin did not open: {:?}",
                 opened.error
             );
-            temp = Some(dir);
+            fuzzer.temp = Some(dir);
         } else {
-            build_project(&state, &mut rng, closures);
+            build_project(&fuzzer.state, &mut fuzzer.rng, closures);
         }
         if knobs.large {
-            temp = Some(fuzz_extended_tests::grow_large(&state, &mut aux));
+            fuzzer.temp = Some(fuzz_extended_tests::grow_large(
+                &fuzzer.state,
+                &mut fuzzer.aux,
+            ));
         }
-        state.undo_stack.lock().unwrap().clear();
-        let mut fuzzer = Self {
+        fuzzer.state.undo_stack.lock().unwrap().clear();
+        assert_eq!(fuzzer.undo_len(), 0, "setup left undo entries behind");
+        let base = fuzzer.record_depth(String::new(), false);
+        fuzzer.depths.push(Some(base));
+        fuzzer.check_live("the starting project");
+        fuzzer
+    }
+
+    /// This generator alone, for a harness that owns its app and its oracles
+    /// (the saving fuzz, `transition_fuzz_tests`): no starting project, no
+    /// depth recorded, nothing checked. The harness swaps its live `AppState`
+    /// into `state` around [`Self::draw_op`] and [`Self::apply_op`], so the
+    /// moves come from this seed's streams and act on its survey.
+    pub(super) fn driving(seed: u32) -> Self {
+        Self::bare(AppState::new().unwrap(), seed, None, Knobs::OFF)
+    }
+
+    /// A fuzzer on `state` with fresh streams and an empty record (the
+    /// history limit and the config are read from `state` now).
+    fn bare(state: AppState, seed: u32, drawn: Option<DrawnConfig>, knobs: Knobs) -> Self {
+        let history_limit = state.undo_stack.lock().unwrap().history_limit();
+        let config = state.get_config();
+        Self {
             state,
-            rng,
-            aux,
+            rng: Rng::new(seed),
+            aux: Rng::new(seed ^ COVERAGE_STREAM),
             seed,
             depths: Vec::new(),
             cursor: 0,
@@ -1751,16 +1771,11 @@ impl Fuzzer {
                 knobs,
                 ..Outcome::default()
             },
-            temp,
+            temp: None,
             orphan_pending: false,
             last_split_join: None,
             knobs,
-        };
-        assert_eq!(fuzzer.undo_len(), 0, "setup left undo entries behind");
-        let base = fuzzer.record_depth(String::new(), false);
-        fuzzer.depths.push(Some(base));
-        fuzzer.check_live("the starting project");
-        fuzzer
+        }
     }
 
     pub(super) fn stopped(&self) -> bool {

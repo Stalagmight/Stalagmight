@@ -31,6 +31,6 @@ svg2pdf = { workspace = true }
 [dev-dependencies]
 # Test-only and acyclic: the hand-run `.stalx` export diagnostic in
 # tml_tests.rs reads a real project (v2 decoded, legacy migrated) to
-# root-check every exported shot, and the golden runner migrates K's dumps.
+# root-check every exported shot.
 stalagmight-persistence = { path = "../persistence" }
 tempfile = { workspace = true }

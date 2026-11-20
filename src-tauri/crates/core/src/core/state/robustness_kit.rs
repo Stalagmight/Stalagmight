@@ -5,8 +5,12 @@
 //! (the canonical v2 text, the integrity verdict, the Closures Computed View,
 //! the id allocators and both history stacks).
 //!
-//! Self-contained on purpose: the undo fuzzers (`fuzz_undo_tests`) are ported
-//! in their own package and change on their own schedule. All data is
+//! The generator (`Rng`, `random_shot`, `random_offset`) is the undo fuzzer's
+//! (`fuzz_undo_tests`), re-exported. The starting survey and the targets stay
+//! this kit's own: the robustness suites start without the undo fuzzer's
+//! standing junction (line 6 on line 3) and, with no loop, without station
+//! comments, and they aim at slots and at shots by sorted session id, so
+//! their seeds keep the trajectories they were swept on. All data is
 //! synthetic; nothing reads a fixture.
 
 use std::collections::BTreeMap;
@@ -16,8 +20,7 @@ use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::Project;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, ShotData, ShotId, ShotKind, StationRef,
-    SurveyDirection,
+    ClosureStrategy, GpsCoordinates, LineId, ShotData, ShotId, StationRef, SurveyDirection,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -25,114 +28,13 @@ use crate::persistence::stalx_v2::{self, Extras, Mode};
 // The generator
 // ===========================================================================
 
-/// A seeded, platform-independent generator: every draw is integer arithmetic
-/// on a `u32` (floats are produced as data, never used to branch), so a seed
-/// replays bit for bit. The stream is the undo fuzzer's.
-pub(super) struct Rng {
-    state: u32,
-}
-
-impl Rng {
-    pub(super) const fn new(seed: u32) -> Self {
-        Self { state: seed }
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        self.state = self.state.wrapping_add(0x6d2b_79f5);
-        let mut t = self.state;
-        t = (t ^ (t >> 15)).wrapping_mul(t | 1);
-        t ^= t.wrapping_add((t ^ (t >> 7)).wrapping_mul(t | 0b11_1101));
-        t ^ (t >> 14)
-    }
-
-    /// Uniform in `0..bound` (0 when `bound` is 0).
-    pub(super) fn below(&mut self, bound: usize) -> usize {
-        if bound == 0 {
-            return 0;
-        }
-        (self.next_u32() as usize) % bound
-    }
-
-    /// Inclusive integer range.
-    pub(super) fn range(&mut self, min: i64, max: i64) -> i64 {
-        if max <= min {
-            return min;
-        }
-        let span = usize::try_from(max - min + 1).unwrap_or(usize::MAX);
-        min + i64::try_from(self.below(span)).unwrap_or(0)
-    }
-
-    /// True with probability `percent`/100.
-    pub(super) fn chance(&mut self, percent: u32) -> bool {
-        (self.next_u32() % 100) < percent
-    }
-
-    /// A float in `[min, max]`, quantized to 1/1000 of the span (a function of
-    /// an integer draw).
-    pub(super) fn float(&mut self, min: f64, max: f64) -> f64 {
-        let steps = self.range(0, 1000) as f64;
-        min + (max - min) * (steps / 1000.0)
-    }
-
-    pub(super) fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
-        &items[self.below(items.len())]
-    }
-}
-
-/// The largest magnitude a generated coordinate offset takes (the undo
-/// fuzzer's bound: past it, coordinate arithmetic loses more than the oracles'
-/// floor to cancellation, which would read as a defect of the edit).
-pub(super) const GEOMETRY_EXTREME: f64 = 1e3;
-
-pub(super) const COLORS: &[&str] = &["#3388FF", "#FF8833", "#33CC66", "#CC33AA", "#FFCC00"];
-
-/// A valid, unremarkable shot. Every value comes from an integer draw.
-pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
-    let azimuth = rng.float(0.0, 359.9);
-    let depth_in = rng.float(0.0, 30.0);
-    ShotData {
-        uuid: None,
-        azimuth_in: azimuth,
-        azimuth_out: (azimuth + rng.float(-1.5, 1.5) + 360.0) % 360.0,
-        length: rng.float(1.0, 12.0),
-        depth_in,
-        depth_out: (depth_in + rng.float(-3.0, 3.0)).max(0.0),
-        pitch_in: rng.chance(40).then(|| rng.float(-60.0, 60.0)),
-        pitch_out: rng.chance(40).then(|| rng.float(-60.0, 60.0)),
-        left: rng.chance(70).then(|| rng.float(0.0, 5.0)),
-        right: rng.chance(70).then(|| rng.float(0.0, 5.0)),
-        up: rng.chance(70).then(|| rng.float(0.0, 5.0)),
-        down: rng.chance(70).then(|| rng.float(0.0, 5.0)),
-        comment: rng
-            .chance(20)
-            .then(|| format!("shot-{}", rng.range(0, 9999))),
-        kind: *rng.pick(&[
-            ShotKind::Normal,
-            ShotKind::Normal,
-            ShotKind::Jump,
-            ShotKind::Reference,
-        ]),
-        marker_index: rng
-            .chance(15)
-            .then(|| u32::try_from(rng.range(0, 9)).unwrap_or(0)),
-        temperature: rng.chance(30).then(|| rng.float(4.0, 30.0)),
-        credit: None,
-    }
-}
-
-/// A Move Line / Move Station offset: mostly small, sometimes the extremes.
-pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
-    let extreme = |rng: &mut Rng| *rng.pick(&[0.0, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9]);
-    if rng.chance(15) {
-        Coordinates::new(extreme(rng), extreme(rng), extreme(rng))
-    } else {
-        Coordinates::new(
-            rng.float(-3.0, 3.0),
-            rng.float(-3.0, 3.0),
-            rng.float(-1.5, 1.5),
-        )
-    }
-}
+// The undo fuzzer's generator, shared: mulberry32 (integer-only, so a seed
+// replays bit for bit), its shot, its move offset and its input bounds. The
+// robustness seeds follow the undo fuzzer's stream, so a change to these
+// moves both suites' seeds.
+pub(super) use super::fuzz_undo_tests::{
+    random_offset, random_shot, Rng, COLORS, GEOMETRY_EXTREME,
+};
 
 /// Shot counts of the starting lines: an empty line and single-shot lines on
 /// purpose (both have carried findings).
@@ -461,14 +363,11 @@ pub(super) fn differences(before: &Observed, after: &Observed) -> Vec<String> {
 
 /// The text of a panic payload, first line only.
 pub(super) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-        .map_or_else(
-            || "<non-string panic>".to_string(),
-            |m| m.lines().next().unwrap_or_default().to_string(),
-        )
+    super::fuzz_undo_tests::panic_message(payload)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Open `path` in a fresh `AppState` through the executor's open; `None` when

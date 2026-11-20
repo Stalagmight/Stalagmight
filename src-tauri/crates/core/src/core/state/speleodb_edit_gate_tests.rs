@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use super::speleodb_cache::{InheritedUndo, OpenProjectToken};
 use super::speleodb_cache_install::PreparedDownload;
 use super::speleodb_edit_gate::OpenProjectGate;
-use super::synthetic_stalx_tests::write_v2;
+use super::stalx_fixtures::write_v2;
 use super::AppState;
 use crate::models::SpeleoLink;
 

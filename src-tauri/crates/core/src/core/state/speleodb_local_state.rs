@@ -651,9 +651,7 @@ fn scan_cache(root: &Path) -> HashMap<String, SpeleoLocalProjectState> {
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::super::synthetic_stalx_tests::{
-        instant, link_on_disk, write_legacy_link_only, write_v2,
-    };
+    use super::super::stalx_fixtures::{instant, link_on_disk, write_legacy_link_only, write_v2};
     use super::*;
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";

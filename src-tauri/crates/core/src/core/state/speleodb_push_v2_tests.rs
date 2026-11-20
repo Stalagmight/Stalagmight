@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::speleodb_local_state::{cache_path_in, TestCacheRoot};
-use super::stalx_v2_fixtures::{decoded, extras_for, line_survey, link_at, write_file};
+use super::stalx_fixtures::{decoded, extras_for, line_survey, link_on_disk, write_file};
 use super::AppState;
 use crate::core::Command;
 use crate::models::{SpeleoLink, UndoMode};
@@ -221,7 +221,7 @@ fn a_confirmed_push_uploads_v2_json_and_is_durable_at_once() {
 
         // R2 B3: BASE, the dirty bit and the cut history are on DISK now, not only
         // in memory - a close right after the push never reopens to a stale BASE.
-        let on_disk = link_at(&path).expect("linked");
+        let on_disk = link_on_disk(&path).expect("linked");
         assert_eq!(on_disk.base_commit_sha.as_deref(), Some(PUSHED));
         assert!(!on_disk.has_unpushed_edits);
         let file = decoded(&path);
@@ -254,7 +254,7 @@ fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
             refused.message.contains("Only SQLite") || refused.status == Some(400),
             "{refused:?}"
         );
-        let on_disk = link_at(&path).expect("linked");
+        let on_disk = link_on_disk(&path).expect("linked");
         assert!(
             on_disk.has_unpushed_edits,
             "the work is still marked un-pushed"

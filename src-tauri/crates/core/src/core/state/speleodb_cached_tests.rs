@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use super::speleodb_cache::LocalEditsPolicy;
 use super::speleodb_cached::SpeleoCacheOwnership;
 use super::speleodb_local_state::{cache_path_in, TestCacheRoot};
-use super::stalx_v2_fixtures::{link_at, relink, seed_linked, seed_unlinked};
+use super::stalx_fixtures::{link_on_disk, relink, write_v2};
 use super::AppState;
 use crate::models::SpeleoLink;
 use crate::speleodb::{SpeleoDbAction, SpeleoReadOnlyOpen};
@@ -30,10 +30,10 @@ const ME: &str = "diver@example.com";
 /// A cached copy of `id` under `root`, linked to `endpoint`.
 fn seed(root: &Path, id: &str, endpoint: &str, dirty: bool) -> PathBuf {
     let path = cache_path_in(root, id);
-    seed_linked(
+    write_v2(
         &path,
         &format!("Cave {id}"),
-        &SpeleoLink {
+        Some(&SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: id.to_owned(),
             project_name: format!("Remote {}", id.get(..4).unwrap_or(id)),
@@ -42,7 +42,7 @@ fn seed(root: &Path, id: &str, endpoint: &str, dirty: bool) -> PathBuf {
             last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
             last_verify_at: None,
             undo_mode: None,
-        },
+        }),
     );
     path
 }
@@ -636,7 +636,7 @@ fn history_server() -> (String, Arc<Mutex<Vec<String>>>) {
     let native = {
         let temp = tempfile::tempdir().expect("temp");
         let path = temp.path().join("server.stalx");
-        seed_unlinked(&path, "Server");
+        write_v2(&path, "Server", None);
         std::fs::read(&path).expect("server bytes")
     };
     let history = super::tests_support::sdk_fixture(r#"{"commits":[{"id":"abc1234"}]}"#);
@@ -741,7 +741,7 @@ fn another_accounts_un_uploaded_work_on_the_tip_takes_the_prompt_and_keeps_its_o
         );
         assert_eq!(downloads(&seen), 1, "it went the guarded-download way");
         assert_eq!(owner_bytes(&copy), Some(before), "owner.json unchanged");
-        let link = link_at(&copy).expect("linked");
+        let link = link_on_disk(&copy).expect("linked");
         assert!(
             link.has_unpushed_edits,
             "the other account's work is intact"

@@ -363,9 +363,9 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "synthetic cache durability tests")]
 mod tests {
     use super::*;
-    use crate::core::state::stalx_v2_fixtures::{
-        extras_for, fixture_link, history_counts, line_survey, link_at, name_at, seed_linked,
-        seed_with_history, write_file,
+    use crate::core::state::stalx_fixtures::{
+        extras_for, fixture_link, history_counts, line_survey, link_on_disk, name_at,
+        seed_with_history, write_file, write_v2,
     };
     use crate::persistence::stalx_v2::temp_path;
 
@@ -374,8 +374,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let source = dir.path().join("source.stalx");
         let dest = dir.path().join("working.stalx");
-        seed_linked(&source, "Synthetic", &fixture_link("https://x", false));
-        seed_linked(&dest, "Working", &fixture_link("https://x", false));
+        write_v2(
+            &source,
+            "Synthetic",
+            Some(&fixture_link("https://x", false)),
+        );
+        write_v2(&dest, "Working", Some(&fixture_link("https://x", false)));
         let before = std::fs::read(&dest).expect("old bytes");
         // A directory where the install writes its temp: the write fails before the
         // rename, as a full disk or a permission denial would.
@@ -393,7 +397,7 @@ mod tests {
         let result = state.replace_cache_for_session(
             prepared,
             &dest,
-            crate::core::state::stalx_v2_fixtures::FIXTURE_ID,
+            crate::core::state::stalx_fixtures::FIXTURE_ID,
             LocalEditsPolicy::Discard,
             state.speleodb_session_generation(),
         );
@@ -460,7 +464,7 @@ mod tests {
         let dest = dir.path().join("cache").join("project.stalx");
         let bytes = prepared.cache_bytes(BTreeMap::new()).expect("bytes");
         super::super::speleodb_reload::install_cache_bytes(&dest, &bytes).expect("install");
-        let link = link_at(&dest).expect("linked");
+        let link = link_on_disk(&dest).expect("linked");
         assert_eq!(link.endpoint, "https://example.com");
         assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
         assert!(!link.has_unpushed_edits);

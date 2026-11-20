@@ -275,9 +275,9 @@ impl AppState {
 )]
 mod tests {
     use super::*;
-    use crate::core::state::stalx_v2_fixtures::{
-        display_at, fixture_link, history_counts, link_at, name_at, seed_linked, seed_with_history,
-        set_display, FIXTURE_ID,
+    use crate::core::state::stalx_fixtures::{
+        display_at, fixture_link, history_counts, link_on_disk, name_at, seed_with_history,
+        set_display, write_v2, FIXTURE_ID,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::persistence::stalx_v2::DecodeOptions;
@@ -307,7 +307,7 @@ mod tests {
         let native = tempfile::NamedTempFile::new().expect("native file");
         let mut link = fixture_link("https://server.example", false);
         link.base_commit_sha = Some("0000000".to_owned());
-        seed_linked(native.path(), "Server Copy", &link);
+        write_v2(native.path(), "Server Copy", Some(&link));
         native
     }
 
@@ -343,7 +343,7 @@ mod tests {
         // name it.
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked(&dest, "Local", &fixture_link("http://x/", true));
+        write_v2(&dest, "Local", Some(&fixture_link("http://x/", true)));
         let before = std::fs::read(&dest).expect("read dest");
         let state = AppState::new().expect("state");
         let native = server_stalx();
@@ -433,9 +433,9 @@ mod tests {
             "Drop empties the history, so no adopt path can inherit it (#194 b3)"
         );
         for path in [&kept, &dropped] {
-            let link = link_at(path).expect("linked");
+            let link = link_on_disk(path).expect("linked");
             assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
-            let sync = crate::core::state::stalx_v2_fixtures::decoded(path)
+            let sync = crate::core::state::stalx_fixtures::decoded(path)
                 .extras
                 .local
                 .speleodb;
@@ -492,7 +492,7 @@ mod tests {
         // there is no work to lose, so an ordinary re-pull goes straight through.
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
+        write_v2(&dest, "Local", Some(&fixture_link("http://x/", false)));
         let state = AppState::new().expect("state");
         let native = server_stalx();
 
@@ -513,10 +513,14 @@ mod tests {
     fn local_view_toggles_survive_a_download_replace() {
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
-        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
+        write_v2(&dest, "Local", Some(&fixture_link("http://x/", false)));
         set_display(&dest, "show_station_names", "true");
         let native = temp.path().join("download.stalx");
-        seed_linked(&native, "Server Copy", &fixture_link("http://x/", false));
+        write_v2(
+            &native,
+            "Server Copy",
+            Some(&fixture_link("http://x/", false)),
+        );
         set_display(&native, "show_station_names", "false");
         set_display(&native, "pushers_view", "1");
         let state = AppState::new().expect("state");
@@ -565,7 +569,7 @@ mod tests {
         )
         .expect("a newer file");
         let dest = temp.path().join("project.stalx");
-        seed_linked(&dest, "Local", &fixture_link("http://x/", false));
+        write_v2(&dest, "Local", Some(&fixture_link("http://x/", false)));
         let before = std::fs::read(&dest).expect("destination");
         let state = AppState::new().expect("state");
         let err = install(
@@ -615,7 +619,7 @@ mod tests {
             "a legacy copy the frozen reader refuses is unreadable, never clean"
         );
         let linked = temp.path().join("linked.stalx");
-        seed_linked(&linked, "Linked", &fixture_link("http://x/", true));
+        write_v2(&linked, "Linked", Some(&fixture_link("http://x/", true)));
         set_display(&linked, "view", "kept");
         let CacheFile::Read { link, display } = read_cache_file(&linked) else {
             panic!("a version 2 copy reads");

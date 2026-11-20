@@ -449,12 +449,6 @@ mod speleodb_upload_limit_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod split_combine_kit;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -462,9 +456,10 @@ mod split_line_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    reason = "test fixtures: a refused build is a broken test setup"
+    clippy::panic,
+    reason = "test fixtures: a failed setup step is a failed test"
 )]
-mod stalx_v2_fixtures;
+mod stalx_fixtures;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -478,13 +473,6 @@ mod station_identity_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_names_import_tests;
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test fixtures: a failed setup step is a failed test"
-)]
-mod synthetic_stalx_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

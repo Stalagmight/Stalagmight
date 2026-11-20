@@ -229,7 +229,7 @@ fn workspace_prepared_reload_commits_validated_bytes_and_preserves_each_editing_
         link.has_unpushed_edits = false;
         link.last_edit_at = None;
         link.base_commit_sha = Some("def4567".into());
-        seed_linked(&source, "New server version", &link);
+        write_v2(&source, "New server version", Some(&link));
         let consent = {
             let _project = state.project.lock().expect("project");
             state.open_project_token_locked()

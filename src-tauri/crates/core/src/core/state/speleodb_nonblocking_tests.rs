@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use super::stalx_v2_fixtures::{extras_for, line_survey, write_file};
+use super::stalx_fixtures::{extras_for, line_survey, write_file};
 use super::tests_support::sdk_fixture;
 use super::AppState;
 use crate::config::Config;

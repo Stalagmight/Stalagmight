@@ -44,7 +44,7 @@
 //! All data is synthetic: projects built in memory, files in a temporary
 //! directory.
 
-use super::split_combine_kit::{
+use super::topology_kit::{
     add_datum, apart, assert_same, assert_undo_redo_exact, close, empty, gps, hold, line_at,
     line_from, open, positions, project, shot, slot, snapshot, st,
 };

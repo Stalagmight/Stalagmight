@@ -1,10 +1,14 @@
-//! Shared test kit of the station topology suites (`topology_commands_tests`,
-//! `multi_datum_tests`, `datum_entrance_tests`, `datum_ui_tests`,
-//! `station_identity_tests`): surveys built on the station-graph model with
-//! its own operations (so every anchor rule holds), written as a `.stalx` v2
-//! file and opened through `AppState` the way the app opens one, the
-//! commands run through `execute`, and the canonical snapshot an undo or a
-//! redo must give back exactly.
+//! Shared test kit of the station-graph command suites: the topology suites
+//! (`topology_commands_tests`, `multi_datum_tests`, `datum_entrance_tests`,
+//! `datum_ui_tests`, `station_identity_tests`), the Split Line Here and
+//! Combine Lines suites (`split_line_tests`, `combine_lines_tests`,
+//! `issue_738_tests`, `issue_756_tests`) and the undo suites that compare
+//! snapshots (`undo_pipeline_tests`, `open_undo_bugs_tests`,
+//! `undo_size_gate_tests`, `misc_state_tests`). It gives surveys built on the
+//! station-graph model with its own operations (so every anchor rule holds),
+//! written as a `.stalx` v2 file and opened through `AppState` the way the
+//! app opens one, the commands run through `execute`, and the canonical
+//! snapshot an undo or a redo must give back exactly.
 //!
 //! All data is synthetic; every file goes to a temporary directory.
 
@@ -15,7 +19,9 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::survey::{LineMeta, Project, StartAt};
+use crate::models::survey::{
+    ClosureId, ClosureStrategy, EditContext, LineMeta, Project, StartAt, ZeroDatum,
+};
 use crate::models::{local_to_gps, GpsCoordinates, LineId, ShotData, StationId, StationRef};
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -30,6 +36,11 @@ pub(super) fn origin() -> GpsCoordinates {
 pub(super) fn gps_at(east: f64, north: f64) -> GpsCoordinates {
     let (lat, lon) = local_to_gps(east, north, &origin()).unwrap();
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
+}
+
+/// A GPS position at sea level.
+pub(super) fn gps(latitude: f64, longitude: f64) -> GpsCoordinates {
+    GpsCoordinates::new(latitude, longitude, 0.0).unwrap()
 }
 
 /// A flat shot (no depth change).
@@ -98,6 +109,43 @@ pub(super) fn st(p: &Project, line: LineId, index: u32) -> StationId {
     p.topology().station_at(slot(line, index)).unwrap()
 }
 
+/// A loop closure between two slots through Create Loop Closure's own
+/// operation (its refusals included).
+pub(super) fn close(
+    p: &mut Project,
+    a: StationRef,
+    b: StationRef,
+    strategy: ClosureStrategy,
+) -> ClosureId {
+    p.create_closure_at(a, b, strategy)
+        .unwrap()
+        .value
+        .closure
+        .id
+}
+
+/// Put a zero datum on `station` as Set Zero Datum would (the anchor
+/// algorithm places its piece on it, or keeps it a GPS fix).
+pub(super) fn add_datum(p: &mut Project, station: StationId, at: GpsCoordinates) {
+    let before = p.anchor_snapshot();
+    p.push_datum(ZeroDatum::new(station, at));
+    p.settle_anchors(&before, &EditContext::none());
+}
+
+/// Put a zero datum on `station` that holds its piece where it is (a
+/// declared correction, as Add .stalx leaves one): two pieces each placed by
+/// their own datum, side by side.
+pub(super) fn hold(p: &mut Project, station: StationId, at: GpsCoordinates) {
+    let here = p.raw_positions().xy(station).unwrap();
+    add_datum(p, station, at);
+    let i = p.datums.len() - 1;
+    p.datums[i].correction = p.correction_to_hold(i, here);
+    assert!(
+        apart(p.raw_positions().xy(station).unwrap(), here) < 1e-9,
+        "setup: held"
+    );
+}
+
 /// The raw (measured) position of a slot.
 pub(super) fn xy(p: &Project, at: StationRef) -> [f64; 2] {
     let [x, y, _] = p.raw_positions().slot(p, at).unwrap();
@@ -118,6 +166,16 @@ pub(super) fn raw_xy(p: &Project) -> BTreeMap<StationRef, [f64; 2]> {
     raw_xyz(p)
         .into_iter()
         .map(|(slot, [x, y, _])| (slot, [x, y]))
+        .collect()
+}
+
+/// Every slot's raw position without depth, lines in list order (unlike
+/// [`raw_xy`], a reordered line list compares different).
+pub(super) fn positions(p: &Project) -> Vec<(StationRef, [f64; 2])> {
+    p.raw_positions()
+        .slots(p)
+        .into_iter()
+        .map(|s| (s.slot, [s.x, s.y]))
         .collect()
 }
 
@@ -242,6 +300,11 @@ pub(super) fn snapshot(state: &AppState) -> Snapshot {
     (text, ids)
 }
 
+/// [`snapshot`] without the session ids, for comparisons across a reopen.
+pub(super) fn canonical(state: &AppState) -> String {
+    snapshot(state).0
+}
+
 /// The undo history, newest first: `(command type, description)`.
 pub(super) fn history(state: &AppState) -> Vec<(String, String)> {
     state
@@ -249,6 +312,23 @@ pub(super) fn history(state: &AppState) -> Vec<(String, String)> {
         .into_iter()
         .map(|item| (item.command_type, item.description))
         .collect()
+}
+
+/// The newest entry's preview rows: `(field, old, new)`.
+pub(super) fn preview_rows(state: &AppState) -> Vec<(String, String, String)> {
+    state
+        .get_undo_stack()
+        .into_iter()
+        .next()
+        .and_then(|item| item.preview_data)
+        .map(|preview| {
+            preview
+                .changes
+                .into_iter()
+                .map(|c| (c.field, c.old_value, c.new_value))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The warning codes and messages of a result.

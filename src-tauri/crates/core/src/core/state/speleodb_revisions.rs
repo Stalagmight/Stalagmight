@@ -566,7 +566,7 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::super::synthetic_stalx_tests::{link_on_disk, write_legacy_link_only, write_v2};
+    use super::super::stalx_fixtures::{link_on_disk, write_legacy_link_only, write_v2};
     use super::{
         downloaded_revision_undo_mode, downloaded_revision_undo_mode_with_limits,
         revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState,

@@ -282,7 +282,10 @@ fn draw_ext(rng: &mut Rng, targets: &Targets, project: &Project) -> Option<ExtOp
             let role = rng.below(5) as u8;
             let person = rng.below(4) as u32;
             if rng.chance(30) {
-                let (line, _) = &targets.lines[rng.below(targets.lines.len().max(1))];
+                // A survey with no lines has no line to credit (the saving
+                // fuzz starts from a new, empty project).
+                let at = rng.below(targets.lines.len().max(1));
+                let (line, _) = targets.lines.get(at)?;
                 return Some(ExtOp::EditCredit {
                     line: Some(*line),
                     shots: Vec::new(),
@@ -1170,6 +1173,28 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
 /// tracking and cleared the redo branch but pushed no undo entry. On the
 /// station-graph pipeline it records one, and its undo restores both lists
 /// exactly.
+/// Every draw on a survey with no lines is a move or nothing, never a panic:
+/// the saving fuzz (`transition_fuzz_tests`) runs this generator on a new,
+/// empty project, where a line credit indexed an empty target list.
+#[test]
+fn the_generator_draws_on_a_survey_with_no_lines() {
+    let _config = crate::test_helpers::isolated_config();
+    let mut fuzzer = Fuzzer::driving(1);
+    let created = fuzzer.state.execute(Command::CreateProject {
+        name: "Empty".to_string(),
+        location: None,
+    });
+    assert!(created.success, "{:?}", created.error);
+    let project = fuzzer.live();
+    assert!(project.lines().is_empty(), "setup: no lines");
+    let targets = Targets::of(&project);
+    let drawn = (0..2_000).filter_map(|_| fuzzer.draw_op(&targets)).count();
+    assert!(drawn > 0, "the generator drew nothing at all");
+    for seed in 0..2_000 {
+        let _ = draw_ext(&mut Rng::new(seed), &targets, &project);
+    }
+}
+
 #[test]
 fn untrack_import_alone_is_undoable() {
     let _config = crate::test_helpers::isolated_config();

@@ -47,6 +47,34 @@
 //! prints file-name hashes, counts and seed repros only, never a name, a
 //! coordinate or a failure's text (the panic hook is silenced too).
 //!
+//! **Two command generators.** A step draws from this file's own generator
+//! ([`operate`]) five times in six and from the undo fuzzer's
+//! (`fuzz_undo_tests`: `Fuzzer::draw_op` and `apply_op` on its `Targets`)
+//! once in six ([`shared_op`]). The shared one brings the families this file
+//! has no arm for (split shot, delete and split, the range deletes, delete
+//! the last shot and its line, detach, move comment, imports, Add .stalx,
+//! create and merge) and its targeting (closures between tieable stations,
+//! Combine at the join a split made), so the save properties run over them
+//! too. The own generator stays, because it deliberately differs from the
+//! undo fuzzer's where the save is the oracle:
+//! - its floats are full-precision draws of a 64-bit stream, not the undo
+//!   fuzzer's integer-quantized ones, so the encoder's byte fixpoint sees
+//!   arbitrary bit patterns;
+//! - its updates carry hostile values (NaN, infinities, negative lengths,
+//!   `-0.0`) whose refusal must leave the dirty flag alone;
+//! - its new shots carry client uuids, which a save must keep;
+//! - its comments carry quotes, accents and line breaks, and its station
+//!   names collide;
+//! - it covers warning ignores, which ride the save;
+//! - its seeds are the farm's 64-bit `STALAGMIGHT_FUZZ_SEED_*` windows,
+//!   while the undo fuzzer's streams, references and replayable traces are
+//!   pinned by its own gates (`the_fuzzer_is_deterministic`, the shrinker),
+//!   which the saving fuzz must not move.
+//!
+//! The undo fuzzer's generator runs here on its own stream (seeded
+//! `seed ^ SHARED_STREAM`) through `Fuzzer::driving`, so it is not changed
+//! by being shared.
+//!
 //! Windows: `STALAGMIGHT_FUZZ_SEED_START` / `STALAGMIGHT_FUZZ_SEEDS`; a failure
 //! prints one line with the seed and the test that replays it alone.
 
@@ -57,6 +85,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use tempfile::TempDir;
 
+use super::fuzz_undo_tests::{read_targets, Fuzzer, Refs};
 use super::{AppState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::testkit::Walk;
@@ -81,6 +110,15 @@ const FORWARD: usize = 16;
 const CORPUS_WALKS: u64 = 4;
 /// Commands per corpus sequence.
 const CORPUS_STEPS: usize = 30;
+/// A step draws one of `OWN_ARMS + SHARED_ARMS` arms: this file's own
+/// command families ([`operate`]), or a move of the undo fuzzer's generator
+/// ([`shared_op`]).
+const OWN_ARMS: usize = 30;
+const SHARED_ARMS: usize = 6;
+/// The undo fuzzer's generator is seeded `seed ^ SHARED_STREAM` (folded to
+/// its 32-bit seed), so its stream is not the undo fuzzer's own for the same
+/// seed number.
+const SHARED_STREAM: u32 = 0x0C24_0C15;
 
 const TEST_PATH: &str = "core::state::transition_fuzz_tests";
 
@@ -279,6 +317,7 @@ fn gps(rng: &mut Rng) -> GpsCoordinates {
 fn operate(
     state: &AppState,
     p: &Project,
+    arm: usize,
     rng: &mut Rng,
     n: &mut u64,
 ) -> (&'static str, CommandResult) {
@@ -286,7 +325,7 @@ fn operate(
     let tag = *n;
     let none = || CommandResult::failure("nothing to do".to_string());
     let exec = |name: &'static str, cmd: Command| (name, state.execute(cmd));
-    match rng.below(30) {
+    match arm {
         0 | 1 => {
             let shots = (0..=rng.below(4))
                 .map(|k| shot_data(rng, format!("tf-{tag}-{k}")))
@@ -418,8 +457,8 @@ fn operate(
             _ => ("merge stations", none()),
         },
         15 => match slot(p, rng) {
-            Some(station_ref) => exec("unmerge", Command::UnmergeStations { station_ref }),
-            None => ("unmerge", none()),
+            Some(station_ref) => exec("unmerge stations", Command::UnmergeStations { station_ref }),
+            None => ("unmerge stations", none()),
         },
         16 => match (slot(p, rng), slot(p, rng)) {
             (Some(station_a), Some(station_b)) => exec(
@@ -501,7 +540,7 @@ fn operate(
                         offset,
                     },
                 ),
-                _ => ("move", none()),
+                _ => ("move (no target)", none()),
             }
         }
         21 => match line_of(p, rng) {
@@ -555,14 +594,14 @@ fn operate(
                     },
                 };
                 exec(
-                    "batch",
+                    "batch edits",
                     Command::Batch {
                         commands: vec![edit(a, rng.range(1.0, 9.0)), edit(b, rng.range(1.0, 9.0))],
                         label: None,
                     },
                 )
             }
-            _ => ("batch", none()),
+            _ => ("batch edits", none()),
         },
         24 => match p.lines().iter().find(|l| l.shots.len() >= 2) {
             Some(line) => {
@@ -650,13 +689,65 @@ fn operate(
     }
 }
 
+/// The undo fuzzer's generator for `seed`, unattached (see [`shared_op`]).
+fn shared_generator(seed: u64) -> Fuzzer {
+    Fuzzer::driving((seed ^ (seed >> 32)) as u32 ^ SHARED_STREAM)
+}
+
+/// One move of the undo fuzzer's generator (`fuzz_undo_tests`): drawn from
+/// the live survey's targets and applied through its own execution path,
+/// with `state` swapped into the generator's app for the draw and the apply.
+/// Named by its family (`Op::kind`): the undo fuzzer names its families in
+/// snake case and [`operate`] in words, so the coverage counts keep the two
+/// generators apart. A draw with no target is a refusal.
+fn shared_op(state: &mut AppState, shared: &mut Fuzzer) -> (&'static str, CommandResult) {
+    std::mem::swap(state, &mut shared.state);
+    let targets = read_targets(&shared.state);
+    let drawn = shared.draw_op(&targets).map(|op| {
+        let result = shared
+            .apply_op(&op, &mut Refs::identity(), &targets)
+            .map(|drawn| drawn.result);
+        (op.kind(), result)
+    });
+    std::mem::swap(state, &mut shared.state);
+    match drawn {
+        Some((kind, Some(result))) => (kind, result),
+        Some((kind, None)) => (kind, CommandResult::failure("no target".to_string())),
+        None => (
+            "shared_no_target",
+            CommandResult::failure("nothing to do".to_string()),
+        ),
+    }
+}
+
+/// One operation from either generator.
+fn draw(
+    state: &mut AppState,
+    p: &Project,
+    shared: &mut Fuzzer,
+    rng: &mut Rng,
+    n: &mut u64,
+) -> (&'static str, CommandResult) {
+    let arm = rng.below(OWN_ARMS + SHARED_ARMS);
+    if arm < OWN_ARMS {
+        operate(state, p, arm, rng, n)
+    } else {
+        shared_op(state, shared)
+    }
+}
+
 /// Run one operation and check the step properties: the project stays
 /// valid, and a refusal changes nothing (survey, stacks, dirty flag).
-fn step(state: &AppState, rng: &mut Rng, n: &mut u64) -> Result<(&'static str, bool), Fail> {
+fn step(
+    state: &mut AppState,
+    shared: &mut Fuzzer,
+    rng: &mut Rng,
+    n: &mut u64,
+) -> Result<(&'static str, bool), Fail> {
     let before = project_of(state)?;
     let stacks = (state.get_undo_stack().len(), state.get_redo_stack().len());
     let dirty = state.has_unsaved_changes();
-    let (name, result) = operate(state, &before, rng, n);
+    let (name, result) = draw(state, &before, shared, rng, n);
     let after = valid(state, name)?;
     if !result.success {
         check(body(&after)? == body(&before)?, || {
@@ -1052,7 +1143,8 @@ fn diff_at(a: &[u8], b: &[u8]) -> String {
 /// A forward block of `count` commands, then undo all and redo all: every
 /// depth lands on its recorded state ([`same_state`]).
 fn forward_exactness(
-    state: &AppState,
+    state: &mut AppState,
+    shared: &mut Fuzzer,
     rng: &mut Rng,
     n: &mut u64,
     count: usize,
@@ -1062,7 +1154,7 @@ fn forward_exactness(
     let mut times: Vec<Option<String>> = Vec::new();
     for _ in 0..count {
         let before = entry_times(state);
-        let (name, ok) = step(state, rng, n)?;
+        let (name, ok) = step(state, shared, rng, n)?;
         let after = entry_times(state);
         let pushed = after.iter().find(|t| !before.contains(t)).cloned();
         match (ok, pushed) {
@@ -1116,6 +1208,7 @@ fn saving_seed(seed: u64, steps: usize) -> Result<BTreeMap<&'static str, usize>,
     let (first, mut path, fragments) = start(seed, origin, dir.path())?;
     let mut state = first;
     let mut rng = Rng::new(seed);
+    let mut shared = shared_generator(seed);
     let mut n = 0u64;
     let mut seen: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut copies = 0usize;
@@ -1133,9 +1226,12 @@ fn saving_seed(seed: u64, steps: usize) -> Result<BTreeMap<&'static str, usize>,
         let action = rng.below(100);
         let what: &'static str = match action {
             0..=64 => {
-                let (name, ok) = step(&state, &mut rng, &mut n)?;
+                let (name, ok) = step(&mut state, &mut shared, &mut rng, &mut n)?;
                 if ok {
                     *seen.entry(name).or_default() += 1;
+                    if !name.contains(' ') {
+                        *seen.entry("shared generator").or_default() += 1;
+                    }
                 }
                 "command"
             }
@@ -1184,7 +1280,7 @@ fn saving_seed(seed: u64, steps: usize) -> Result<BTreeMap<&'static str, usize>,
         };
         *seen.entry(what).or_default() += 1;
     }
-    let recorded = forward_exactness(&state, &mut rng, &mut n, FORWARD)?;
+    let recorded = forward_exactness(&mut state, &mut shared, &mut rng, &mut n, FORWARD)?;
     *seen.entry("forward steps").or_default() += recorded;
     let last = save_and_reopen(&state, &path)?;
     let text = String::from_utf8_lossy(&read(&path)?).into_owned();
@@ -1258,6 +1354,7 @@ fn saving_fuzz_window() {
         "save a copy",
         "undo",
         "update shot",
+        "shared generator",
         "forward steps",
     ] {
         assert!(
@@ -1295,16 +1392,17 @@ fn read_only_files_are_never_written() {
         let text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
         std::fs::write(&path, &text).unwrap_or_else(|e| panic!("{e}"));
         let original = survey_members(text.as_bytes());
-        let state = open(&path).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+        let mut state = open(&path).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
         assert!(
             state.read_only_reason().is_some(),
             "seed {seed}: opens read-only"
         );
         let mut rng = Rng::new(seed);
+        let mut shared = shared_generator(seed);
         let mut n = 0;
         for _ in 0..30 {
             let before = project_of(&state).unwrap_or_else(|e| panic!("{e}"));
-            let (name, result) = operate(&state, &before, &mut rng, &mut n);
+            let (name, result) = draw(&mut state, &before, &mut shared, &mut rng, &mut n);
             assert!(
                 !result.success,
                 "seed {seed}: {name} succeeded on a read-only file"
@@ -1407,10 +1505,11 @@ fn corpus_file(
     let mut steps = 0;
     for seed in first..first + walks {
         std::fs::copy(original, &copy).map_err(|_| (Some(seed), "copy"))?;
-        let state = open(&copy).map_err(|_| (Some(seed), "open"))?;
+        let mut state = open(&copy).map_err(|_| (Some(seed), "open"))?;
         let mut rng = Rng::new(seed);
+        let mut shared = shared_generator(seed);
         let mut n = 0;
-        steps += forward_exactness(&state, &mut rng, &mut n, CORPUS_STEPS)
+        steps += forward_exactness(&mut state, &mut shared, &mut rng, &mut n, CORPUS_STEPS)
             .map_err(|_| (Some(seed), "undo-redo-exactness"))?;
         save_and_reopen(&state, &copy).map_err(|_| (Some(seed), "save-reopen-fixpoint"))?;
         drop_backups("corpus");
@@ -1501,19 +1600,27 @@ fn the_command_generator_reaches_the_command_families() {
         encode(&p, &Extras::default(), Mode::Normal).unwrap_or_default(),
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    let state = open(&path).unwrap_or_else(|e| panic!("{e}"));
+    let mut state = open(&path).unwrap_or_else(|e| panic!("{e}"));
     let mut rng = Rng::new(5);
+    let mut shared = shared_generator(5);
     let mut n = 0;
     let mut ok: BTreeMap<&'static str, usize> = BTreeMap::new();
     for _ in 0..400 {
-        let (name, success) = step(&state, &mut rng, &mut n).unwrap_or_else(|e| panic!("{e}"));
+        let (name, success) =
+            step(&mut state, &mut shared, &mut rng, &mut n).unwrap_or_else(|e| panic!("{e}"));
         if success {
             *ok.entry(name).or_default() += 1;
         }
     }
+    let (own, shared): (Vec<&str>, Vec<&str>) = ok.keys().partition(|name| name.contains(' '));
     assert!(
-        ok.len() >= 18,
-        "only {} families succeeded: {ok:#?}",
-        ok.len()
+        own.len() >= 18,
+        "only {} of this file's families succeeded: {ok:#?}",
+        own.len()
+    );
+    assert!(
+        shared.len() >= 8,
+        "only {} of the undo fuzzer's families succeeded: {ok:#?}",
+        shared.len()
     );
 }
