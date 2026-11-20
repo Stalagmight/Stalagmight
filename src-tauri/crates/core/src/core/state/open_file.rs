@@ -297,31 +297,9 @@ impl AppState {
     }
 
     /// Change the link in memory and make it durable at once (local-only
-    /// save). `f` returns whether it changed anything. Takes the `project`
-    /// lock: a caller holding that guard uses
-    /// [`Self::mutate_speleo_link_locked`].
+    /// save). `f` returns whether it changed anything.
     pub(crate) fn mutate_speleo_link(
         &self,
-        f: impl FnOnce(&mut Option<SpeleoLink>) -> bool,
-    ) -> Result<(), String> {
-        let path = self.open_file_path();
-        self.mutate_speleo_link_at(path.as_deref(), f)
-    }
-
-    /// [`Self::mutate_speleo_link`] for a caller that holds the `project`
-    /// guard: `open` is the project in that guard (its file is the one the
-    /// local-only save rewrites).
-    pub(crate) fn mutate_speleo_link_locked(
-        &self,
-        open: Option<&crate::models::survey::Project>,
-        f: impl FnOnce(&mut Option<SpeleoLink>) -> bool,
-    ) -> Result<(), String> {
-        self.mutate_speleo_link_at(open.and_then(|p| p.file_path.as_deref()), f)
-    }
-
-    fn mutate_speleo_link_at(
-        &self,
-        path: Option<&Path>,
         f: impl FnOnce(&mut Option<SpeleoLink>) -> bool,
     ) -> Result<(), String> {
         let changed = self.with_file(|file| {
@@ -333,7 +311,7 @@ impl AppState {
             changed
         });
         if changed {
-            self.persist_local_state_at(path)?;
+            self.persist_local_state()?;
         }
         Ok(())
     }
@@ -342,24 +320,19 @@ impl AppState {
     /// `local` and `history` of the file on disk, copying every other member
     /// verbatim. A legacy or never-saved project keeps the change in memory
     /// for its first real save (`local_pending`). Guarded: a file changed on
-    /// disk since it was last read or written is not touched. Takes the
-    /// `project` lock (for the path): a caller holding that guard uses
-    /// [`Self::persist_local_state_locked`].
+    /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
         let path = self.open_file_path();
-        self.persist_local_state_at(path.as_deref())
+        self.persist_local_state_at(path)
     }
 
-    /// [`Self::persist_local_state`] for a caller that holds the `project`
-    /// guard: `open` is the project in that guard.
-    pub(crate) fn persist_local_state_locked(
+    /// [`Self::persist_local_state`] for a caller that already holds the
+    /// `project` guard (which is not reentrant): `path` is the open project's
+    /// `file_path`, read through that guard. Takes `file`, then `undo_stack`.
+    pub(crate) fn persist_local_state_at(
         &self,
-        open: Option<&crate::models::survey::Project>,
+        path: Option<PathBuf>,
     ) -> Result<(), LocalSaveError> {
-        self.persist_local_state_at(open.and_then(|p| p.file_path.as_deref()))
-    }
-
-    fn persist_local_state_at(&self, path: Option<&Path>) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
             .lock()
@@ -372,7 +345,7 @@ impl AppState {
             file.local_pending = true;
             return Ok(());
         };
-        let original = read_unchanged(path, &expected)?;
+        let original = read_unchanged(&path, &expected)?;
         let mut extras = file.extras.clone();
         extras.history = if file.dirty {
             file.saved_history.clone()
@@ -385,7 +358,7 @@ impl AppState {
         let bytes = crate::persistence::stalx_v2::rewrite_local(&original, &extras)
             .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
         let fingerprint =
-            write_atomic(path, &bytes, Guard::Expect(&expected)).map_err(|e| write_error(&e))?;
+            write_atomic(&path, &bytes, Guard::Expect(&expected)).map_err(|e| write_error(&e))?;
         file.fingerprint = Some(fingerprint);
         file.saved_history = extras.history;
         file.local_pending = false;

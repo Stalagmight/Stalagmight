@@ -746,7 +746,7 @@ impl AppState {
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
+                self.speleodb_mutate_link_held(project.as_ref(), |l| {
                     l.base_commit_sha = tip.clone();
                 })
                 .map_err(local_dto)?;
@@ -763,7 +763,7 @@ impl AppState {
                     undo_history_omitted: false,
                 };
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
+                self.speleodb_mutate_link_held(project.as_ref(), |l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
                     l.last_edit_at = None;
@@ -961,7 +961,7 @@ impl AppState {
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_mutate_link_locked(project.as_ref(), |l| {
+                self.speleodb_mutate_link_held(project.as_ref(), |l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
                     // over a dirty copy fences straight to Diverged, then walks the
                     // whole history to the service-account creation root and calls
@@ -1019,7 +1019,7 @@ impl AppState {
                         server_kind.as_deref(),
                     );
                     let project = self.speleodb_push_project_guard(generation)?;
-                    self.speleodb_mutate_link_locked(project.as_ref(), |l| {
+                    self.speleodb_mutate_link_held(project.as_ref(), |l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
                             Some(&push_start),
@@ -1185,7 +1185,7 @@ impl AppState {
         // ONE local-only save writes the cut history and the cleared chain metadata
         // together. If it fails the disk keeps both as they were (the old rows still
         // fall under the old watermark), and the next save writes them together.
-        match self.persist_local_state_locked(open) {
+        match self.persist_local_state_at(open.and_then(|p| p.file_path.clone())) {
             Ok(()) => tracing::info!(
                 dropped,
                 remaining,

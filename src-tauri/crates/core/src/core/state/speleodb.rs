@@ -1606,34 +1606,24 @@ impl AppState {
             .and_then(|s| s.email.clone())
     }
 
-    /// Load the open project's `speleo_link`, apply `f`, and persist it (a
-    /// local-only save, durable at once). Errors if no remote project is open.
-    /// Takes the `project` lock: a caller holding that guard uses
-    /// [`Self::speleodb_mutate_link_locked`].
+    /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
+    /// no remote project is open.
     pub(super) fn speleodb_mutate_link(
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),
     ) -> Result<(), SpeleoDbError> {
         let mut missing = false;
-        self.mutate_speleo_link(|link| apply_to_link(link, &mut missing, f))
-            .map_err(SpeleoDbError::Io)?;
-        if missing {
-            return Err(SpeleoDbError::NoRemoteProject);
-        }
-        Ok(())
-    }
-
-    /// [`Self::speleodb_mutate_link`] for a caller that holds the `project` guard
-    /// (`open` is the project in it), so the write serializes with every session
-    /// boundary without re-taking the lock.
-    pub(super) fn speleodb_mutate_link_locked(
-        &self,
-        open: Option<&crate::models::survey::Project>,
-        f: impl FnOnce(&mut crate::models::SpeleoLink),
-    ) -> Result<(), SpeleoDbError> {
-        let mut missing = false;
-        self.mutate_speleo_link_locked(open, |link| apply_to_link(link, &mut missing, f))
-            .map_err(SpeleoDbError::Io)?;
+        self.mutate_speleo_link(|link| match link.as_mut() {
+            Some(link) => {
+                f(link);
+                true
+            }
+            None => {
+                missing = true;
+                false
+            }
+        })
+        .map_err(SpeleoDbError::Io)?;
         if missing {
             return Err(SpeleoDbError::NoRemoteProject);
         }
@@ -1775,21 +1765,6 @@ impl AppState {
 
 /// A #202 lock re-verify running in the background, started by one edit and
 /// collected by a later one.
-/// Apply `f` to the link, or record that there is none.
-fn apply_to_link(
-    link: &mut Option<crate::models::SpeleoLink>,
-    missing: &mut bool,
-    f: impl FnOnce(&mut crate::models::SpeleoLink),
-) -> bool {
-    if let Some(link) = link.as_mut() {
-        f(link);
-        true
-    } else {
-        *missing = true;
-        false
-    }
-}
-
 pub(super) struct PendingReverify {
     /// The session generation the probe was started in.
     pub(super) generation: u64,

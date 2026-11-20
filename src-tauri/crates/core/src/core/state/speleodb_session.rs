@@ -286,12 +286,36 @@ impl AppState {
         // this session without the gate being open.
         self.speleodb_bind_edit_claim(project_id, &open.endpoint, acquired_here, acquired_here)?;
         if entry_generation.is_some() {
-            // C11: under the held `project` guard (the local-only save re-took it).
-            let _ = self.speleodb_mutate_link_locked(proj_guard.as_ref(), |l| {
+            let _ = self.speleodb_mutate_link_held(proj_guard.as_ref(), |l| {
                 l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
             });
         }
         Ok(())
+    }
+
+    /// `speleodb_mutate_link` for a caller that holds the `project` guard:
+    /// change the open project's link in memory and make it durable at once
+    /// (the local-only save, `persist_local_state_at`, with the path read
+    /// through `project`, that guard's content). The plain form would take
+    /// `project` again for the save, and the guard is not reentrant: a
+    /// deadlock. [`SpeleoDbError::NoRemoteProject`] when nothing linked is
+    /// open; a failed save is `Io` with the link changed in memory.
+    pub(super) fn speleodb_mutate_link_held(
+        &self,
+        project: Option<&crate::models::survey::Project>,
+        f: impl FnOnce(&mut crate::models::SpeleoLink),
+    ) -> Result<(), SpeleoDbError> {
+        let changed = self.with_file(|file| {
+            let mut link = file.speleo_link()?;
+            f(&mut link);
+            file.set_speleo_link(Some(&link));
+            Some(())
+        });
+        if changed.is_none() {
+            return Err(SpeleoDbError::NoRemoteProject);
+        }
+        self.persist_local_state_at(project.and_then(|p| p.file_path.clone()))
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))
     }
 
     /// The unwind release for Start Editing's abort arms, now that a session
