@@ -9,7 +9,11 @@
 //! moves on merged members, drifted and moved line offsets, entrance
 //! overrides, duplicate, empty and odd station names, comments, LRUD with
 //! gaps, unknown tables and columns, persisted undo and redo rows, empty and
-//! single-station lines, huge and tiny (NaN-free) values.
+//! single-station lines, huge and tiny (NaN-free) values. One combination
+//! is left out of the default draw and pinned instead: shots under 20 cm
+//! near a grid axis, which make both least-squares solves degenerate
+//! (finding C24-F2, `Knobs::degenerate_lsq`). The generator is deterministic
+//! per seed across processes (no set or map order reaches the rng).
 //!
 //! Properties, per seed:
 //! 1. the frozen open and the migration succeed or refuse with a typed
@@ -37,6 +41,9 @@
 //! window); `migration_fuzz_wide` (ignored) runs 2,000 seeds by default on
 //! `STALAGMIGHT_FUZZ_THREADS` threads. A failure prints one line: the seed,
 //! the test that replays it alone, and what failed.
+//!
+//! `migration_fuzz_explain` (ignored) prints one seed's features, report,
+//! view hashes and verdict, with the knobs as env switches.
 //!
 //! `migration_fuzz_corpus` (ignored) runs properties 1 and 3 to 6 on every
 //! `*.stalx` under `STALAGMIGHT_MIGRATION_CORPUS` (real files, on the fuzz
@@ -275,33 +282,33 @@ fn credit(rng: &mut Rng) -> Option<Arc<m::SurveyCredit>> {
     }))
 }
 
-/// Generator switches. The default draws everything but the degenerate
-/// least-squares case (C24-F2); the explain runner can turn the extreme
-/// values off to tell solver numerics from conversion differences (the rng
-/// stream is the same either way).
+/// Generator switches (the rng stream is the same whatever they say, so a
+/// seed replays with any of them). The default draws everything but the
+/// degenerate least-squares case (finding C24-F2); the explain runner turns
+/// them on and off for triage.
 #[derive(Debug, Clone, Copy)]
 struct Knobs {
+    /// Shots under 20 cm within 2 degrees of a grid axis (C24-F2).
     degenerate_lsq: bool,
+    /// The hostile lines' extreme values at all.
     extremes: bool,
-    /// Shot lengths of 10 km and more, and depth changes of 10 km and more
-    /// on one shot (C24-F3).
+    /// Shots of 10 km and more, depths of 10 km and more; off, they are
+    /// capped at about 500 m and 2.2 km.
     huge_lengths: bool,
 }
 
 const DEFAULT_KNOBS: Knobs = Knobs {
     degenerate_lsq: false,
     extremes: true,
-    huge_lengths: false,
+    huge_lengths: true,
 };
 
-/// One shot of a hostile line. Unless the knobs ask for them, a shot under
-/// 20 cm never lies within 2 degrees of a grid axis, none is over 1 km long
-/// and none goes below 2.2 km: a short shot near a grid axis has a huge to
-/// infinite (or, at zero length, no) least-squares weight on one axis
-/// (sigma = length x sigma_az against sin(azimuth) x sigma_length), and such
-/// shots beside the others make the solve ill-conditioned, where 0.6.0's
-/// Computed View is not reproducible (findings C24-F2 and C24-F3, pinned by
-/// `ill_conditioned_least_squares_keeps_the_computed_view`).
+/// One shot of a hostile line. Unless the knobs ask for it, a shot under
+/// 20 cm never lies within 2 degrees of a grid axis: such a shot has a huge
+/// to infinite (or, at zero length, no) least-squares weight on one axis
+/// (sigma = length x sigma_az against sin(azimuth) x sigma_length), and both
+/// Computed View solves then go wrong, each its own way (finding C24-F2,
+/// pinned by `short_shots_on_a_grid_axis_keep_the_computed_view`).
 fn hostile_shot(
     rng: &mut Rng,
     uuids: &mut u64,
@@ -559,7 +566,9 @@ fn hostile_case(seed: u64, knobs: Knobs) -> Option<Hostile> {
     // one station (raw), with entrance overrides.
     if rng.chance(0.5) {
         if let Some(sr) = any_slot(&p, &mut rng) {
-            let group: Vec<LineId> = p.get_merged_line_ids(sr.line_id).into_iter().collect();
+            // Sorted: the set's order is random per process.
+            let mut group: Vec<LineId> = p.get_merged_line_ids(sr.line_id).into_iter().collect();
+            group.sort_unstable();
             for _ in 0..2 + rng.below(3) {
                 let line = group[rng.below(group.len())];
                 let slot = slot_on(&p, &mut rng, line);
@@ -792,7 +801,7 @@ fn hostile_case(seed: u64, knobs: Knobs) -> Option<Hostile> {
     let (undo_rows, redo_rows) = if rng.chance(0.4) {
         f.add("history rows", 1);
         (
-            (0..1 + rng.below(4)).map(|_| row(&mut rng)).collect(),
+            (0..=rng.below(4)).map(|_| row(&mut rng)).collect(),
             (0..rng.below(3)).map(|_| row(&mut rng)).collect(),
         )
     } else {
@@ -1207,12 +1216,13 @@ fn open_and_migrate(
 fn transition_properties(
     what: &str,
     seed: u64,
-    legacy: &LegacySurvey,
-    migrated: &Migrated,
+    bytes: &[u8],
+    (legacy, migrated): (&LegacySurvey, &Migrated),
     walks: &[(u64, usize)],
     tally: &mut Tally,
 ) -> Result<(), Failure> {
     v2_round_trip(migrated)?;
+    let _ = bytes;
     let wire = catch_unwind(AssertUnwindSafe(|| {
         wire_compare(what.to_string(), seed, legacy, migrated)
     }))
@@ -1233,22 +1243,6 @@ fn transition_properties(
     Ok(())
 }
 
-/// The count a classified C24-F3 seed adds (printed with the totals).
-const F3_CLASS: &str = "finding C24-F3: Computed View differs on extreme geometry, twin clean";
-
-/// The same seed without the extreme values migrates and passes the whole
-/// check (the rng stream is the same, so the rest of the case is identical).
-fn extreme_free_twin_is_clean(seed: u64) -> bool {
-    let knobs = Knobs {
-        extremes: false,
-        ..DEFAULT_KNOBS
-    };
-    let Ok(Some(twin)) = catch_unwind(|| hostile_case(seed, knobs)) else {
-        return false;
-    };
-    matches!(open_and_migrate(&twin.bytes), Ok(Ok((legacy, migrated))) if check(&legacy, &migrated).is_ok())
-}
-
 fn run_seed(seed: u64) -> Result<Outcome, Failure> {
     let built = catch_unwind(|| hostile_case(seed, DEFAULT_KNOBS))
         .map_err(|p| fail("generator-panic", panic_text(p.as_ref())))?;
@@ -1260,34 +1254,15 @@ fn run_seed(seed: u64) -> Result<Outcome, Failure> {
         Ok(pair) => pair,
         Err(class) => return Ok(Outcome::Refused(class, tally)),
     };
-    if let Err(e) = check(&legacy, &migrated) {
-        // Finding C24-F3, and only it: a Computed View difference on a seed
-        // with extreme values whose twin without them is clean. 0.6.0's
-        // solve is not reproducible on such geometry; counted, never hidden.
-        let f3 = e.contains("unexplained Computed View mismatches")
-            && tally.get("extreme values") > 0
-            && extreme_free_twin_is_clean(seed);
-        if !f3 {
-            return Err(fail("migration-check", e));
-        }
-        tally.add(F3_CLASS, 1);
-        let again = migrate(&legacy, &ClosureAdjustmentConfig::default())
-            .map_err(|e| fail("second-migrate", e.class()))?;
-        if again.project != migrated.project || again.report != migrated.report {
-            return Err(fail(
-                "determinism",
-                "migrating twice gave different results",
-            ));
-        }
-    }
+    check(&legacy, &migrated).map_err(|e| fail("migration-check", e))?;
     let dir = tempfile::tempdir().map_err(|e| fail("io", e.to_string()))?;
     legacy_recognised(&hostile.bytes, &legacy, dir.path())?;
     tally.report(&migrated.report);
     transition_properties(
         &format!("seed {seed}"),
         seed,
-        &legacy,
-        &migrated,
+        &hostile.bytes,
+        (&legacy, &migrated),
         &[(seed, WALK_STEPS)],
         &mut tally,
     )?;
@@ -1353,13 +1328,12 @@ fn report_and_assert(totals: &Totals, test: &str) {
         );
     }
     eprintln!(
-        "C24 migration fuzz: seeds={} migrated={} refused={:?} unbuilt={} failed={} classified_f3={}",
+        "C24 migration fuzz: seeds={} migrated={} refused={:?} unbuilt={} failed={}",
         totals.seeds,
         totals.migrated,
         totals.refused,
         totals.unbuilt,
-        totals.failures.len(),
-        totals.tally.get(F3_CLASS)
+        totals.failures.len()
     );
     assert!(
         totals.failures.is_empty(),
@@ -1512,12 +1486,12 @@ fn migration_fuzz_corpus() {
             }
             tally.report(&migrated.report);
             // Never keep a failure's text: it can quote the file.
-            transition_properties(&tag, 0, &legacy, &migrated, &[], &mut tally).map_err(|f| {
-                Failure {
+            transition_properties(&tag, 0, &bytes, (&legacy, &migrated), &[], &mut tally).map_err(
+                |f| Failure {
                     class: f.class,
                     detail: String::new(),
-                }
-            })?;
+                },
+            )?;
             for walk_seed in first_walk..first_walk + walks {
                 legacy_origin_walk(&migrated.project, walk_seed, CORPUS_WALK_STEPS).map_err(
                     |f| Failure {
@@ -1611,26 +1585,23 @@ fn refusals_of_broken_legacy_bytes_are_typed() {
     );
 }
 
-/// Findings C24-F2 and C24-F3: ill-conditioned least squares. A shot
-/// shorter than a few centimetres on a grid axis has a zero (or a 1e7 to
-/// infinite) least-squares weight on one axis, and shots of 10 km and more
-/// beside short ones spread the weights over 1e8, in 0.6.0 and in the port
-/// alike; and 0.6.0's destructive solve rewrites each shot's length from the
-/// solved horizontal and the stored depth change, which loses the horizontal
-/// to cancellation when a shot's depth changes by 10 km and more. There 0.6.0's Closures Computed View is not reproducible from one
-/// run to the next (its unknowns follow `HashMap` order and the solve stops
-/// early), and the port's deterministic solve differs from it by up to
-/// 1e2 m and more (seeds 0, 19, 310, 878 with both knobs on); the migration
-/// reports such slots as unexplained and shows the conversion notice.
-/// Ignored until the solvers condition such shots or the migration declares
-/// a class.
+/// Finding C24-F2: a shot under about 20 cm within 2 degrees of a grid axis
+/// (a zero-length "0 0 0" connector at azimuth 0 is the common one) has a
+/// huge, infinite or no least-squares weight on one axis (sigma = length x
+/// sigma_az, against sin(azimuth) x sigma_length), in 0.6.0 and in the port
+/// alike. Both Closures Computed View solves then go wrong, each its own way:
+/// 0.6.0 moves a station 11,550 km in seed 46, the port 13.8 km in seed 98;
+/// in seeds 0 and 19 the two disagree by 3.7 m and 90 m. The migration reports
+/// those slots as unexplained (the conversion notice shows). Ignored until the
+/// solvers condition such shots (a sigma floor, or a zero-weight axis held by
+/// its neighbours) or the migration declares a class.
 #[test]
-#[ignore = "findings C24-F2/F3: ill-conditioned least squares (short shots on a grid axis, very long shots)"]
-fn ill_conditioned_least_squares_keeps_the_computed_view() {
-    for seed in [0, 19, 310, 878, 1635, 1642] {
+#[ignore = "finding C24-F2: short shots near a grid axis make the least squares degenerate"]
+fn short_shots_on_a_grid_axis_keep_the_computed_view() {
+    for seed in [0, 19, 46, 98] {
         let knobs = Knobs {
             degenerate_lsq: true,
-            huge_lengths: true,
+            huge_lengths: false,
             ..DEFAULT_KNOBS
         };
         let Some(hostile) = hostile_case(seed, knobs) else {
@@ -1677,17 +1648,19 @@ fn out_of_range_legacy_dates_migrate_as_the_file_holds_them() {
 }
 
 /// `STALAGMIGHT_FUZZ_SEED_START=<s> [STALAGMIGHT_FUZZ_SEEDS=<n>]
-/// [STALAGMIGHT_FUZZ_NO_EXTREMES=1] cargo test -p stalagmight-persistence
+/// [STALAGMIGHT_FUZZ_NO_EXTREMES=1] [STALAGMIGHT_FUZZ_NO_HUGE=1]
+/// [STALAGMIGHT_FUZZ_DEGENERATE_LSQ=1] cargo test -p stalagmight-persistence
 /// --lib migration_fuzz_explain -- --ignored --nocapture`: for each seed of
-/// the window, the hostile features, the migration report and the check's
-/// verdict (synthetic data), to triage a failing seed.
+/// the window, the hostile features, the migration report, a hash of each
+/// Computed View, the largest move each makes and the check's verdict
+/// (synthetic data), to triage a failing seed.
 #[test]
 #[ignore = "triage aid: prints one seed's features, report and verdict"]
 fn migration_fuzz_explain() {
     let (start, count) = window(1);
     let knobs = Knobs {
         extremes: std::env::var_os("STALAGMIGHT_FUZZ_NO_EXTREMES").is_none(),
-        huge_lengths: std::env::var_os("STALAGMIGHT_FUZZ_HUGE_LENGTHS").is_some(),
+        huge_lengths: std::env::var_os("STALAGMIGHT_FUZZ_NO_HUGE").is_none(),
         degenerate_lsq: std::env::var_os("STALAGMIGHT_FUZZ_DEGENERATE_LSQ").is_some(),
     };
     for seed in start..start + count {
@@ -1699,6 +1672,56 @@ fn migration_fuzz_explain() {
         match open_and_migrate(&hostile.bytes) {
             Ok(Ok((legacy, migrated))) => {
                 eprintln!("{}", migrated.report.summary());
+                // Which side of a Computed View difference moves between
+                // runs: the bits of 0.6.0's view and of the port's.
+                let hash = |bits: Vec<u64>| {
+                    use std::hash::{Hash as _, Hasher as _};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    bits.hash(&mut h);
+                    h.finish()
+                };
+                let old_view = legacy.adjusted_positions.as_ref().map(|v| {
+                    hash(
+                        v.values()
+                            .flat_map(|p| p.iter().map(|x| x.to_bits()))
+                            .collect(),
+                    )
+                });
+                let new_view = hash(
+                    position_bits(&migrated.project)
+                        .into_iter()
+                        .flat_map(|(_, b)| b)
+                        .collect(),
+                );
+                eprintln!("seed {seed} views: legacy {old_view:?} port {new_view}");
+                // How far each view moves a slot from its raw position.
+                let raw = migrated.project.raw_positions();
+                let adjusted = migrated
+                    .project
+                    .adjusted_positions_from(&raw, &ClosureAdjustmentConfig::default());
+                let moved = |a: &[SlotPosition], b: &[SlotPosition]| {
+                    a.iter()
+                        .zip(b)
+                        .map(|(p, q)| (p.x - q.x).hypot(p.y - q.y))
+                        .fold(0.0_f64, f64::max)
+                };
+                let port_move = moved(
+                    &adjusted.slots(&migrated.project),
+                    &raw.slots(&migrated.project),
+                );
+                let legacy_move = legacy.adjusted_positions.as_ref().map(|v| {
+                    v.iter()
+                        .filter_map(|(slot, a)| {
+                            legacy
+                                .raw_positions
+                                .get(slot)
+                                .map(|r| (a[0] - r[0]).hypot(a[1] - r[1]))
+                        })
+                        .fold(0.0_f64, f64::max)
+                });
+                eprintln!(
+                    "seed {seed} largest Computed View move: legacy {legacy_move:?} m, port {port_move} m"
+                );
                 eprintln!("seed {seed} check: {:?}", check(&legacy, &migrated));
             }
             Ok(Err(class)) => eprintln!("seed {seed}: refused {class}"),

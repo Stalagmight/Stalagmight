@@ -286,7 +286,7 @@ fn operate(
     let exec = |name: &'static str, cmd: Command| (name, state.execute(cmd));
     match rng.below(30) {
         0 | 1 => {
-            let shots = (0..1 + rng.below(4))
+            let shots = (0..=rng.below(4))
                 .map(|k| shot_data(rng, format!("tf-{tag}-{k}")))
                 .collect();
             exec(
@@ -756,14 +756,27 @@ fn save_and_reopen(state: &AppState, path: &Path) -> Result<AppState, Fail> {
     Ok(reopened)
 }
 
-/// A display toggle is durable at once and rewrites only `local`; the next
-/// save still passes the guard.
+/// A display toggle (and, on a linked project, a sync-state change) is
+/// durable at once and rewrites only `local`; the next save still passes the
+/// guard.
 fn display_toggle(state: &AppState, path: &Path, rng: &mut Rng) -> Result<(), Fail> {
     let before = read(path)?;
     let key = format!("zz.view{}", rng.below(3));
     state
         .save_display_setting(&key, if rng.chance(0.5) { "true" } else { "false" })
         .map_err(|e| format!("display toggle: {e}"))?;
+    if state.speleo_link().is_some() && rng.chance(0.5) {
+        // A SpeleoDB sync-state change is local-only too (plan 6.5 mode 4).
+        let verified = Utc::now().to_rfc3339();
+        state
+            .mutate_speleo_link(|link| {
+                link.as_mut().is_some_and(|l| {
+                    l.last_verify_at = Some(verified.clone());
+                    true
+                })
+            })
+            .map_err(|e| format!("sync-state change: {e}"))?;
+    }
     let after = read(path)?;
     if stalx_v2::sniff(&before) == Format::V2 {
         let (a, b) = (survey_members(&after), survey_members(&before));
@@ -1364,7 +1377,7 @@ fn corpus_file(
     let legacy = stalx_v2::sniff(&bytes) == Format::Legacy;
     let state = open(&copy).map_err(|_| (None, "open"))?;
     let opened = project_of(&state).map_err(|_| (None, "open"))?;
-    if opened.validate().first().is_some() {
+    if !opened.validate().is_empty() {
         return Err((None, "open-invalid"));
     }
     if legacy {

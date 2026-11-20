@@ -765,9 +765,10 @@ fn mutate(text: &str, which: usize, rng: &mut Rng) -> Option<Mutant> {
             let closure = format!(
                 "{{\"id\":999999,\"a\":{station},\"b\":{DANGLING},\"strategy\":\"batch\"}}"
             );
-            let out = match rows(text, "closures").last() {
-                Some(&(_, at)) => splice(text, at, at, &format!(",\n{closure}")),
-                None => {
+            let out = if let Some(&(_, at)) = rows(text, "closures").last() {
+                splice(text, at, at, &format!(",\n{closure}"))
+            } else {
+                {
                     let at = ms
                         .iter()
                         .find(|mm| {
@@ -920,7 +921,7 @@ fn mutate(text: &str, which: usize, rng: &mut Rng) -> Option<Mutant> {
         _ => {
             // Byte flips.
             let mut bytes = text.as_bytes().to_vec();
-            for _ in 0..1 + rng.below(4) {
+            for _ in 0..=rng.below(4) {
                 let at = rng.below(bytes.len());
                 bytes[at] = [
                     0x00, 0xff, b'"', b'\\', b'{', b'}', b'[', b']', b',', b':', b'0', b'9', b'-',
@@ -1163,7 +1164,7 @@ fn run_window(start: u64, count: u64, threads: usize) -> Totals {
                 t.seeds += 1;
                 match outcome {
                     Ok((op, verdict)) => {
-                        *t.verdicts.entry(format!("{op} {verdict}")).or_default() += 1
+                        *t.verdicts.entry(format!("{op} {verdict}")).or_default() += 1;
                     }
                     Err((op, why)) => t.failures.push((seed, op, why)),
                 }
