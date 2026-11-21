@@ -37,12 +37,13 @@
 //! A step that fails leaves the original whole (settled, or as it was), and a
 //! write that fails removes the copy step 4 kept (never one an earlier upgrade
 //! kept) while the original still holds the same bytes, so a save retried on
-//! a read-only folder does not fill the backups folder. Settling replaces the file by a rename, so it needs what
-//! the version 2 write needs (a writable folder) and nothing more: on Unix a
-//! write-protected legacy file upgrades as an ordinary one does and keeps its
-//! permission bits. On Windows a rename cannot replace a read-only file, so
-//! the upgrade of one is refused like its version 2 write, and nothing is
-//! left beside it (the staged copy is never made read-only).
+//! a read-only folder does not fill the backups folder. Settling replaces the
+//! file by a rename, so it needs what the version 2 write needs (a writable
+//! folder) and nothing more: on Unix a write-protected legacy file upgrades as
+//! an ordinary one does and keeps its permission bits. On Windows a rename
+//! cannot replace a read-only file, so the upgrade of one is refused like its
+//! version 2 write, and nothing is left beside it (the staged copy is never
+//! made read-only).
 
 use std::fmt;
 use std::io::Write as _;
