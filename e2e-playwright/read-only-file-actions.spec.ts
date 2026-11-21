@@ -12,7 +12,9 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
  * - The status bar said "Saved". Now it says "Read-only".
  * - A disabled row explained itself only in a native `title` WebKitGTK never
  *   draws, and a click on it did nothing. Now the app's tooltip says why, and a
- *   click shows the notice once.
+ *   click shows the notice once. Demo findings V-3 to V-5: the reason is
+ *   opaque and beside the row, Save and Close's points to Close Project, and
+ *   the toolbar's Import, Undo and Redo say why too.
  *
  * The mock refuses every save of the file (`READ_ONLY_FILE`) while
  * `__MOCK_SET_READ_ONLY_REASON__` is set; the reason is read once a project is
@@ -44,9 +46,9 @@ async function openReadOnlyProject(page: Page, name: string): Promise<void> {
 }
 
 /** The notice is on screen once, worded, and no error dialog came with it; then dismiss it. */
-async function expectNoticeOnce(page: Page): Promise<void> {
+async function expectNoticeOnce(page: Page, text: string = NOTICE): Promise<void> {
   await expect(notice(page)).toHaveCount(1);
-  await expect(notice(page)).toContainText(NOTICE);
+  await expect(notice(page)).toContainText(text);
   await expect(page.getByTestId('error-dialog')).toHaveCount(0);
   await notice(page).getByRole('button').click();
   await expect(notice(page)).toHaveCount(0);
@@ -77,15 +79,35 @@ test.describe('a file made with a newer Stalagmight', () => {
     for (const id of ['global-open-project-button', 'toolbar-export-button', 'back-button']) {
       await expect(page.getByTestId(id), id).toBeEnabled();
     }
-    // Pointing at a row says why, in the app's tooltip.
+    // Pointing at a row says why, in the app's tooltip: opaque, and beside
+    // the row, so it covers neither the row above nor the one below (V-3).
     await page.getByTestId('toolbar-save-button').hover();
-    await expect(page.getByTestId('toolbar-save-button-reason')).toContainText(NOTICE);
+    const reason = page.getByTestId('toolbar-save-button-reason');
+    await expect(reason).toContainText(NOTICE);
+    await expect(reason).toHaveClass(/(^|\s)bg-panel(\s|$)/);
+    const bubble = await reason.boundingBox();
+    const saveRow = await page.getByTestId('toolbar-save-button').boundingBox();
+    expect(bubble && saveRow && bubble.x >= saveRow.x + saveRow.width).toBe(true);
+    // Save and Close's reason points to Close Project (V-4).
+    await page.getByTestId('project-menu-save-and-close').hover();
+    await expect(page.getByTestId('project-menu-save-and-close-reason')).toContainText(
+      'Nothing to save: use Close Project.',
+    );
     // Clicking one says it too, once, and does nothing else: no Save Failed
     // dialog, and the project stays open.
     await page.getByTestId('project-menu-save-and-close').click({ force: true });
     await page.getByTestId('project-menu-save-and-close').click({ force: true });
     await expect(page.getByTestId('single-system-view')).toBeVisible();
     await page.keyboard.press('Escape');
+    await expectNoticeOnce(page, 'Nothing to save: use Close Project.');
+
+    // The toolbar's Import, Undo and Redo say why too, the same way (V-5).
+    for (const id of ['toolbar-import-button', 'toolbar-undo-button', 'toolbar-redo-button']) {
+      await expect(page.getByTestId(id), id).toHaveAttribute('aria-disabled', 'true');
+      await page.getByTestId(id).hover();
+      await expect(page.getByTestId(`${id}-reason`), id).toContainText(NOTICE);
+    }
+    await page.getByTestId('toolbar-import-button').click({ force: true });
     await expectNoticeOnce(page);
 
     // Every shortcut that would save or add gets the same notice.
