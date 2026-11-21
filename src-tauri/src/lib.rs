@@ -1833,6 +1833,7 @@ pub fn run() {
             commands::project::take_conversion_notice,
             commands::project::has_unsaved_changes,
             commands::project::project_read_only_reason,
+            commands::project::project_file_is_legacy,
             commands::project::close_project,
             commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,

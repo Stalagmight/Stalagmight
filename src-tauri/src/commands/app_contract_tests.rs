@@ -135,12 +135,14 @@ fn test_csp_allows_the_tauri_ipc_origin() {
 }
 
 /// The `.stalx` version 2 file-status commands the frontend's save-conflict
-/// prompt, read-only and conversion banners and dirty tracking call.
-const FILE_STATUS_COMMANDS: [&str; 4] = [
+/// prompt, read-only and conversion banners, status bar and dirty tracking
+/// call.
+const FILE_STATUS_COMMANDS: [&str; 5] = [
     "save_project_overwriting",
     "take_conversion_notice",
     "has_unsaved_changes",
     "project_read_only_reason",
+    "project_file_is_legacy",
 ];
 
 /// Every `.ts` / `.tsx` file under `dir` that is not a test.
@@ -168,7 +170,7 @@ fn frontend_sources(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, St
     }
 }
 
-/// The four commands are registered handlers, and the frontend calls each
+/// The five commands are registered handlers, and the frontend calls each
 /// under that exact name: a rename on either side would leave the save
 /// prompt, a banner or the dirty flag silently dead (the call fails at run
 /// time, never at build time).
@@ -240,11 +242,13 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     assert!(!project::has_unsaved_changes(state()));
     assert_eq!(project::take_conversion_notice(state()), None);
     assert_eq!(project::project_read_only_reason(state()), None);
+    assert!(!project::project_file_is_legacy(state()));
 
     // An ordinary version 2 file: editable, nothing converted, clean.
     let opened = state().execute(Command::OpenProject { path: path.clone() });
     assert!(opened.success, "{:?}", opened.error);
     assert_eq!(project::project_read_only_reason(state()), None);
+    assert!(!project::project_file_is_legacy(state()));
     assert_eq!(project::take_conversion_notice(state()), None);
     assert!(!project::has_unsaved_changes(state()));
 

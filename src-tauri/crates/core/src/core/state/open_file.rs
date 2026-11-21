@@ -621,6 +621,14 @@ impl AppState {
         self.with_file(|file| file.extras.read_only.as_ref().map(ToString::to_string))
     }
 
+    /// Whether the file on disk is still the 0.6.0 (SQLite) file the open
+    /// project was migrated from: no save has upgraded it yet, so the status
+    /// bar must not say "Saved" (demo issue N-6). Any save that writes the
+    /// open project (to its own path or a Save As) makes it `false`.
+    pub fn file_is_legacy(&self) -> bool {
+        self.with_file(|file| file.origin == FileOrigin::Legacy)
+    }
+
     /// The path the open project saves to, if any.
     pub(crate) fn open_file_path(&self) -> Option<PathBuf> {
         self.project

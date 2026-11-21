@@ -874,6 +874,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.take_conversion_notice",
     "command.has_unsaved_changes",
     "command.project_read_only_reason",
+    // Whether the open file is still a 0.6.0 file, which the status bar says
+    // instead of "Saved" until the first save converts it (demo issue N-6).
+    "command.project_file_is_legacy",
     "action.dialog.save-conflict",
     "dialog-cancel.save-conflict",
     "dwell.dialog.save-conflict",
@@ -1229,7 +1232,9 @@ mod tests {
         //       command.repair_project_integrity = 750.
         //   + 1 the Detach dialog's naming preview (review finding UX-4):
         //       command.preview_detach_line = 751.
-        assert_eq!(EVENT_NAMES.len(), 751);
+        //   + 1 the status bar's "old format" state (demo issue N-6):
+        //       command.project_file_is_legacy = 752.
+        assert_eq!(EVENT_NAMES.len(), 752);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
