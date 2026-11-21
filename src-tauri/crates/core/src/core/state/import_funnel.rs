@@ -637,6 +637,12 @@ fn check_new_line(id: LineId, name: Option<&str>, shots: &[ShotData]) -> Result<
     if shots.iter().any(|s| !s.all_finite()) {
         return Err("Line has a shot with a non-finite (NaN/inf) value".to_string());
     }
+    // A distance past the model's bound is the line's refusal, in words, as
+    // at the create-line door: left to the import's final validation it
+    // refused the whole file as "would corrupt the survey structure".
+    if let Some(refusal) = shots.iter().find_map(ShotData::measurement_refusal) {
+        return Err(refusal);
+    }
     let line_name = shot_label_name(name);
     for (i, shot) in shots.iter().enumerate() {
         if shot.length == 0.0 {

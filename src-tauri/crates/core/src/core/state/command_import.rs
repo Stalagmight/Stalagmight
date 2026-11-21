@@ -396,6 +396,18 @@ impl AppState {
                 update.line_id, update.shot_id
             ));
         }
+        // And within the model's distance bound, in words, as UpdateShot
+        // refuses it (left to the final validation, it was "would corrupt the
+        // survey structure").
+        if let Some((update, refusal)) = existing_shot_updates
+            .iter()
+            .find_map(|u| u.updates.measurement_refusal().map(|r| (u, r)))
+        {
+            return CommandResult::failure(format!(
+                "Import shot update for line {} shot {}: {refusal}",
+                update.line_id, update.shot_id
+            ));
+        }
         tracing::info!(
             count = lines.len(),
             purpose = "apply imported lines as single undo",

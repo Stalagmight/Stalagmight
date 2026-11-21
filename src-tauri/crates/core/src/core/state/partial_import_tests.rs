@@ -911,3 +911,39 @@ fn the_not_connected_code_keeps_masters_spelling() {
         "the Ignore survives save and reopen"
     );
 }
+
+/// A distance past the measurement bound (a unit or typing mistake in the
+/// file: a thousand kilometres and more) costs only its line, in words, as
+/// any other refused line does (#814): it never refuses the whole file.
+#[test]
+fn a_line_with_a_distance_past_the_bound_costs_only_itself() {
+    let state = new_state();
+    let mut deep = line(2, "Deep", 3.0, ImportPlacement::Origin);
+    deep.shots[1].depth_out = -1_500_000.0;
+    let mut wide = line(3, "Wide", 3.0, ImportPlacement::Origin);
+    wide.shots[0].left = Some(2_500_000.0);
+    let result = import(
+        &state,
+        vec![
+            line(0, "Good", 5.0, ImportPlacement::Origin),
+            line(1, "Long", 2_000_000.0, ImportPlacement::Origin),
+            deep,
+            wide,
+            line(4, "Also good", 3.0, ImportPlacement::Origin),
+        ],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(names(&project(&state)), ["Good", "Also good"]);
+    assert_eq!(
+        problems(&result),
+        [
+            "Line \"Long\" was not imported: A shot's length of 2000000 m is beyond the \
+             1000000 m a survey measurement may be",
+            "Line \"Deep\" was not imported: A shot's depth out of -1500000 m is beyond the \
+             1000000 m a survey measurement may be",
+            "Line \"Wide\" was not imported: A shot's left of 2500000 m is beyond the \
+             1000000 m a survey measurement may be",
+        ]
+    );
+}
