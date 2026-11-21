@@ -535,14 +535,16 @@ impl World {
     }
 
     /// What `target` can be restored from: the backups the recovery dialog
-    /// offers, and the safety copy an earlier restore left (undoing it).
+    /// offers, the safety copy an earlier restore left (undoing it) among
+    /// them, and that copy also when the dialog leaves it out (torn, empty),
+    /// so the fuzz still aims a restore at it.
     fn backups_of(target: &Path) -> Vec<PathBuf> {
         let mut backups: Vec<PathBuf> = recovery::list_backups(target.to_path_buf())
             .into_iter()
             .map(|b| PathBuf::from(b.path))
             .collect();
         let safety = safety_copy_of(target);
-        if safety.exists() {
+        if safety.exists() && !backups.iter().any(|b| same_file(b, &safety)) {
             backups.push(safety);
         }
         backups

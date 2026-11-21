@@ -467,6 +467,14 @@ fn inspect(
                 if partial > 0 {
                     problems.push(label("the next save left a partial backup behind"));
                 }
+                // The original the killed upgrade already kept is the one the
+                // next save keeps: never a second copy of the same bytes.
+                let after = kept_originals(stem);
+                if after.len() > 1 {
+                    problems.push(label(&format!(
+                        "the next save kept a second copy of the original: {after:?}"
+                    )));
+                }
                 let reread = std::fs::read(destination).unwrap_or_default();
                 if stalx_v2::sniff(&reread) != Format::V2 {
                     problems.push(label("the next save did not write version 2"));
@@ -974,6 +982,89 @@ fn a_failed_upgrade_leaves_the_original_whole_and_the_next_save_works() {
         assert_eq!(kept_originals(&stem).len(), 1, "{}", kind.id());
         forget_backups(&stem);
     }
+}
+
+/// The original restored from Recovery (the dialog's "Original before the
+/// upgrade to the new format") and saved again is the same bytes the first
+/// upgrade kept: the second upgrade keeps no second copy, so Recovery lists
+/// one original, not two identical ones (real-app demo I-2). A write that
+/// fails meanwhile never removes the copy the first upgrade kept: it is the
+/// only one.
+#[test]
+fn an_original_restored_and_saved_again_is_kept_once() {
+    let _config = isolated_config();
+    for kind in Kind::ALL {
+        let original = Original::build(8, kind).unwrap();
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("restored-again");
+        let path = original
+            .place(dir.path(), &format!("{stem}.stalx"))
+            .unwrap();
+        let state = open_fresh(&path).unwrap();
+        assert!(state.save_project(None).success, "{}", kind.id());
+        drop(state);
+        let first = kept_originals(&stem);
+        assert_eq!(first.len(), 1, "{}: {first:?}", kind.id());
+
+        AppState::new()
+            .unwrap()
+            .restore_project_from_backup(&path, &first[0])
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original.settled);
+
+        // The write fails (its temp cannot be staged): the earlier copy stays.
+        let state = open_fresh(&path).unwrap();
+        let temp = stalx_v2::temp_path(&path);
+        std::fs::create_dir_all(&temp).unwrap();
+        assert!(!state.save_project(None).success, "{}", kind.id());
+        assert_eq!(
+            kept_originals(&stem),
+            first,
+            "{}: a failed write removed the copy an earlier upgrade kept",
+            kind.id()
+        );
+        std::fs::remove_dir(&temp).unwrap();
+
+        let saved = state.save_project(None);
+        assert!(saved.success, "{}: {:?}", kind.id(), saved.error);
+        assert_eq!(stalx_v2::sniff(&std::fs::read(&path).unwrap()), Format::V2);
+        assert_eq!(
+            kept_originals(&stem),
+            first,
+            "{}: the same original is kept once",
+            kind.id()
+        );
+        assert_eq!(std::fs::read(&first[0]).unwrap(), original.settled);
+        let listed = AppState::list_project_backups(&path)
+            .into_iter()
+            .filter(|b| b.kind == crate::persistence::BackupKind::PreUpgrade)
+            .count();
+        assert_eq!(listed, 1, "{}: Recovery lists one original", kind.id());
+        forget_backups(&stem);
+    }
+}
+
+/// A different original (the file was changed between two upgrades) is still
+/// kept beside the first: only a copy with the same bytes is skipped.
+#[test]
+fn a_different_original_is_kept_beside_the_first() {
+    let _config = isolated_config();
+    let dir = TempDir::new().unwrap();
+    let stem = unique_stem("different-again");
+    let path = dir.path().join(format!("{stem}.stalx"));
+    write_legacy(&path, &mut Rng::new(31), "First");
+    let state = open_fresh(&path).unwrap();
+    assert!(state.save_project(None).success);
+    drop(state);
+    write_legacy(&path, &mut Rng::new(32), "Second");
+    let second = std::fs::read(&path).unwrap();
+    let state = open_fresh(&path).unwrap();
+    assert!(state.save_project(None).success);
+
+    let kept = kept_originals(&stem);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept.iter().any(|k| std::fs::read(k).unwrap() == second));
+    forget_backups(&stem);
 }
 
 /// The guard comes first: an original another program changed since the open

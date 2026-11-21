@@ -71,7 +71,7 @@ use super::AppState;
 use crate::models::NewerSchema;
 use crate::persistence::migrate::{LegacyError, MigrateError};
 use crate::persistence::stalx_v2::{self, DecodeError, DecodeOptions, Format};
-use crate::persistence::{same_file_on_disk, BackupInfo};
+use crate::persistence::{same_file_on_disk, BackupInfo, BackupKind};
 
 /// Where a restore keeps a copy of the file it replaces.
 pub(super) fn pre_restore_path(project: &Path) -> PathBuf {
@@ -197,25 +197,34 @@ impl AppState {
     }
 
     /// Every backup of the project at `path` the recovery dialog can offer,
-    /// newest first:
+    /// newest first, each with its [`BackupKind`]:
     ///
     /// - beside the project, a file named after it plus a suffix with
-    ///   `.backup` in it, or ending in `.tmp`: `cave.stalx.backup`,
+    ///   `.backup` in it ([`BackupKind::Backup`]), or ending in `.tmp`
+    ///   ([`BackupKind::InterruptedSave`]): `cave.stalx.backup`,
     ///   `cave.stalx.backup.1`, `cave.stalx.tmp` (the temp a version 2 save
     ///   writes through, left behind by a save that never renamed it). Only
     ///   the suffix decides, so a project whose own name contains `.backup`
-    ///   (`cave.backup.stalx`) is never offered as a backup of itself, and
-    ///   neither is its safety copy `cave.backup.stalx.pre-restore` (#720);
+    ///   (`cave.backup.stalx`) is never offered as a backup of itself (#720);
+    /// - the copy the last restore kept, `<project>.stalx.pre-restore`
+    ///   ([`BackupKind::PreRestore`]), so a restore can be undone: restoring
+    ///   it swaps the two files;
     /// - in the app-data `backups/` folder, the SQLite original the first
     ///   version 2 save of this project kept (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`,
-    ///   C3).
+    ///   C3, [`BackupKind::PreUpgrade`]).
     ///
-    /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, and
-    /// neither is a file a restore would only refuse: one that is empty, that
-    /// is neither a SQLite file nor a version 2 file, or a version 2 file that
-    /// does not end (a save torn before it finished).
+    /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, nor the
+    /// project itself under another name (a hard link), and neither is a file
+    /// a restore would only refuse: one that is empty, that is neither a SQLite
+    /// file nor a version 2 file, or a version 2 file that does not end (a
+    /// save torn before it finished).
     pub fn list_project_backups(path: &Path) -> Vec<BackupInfo> {
         let mut backups = Vec::new();
+        // Where a restore keeps its copy: beside the file a link names.
+        let safety = pre_restore_path(&follow_link(path).unwrap_or_else(|_| path.to_path_buf()));
+        if !same_file_on_disk(&safety, path) {
+            backups.extend(restorable(&safety, BackupKind::PreRestore));
+        }
         let own_name = path.file_name().unwrap_or_default().to_string_lossy();
         let dir = path.parent().map(|p| {
             if p.as_os_str().is_empty() {
@@ -238,33 +247,69 @@ impl AppState {
             let is_sidecar = ["-journal", "-wal", "-shm"]
                 .iter()
                 .any(|sidecar| suffix.ends_with(sidecar));
-            let is_backup = !suffix.is_empty()
-                && !is_sidecar
-                && (suffix.contains(".backup")
-                    || suffix
-                        .rsplit_once('.')
-                        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp")))
-                && !same_file_on_disk(&entry.path(), path);
-            if is_backup {
-                backups.extend(restorable(&entry.path()));
+            let kind = if suffix.is_empty() || is_sidecar {
+                None
+            } else if suffix.contains(".backup") {
+                Some(BackupKind::Backup)
+            } else if suffix
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp"))
+            {
+                Some(BackupKind::InterruptedSave)
+            } else {
+                None
+            };
+            if let Some(kind) = kind.filter(|_| !same_file_on_disk(&entry.path(), path)) {
+                backups.extend(restorable(&entry.path(), kind));
             }
         }
         if let Some(folder) = super::project_io::upgrade_backup_dir() {
-            let prefix = super::project_io::upgrade_backup_prefix(path);
-            for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-                let file_name = entry.file_name().to_string_lossy().into_owned();
-                let stamp = file_name
-                    .strip_prefix(&prefix)
-                    .and_then(|rest| rest.strip_suffix(".pre-v2.stalx"));
-                if stamp.is_some_and(is_upgrade_stamp) {
-                    backups.extend(restorable(&entry.path()));
-                }
+            for kept in kept_originals_in(&folder, path) {
+                backups.extend(restorable(&kept, BackupKind::PreUpgrade));
             }
         }
-        // Newest first (RFC 3339 in UTC sorts as text).
-        backups.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-        backups
+        // Newest first; the same time by name, so the order is stable.
+        backups.sort_by(|(a_time, a), (b_time, b)| {
+            b_time.cmp(a_time).then_with(|| a.path.cmp(&b.path))
+        });
+        backups.into_iter().map(|(_, info)| info).collect()
     }
+}
+
+/// The pre-upgrade originals of the project at `project` in the app-data
+/// backups `folder`: `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`
+/// ([`super::project_io::upgrade_backup_prefix`]). Hidden partial copies and
+/// sidecars do not match.
+pub(super) fn kept_originals_in(folder: &Path, project: &Path) -> Vec<PathBuf> {
+    let prefix = super::project_io::upgrade_backup_prefix(project);
+    std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".pre-v2.stalx"))
+                .is_some_and(is_upgrade_stamp)
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Whether `backup` is a pre-upgrade original in the app-data backups folder
+/// (`*.pre-v2.stalx`).
+fn is_kept_original(backup: &Path) -> bool {
+    let in_folder = super::project_io::upgrade_backup_dir().is_some_and(|folder| {
+        backup
+            .parent()
+            .is_some_and(|parent| same_file_on_disk(parent, &folder))
+    });
+    in_folder
+        && backup
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".pre-v2.stalx"))
 }
 
 /// The file the open project's slot names, if any.
@@ -332,9 +377,10 @@ fn newer_on_disk(path: &Path) -> Option<NewerSchema> {
     }
 }
 
-/// A file the dialog can offer, with its size and time, or `None` when a
-/// restore would only refuse it (see [`AppState::list_project_backups`]).
-fn restorable(path: &Path) -> Option<BackupInfo> {
+/// A file the dialog can offer, with its size and time (also returned as a
+/// `SystemTime`, for the sort), or `None` when a restore would only refuse it
+/// (see [`AppState::list_project_backups`]).
+fn restorable(path: &Path, kind: BackupKind) -> Option<(std::time::SystemTime, BackupInfo)> {
     let meta = std::fs::metadata(path)
         .ok()
         .filter(std::fs::Metadata::is_file)?;
@@ -347,14 +393,22 @@ fn restorable(path: &Path) -> Option<BackupInfo> {
         Format::V2 => ends_like_a_complete_file(path, meta.len()),
         Format::Unknown => false,
     };
-    offered.then(|| BackupInfo {
-        path: path.display().to_string(),
-        size_bytes: meta.len(),
-        modified_at: meta
-            .modified()
-            .ok()
-            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
-            .unwrap_or_default(),
+    let modified = meta.modified().ok();
+    offered.then(|| {
+        (
+            modified.unwrap_or(std::time::UNIX_EPOCH),
+            BackupInfo {
+                path: path.display().to_string(),
+                size_bytes: meta.len(),
+                modified_at: modified
+                    .map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t)
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    })
+                    .unwrap_or_default(),
+                kind,
+            },
+        )
     })
 }
 
@@ -575,14 +629,21 @@ impl<'a> Files<'a> {
                 name(&self.safety)
             ));
         }
+        // Named the way the dialog lists it: a pre-upgrade original's file name
+        // (a hash and a nanosecond stamp in the app-data folder) means nothing.
+        let restored = if is_kept_original(self.backup) {
+            "Restored the original from before the upgrade to the new format.".to_string()
+        } else {
+            format!("Restored from {}.", name(self.backup))
+        };
         Ok(if kept {
             format!(
-                "Restored from {}. The file it replaced is kept as {}.",
-                self.backup.display(),
+                "{restored} The file it replaced is kept as {} and is listed with the earlier \
+                 copies, so you can switch back.",
                 name(&self.safety)
             )
         } else {
-            format!("Restored from {}.", self.backup.display())
+            restored
         })
     }
 

@@ -27,14 +27,17 @@
 //! 3. Remove every sidecar beside the original: none of them holds anything
 //!    the file does not hold now.
 //! 4. Keep the original: write its bytes to the backups folder under a hidden
-//!    name, sync, rename to `<stem>.<UTC stamp>.pre-v2.stalx`, sync the folder.
-//!    The Recovery dialog only ever sees a complete copy that needs no sidecar.
+//!    name, sync, rename to `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, sync
+//!    the folder. The Recovery dialog only ever sees a complete copy that
+//!    needs no sidecar. When a copy of this project with the same bytes is
+//!    already kept (the original restored from Recovery, then saved again),
+//!    nothing is written: Recovery lists that one.
 //! 5. Write version 2 (`write_atomic`), guarded by what the original holds now.
 //!
 //! A step that fails leaves the original whole (settled, or as it was), and a
-//! write that fails removes the copy step 4 kept while the original still
-//! holds the same bytes, so a save retried on a read-only folder does not fill
-//! the backups folder. Settling replaces the file by a rename, so it needs what
+//! write that fails removes the copy step 4 kept (never one an earlier upgrade
+//! kept) while the original still holds the same bytes, so a save retried on
+//! a read-only folder does not fill the backups folder. Settling replaces the file by a rename, so it needs what
 //! the version 2 write needs (a writable folder) and nothing more: on Unix a
 //! write-protected legacy file upgrades as an ordinary one does and keeps its
 //! permission bits. On Windows a rename cannot replace a read-only file, so
@@ -201,7 +204,7 @@ pub(super) fn upgrade(
         Ok(written) => {
             tracing::info!(
                 path = ?original,
-                backup = ?kept,
+                backup = ?kept.as_ref().map(Kept::path),
                 settled = settled.is_some(),
                 purpose = "upgrade a legacy file to version 2, keeping the original",
                 "Upgraded a legacy project file to version 2"
@@ -209,7 +212,7 @@ pub(super) fn upgrade(
             Ok(written)
         }
         Err(e) => {
-            if let (Some(kept), Some(expected)) = (kept, expected) {
+            if let (Some(Kept::New(kept)), Some(expected)) = (kept, expected) {
                 discard_backup(&kept, original, expected);
             }
             Err(failed(UpgradeError::Write(e)))
@@ -340,11 +343,25 @@ fn remove_sidecars(original: &Path) -> Result<(), UpgradeError> {
 /// Step 4: keep `bytes` (the original, whole) in the backups folder as
 /// `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`
 /// ([`super::project_io::upgrade_backup_prefix`]). Returns where.
-fn keep(original: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+///
+/// When a copy of this project with the same bytes is already kept (an
+/// original restored from Recovery and saved again), nothing is written: a
+/// second identical copy would only be a second identical row in Recovery.
+/// That copy is returned as [`Kept::Already`], which a failed write never
+/// removes.
+fn keep(original: &Path, bytes: &[u8]) -> Result<Kept, String> {
     let dir = super::project_io::upgrade_backup_dir()
         .ok_or_else(|| "the app data folder is not available".to_owned())?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    if let Some(same) = already_kept(&dir, original, bytes) {
+        tracing::info!(
+            backup = ?same,
+            purpose = "keep the original of a legacy file its first version 2 write replaces",
+            "The legacy original is already kept with the same bytes; no second copy"
+        );
+        return Ok(Kept::Already(same));
+    }
     let prefix = super::project_io::upgrade_backup_prefix(original);
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
     let name = format!("{prefix}{stamp}.pre-v2.stalx");
@@ -379,7 +396,34 @@ fn keep(original: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
         purpose = "keep the original of a legacy file its first version 2 write replaces",
         "Kept the legacy original before writing version 2"
     );
-    Ok(kept)
+    Ok(Kept::New(kept))
+}
+
+/// Where step 4 left the original.
+#[derive(Debug)]
+enum Kept {
+    /// A copy this upgrade wrote: redundant, and removed, if the write fails.
+    New(PathBuf),
+    /// A copy with the same bytes an earlier upgrade kept: never removed here.
+    Already(PathBuf),
+}
+
+impl Kept {
+    fn path(&self) -> &Path {
+        match self {
+            Self::New(path) | Self::Already(path) => path,
+        }
+    }
+}
+
+/// A kept original of the project at `original` in `dir` whose bytes are
+/// `bytes`, if any. Only files of the same length are read.
+fn already_kept(dir: &Path, original: &Path, bytes: &[u8]) -> Option<PathBuf> {
+    let len = u64::try_from(bytes.len()).ok()?;
+    super::project_restore::kept_originals_in(dir, original)
+        .into_iter()
+        .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == len))
+        .find(|path| std::fs::read(path).is_ok_and(|kept| kept == bytes))
 }
 
 /// The write failed: the copy step 4 kept is redundant while the original

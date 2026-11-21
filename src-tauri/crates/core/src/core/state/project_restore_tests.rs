@@ -22,6 +22,7 @@ use super::AppState;
 use crate::core::events::EventSink;
 use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::persistence::stalx_v2::{self, Extras, Format, Mode};
+use crate::persistence::BackupKind;
 
 /// The load needs a sink for its progress events; nothing listens here.
 struct NullSink;
@@ -153,10 +154,8 @@ fn a_restore_puts_the_backup_in_place_and_keeps_the_project_beside_it() {
     );
     assert_eq!(
         message,
-        format!(
-            "Restored from {}. The file it replaced is kept as cave.stalx.pre-restore.",
-            backup.display()
-        )
+        "Restored from cave.stalx.backup. The file it replaced is kept as \
+         cave.stalx.pre-restore and is listed with the earlier copies, so you can switch back."
     );
     assert_eq!(
         names(dir.path()),
@@ -944,7 +943,7 @@ fn a_missing_project_is_restored_without_a_safety_copy() {
         .restore_project_from_backup(&project, &backup)
         .unwrap();
 
-    assert_eq!(message, format!("Restored from {}.", backup.display()));
+    assert_eq!(message, "Restored from cave.stalx.backup.");
     assert_eq!(label(&project), "Older");
     assert_eq!(names(dir.path()), ["cave.stalx", "cave.stalx.backup"]);
 }
@@ -961,7 +960,7 @@ fn a_left_over_safety_copy_restored_into_a_missing_project_is_not_a_swap() {
         .restore_project_from_backup(&project, &safety)
         .unwrap();
 
-    assert_eq!(message, format!("Restored from {}.", safety.display()));
+    assert_eq!(message, "Restored from cave.stalx.pre-restore.");
     assert_eq!(label(&project), "Kept");
     assert_eq!(label(&safety), "Kept", "the copy is only read");
 }
@@ -1063,9 +1062,10 @@ fn offered(path: &Path) -> Vec<String> {
     found
 }
 
-/// Beside the project: both formats, a complete temp; never the project
-/// itself (under a `.backup` name of its own), its safety copy, a sidecar, an
-/// empty or foreign file, or a torn temp.
+/// Beside the project: both formats, a complete temp, the copy the last
+/// restore kept (so a restore can be undone); never the project itself (under
+/// a `.backup` name of its own), a sidecar, an empty or foreign file, or a
+/// torn temp.
 #[test]
 fn the_dialog_offers_restorable_files_beside_the_project_only() {
     let dir = TempDir::new().unwrap();
@@ -1090,6 +1090,7 @@ fn the_dialog_offers_restorable_files_beside_the_project_only() {
         [
             "cave.backup.stalx.backup",
             "cave.backup.stalx.backup.1",
+            "cave.backup.stalx.pre-restore",
             "cave.backup.stalx.tmp"
         ]
     );
@@ -1160,13 +1161,170 @@ fn the_pre_upgrade_original_is_offered_and_restores() {
         .iter()
         .find(|b| std::fs::read(&b.path).ok().as_deref() == Some(original.as_slice()))
         .expect("the original is offered");
+    assert_eq!(kept.kind, BackupKind::PreUpgrade);
     let message = state
         .restore_project_from_backup(&path, Path::new(&kept.path))
         .unwrap();
 
-    assert!(message.starts_with("Restored from "), "{message}");
+    // Named as the dialog lists it, never by its app-data path.
+    assert_eq!(
+        message,
+        format!(
+            "Restored the original from before the upgrade to the new format. The file it \
+             replaced is kept as {stem}.stalx.pre-restore and is listed with the earlier copies, \
+             so you can switch back."
+        )
+    );
     assert_eq!(std::fs::read(&path).unwrap(), original);
     for backup in &backups {
         let _ = std::fs::remove_file(&backup.path);
     }
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Every offered copy says what it is (the dialog words it from the kind:
+/// real-app demo I-2), newest first, with its time in one fixed-width UTC
+/// form the dialog shows in local time.
+#[test]
+fn each_offered_copy_says_what_it_is_newest_first() {
+    use std::time::{Duration, UNIX_EPOCH};
+    crate::app_dirs::init_for_test();
+    let folder = super::project_io::upgrade_backup_dir().unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    let dir = TempDir::new().unwrap();
+    let stem = format!("restore-kinds-{}", uuid::Uuid::new_v4());
+    let project = project_file(dir.path(), &format!("{stem}.stalx"), "Current");
+    let prefix = super::project_io::upgrade_backup_prefix(&project);
+    let original = legacy_file(
+        &folder,
+        &format!("{prefix}20261120T101112.123456789Z.pre-v2.stalx"),
+        "Original",
+    );
+    let repair = project_file(dir.path(), &format!("{stem}.stalx.backup"), "Repaired");
+    let temp = project_file(dir.path(), &format!("{stem}.stalx.tmp"), "Interrupted");
+    let safety = project_file(dir.path(), &format!("{stem}.stalx.pre-restore"), "Kept");
+    // Oldest to newest, a minute apart: the original, the repair's copy, the
+    // interrupted save, the copy the last restore kept.
+    let base = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    for (minutes, path) in [&original, &repair, &temp, &safety].into_iter().enumerate() {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(base + Duration::from_secs(60 * minutes as u64))
+            .unwrap();
+    }
+
+    let listed = AppState::list_project_backups(&project);
+    std::fs::remove_file(&original).unwrap();
+
+    let kinds: Vec<(String, BackupKind)> = listed
+        .iter()
+        .map(|b| (file_name(&b.path), b.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (format!("{stem}.stalx.pre-restore"), BackupKind::PreRestore),
+            (format!("{stem}.stalx.tmp"), BackupKind::InterruptedSave),
+            (format!("{stem}.stalx.backup"), BackupKind::Backup),
+            (
+                file_name(&original.display().to_string()),
+                BackupKind::PreUpgrade
+            ),
+        ]
+    );
+    let times: Vec<&str> = listed.iter().map(|b| b.modified_at.as_str()).collect();
+    assert_eq!(
+        times,
+        [
+            "2027-01-15T08:03:00.000Z",
+            "2027-01-15T08:02:00.000Z",
+            "2027-01-15T08:01:00.000Z",
+            "2027-01-15T08:00:00.000Z",
+        ]
+    );
+}
+
+/// The copy a restore keeps is offered next (real-app demo I-2: it sat beside
+/// the project and the list never showed it), so a restore can be undone from
+/// the dialog: restoring it swaps the two files back.
+#[test]
+fn the_copy_the_last_restore_kept_is_offered_and_undoes_it() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+    let kept_copies = |listed: &[crate::persistence::BackupInfo]| -> Vec<PathBuf> {
+        listed
+            .iter()
+            .filter(|b| b.kind == BackupKind::PreRestore)
+            .map(|b| PathBuf::from(&b.path))
+            .collect()
+    };
+    assert!(kept_copies(&AppState::list_project_backups(&project)).is_empty());
+
+    state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
+    let kept = kept_copies(&AppState::list_project_backups(&project));
+    assert_eq!(kept, [pre_restore_path(&project)]);
+
+    let message = state()
+        .restore_project_from_backup(&project, &kept[0])
+        .unwrap();
+    assert!(message.contains("swapped places"), "{message}");
+    assert_eq!(label(&project), "Current");
+    assert_eq!(label(&pre_restore_path(&project)), "Older");
+}
+
+/// A project reached through a link keeps its restore copy beside the file the
+/// link names, and that is the copy offered. A copy that is the project
+/// itself (a hard link) is never offered.
+#[cfg(unix)]
+#[test]
+fn the_offered_restore_copy_is_the_one_a_restore_keeps() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    let real = project_file(&dir.path().join("real"), "cave.stalx", "Current");
+    let link = dir.path().join("cave.stalx");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let backup = project_file(dir.path(), "cave.stalx.backup", "Older");
+    state().restore_project_from_backup(&link, &backup).unwrap();
+
+    let offered: Vec<PathBuf> = AppState::list_project_backups(&link)
+        .into_iter()
+        .filter(|b| b.kind == BackupKind::PreRestore)
+        .map(|b| PathBuf::from(b.path))
+        .collect();
+    assert_eq!(offered, [pre_restore_path(&real.canonicalize().unwrap())]);
+
+    let other = TempDir::new().unwrap();
+    let project = project_file(other.path(), "cave.stalx", "Current");
+    std::fs::hard_link(&project, pre_restore_path(&project)).unwrap();
+    assert!(AppState::list_project_backups(&project).is_empty());
+}
+
+/// The kind's wire names are the ones the generated TypeScript type lists
+/// (`src/types/ipc/BackupKind.ts`), which the dialog words.
+#[test]
+fn backup_kinds_go_over_the_wire_as_the_dialog_reads_them() {
+    let wire: Vec<serde_json::Value> = [
+        BackupKind::PreUpgrade,
+        BackupKind::PreRestore,
+        BackupKind::Backup,
+        BackupKind::InterruptedSave,
+    ]
+    .into_iter()
+    .map(|kind| serde_json::to_value(kind).unwrap())
+    .collect();
+    assert_eq!(
+        wire,
+        ["pre_upgrade", "pre_restore", "backup", "interrupted_save"]
+    );
 }

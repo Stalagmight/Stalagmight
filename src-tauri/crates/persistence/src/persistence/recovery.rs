@@ -39,14 +39,37 @@ pub struct RawTableData {
     pub total_rows: u32,
 }
 
-/// Information about a backup file.
+/// A backup the recovery dialog offers.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub path: String,
     pub size_bytes: u64,
+    /// When the file was last written, in UTC with milliseconds
+    /// (`2026-11-21T02:50:05.334Z`, one fixed width).
     pub modified_at: String,
+    /// What the file is, so the dialog can say it in words.
+    pub kind: BackupKind,
+}
+
+/// What a backup the recovery dialog offers is (`list_project_backups`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    /// The 0.6.0 (SQLite) original the first version 2 write over it kept in
+    /// the app-data backups folder.
+    PreUpgrade,
+    /// `<project>.stalx.pre-restore`: the file as it was before the last
+    /// restore. Restoring it undoes that restore.
+    PreRestore,
+    /// `<project>.stalx.backup` or `.backup.N` beside the project: the copy
+    /// Attempt Repair keeps of the damaged file (and 0.6.0 kept).
+    Backup,
+    /// `<project>.stalx.tmp`: a complete file a save wrote but never put in
+    /// the project's place.
+    InterruptedSave,
 }
 
 /// Result of attempting to repair a corrupt database.
