@@ -81,7 +81,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('counts the other lines of a moving piece', () => {
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream and 1 more line moves 4.3 m to join');
+    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream and 1 more line move 4.3 m to join');
   });
 
   it('says no move for stations already on one point', () => {

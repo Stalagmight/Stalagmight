@@ -1261,7 +1261,8 @@
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "pieceMore_one": "{{name}} and 1 more line",
       "pieceMore_other": "{{name}} and {{count}} more lines",
-      "moves": "{{piece}} moves {{distance}} m to join {{station}}.",
+      "moves_one": "{{piece}} moves {{distance}} m to join {{station}}.",
+      "moves_other": "{{piece}} move {{distance}} m to join {{station}}.",
       "depths": "Depths {{a}} and {{b}} become {{joined}}: the joined station takes the mean of its depth readings."
     },
     "importBlocked": {

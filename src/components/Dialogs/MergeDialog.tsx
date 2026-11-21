@@ -157,6 +157,9 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
       {moves && (
         <p className="p-2 rounded bg-accent-10 text-text-primary" data-testid="merge-preview-move">
           {t('dialogs.mergeStations.moves', {
+            // The verb agrees with the piece: "Upstream moves", "Upstream and
+            // 1 more line move".
+            count: preview.moving_line_ids.length,
             piece,
             distance: formatDatumMetres(preview.shift_m),
             station: labels.station(preview.joins, true),
