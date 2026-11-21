@@ -59,31 +59,67 @@ pub enum SpeleoDbAction {
 
 /// Why a transport attempt never reached (or never finished with) the server.
 ///
-/// [#270] Derived from the TYPED `reqwest::Error` / `io::ErrorKind` /
-/// `rustls::Error` at the point of failure (`client::network_error` /
-/// `client::api_error`, and `tls::enforce` for an unresolvable `http://` host),
-/// never from the error's Display text -
-/// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
-/// dependent and unusable as a discriminant. Crosses IPC on
+/// [#270] Derived from the TYPED error tree at the point of failure
+/// (`client::transport_cause`, the one classifier of the SDK's send and body
+/// failures: `reqwest::Error`, `hyper::Error`, `io::ErrorKind`, `rustls::Error`;
+/// and `tls::enforce` for an unresolvable `http://` host), never from the
+/// error's Display text - `io::Error`'s message comes from `strerror`, so it is
+/// OS- and locale-dependent and unusable as a discriminant. Crosses IPC on
 /// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
 /// actionable line ("could not reach SpeleoDB at <endpoint> …") instead of
 /// surfacing a bare errno like "Invalid argument". The raw cause is kept in the
 /// error's `detail` (and logged) so bug reports stay actionable.
+///
+/// What each cause says about the request (F1): after [`Self::Refused`] or
+/// [`Self::Dns`] nothing reached the server; after [`Self::Timeout`],
+/// [`Self::Dropped`] or [`Self::Unknown`] the request may have reached it. So
+/// every WRITE (upload, lock acquire and release, publish, project create)
+/// treats every transport failure as an outcome it does not know, whatever the
+/// cause: an upload stays unconfirmed and dirty, an acquire asks the server who
+/// holds the lock. A READ that failed with a cause [`Self::got_no_reply`] names
+/// heard nothing from the server, and an open then opens the cached copy
+/// offline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
-    /// The connection was refused, dropped, or the network/host was unreachable.
+    /// The connection could not be made: refused, the network or host
+    /// unreachable, or any other failure to connect (a blackholed address's
+    /// EINVAL, the case #270 was found through). Nothing was sent.
     Refused,
+    /// The connection was made, then closed or reset before the whole reply
+    /// arrived: closed before any reply, a reply head cut short, or a body
+    /// shorter than its length (F1). The request may have reached the server.
+    Dropped,
     /// A configured timeout elapsed (dial, response, or body read).
     Timeout,
     /// The hostname could not be resolved.
     Dns,
     /// The TLS handshake / certificate validation failed.
     Tls,
-    /// Anything else - a blackholed address (the EINVAL this fix was
-    /// found through), an unclassified transport failure. Fails to the generic
-    /// "could not reach the server" line rather than showing the raw errno.
+    /// Anything else: an unclassified transport failure, such as a reply that is
+    /// not HTTP at all. Fails to the generic "could not reach the server" line
+    /// rather than showing the raw error.
     Unknown,
+}
+
+impl TransportCause {
+    /// Whether a request that failed this way got no reply at all from the
+    /// server: the connection could not be made, the name did not resolve, the
+    /// time ran out, or the connection closed or reset before the whole reply
+    /// arrived. A read that got no reply learnt nothing about the project, so an
+    /// open may fall back to the cached copy (`offline_open_result`).
+    ///
+    /// Not [`Self::Tls`]: the peer did not prove it is the server, which the user
+    /// has to see and fix. Not [`Self::Unknown`]: an unclassified failure fails
+    /// closed. A write never asks this: its outcome is unknown after every
+    /// transport failure (see the type).
+    #[must_use]
+    pub const fn got_no_reply(self) -> bool {
+        matches!(
+            self,
+            Self::Refused | Self::Dropped | Self::Timeout | Self::Dns
+        )
+    }
 }
 
 /// Why the endpoint policy (`tls::validate_endpoint`) refused a server address

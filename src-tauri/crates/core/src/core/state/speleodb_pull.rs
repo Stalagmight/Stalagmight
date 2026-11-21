@@ -14,7 +14,6 @@ use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::{
     client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, SpeleoReadOnlyOpen,
-    TransportCause,
 };
 pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
     let sha = tip?;
@@ -60,21 +59,22 @@ impl DownloadOptions {
     }
 }
 
-/// A connection failure is the only reason to open a cache instead of downloading.
-/// Never use cache availability to bypass access denial or invalid server content.
+/// A download that got no reply at all is the only reason to open a cache instead
+/// of downloading: the connection could not be made, the name did not resolve, the
+/// time ran out, or the connection closed or reset before the whole reply arrived
+/// ([`crate::speleodb::TransportCause::got_no_reply`], F1). Never use cache availability to bypass
+/// access denial or invalid server content: a status, a reply the app cannot read,
+/// a TLS failure and an unclassified transport failure all report the error.
 fn offline_open_result(
     dest: &std::path::Path,
     endpoint: &str,
     project_id: &str,
     error: &SpeleoDbError,
 ) -> Option<SpeleoOpenResult> {
-    if !matches!(
-        error,
-        SpeleoDbError::Transport {
-            cause: TransportCause::Refused | TransportCause::Timeout | TransportCause::Dns,
-            ..
-        }
-    ) {
+    let SpeleoDbError::Transport { cause, .. } = error else {
+        return None;
+    };
+    if !cause.got_no_reply() {
         return None;
     }
     let CacheFile::Read {
@@ -484,6 +484,7 @@ mod tests {
     use crate::models::survey::Project;
     use crate::models::{SpeleoLink, UndoMode};
     use crate::persistence::stalx_v2::temp_path;
+    use crate::speleodb::TransportCause;
 
     fn link() -> SpeleoLink {
         SpeleoLink {
@@ -761,6 +762,7 @@ mod tests {
         write_v2(&dest, "Cached", Some(&cached_link));
         for cause in [
             TransportCause::Refused,
+            TransportCause::Dropped,
             TransportCause::Timeout,
             TransportCause::Dns,
         ] {

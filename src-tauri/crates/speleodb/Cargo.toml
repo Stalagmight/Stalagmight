@@ -42,6 +42,8 @@ uuid = { workspace = true, features = ["v4"] }
 speleodb-api = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
+hyper = { workspace = true }
+reqwest-middleware = { workspace = true }
 tokio = { workspace = true }
 futures-util = { workspace = true }
 tempfile = { workspace = true }
