@@ -398,6 +398,58 @@ fn a_mid_delete_in_a_loop_or_between_two_datums_is_refused() {
     );
 }
 
+/// Demo finding I-8: a shot in a loop of a survey with ONE datum. Both sides
+/// reach that datum only through the loop, so "Both sides are anchored to a
+/// zero datum" would read as a second datum: only the loop reason is listed.
+/// The verdict (shift blocked) is 0.6.0's, whose reasons listed both.
+#[test]
+fn a_mid_delete_in_a_loop_with_one_datum_names_only_the_loop() {
+    let (mut p, l) = east3();
+    let (s0, s3) = (st(&p, l, 0), st(&p, l, 3));
+    add_datum(&mut p, s0, gps(20.5, -87.3));
+    p.push_closure(s0, Some(l), s3, Some(l), ClosureStrategy::Batch);
+    assert_valid(&p);
+    let loop_reason = "This shot is part of a loop (the two sides are already connected).";
+    let preview = p.preview_delete_shot(l, shot_id(&p, l, 1)).unwrap();
+    assert!(preview.shift_blocked);
+    assert_eq!(preview.shift_blocked_reasons, [loop_reason]);
+    assert_eq!(
+        refused(p.delete_shot(l, shot_id(&p, l, 1))),
+        format!("{loop_reason} Use split instead.")
+    );
+
+    // 0.6.0, the same survey: the same verdict, and both reasons.
+    let mut old = stalagmight_legacy::LegacyProject::new("legacy".to_string(), None);
+    let flat = old::ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        ..old::ShotData::default()
+    };
+    let main = old
+        .add_line(old::LineData {
+            shots: vec![flat; 3],
+            quality: 1.0,
+            ..old::LineData::default()
+        })
+        .id;
+    let at = old::StationRef::new;
+    old.set_zero_datum(
+        at(main, 0),
+        old::GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    )
+    .unwrap();
+    old.create_loop_closure(at(main, 0), at(main, 3), old::ClosureStrategy::Batch)
+        .unwrap();
+    let shot = old.lines[0].shots[1].id;
+    let legacy = old.preview_delete_shot(main, shot).unwrap();
+    assert!(legacy.shift_blocked);
+    assert_eq!(
+        legacy.shift_blocked_reasons,
+        [loop_reason, "Both sides are anchored to a zero datum."]
+    );
+}
+
 #[test]
 fn split_at_distance_inserts_a_mid_station_and_keeps_positions() {
     let mut p = empty();

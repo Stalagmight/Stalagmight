@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -14,6 +15,7 @@ import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
 export default function ClosureDialog() {
+  const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch } = useProjectStore();
@@ -23,6 +25,11 @@ export default function ClosureDialog() {
   const stationB = dialogData.stationB as StationRef | undefined;
   const preview = (dialogData.preview as ClosurePreview | null) ?? undefined;
   const reason = dialogData.reason as string | undefined;
+  // Opened by Merge (the tool, Merge With..., or a snap-to-merge drag) on two
+  // stations that are already connected: say why the user who asked for a
+  // merge gets a loop closure (demo finding I-9; the backend's reason was only
+  // "Creates survey loop").
+  const fromMerge = dialogData.fromMerge === true;
   // Why the backend would refuse this closure (#737): it would tie the two ends
   // of one shot together. The dialog says so up front and offers no Create; the
   // backend refuses the pair regardless.
@@ -82,8 +89,10 @@ export default function ClosureDialog() {
       <div className="space-y-4">
         {/* The redirect reason ("Creates survey loop") would contradict a refusal
             that refuses it, so the refusal replaces it. */}
-        {reason && !closureRefusal && (
-          <p className="text-sm text-text-secondary" data-testid="closure-reason">{reason}</p>
+        {(fromMerge || reason) && !closureRefusal && (
+          <p className="text-sm text-text-secondary" data-testid="closure-reason">
+            {fromMerge ? t('dialogs.mergeStations.becomesClosure') : reason}
+          </p>
         )}
         {closureRefusal && (
           <div

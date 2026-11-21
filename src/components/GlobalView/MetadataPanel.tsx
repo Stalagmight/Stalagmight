@@ -404,18 +404,27 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 testId="metadata-gps"
               />
 
-              {/* GPS Bounds (if available) */}
-              {singleProject.gps_bounds && (
-                <div className="text-xs text-text-secondary">
-                  <span className="font-medium">{t('globalView.metadata.fields.bounds')}:</span>{' '}
-                  {t('globalView.metadata.boundsValue', {
-                    north: formatFixed(singleProject.gps_bounds.north, undefined, precision.gps),
-                    south: formatFixed(singleProject.gps_bounds.south, undefined, precision.gps),
-                    east: formatFixed(singleProject.gps_bounds.east, undefined, precision.gps),
-                    west: formatFixed(singleProject.gps_bounds.west, undefined, precision.gps),
-                  })}
-                </div>
-              )}
+              {/* GPS Bounds, when they span something. A version 2 file's bounds
+                  are around its datums only (file format 4), so a survey with one
+                  datum has a box of one point, which the GPS center above already
+                  shows: "N 20.41, S 20.41, ..." read as a broken box (demo
+                  finding I-14). Compared as shown, at the GPS precision. */}
+              {singleProject.gps_bounds && (() => {
+                const edge = (v: number) => formatFixed(v, undefined, precision.gps);
+                const { north, south, east, west } = singleProject.gps_bounds;
+                if (edge(north) === edge(south) && edge(east) === edge(west)) return null;
+                return (
+                  <div className="text-xs text-text-secondary" data-testid="metadata-bounds">
+                    <span className="font-medium">{t('globalView.metadata.fields.bounds')}:</span>{' '}
+                    {t('globalView.metadata.boundsValue', {
+                      north: edge(north),
+                      south: edge(south),
+                      east: edge(east),
+                      west: edge(west),
+                    })}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Actions */}

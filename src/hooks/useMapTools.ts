@@ -412,6 +412,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             preview: result.preview,
             reason: result.reason,
             closureRefusal: result.closure_refusal,
+            fromMerge: true,
           });
         } else {
           // Not connected and merge blocked. The backend blocks only a loop
@@ -427,6 +428,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         if (requestId === connectivityRequestIdRef.current) {
           connectivityInFlightRef.current = false;
           setIsCheckingConnectivity(false);
+          // The check is over: its "Checking..." toast must not linger behind
+          // the dialog it opened (demo finding I-9).
+          useUIStore.getState().dismissToastsByKey(TOAST_KEYS.MERGE_CHECK);
         }
       }
     },

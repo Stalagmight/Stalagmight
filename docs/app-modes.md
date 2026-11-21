@@ -71,6 +71,11 @@ They compose three terms:
 | `selectSpeleoReadOnly` | `speleoStore` | a SpeleoDB project open without the write lock (fails closed while the link kind is unknown) | `guard_mutation` refuses without the lock |
 | the file term (`fileReadOnlyReason !== null`) | `projectStore` | the open `.stalx` was made with a newer Stalagmight: an unknown `requires` feature or unknown survey content (file format 6.4) | every edit, undo, redo and save is refused with `READ_ONLY_FILE` |
 
+`notifyIfFileReadOnly()` (the same module) is how a frontend-side refusal
+says why when the file term blocks: the `READ_ONLY_FILE` notice, not stacked
+while it is on screen (the Delete key, the data table's `onLockedEdit`); the
+other terms have their badge or banner and stay silent there.
+
 `useEditingBlockedReason()` / `editingBlockedReasonNow()` say which term
 blocks, for copy: `'project'` for the SpeleoDB and file terms, `'view'` for the
 map term (the project wins, since leaving the view would not unblock it). The

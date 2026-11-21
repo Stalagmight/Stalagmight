@@ -78,6 +78,8 @@ export const TOAST_KEYS = {
    * file-level compromise. Same code across two exports still collapses.
    */
   EXPORT_NOTE: 'export-note',
+  /** An export wrote its file: the success toast names it (demo finding I-13). */
+  EXPORT_SUCCEEDED: 'export-succeeded',
   WARNING_RESOLVE: 'warning-resolve',
   ZERO_DATUM_INCOMPLETE: 'zero-datum-incomplete',
   /**

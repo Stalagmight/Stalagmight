@@ -1024,6 +1024,11 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
+The data table's line, its row and column selection and its scroll belong to
+the open project: opening another project starts the table on that project's
+first line, at the top, as does reopening one; an edit or a save keeps them
+(demo finding I-12).
+
 #### 6.3.1 Detail Panel Hyperlinks
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, lines).
@@ -1820,6 +1825,12 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+When the file is written the dialog closes and a success toast names it
+("Exported to demo-cave.tml"); a failed export shows an error toast and keeps
+the dialog open; a cancelled save picker shows nothing (demo finding I-13).
+In a read-only file the TML notice about lines without a zero datum does not
+suggest setting one, since that edit is turned off there (I-10).
+
 ---
 
 ## 7. Workflows
@@ -1925,12 +1936,27 @@ Station ID, name and comment) and the other lines get their own station back
 instead; the dialog says which. The datums and closure ends that came from that
 line (their `via`) move to the new station with it; the orphan-closure sweep
 then promotes a closure left as the only connection of the detached piece. On a
-hub of three or more lines only the chosen line leaves.
+hub of three or more lines only the chosen line leaves. The dialog preselects
+the line clicked, except when detaching it would give it a new Station ID (it
+is the junction's owner, a line no alias names, and a line that shows the
+junction by its own name stays on it, so the owner does not keep the
+junction) while another line was merged there: that line, which gets its own
+Station ID and name back, is preselected. A clicked owner that keeps the
+junction stays selected, since either choice then gives every line the same
+station. When the chosen line gets its station back and the others keep the
+junction, the station's comment stays with them; a merge or the 0.6.0 upgrade
+may have joined the detached line's own comment into it, which no alias
+keeps, so the dialog then says the comment stays and to copy that part over
+(demo finding I-7).
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
-3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
+3. ClosureDialog appears with closure preview data (path length, misclosure, error %),
+   and says why the merge became a closure: "These stations are already
+   connected, so merging them would make a loop. A loop closure is created
+   instead." The "Checking merge compatibility..." toast leaves as the
+   dialog opens (demo finding I-9)
    - If the two stations are the two ends of one shot (directly or through
      junctions and other closures), the dialog says why and Create is disabled:
      the closure would squeeze that shot to zero length (#737)
@@ -1985,7 +2011,14 @@ hub of three or more lines only the chosen line leaves.
    position-aware: an edge shot gets "Are you sure you want to delete this
    shot?" and is deleted without splitting; a mid-line shot opens the Delete
    Shot dialog offering [Split Line] or [Shift Geometry]; the last remaining
-   shot removes the whole line
+   shot removes the whole line. Shift Geometry is not offered, and the dialog
+   says why, when the shot is in a loop ("This shot is part of a loop") or the
+   two sides reach different zero datums ("Both sides are anchored to a zero
+   datum."); a shot in a loop gives only the loop reason, even when both
+   sides reach the one datum through it. A range whose two sides reach one
+   datum through a loop closure says "Both sides are tied to the same zero
+   datum through a loop closure." (demo finding I-8; 0.6.0 said "Both sides
+   are anchored" in each case)
 3. On Split Line, the line splits into two, named "<line> A" and
    "<line> B" by default, each made unique against the other lines (both
    editable; an empty name, another line's name or the two names equal is
@@ -2021,8 +2054,9 @@ user to delete the connected shots instead.
 
 **Deleting a Line:**
 1. Right-click line in Sections Panel → Delete
-2. Confirmation: "Are you sure you want to delete this line and all its
-   shots?", plus a list of what goes with it: its connections to other lines
+2. Confirmation naming the line: "Delete the line "Upstream Side" and its 2
+   shots (13.0 m)?" (demo finding I-9; deleting a line's last shot names it
+   too), plus a list of what goes with it: its connections to other lines
    (the shared station stays for them), the closures and zero datums on stations
    only this line passes, its map placement, and hand-moved station positions
 3. Confirm → Line removed

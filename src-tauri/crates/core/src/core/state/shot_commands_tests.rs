@@ -405,7 +405,7 @@ fn a_deleted_shot_leaves_the_line_with_one_shot_less() {
     let (label, kind, _) = top_entry(&state);
     assert_eq!(
         (label.as_str(), kind.as_str()),
-        ("Delete shot in line \"Line\"", "delete_shot")
+        ("Delete shot Line: 0 \u{2192} 1", "delete_shot")
     );
 }
 

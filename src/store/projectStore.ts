@@ -137,6 +137,13 @@ function nextProjectTreeGeneration(): number {
   return projectTreeGenerationCounter;
 }
 
+let projectOpenGenerationCounter = 0;
+
+function nextProjectOpenGeneration(): number {
+  projectOpenGenerationCounter += 1;
+  return projectOpenGenerationCounter;
+}
+
 /**
  * Parsed error from Tauri backend.
  */
@@ -230,6 +237,14 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * not change.
    */
   projectTreeGeneration: number;
+  /**
+   * Monotonic identity of the open PROJECT: moves when a project is loaded,
+   * created or closed, never on an edit, refresh or save. View state that
+   * belongs to one project (the data table's line, row and column, demo
+   * finding I-12) is keyed on it, so the next project starts fresh even when
+   * its line ids are the previous one's.
+   */
+  projectOpenGeneration: number;
   /**
    * Whether the open project is backed by an on-disk database. A new project
    * created with a deferred initial save reserves `project.file_path` but leaves
@@ -593,6 +608,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   set({
     project: null,
     projectTreeGeneration: nextProjectTreeGeneration(),
+    projectOpenGeneration: nextProjectOpenGeneration(),
     databaseOpen: false,
     stations: [],
     surveyData: null,
@@ -837,6 +853,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Initial state
   project: null,
   projectTreeGeneration: 0,
+  projectOpenGeneration: 0,
   databaseOpen: false,
   stations: [],
   surveyData: null,
@@ -1020,6 +1037,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({
           project: result.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
+          projectOpenGeneration: nextProjectOpenGeneration(),
           stations: result.stations,
           surveyData: result.surveyData,
           // Adjusted geometry is lazily (re)fetched by the map when the adjusted
@@ -1286,6 +1304,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         project: result.project,
         projectTreeGeneration: nextProjectTreeGeneration(),
+        projectOpenGeneration: nextProjectOpenGeneration(),
         // A deferred new project has no on-disk database until the first save.
         databaseOpen: !deferred,
         stations: [],

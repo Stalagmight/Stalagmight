@@ -4,7 +4,7 @@ import { type Line, type Shot, type ShotData, type Station, type StationRef } fr
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { notifyIfFileReadOnly, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
@@ -260,7 +260,20 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
-export default function DataTable({ lines }: DataTableProps) {
+/**
+ * The data table of the open project. Its view of one project - the line it
+ * shows, the grid's row and column selection and scroll, unsaved draft rows -
+ * starts over when another project opens (keyed on `projectOpenGeneration`):
+ * line ids are small per-project integers, so a kept line id used to open the
+ * next project on whichever of its lines had that id, at the old row and
+ * column (demo finding I-12).
+ */
+export default function DataTable(props: DataTableProps) {
+  const openGeneration = useProjectStore((s) => s.projectOpenGeneration);
+  return <ProjectDataTable key={openGeneration} {...props} />;
+}
+
+function ProjectDataTable({ lines }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const [selectedLineId, setSelectedLineId] = useState<number | null>(
@@ -1058,6 +1071,7 @@ export default function DataTable({ lines }: DataTableProps) {
    *  longer leaves the rows with their selection gone. */
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number): boolean => {
+      if (editingBlocked) notifyIfFileReadOnly();
       if (!selectedLine || editingBlocked) return false;
       setSource('data-table');
       const inRange = rowEntries
@@ -1777,6 +1791,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}
+                onLockedEdit={notifyIfFileReadOnly}
                 selectedRow={shotScrollToRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
@@ -1812,6 +1827,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
+                onLockedEdit={notifyIfFileReadOnly}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}
                 selectedRow={stationScrollToRow}

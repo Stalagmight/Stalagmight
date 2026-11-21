@@ -209,7 +209,8 @@ impl Project {
                 let (from, to) = (range.start, range.end + 1);
                 let excluded = |l: LineId, i: usize| l == line && (from..=to).contains(&i);
                 let without = self.reach_without_shots(&[head], &excluded, false);
-                if without[0].contains(&tail) {
+                let looped = without[0].contains(&tail);
+                if looped {
                     reasons.push(
                         "This range is part of a loop (the two sides are already connected)."
                             .to_string(),
@@ -224,9 +225,8 @@ impl Project {
                 // so a closure ending on one is no path to a datum (a junction
                 // stays for its other lines and still carries one).
                 let sides = self.reach_avoiding(&[head, tail], &excluded, true, &deleted);
-                let reaches = |side: &BTreeSet<StationId>| held.iter().any(|s| side.contains(s));
-                if reaches(&sides[0]) && reaches(&sides[1]) {
-                    reasons.push("Both sides are anchored to a zero datum.".to_string());
+                if let Some(reason) = super::shots::anchored_sides_reason(&held, &sides, looped) {
+                    reasons.push(reason.to_string());
                 }
             }
         }

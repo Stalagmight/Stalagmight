@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -20,6 +20,25 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 }
 
 /**
+ * The slot to preselect (demo finding I-7): the clicked one (`slots[0]`),
+ * unless its line would NOT get its own station back (it is the junction's
+ * owner and would get a new Station ID: a line that shows the junction by its
+ * own name stays on it, so the owner does not keep it, I-1) and another line
+ * would: then the first such line. A clicked owner that keeps the junction
+ * (`kept`, `restored` true) stays selected: either choice then gives every
+ * line the same station. While the previews are still out, or when none
+ * says, the clicked one.
+ */
+export function defaultDetachSlot(
+  slots: StationRef[],
+  previews: ReadonlyMap<number, DetachLinePreview>,
+): StationRef | undefined {
+  const [clicked, ...others] = slots;
+  if (!clicked || previews.get(clicked.line_id)?.restored !== false) return clicked;
+  return others.find((ref) => previews.get(ref.line_id)?.restored === true) ?? clicked;
+}
+
+/**
  * Detach a line from a station several lines share (plan 5.2; the dialog kept
  * its `unmerge-stations` name for telemetry).
  *
@@ -31,8 +50,16 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
  * gets the name it showed the junction by, under a new Station ID. When every
  * other line knew the junction by an alias, the chosen line keeps it and the
  * others get back the station they had (I-1). The dialog says which, from the
- * backend's `preview_detach_line` (review finding UX-4). The clicked slot's
- * line is listed first and preselected. Its own line detaches with
+ * backend's `preview_detach_line` (review finding UX-4), asked for every line
+ * when the dialog opens. The clicked slot's line is listed first. It is
+ * preselected unless detaching it would give it a NEW Station ID and take the
+ * station's comment away from it (the junction's owner, while a line that
+ * shows the junction by its own name stays on it) and another line would get
+ * its own station back: that line is then the likely intent and preselected
+ * (demo finding I-7). When the chosen line gets its station back and the
+ * others keep the junction, the comment stays with them; the dialog says so,
+ * since a merge (or the 0.6.0 upgrade) may have joined that line's own
+ * comment into it and the alias does not keep it. Its own line detaches with
  * `unmerge_stations(slot)`; another line with `unmerge_station_pair(slot,
  * other)`, which detaches the PARTNER's line.
  */
@@ -44,6 +71,9 @@ export default function UnmergeStationsDialog() {
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
+  const stationComment = stationRef
+    ? stations.find((station) => sameStationRef(station.station_ref, stationRef))?.comment ?? ''
+    : '';
 
   /** Every slot of the station: the clicked one first, then the other lines through it. */
   const slots = useMemo(() => {
@@ -61,38 +91,45 @@ export default function UnmergeStationsDialog() {
   const [selectedKey, setSelectedKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What each line would get, by line id. A failed preview only hides that
+  // line's sentence; the detach reports its own refusal.
+  const [previews, setPreviews] = useState<ReadonlyMap<number, DetachLinePreview>>(new Map());
+  // Once the user picks a line, the default stops following the previews.
+  const pickedRef = useRef(false);
 
   useEffect(() => {
+    pickedRef.current = false;
+    setPreviews(new Map());
     setSelectedKey(slots.length > 0 ? stationRefKey(slots[0]!) : '');
-  }, [slots]);
+    if (!stationRef || slots.length === 0) return;
+    let live = true;
+    void Promise.all(
+      slots.map((ref) =>
+        invokeIpc<DetachLinePreview>(
+          'preview_detach_line',
+          { stationRef, lineId: ref.line_id },
+          { purpose: 'preview detach line' },
+        )
+          .then((preview): [number, DetachLinePreview] | null => [ref.line_id, preview])
+          .catch(() => null),
+      ),
+    ).then((answers) => {
+      if (!live) return;
+      const byLine = new Map(answers.filter((a): a is [number, DetachLinePreview] => a !== null));
+      setPreviews(byLine);
+      const preferred = defaultDetachSlot(slots, byLine);
+      if (!pickedRef.current && preferred) setSelectedKey(stationRefKey(preferred));
+    });
+    return () => {
+      live = false;
+    };
+  }, [slots, stationRef]);
 
   const selected = useMemo(
     () => slots.find((ref) => stationRefKey(ref) === selectedKey) ?? null,
     [slots, selectedKey],
   );
-
-  // What the chosen line gets. A failed preview only hides the line; the
-  // detach reports its own refusal.
-  const [naming, setNaming] = useState<DetachLinePreview | null>(null);
-  useEffect(() => {
-    setNaming(null);
-    if (!stationRef || !selected) return;
-    let live = true;
-    invokeIpc<DetachLinePreview>(
-      'preview_detach_line',
-      { stationRef, lineId: selected.line_id },
-      { purpose: 'preview detach line' },
-    )
-      .then((result) => {
-        if (live) setNaming(result);
-      })
-      .catch(() => {
-        if (live) setNaming(null);
-      });
-    return () => {
-      live = false;
-    };
-  }, [stationRef, selected]);
+  const naming = selected ? previews.get(selected.line_id) ?? null : null;
 
   const handleConfirm = async () => {
     if (!stationRef || !selected) return;
@@ -153,7 +190,10 @@ export default function UnmergeStationsDialog() {
                   name="unmerge-station"
                   value={key}
                   checked={selectedKey === key}
-                  onChange={() => setSelectedKey(key)}
+                  onChange={() => {
+                    pickedRef.current = true;
+                    setSelectedKey(key);
+                  }}
                   data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                 />
                 <EntityBlob entity="line">{i === 0 ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>
@@ -181,6 +221,12 @@ export default function UnmergeStationsDialog() {
                     id: naming.station_id,
                   })
                 : t('dialogs.detachLine.copies', { line: labels.lineName(selected.line_id), name: naming.name })}
+          </p>
+        )}
+
+        {naming?.restored && !naming.kept && selected && stationComment.trim() !== '' && (
+          <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comment">
+            {t('dialogs.detachLine.commentStays', { line: labels.lineName(selected.line_id) })}
           </p>
         )}
 

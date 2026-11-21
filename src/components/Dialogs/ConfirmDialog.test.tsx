@@ -154,3 +154,52 @@ describe('ConfirmDialog non-split delete refusal (#241)', () => {
     expect(closeDialog).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Demo finding I-9: the Delete Line confirm said "this line" and never named
+ * it, so a right-click on a crowded map gave no check of what would go. It now
+ * names the line with its shot count and length. Injection: restoring the old
+ * fixed message fails the first case.
+ */
+describe('ConfirmDialog names the line it deletes (I-9)', () => {
+  const shot = (length: number) => ({ id: length, length });
+  beforeEach(() => {
+    useProjectStore.setState({
+      project: {
+        lines: [
+          { id: 4, name: 'Upstream Side', shots: [shot(5.5), shot(7.5)] },
+          { id: 5, name: 'Sump Tail', shots: [shot(3)] },
+          { id: 6, name: null, shots: [] },
+        ],
+      },
+    } as never);
+  });
+
+  it('says which line, how many shots and how long', () => {
+    useUIStore.setState({ dialogData: { type: 'line', lineId: 4 } });
+    render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
+      'Delete the line "Upstream Side" and its 2 shots (13.0 m)?',
+    );
+  });
+
+  it('counts one shot as one, and names a line with no shots alone', () => {
+    useUIStore.setState({ dialogData: { type: 'line', lineId: 5 } });
+    const { unmount } = render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
+      'Delete the line "Sump Tail" and its 1 shot (3.0 m)?',
+    );
+    unmount();
+    useUIStore.setState({ dialogData: { type: 'line', lineId: 6 } });
+    render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(/^Delete the line ".+"\?$/);
+  });
+
+  it('names the line the last shot takes with it', () => {
+    useUIStore.setState({ dialogData: { type: 'last-shot', lineId: 5, shotId: 5 } });
+    render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
+      'Deleting the last shot will remove the entire line "Sump Tail". Continue?',
+    );
+  });
+});

@@ -1203,6 +1203,7 @@
       "restores": "{{line}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
       "keeps": "{{line}} keeps this station. {{others}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
       "copies": "{{line}} gets a new station here named {{name}}.",
+      "commentStays": "The station's comment stays with the other lines. If part of it was {{line}}'s own, copy it over after detaching.",
       "thisLine": "{{line}} (the line you clicked)",
       "notFound": "Station not found.",
       "close": "Close",
@@ -1259,6 +1260,7 @@
       "warningToast": "Merge complete - {{message}}"
     },
     "mergeStations": {
+      "becomesClosure": "These stations are already connected, so merging them would make a loop. A loop closure is created instead.",
       "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "pieceMore_one": "{{name}} and 1 more line",
@@ -1736,6 +1738,7 @@
     },
     "export": {
       "failed": "Export failed - try a different folder or file name",
+      "succeeded": "Exported to {{file}}",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some lines have no declination - Ariane will re-correct all",
@@ -1748,6 +1751,9 @@
       "bodyAllUnanchored": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
       "bodyPartial_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
       "bodyPartial_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyAllUnanchoredReadOnly": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
       "listHeading": "Lines without a zero datum connection"
     },
     "about": {

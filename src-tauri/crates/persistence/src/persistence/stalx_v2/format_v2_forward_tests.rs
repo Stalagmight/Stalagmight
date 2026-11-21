@@ -147,7 +147,7 @@ fn unknown_local_keys_survive_every_rewrite_of_this_machine() {
     let rewritten = text_of(&rewrite_local(newer.as_bytes(), &toggled).unwrap()).to_string();
     assert!(
         rewritten.contains(
-            "\"local\":{\"display\":{\"grid\":\"false\"},\"speleodb\":{\"base\":\
+            "\"local\":{\"display\":{\"grid\":false},\"speleodb\":{\"base\":\
              \"3a7bd3e2360a3d29eea436fcfb7e44c735d117c4\",\"unpushed\":true,\
              \"last_edit\":\"2025-11-20T13:00:00.000000000Z\",\"zz_sync\":true},\
              \"zz_machine\":{\"keep\":[1,2.50]}},\n"
@@ -172,6 +172,71 @@ fn unknown_local_keys_survive_every_rewrite_of_this_machine() {
         let out = encode(&decoded.project, &decoded.extras, mode).unwrap();
         assert!(!text_of(&out).contains("zz_"), "{mode:?}");
     }
+}
+
+/// Demo finding I-16: a display toggle is written as a JSON boolean, not the
+/// `"false"` string 0.6.0's key/value table held; any other setting stays
+/// its text. A file an earlier version 2 writer made (toggles as strings)
+/// reads the same settings, and saving it writes the booleans. Injection:
+/// writing every value with `string` in `write_local` fails the first
+/// check; reading only strings in `read_local` drops the toggles of every
+/// file this build writes.
+#[test]
+fn display_toggles_are_json_booleans_and_strings_still_read() {
+    let (p, mut extras) = example();
+    for (key, value) in [
+        ("showSatellite", "false"),
+        ("showGrid", "true"),
+        ("gridSpacing", "10"),
+        ("geometryMode", "measured"),
+        ("hiddenSections", "[1,2]"),
+    ] {
+        extras
+            .local
+            .display
+            .insert(key.to_string(), value.to_string());
+    }
+    let written = encode(&p, &extras, Mode::Normal).unwrap();
+    let text = text_of(&written);
+    assert!(
+        text.contains(
+            "\"display\":{\"geometryMode\":\"measured\",\"grid\":true,\"gridSpacing\":\"10\",\
+             \"hiddenSections\":\"[1,2]\",\"showGrid\":true,\"showSatellite\":false}"
+        ),
+        "{text}"
+    );
+    let decoded = open(text);
+    assert!(
+        !decoded
+            .notes
+            .iter()
+            .any(|n| matches!(n, DecodeNote::LocalDropped { .. })),
+        "{:?}",
+        decoded.notes
+    );
+    assert_eq!(decoded.extras.local.display, extras.local.display);
+
+    // An earlier version 2 file: every setting a string.
+    let earlier = text
+        .replace("\"grid\":true", "\"grid\":\"true\"")
+        .replace("\"showGrid\":true", "\"showGrid\":\"true\"")
+        .replace("\"showSatellite\":false", "\"showSatellite\":\"false\"");
+    assert_ne!(earlier, text);
+    let decoded = open(&earlier);
+    assert_eq!(decoded.extras.local.display, extras.local.display);
+    assert_eq!(
+        encode(&decoded.project, &decoded.extras, Mode::Normal).unwrap(),
+        written
+    );
+
+    // A value that is neither is dropped with a note, as before.
+    let odd = text.replace("\"showGrid\":true", "\"showGrid\":1");
+    let decoded = open(&odd);
+    assert!(!decoded.extras.local.display.contains_key("showGrid"));
+    assert!(decoded
+        .notes
+        .iter()
+        .any(|n| matches!(n, DecodeNote::LocalDropped { .. })));
 }
 
 /// The documented example with a station on no line (an invariant this

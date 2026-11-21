@@ -272,8 +272,10 @@ fn a_created_shot_shows_its_length_and_azimuth() {
     );
 }
 
+/// Named by its stations, like an update (demo finding I-9: "Delete shot in
+/// line \"Side\"" did not say which shot went).
 #[test]
-fn a_deleted_shot_names_its_line() {
+fn a_deleted_shot_names_the_shot() {
     let o = open();
     let shot_id = shot_id(&o.state, SIDE, 1);
     let cmd = Command::DeleteShot {
@@ -286,10 +288,10 @@ fn a_deleted_shot_names_its_line() {
             .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Delete shot in line \"Side\"");
+    assert_eq!(item.description, "Delete shot Side: 1 \u{2192} 2");
     assert_eq!(
         rows(&item),
-        vec![r("Action", "", "Delete shot in line \"Side\"")]
+        vec![r("Action", "", "Delete shot Side: 1 \u{2192} 2")]
     );
 }
 

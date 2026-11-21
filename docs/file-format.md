@@ -291,7 +291,7 @@ not know (another build's per-machine or sync state, at `local` or inside
 
 | Key | Type | Meaning |
 |---|---|---|
-| `display` | object of strings, opt | View toggles, key to stored text. |
+| `display` | object of booleans and strings, opt | View settings by key: a toggle is a boolean (`"showGrid":true`), any other setting its stored text (`"gridSpacing":"10"`, `"geometryMode":"measured"`). A reader reads `"true"` and `"false"` strings, which earlier version 2 writers wrote, as the booleans. |
 | `speleodb` | object, opt | Sync state: `base` (string, the server revision this copy is based on), `unpushed` (`true` when there are edits not yet uploaded), `last_edit` and `last_verify` (times), `unwound_from` (string, the revision an Unwind started from), `inherited_through` (time: undo entries at or before it came with a downloaded revision). Every key optional. |
 
 ### 5.7 `sections`
@@ -811,7 +811,7 @@ what Stalagmight writes for it (a test keeps it so).
 "settings":{"validation":{"warn_shot_length_min":0.3,"warn_shot_length_max":50.0,"warn_depth_change_per_shot_max":10.0,"warn_azimuth_deviation_max":30.0,"azimuth_diff_threshold":20.0,"pitch_diff_threshold":10.0,"inclination_depth_diff_threshold":15.0}},
 "counters":{"station":8,"closure":2,"section":1},
 "speleodb":{"endpoint":"https://speleodb.example","project":"0f6c1d2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5","name":"Cenote Example","undo_mode":"full"},
-"local":{"display":{"grid":"true"},"speleodb":{"base":"3a7bd3e2360a3d29eea436fcfb7e44c735d117c4","unpushed":true,"last_edit":"2025-11-20T13:00:00.000000000Z"}},
+"local":{"display":{"grid":true},"speleodb":{"base":"3a7bd3e2360a3d29eea436fcfb7e44c735d117c4","unpushed":true,"last_edit":"2025-11-20T13:00:00.000000000Z"}},
 "sections":[
 {"id":0,"name":"Upstream","color":"#4ecdc4"}
 ],

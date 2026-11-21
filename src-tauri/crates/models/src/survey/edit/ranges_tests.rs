@@ -322,13 +322,40 @@ fn a_closure_on_a_station_the_gap_close_deletes_does_not_anchor_a_side() {
 #[test]
 fn a_datum_reached_over_a_junction_the_gap_close_keeps_still_anchors_a_side() {
     // The same shape, but station 3 is a junction (a second line passes
-    // it): it stays, so the tail still reaches the datum through it.
+    // it): it stays, so the tail still reaches the datum through it. Both
+    // sides reach the ONE datum, the tail through two loop closures, so the
+    // reason says so instead of "Both sides are anchored" (demo finding
+    // I-8; 0.6.0 said that); the shift stays blocked.
     let (mut p, l) = tail_reaching_the_datum_through_a_deleted_station();
     let s3 = st(&p, l, 3);
     line_from(&mut p, "Through", s3, run("u", 180.0, 10.0, 1));
     let preview = p
         .preview_delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2))
         .unwrap();
+    assert!(preview.shift_blocked);
+    assert_eq!(
+        preview.shift_blocked_reasons,
+        ["Both sides are tied to the same zero datum through a loop closure."]
+    );
+}
+
+/// Demo finding I-8 for a range: "Both sides are anchored to a zero datum"
+/// stays for two sides that reach DIFFERENT datums (here each side of the
+/// cut reaches its own piece's datum, the tail through a loop closure).
+#[test]
+fn a_range_between_two_datums_says_both_sides_are_anchored() {
+    let (mut q, m) = east5();
+    let (q0, q5) = (st(&q, m, 0), st(&q, m, 5));
+    add_datum(&mut q, q0, gps(20.5, -87.3));
+    let far = line(&mut q, "Far", run("f", 0.0, 5.0, 1));
+    let far0 = st(&q, far, 0);
+    add_datum(&mut q, far0, gps(20.5001, -87.2999));
+    q.push_closure(q5, Some(m), far0, Some(far), ClosureStrategy::Batch);
+    assert_valid(&q);
+    let preview = q
+        .preview_delete_shot_range(m, shot_id(&q, m, 1), shot_id(&q, m, 2))
+        .unwrap();
+    assert!(preview.shift_blocked);
     assert_eq!(
         preview.shift_blocked_reasons,
         ["Both sides are anchored to a zero datum."]
