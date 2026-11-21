@@ -85,6 +85,11 @@ export const TOAST_KEYS = {
    * app drops when it saves the file (#741). Shown once per project per session.
    */
   OLDER_VERSIONS_DROP_GPS_FIXES: 'older-versions-drop-gps-fixes',
+  /**
+   * A save converted a project opened from a 0.6.0 file to the new format,
+   * with no conversion banner showing to say so (demo issue I-5).
+   */
+  LEGACY_CONVERTED: 'legacy-converted',
 
   // SpeleoDB
   SPELEODB_UNLINKED_COPY: 'speleodb-unlinked-copy',

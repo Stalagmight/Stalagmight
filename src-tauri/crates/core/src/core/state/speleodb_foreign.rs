@@ -201,7 +201,7 @@ enum Strip {
         /// The migration's record parity and conversion notice, which the
         /// upgrade still owes (`AppState::finish_closed_upgrade`).
         parity: Option<crate::persistence::migrate::LegacyParity>,
-        notice: Option<super::open_file::ConversionNotice>,
+        notice: Option<super::conversion_notice::ConversionNotice>,
     },
 }
 

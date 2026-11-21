@@ -1,6 +1,11 @@
 import type { StoreApi } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import type { ProjectStore } from './projectStore';
+import type { ConversionFile } from '../types/ipc/ConversionFile';
+import type { ConversionNoticeView } from '../types/ipc/ConversionNoticeView';
+import { useUIStore } from './uiStore';
+import i18n from '../i18n';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**
  * What the open project's FILE says about it, beside the survey (`.stalx` v2,
@@ -19,10 +24,12 @@ export interface ProjectFileStatusState {
    *  `READ_ONLY_FILE: ...`; the frontend gates its editing controls on it
    *  (`useEditingBlocked`) and shows a banner. */
   fileReadOnlyReason: string | null;
-  /** The notice a legacy (SQLite) open leaves when the conversion moved
-   *  stations ("Converted from the old file format; ..."), shown as a banner
-   *  until dismissed. The backend hands it over once. */
-  conversionNotice: string | null;
+  /** The notice a legacy (SQLite) open leaves when the conversion changed
+   *  what a line shows: the changes, a renamed-stations list for Details, and
+   *  the file's state, which a converting save moves on
+   *  (`noteLegacyConverted`). Shown as a banner until dismissed. The backend
+   *  hands it over once. */
+  conversionNotice: ConversionNoticeView | null;
 }
 
 export interface ProjectFileStatusActions {
@@ -31,6 +38,11 @@ export interface ProjectFileStatusActions {
   checkFileStatus: () => Promise<void>;
   /** Hide the conversion notice for the open project. */
   dismissConversionNotice: () => void;
+  /** A save converted the open project from a 0.6.0 file
+   *  (`CommandResult.legacy_converted`, demo issue I-5): the banner, when it
+   *  shows, now says it was saved; with none showing, a toast says so (one
+   *  event, one surface: docs/notifications.md). */
+  noteLegacyConverted: (file: ConversionFile) => void;
 }
 
 /** The cleared state, as ONE spreadable value (see `HISTORY_BANNER_CLEARED`). */
@@ -74,7 +86,7 @@ export function createProjectFileStatusActions(
       try {
         // A take: the backend answers it once per open. A second check (React
         // StrictMode runs the effect twice) gets null and must not clear it.
-        const notice = await invokeIpc<string | null>('take_conversion_notice', undefined, {
+        const notice = await invokeIpc<ConversionNoticeView | null>('take_conversion_notice', undefined, {
           purpose: 'show the old-format conversion notice once',
         });
         if (notice && !stale()) set({ conversionNotice: notice });
@@ -84,5 +96,15 @@ export function createProjectFileStatusActions(
     },
 
     dismissConversionNotice: () => set({ conversionNotice: null }),
+
+    noteLegacyConverted: (file) => {
+      const notice = get().conversionNotice;
+      if (notice !== null) {
+        set({ conversionNotice: { ...notice, file } });
+        return;
+      }
+      const key = file === 'saved_as_new_file' ? 'saveNotices.legacyConvertedNewFile' : 'saveNotices.legacyConverted';
+      useUIStore.getState().showToast(i18n.t(key), TOAST_KEYS.LEGACY_CONVERTED, 'success');
+    },
   };
 }

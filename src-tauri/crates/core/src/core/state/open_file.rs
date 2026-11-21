@@ -30,14 +30,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::models::SpeleoLink;
-use crate::persistence::migrate::{
-    LegacyParity, MigratedExtras, MigrationReport, NameChange, Verification,
-};
+use crate::persistence::migrate::{LegacyParity, MigratedExtras, MigrationReport};
 use crate::persistence::stalx_v2::{
     write_atomic, Extras, Fingerprint, Guard, History, IgnoredWarning, LocalSync, SpeleoDbLink,
     WriteError,
 };
 
+use super::conversion_notice::{ConversionNotice, ConversionNoticeView};
 use super::AppState;
 
 /// Coded-failure prefix of a save refused because the file on disk changed
@@ -63,188 +62,6 @@ pub(crate) enum FileOrigin {
     /// writes version 2 over it after moving the original into the backups
     /// folder (plan 7.2.10).
     Legacy,
-}
-
-/// The one-line notice an upgrade shows when the migration changed what the
-/// user sees (plan 7.2.10, G4, C4): stations moved in plan (a torn legacy merge
-/// collapsed, or an unexplained raw difference), stations whose depth changed
-/// (a snap's derived alignment changed a depth tie, or an unexplained one),
-/// stations the conversion could not place, or a name a line showed (review
-/// findings D-migration-upgrade-8, UX-3 and UX-1: a merged station now goes by
-/// one name on all its lines, and a true clash is lettered). Computed View
-/// differences never raise it (C4).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ConversionNotice {
-    pub(crate) slots_moved: usize,
-    pub(crate) max_displacement_m: f64,
-    /// Slots whose depth changed beyond the 1e-9 m tolerance, and by how much
-    /// at most (review finding D-migration-upgrade-6).
-    pub(crate) depth_changed: usize,
-    pub(crate) max_depth_change_m: f64,
-    /// Slots with no finite migrated position.
-    pub(crate) unplaced: usize,
-    pub(crate) unexplained: usize,
-    /// The slots whose name changed, in slot order (survey content: shown,
-    /// never logged).
-    pub(crate) names_changed: Vec<NameChange>,
-    /// Merged stations whose members' different comments were joined into
-    /// one (each line now shows both).
-    pub(crate) comments_joined: usize,
-    /// Where the unconverted original is, which the notice tells the user.
-    pub(crate) original: ConversionOriginal,
-}
-
-/// Where the original of a converted legacy file is kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ConversionOriginal {
-    /// A local file: converted in memory, written as version 2 by its first
-    /// save, which moves the original into the backups folder (Recent
-    /// Projects: Restore an earlier copy).
-    #[default]
-    LocalFile,
-    /// A SpeleoDB revision downloaded into the cache: the cache copy is
-    /// already version 2 when it opens, and no local backup is made; the
-    /// original is the revision itself, unchanged on the server (Revision
-    /// history).
-    SpeleoDbRevision,
-}
-
-/// How many name changes the notice spells out before "and N more".
-const NAMES_LISTED: usize = 5;
-
-impl ConversionNotice {
-    /// [`Self::of`] plus what else a line shows differently: the names the
-    /// conversion changed and the comments it joined. A notice also when
-    /// nothing moved but something visible changed (review finding UX-1).
-    pub(crate) fn of_migration(
-        report: &MigrationReport,
-        names_changed: &[NameChange],
-    ) -> Option<Self> {
-        let names_changed = names_changed.to_vec();
-        let comments_joined = report.comments_joined;
-        match Self::of(&report.verification) {
-            Some(notice) => Some(Self {
-                names_changed,
-                comments_joined,
-                ..notice
-            }),
-            None => (!names_changed.is_empty() || comments_joined > 0).then_some(Self {
-                slots_moved: 0,
-                max_displacement_m: 0.0,
-                depth_changed: 0,
-                max_depth_change_m: 0.0,
-                unplaced: 0,
-                unexplained: 0,
-                names_changed,
-                comments_joined,
-                original: ConversionOriginal::LocalFile,
-            }),
-        }
-    }
-
-    /// The same notice for a SpeleoDB revision the cache got converted.
-    pub(crate) fn downloaded(self) -> Self {
-        Self {
-            original: ConversionOriginal::SpeleoDbRevision,
-            ..self
-        }
-    }
-
-    pub(crate) fn of(verification: &Verification) -> Option<Self> {
-        let moved = verification.moved();
-        let depth = verification.depth_changed();
-        let notice = Self {
-            slots_moved: moved.slots,
-            max_displacement_m: moved.max_displacement_m,
-            depth_changed: depth.slots,
-            max_depth_change_m: depth.max_displacement_m,
-            unplaced: verification.unplaced(),
-            unexplained: verification.mismatches.len(),
-            names_changed: Vec::new(),
-            comments_joined: 0,
-            original: ConversionOriginal::LocalFile,
-        };
-        (notice.slots_moved > 0
-            || notice.depth_changed > 0
-            || notice.unplaced > 0
-            || notice.unexplained > 0)
-            .then_some(notice)
-    }
-
-    pub(crate) fn message(&self) -> String {
-        let mut what = Vec::new();
-        if self.slots_moved > 0 {
-            what.push(format!(
-                "{} stations moved by up to {:.2} m",
-                self.slots_moved, self.max_displacement_m
-            ));
-        }
-        if self.depth_changed > 0 {
-            what.push(format!(
-                "{} stations changed depth by up to {:.2} m",
-                self.depth_changed, self.max_depth_change_m
-            ));
-        }
-        if self.unplaced > 0 {
-            what.push(format!("{} stations could not be placed", self.unplaced));
-        }
-        if !self.names_changed.is_empty() {
-            what.push(self.names_part());
-        }
-        match self.comments_joined {
-            0 => {}
-            1 => what.push("a merged station's two comments were joined".to_string()),
-            n => what.push(format!("the comments of {n} merged stations were joined")),
-        }
-        if what.is_empty() {
-            // `of` and `of_migration` raise no notice without one of the
-            // counts above; never "0 stations moved" all the same.
-            what.push("some positions differ from the old version's".to_owned());
-        }
-        // The second sentence says where the original is: a local file's
-        // upgrade keeps it in the backups folder (written by the first save,
-        // or already by a Recents rename or a link strip of the closed file);
-        // a downloaded revision's cache copy keeps none, the server has it.
-        let original = match self.original {
-            ConversionOriginal::LocalFile => {
-                "The new format is written the first time the project is saved, or already \
-                 was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
-                 original file is kept: to go back to it, right-click the project in Recent \
-                 Projects and choose Restore an earlier copy."
-            }
-            ConversionOriginal::SpeleoDbRevision => {
-                "This computer's copy is already converted, and the original revision is \
-                 unchanged on SpeleoDB: it stays in the project's Revision history."
-            }
-        };
-        format!(
-            "Converted from the old file format; {}. {original}",
-            what.join("; ")
-        )
-    }
-
-    /// "3 station names changed (a merged station has one name on all its
-    /// lines): Side 0 is now 3, Loop 0 is now 1, ..."
-    fn names_part(&self) -> String {
-        let n = self.names_changed.len();
-        let listed: Vec<String> = self
-            .names_changed
-            .iter()
-            .take(NAMES_LISTED)
-            .map(|c| format!("{} {} is now {}", c.line, c.from, c.to))
-            .collect();
-        let more = n.saturating_sub(NAMES_LISTED);
-        let tail = if more > 0 {
-            format!(" and {more} more")
-        } else {
-            String::new()
-        };
-        let noun = if n == 1 { "name" } else { "names" };
-        format!(
-            "{n} station {noun} changed (a merged station has one name on all its lines): {}{tail}",
-            listed.join(", ")
-        )
-    }
 }
 
 /// The open project's per-file state (see the module docs).
@@ -685,9 +502,15 @@ impl AppState {
         Some(pending.remove(at).1)
     }
 
-    /// The conversion notice of a legacy open, taken once.
-    pub fn take_conversion_notice(&self) -> Option<String> {
-        self.with_file(|file| file.conversion.take().map(|n| n.message()))
+    /// The conversion notice of a legacy open, taken once, as the banner
+    /// shows it: a project opened from a version 2 file (a closed 0.6.0
+    /// file a Recents rename or link strip upgraded) is already saved in the
+    /// new format.
+    pub fn take_conversion_notice(&self) -> Option<ConversionNoticeView> {
+        self.with_file(|file| {
+            let saved = file.origin == FileOrigin::V2;
+            file.conversion.take().map(|n| n.view(saved))
+        })
     }
 
     /// Whether the open project has changes no save has written yet: survey

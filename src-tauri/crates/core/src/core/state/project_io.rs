@@ -2,6 +2,7 @@ use super::AppState;
 use crate::core::CommandResult;
 use std::path::{Path, PathBuf};
 
+use super::conversion_notice::ConversionFile;
 use super::legacy_upgrade::{self, UpgradeError};
 use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 use crate::models::survey::Project;
@@ -425,6 +426,13 @@ impl AppState {
         // build would roll into it (review finding D-migration-upgrade-10), and
         // the 0.6.0 file it replaces is kept in Recovery like any upgraded one.
         let upgrade = !detached && to_open_file && file.origin == FileOrigin::Legacy;
+        // A Save As elsewhere of a project opened from a 0.6.0 file writes its
+        // first version 2 file too, leaving the 0.6.0 file as it was.
+        let converted = match (detached, file.origin) {
+            (false, FileOrigin::Legacy) if to_open_file => Some(ConversionFile::Saved),
+            (false, FileOrigin::Legacy) => Some(ConversionFile::SavedAsNewFile),
+            _ => None,
+        };
         let over_legacy = !to_open_file && holds_legacy_file(&target);
         let written = if upgrade || over_legacy {
             legacy_upgrade::upgrade(&target, &bytes, guard)
@@ -509,6 +517,7 @@ impl AppState {
         }
         let mut result = CommandResult::success();
         result.saved_path = Some(target.display().to_string());
+        result.legacy_converted = converted;
         result
     }
 

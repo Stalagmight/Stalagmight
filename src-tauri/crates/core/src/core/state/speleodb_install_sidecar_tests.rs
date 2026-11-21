@@ -352,21 +352,17 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
             let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
             assert!(opened.success, "{:?}", opened.error);
             let notice = state.take_conversion_notice().expect("a notice");
-            assert_eq!(notice.contains("2 stations moved"), moved, "{notice}");
-            assert!(notice.contains("1 station name changed"), "{notice}");
+            let said = |clause: &str| notice.changes.iter().any(|c| c == clause);
+            assert_eq!(
+                said("2 stations moved by up to 5.00 m"),
+                moved,
+                "{notice:?}"
+            );
+            assert!(said("Line 3 / 0 is now shown as 1"), "{notice:?}");
             // The cache is version 2 already and nothing local keeps the
             // original: the notice points at the server's revision, never at a
             // local backup the pull did not make.
-            assert!(
-                notice.ends_with(
-                    ". This computer's copy is already converted, and the original \
-                     revision is unchanged on SpeleoDB: it stays in the project's Revision \
-                     history."
-                ),
-                "{notice}"
-            );
-            assert!(!notice.contains("Restore an earlier copy"), "{notice}");
-            assert!(!notice.contains("project is saved"), "{notice}");
+            assert_eq!(notice.file, super::ConversionFile::Downloaded, "{notice:?}");
             assert_eq!(state.take_conversion_notice(), None, "offered once");
             // Other tests share the backups folder: look for this path's own.
             let backups = super::project_io::upgrade_backup_dir().expect("backups dir");

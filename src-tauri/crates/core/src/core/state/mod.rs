@@ -15,6 +15,7 @@ mod command_station;
 mod command_station_name;
 mod commands;
 mod config;
+mod conversion_notice;
 mod display_settings;
 pub mod dive_plan;
 pub mod export_views;
@@ -536,6 +537,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use conversion_notice::{ConversionFile, ConversionNoticeView};
 pub use open_file::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 pub use project_io::set_generator;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

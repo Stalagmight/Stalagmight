@@ -14,7 +14,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::open_file::{ConversionNotice, FileState};
+use super::conversion_notice::ConversionNotice;
+use super::open_file::FileState;
 use super::project_load::Opened;
 use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;

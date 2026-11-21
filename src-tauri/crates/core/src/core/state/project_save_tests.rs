@@ -876,10 +876,12 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     write_legacy_drift(&path, true);
     let state = open(&path);
     let notice = state.take_conversion_notice().expect("a conversion notice");
-    assert!(
-        notice.starts_with("Converted from the old file format; 2 stations moved by up to 5.00 m"),
-        "{notice}"
+    assert_eq!(
+        notice.changes.first().map(String::as_str),
+        Some("2 stations moved by up to 5.00 m"),
+        "{notice:?}"
     );
+    assert_eq!(notice.file, super::ConversionFile::NotYetSaved);
     assert_eq!(state.take_conversion_notice(), None, "offered once");
 
     let path = dir.path().join("clean.stalx");
@@ -887,15 +889,9 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     let notice = open(&path)
         .take_conversion_notice()
         .expect("a name changed");
-    assert_eq!(
-        notice,
-        "Converted from the old file format; 1 station name changed (a merged station has \
-         one name on all its lines): Line 3 0 is now 1. \
-         The new format is written the first time the project is saved, or already \
-         was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
-         original file is kept: to go back to it, right-click the project in Recent \
-         Projects and choose Restore an earlier copy."
-    );
+    assert_eq!(notice.changes, ["Line 3 / 0 is now shown as 1"]);
+    assert!(notice.details.is_empty());
+    assert_eq!(notice.file, super::ConversionFile::NotYetSaved);
 }
 
 /// Review finding UX-1: a conversion that moved nothing still says what each
@@ -934,11 +930,13 @@ fn a_conversion_that_joined_comments_says_so() {
     let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
-    assert!(!notice.contains("stations moved"), "{notice}");
-    assert!(notice.contains("1 station name changed"), "{notice}");
-    assert!(
-        notice.contains("a merged station's two comments were joined"),
-        "{notice}"
+    assert_eq!(
+        notice.changes,
+        [
+            "Line 2 / 0 is now shown as 1",
+            "a merged station's two comments were joined"
+        ],
+        "{notice:?}"
     );
 }
 

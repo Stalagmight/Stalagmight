@@ -14,6 +14,7 @@ use super::legacy_upgrade_tests::{forget_backups, unique_stem};
 use super::project_save_tests::{write_legacy_drift, write_legacy_unchanged};
 use super::stalx_fixtures::write_legacy_link_only;
 use super::AppState;
+use super::{ConversionFile, ConversionNoticeView};
 use crate::core::loading::SpeleoManagedFile;
 use crate::models::SpeleoLink;
 use crate::persistence::stalx_v2::{self, Format};
@@ -38,7 +39,7 @@ fn is_v2(path: &Path) -> bool {
 }
 
 /// Open `path` in `state` the way the executor does; the notice it raised.
-fn notice_of_open(state: &AppState, path: &Path) -> Option<String> {
+fn notice_of_open(state: &AppState, path: &Path) -> Option<ConversionNoticeView> {
     let opened = state.open_project(path.to_path_buf());
     assert!(opened.success, "{:?}", opened.error);
     state.take_conversion_notice()
@@ -46,7 +47,10 @@ fn notice_of_open(state: &AppState, path: &Path) -> Option<String> {
 
 /// A Recents rename upgrades a closed 0.6.0 file whose conversion moved two
 /// stations: the open of that file later in the session says so, once, even
-/// when another project was opened in between.
+/// when another project was opened in between, and says the file is already
+/// saved in the new format (demo issue I-5: never a future save that already
+/// happened). Injection: take the notice with `view(false)` and it promises
+/// the next save.
 #[test]
 fn a_recents_rename_upgrade_keeps_the_conversion_notice_for_the_next_open() {
     crate::app_dirs::init_for_test();
@@ -69,12 +73,12 @@ fn a_recents_rename_upgrade_keeps_the_conversion_notice_for_the_next_open() {
             "another file's open neither shows nor drops it"
         );
         let notice = notice_of_open(&state, &drifted).expect("the conversion notice");
-        assert!(
-            notice.starts_with(
-                "Converted from the old file format; 2 stations moved by up to 5.00 m"
-            ),
-            "{notice}"
+        assert_eq!(
+            notice.changes.first().map(String::as_str),
+            Some("2 stations moved by up to 5.00 m"),
+            "{notice:?}"
         );
+        assert_eq!(notice.file, ConversionFile::Saved, "the rename wrote it");
         assert_eq!(notice_of_open(&state, &drifted), None, "offered once");
         forget_backups(&stem);
     });
@@ -109,9 +113,12 @@ fn a_link_strip_upgrade_hands_the_conversion_notice_to_the_open_that_follows() {
 
         let notice = notice_of_open(&state, &path).expect("the conversion notice");
         assert!(
-            notice.contains("2 stations moved by up to 5.00 m"),
-            "{notice}"
+            notice
+                .changes
+                .contains(&"2 stations moved by up to 5.00 m".to_owned()),
+            "{notice:?}"
         );
+        assert_eq!(notice.file, ConversionFile::Saved, "the strip wrote it");
         assert!(state.speleo_link().is_none());
         forget_backups(&stem);
     });
@@ -266,10 +273,17 @@ fn a_display_toggle_on_a_legacy_project_waits_for_a_save_without_making_it_unsav
             !state.has_unsaved_changes(),
             "a display toggle alone must not arm autosave or the close prompt"
         );
-        assert!(state.with_file(|f| f.local_pending), "it waits for the next save");
+        assert!(
+            state.with_file(|f| f.local_pending),
+            "it waits for the next save"
+        );
         // A close with nothing else pending leaves the 0.6.0 file untouched.
         assert!(state.close_project().success);
-        assert_eq!(std::fs::read(&path).unwrap(), original, "never converted silently");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "never converted silently"
+        );
 
         // The next save the user asks for writes it with the conversion.
         let state = open_fresh(&path).unwrap();
@@ -361,6 +375,55 @@ fn an_unlink_of_an_open_legacy_copy_is_written_at_once() {
         assert!(state.close_project().success);
         assert!(state.open_project(path).success);
         assert!(state.speleo_link().is_none());
+        forget_backups(&stem);
+    });
+}
+
+/// The save that converts a project opened from a 0.6.0 file says so
+/// (demo issue I-5), so the banner never promises a save that already
+/// happened: `saved` for the save over the file itself (the original kept in
+/// Recovery), nothing for the saves after it, `saved_as_new_file` for a Save
+/// As elsewhere (the 0.6.0 file left as it was). A version 2 project's save
+/// reports nothing. Injection: leave `legacy_converted` unset in
+/// `save_project_to` and every assertion on it fails.
+#[test]
+fn the_converting_save_says_it_converted_the_file() {
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("converting-save");
+        let path = dir.path().join(format!("{stem}.stalx"));
+        write_legacy_drift(&path, true);
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path.clone()).success);
+        let notice = state.take_conversion_notice().expect("a notice");
+        assert_eq!(notice.file, ConversionFile::NotYetSaved);
+
+        let first = state.save_project(None);
+        assert!(first.success, "{:?}", first.error);
+        assert_eq!(first.legacy_converted, Some(ConversionFile::Saved));
+        assert!(is_v2(&path));
+        let again = state.save_project(None);
+        assert!(again.success, "{:?}", again.error);
+        assert_eq!(again.legacy_converted, None, "converted once");
+        assert!(state.close_project().success);
+
+        let other = dir.path().join(format!("{stem}-old.stalx"));
+        write_legacy_drift(&other, true);
+        let original = std::fs::read(&other).unwrap();
+        assert!(state.open_project(other.clone()).success);
+        let elsewhere = dir.path().join(format!("{stem}-new.stalx"));
+        let save_as = state.save_project(Some(elsewhere.clone()));
+        assert!(save_as.success, "{:?}", save_as.error);
+        assert_eq!(
+            save_as.legacy_converted,
+            Some(ConversionFile::SavedAsNewFile)
+        );
+        assert!(is_v2(&elsewhere));
+        assert_eq!(std::fs::read(&other).unwrap(), original, "left as it was");
+        let next = state.save_project(None);
+        assert!(next.success, "{:?}", next.error);
+        assert_eq!(next.legacy_converted, None);
         forget_backups(&stem);
     });
 }

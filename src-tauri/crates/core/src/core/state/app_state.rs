@@ -219,12 +219,13 @@ pub struct AppState {
     /// (the cache then holds version 2, so the open has nothing to compare).
     /// Taken by the next commit of an open of the same path.
     pub(super) pending_download_notice:
-        Mutex<Option<(PathBuf, super::open_file::ConversionNotice)>>,
+        Mutex<Option<(PathBuf, super::conversion_notice::ConversionNotice)>>,
     /// Legacy files upgraded to version 2 while closed (a Recents rename, a
     /// SpeleoDB link strip) whose conversion moved something: the notice the
     /// next open of that path in this session shows (review finding
     /// D-migration-upgrade-4). Taken by that open's commit.
-    pub(super) pending_upgrade_notices: Mutex<Vec<(PathBuf, super::open_file::ConversionNotice)>>,
+    pub(super) pending_upgrade_notices:
+        Mutex<Vec<(PathBuf, super::conversion_notice::ConversionNotice)>>,
     /// The SpeleoDB SESSION generation: bumped on every session boundary - a
     /// project committed into (or cleared from) the `project` slot, and logout -
     /// and ONLY while holding the `project` mutex. Captured by Start Editing at
