@@ -471,6 +471,12 @@ mod speleodb_restore_refusal_tests;
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod speleodb_same_account_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod speleodb_upload_limit_tests;
 #[cfg(test)]
 #[expect(
