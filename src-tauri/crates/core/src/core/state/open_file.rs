@@ -47,6 +47,22 @@ use super::AppState;
 /// and asks: reload, overwrite (`save_project_overwriting`), or save as.
 pub const EXTERNALLY_MODIFIED_CODE: &str = "EXTERNALLY_MODIFIED";
 
+/// Marker right after [`EXTERNALLY_MODIFIED_CODE`] when the guard refused
+/// because the file is GONE (moved or deleted by another program):
+/// `EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted ...`. The
+/// prefix still routes it to the save prompt; the marker tells the prompt
+/// that there is no file's version to reopen (the reopen would fail after the
+/// close dropped the unsaved changes).
+pub const FILE_MISSING_MARKER: &str = "FILE_MISSING";
+
+/// The coded failure of a write the guard refused (`ExternallyModified`,
+/// `Exists`), as every save path sends it to the frontend:
+/// [`EXTERNALLY_MODIFIED_CODE`], then [`FILE_MISSING_MARKER`] when the file
+/// is gone, then the sentence.
+pub(crate) fn guard_refusal(e: &WriteError) -> String {
+    write_error(e).to_string()
+}
+
 /// Coded-failure prefix of a save refused because the project is open
 /// read-only (an unknown `requires` feature or unknown structural content:
 /// "made with a newer Stalagmight", plan 6.4).
@@ -251,6 +267,9 @@ impl FileState {
 pub(crate) enum LocalSaveError {
     /// The file on disk is not the one last read or written.
     ExternallyModified(String),
+    /// The file is gone (moved or deleted): coded with
+    /// [`FILE_MISSING_MARKER`] after the guard's code.
+    Missing(String),
     Io(String),
     Encode(String),
 }
@@ -259,6 +278,7 @@ impl std::fmt::Display for LocalSaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ExternallyModified(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {m}"),
+            Self::Missing(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {FILE_MISSING_MARKER}: {m}"),
             Self::Io(m) | Self::Encode(m) => f.write_str(m),
         }
     }
@@ -289,7 +309,7 @@ pub(super) fn read_unchanged(
             )))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(LocalSaveError::ExternallyModified(format!(
+            Err(LocalSaveError::Missing(format!(
                 "{} was moved or deleted by another program since it was opened",
                 path.display()
             )))
@@ -303,6 +323,9 @@ pub(super) fn read_unchanged(
 
 pub(super) fn write_error(e: &WriteError) -> LocalSaveError {
     match e {
+        WriteError::ExternallyModified {
+            found_len: None, ..
+        } => LocalSaveError::Missing(e.to_string()),
         WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
             LocalSaveError::ExternallyModified(e.to_string())
         }

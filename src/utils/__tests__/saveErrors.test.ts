@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   EXTERNALLY_MODIFIED,
+  FILE_MISSING,
   READ_ONLY_FILE,
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
   FS_PERMISSION_DENIED,
   IGNORES_UNREADABLE,
   classifySaveError,
+  isFileMissingError,
   isPathError,
   isPermissionError,
   stripSaveErrorMarker,
@@ -54,6 +56,19 @@ describe('classifySaveError', () => {
     // The `.stalx` v2 refusals (plan 6.4, 6.5).
     expect(classifySaveError(`${EXTERNALLY_MODIFIED}: cave.stalx changed on disk`)).toBe('externally-modified');
     expect(classifySaveError(`${READ_ONLY_FILE}: made with a newer Stalagmight`)).toBe('read-only-file');
+  });
+
+  // Pre-PR review finding 1: a file that is GONE is still the guard's refusal
+  // (the save prompt), but marked so the prompt offers no reopen of it.
+  it('tells a moved or deleted file from a changed one', () => {
+    const missing = `${EXTERNALLY_MODIFIED}: ${FILE_MISSING}: /c/cave.stalx was moved or deleted by another program`;
+    expect(classifySaveError(missing)).toBe('externally-modified');
+    expect(isFileMissingError(missing)).toBe(true);
+    expect(isFileMissingError(`${EXTERNALLY_MODIFIED}: /c/cave.stalx was changed by another program`)).toBe(false);
+    // Only right after the guard's code: a path that happens to contain it is not.
+    expect(isFileMissingError(`${EXTERNALLY_MODIFIED}: /c/${FILE_MISSING}: cave.stalx was changed`)).toBe(false);
+    expect(isFileMissingError(`${FS_PATH_NOT_FOUND}: ${FILE_MISSING}: x`)).toBe(false);
+    expect(isFileMissingError(null)).toBe(false);
   });
 
   // [#517] The marker exists to keep this refusal out of the Review & Repair

@@ -111,6 +111,24 @@ pub fn project_read_only_reason(state: State<'_, AppState>) -> Option<String> {
     state.read_only_reason()
 }
 
+/// Why the open project's file could not be opened again as it is on disk
+/// now, or `None` when it would (`AppState::project_file_reload_refusal`).
+/// The save prompt's "Use the file's version" asks before it closes the
+/// session, so the unsaved changes are never dropped for a reopen that would
+/// fail. Off the main thread: it reads and decodes the whole file.
+#[tauri::command]
+pub async fn project_file_reload_refusal<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .project_file_reload_refusal()
+    })
+    .await
+    .unwrap_or_else(|e| Some(format!("the check of the file failed: {e}")))
+}
+
 /// Whether the open project's file on disk is still a 0.6.0 file: opened
 /// from one and not saved yet (the first save converts it, plan 7.2.10). A
 /// peek: the status bar says so instead of "Saved" until a save lands.

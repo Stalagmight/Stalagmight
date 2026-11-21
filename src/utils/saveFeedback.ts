@@ -1,6 +1,7 @@
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
+  isFileMissingError,
   stripSaveErrorMarker,
   IGNORES_UNREADABLE,
   type SaveErrorKind,
@@ -83,7 +84,7 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
     case 'permission':
       return i18n.t('banners.autosave.permissionDenied');
     case 'externally-modified':
-      return i18n.t('banners.autosave.externallyModified');
+      return externallyModifiedLine(error);
     case 'path-not-found':
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':
@@ -96,6 +97,11 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
     default:
       return error;
   }
+}
+
+/** The guard's refusal in words: a changed file, or one that is gone. */
+function externallyModifiedLine(error: string): string {
+  return i18n.t(isFileMissingError(error) ? 'banners.autosave.externallyMissing' : 'banners.autosave.externallyModified');
 }
 
 /**
@@ -112,7 +118,7 @@ export function autosaveFailureMessage(error?: string | null): string {
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
     case 'externally-modified':
-      return i18n.t('banners.autosave.externallyModified');
+      return externallyModifiedLine(error ?? '');
     case 'read-only-file':
       return i18n.t('banners.autosave.readOnlyFile');
     case 'ignores-unreadable':

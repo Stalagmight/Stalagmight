@@ -1244,7 +1244,15 @@
       "reloadDetail": "Open the file as it is now. Your unsaved changes are lost.",
       "cancel": "Decide later",
       "working": "Saving...",
-      "failed": "That did not work: {{error}}"
+      "failed": "That did not work: {{error}}",
+      "reloadRefused": "The file can't be opened as it is now, so your unsaved changes were kept: {{error}}",
+      "missing": {
+        "title": "The project file was moved or deleted",
+        "lead": "{{fileName}} was moved or deleted by another program after Stalagmight opened it. Your changes are only in Stalagmight now.",
+        "unsaved": "Your unsaved changes are still here. Choose where to save them:",
+        "overwriteDetail": "Save your version where the file was.",
+        "saveAsDetail": "Save your version to a new file."
+      }
     },
     "importFailure": {
       "commandTitle": "Import Errors",
@@ -2836,6 +2844,7 @@
       "pathNotFound": "Save folder unavailable - it was moved, or its drive is not connected.",
       "pathTooLong": "Save path too long - save to a shorter path.",
       "externallyModified": "The project file was changed by another program. Choose whether to keep your version or the file's.",
+      "externallyMissing": "The project file was moved or deleted by another program. Save to put your version back, or save it as a new file.",
       "readOnlyFile": "This project was made with a newer Stalagmight and is open read-only.",
       "genericFailure": "Failed to save project",
       "saveNow": "Save now",

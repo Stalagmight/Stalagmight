@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::conversion_notice::ConversionFile;
 use super::legacy_upgrade::{self, UpgradeError};
-use super::open_file::{FileOrigin, FileState, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+use super::open_file::{guard_refusal, FileOrigin, FileState, READ_ONLY_FILE_CODE};
 use crate::models::survey::Project;
 use crate::persistence::stalx_v2::{write_atomic, Guard, History, Mode, WriteError};
 
@@ -182,7 +182,8 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
 /// How the save treats a destination that is not what it last read or wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnDisk {
-    /// The guard (plan 6.5): refuse with [`EXTERNALLY_MODIFIED_CODE`].
+    /// The guard (plan 6.5): refuse with
+    /// [`EXTERNALLY_MODIFIED_CODE`](super::EXTERNALLY_MODIFIED_CODE).
     Checked,
     /// Replace it (the user chose Overwrite after the guard refused).
     Overwrite,
@@ -453,7 +454,7 @@ impl AppState {
                         e @ (WriteError::ExternallyModified { .. } | WriteError::Exists { .. }),
                     ) => {
                         tracing::warn!(error = %e, "Save refused: the file changed on disk");
-                        CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
+                        CommandResult::failure(guard_refusal(&e))
                     }
                     UpgradeError::Write(WriteError::Io { error, .. }) => {
                         save_failure("Failed to save", &target, &anyhow::Error::from(error))

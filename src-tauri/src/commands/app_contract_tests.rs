@@ -137,12 +137,13 @@ fn test_csp_allows_the_tauri_ipc_origin() {
 /// The `.stalx` version 2 file-status commands the frontend's save-conflict
 /// prompt, read-only and conversion banners, status bar and dirty tracking
 /// call.
-const FILE_STATUS_COMMANDS: [&str; 5] = [
+const FILE_STATUS_COMMANDS: [&str; 6] = [
     "save_project_overwriting",
     "take_conversion_notice",
     "has_unsaved_changes",
     "project_read_only_reason",
     "project_file_is_legacy",
+    "project_file_reload_refusal",
 ];
 
 /// Every `.ts` / `.tsx` file under `dir` that is not a test.
@@ -206,7 +207,7 @@ fn the_file_status_commands_are_registered_and_called_by_the_frontend() {
 #[test]
 fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     use super::project;
-    use crate::core::state::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+    use crate::core::state::{EXTERNALLY_MODIFIED_CODE, FILE_MISSING_MARKER, READ_ONLY_FILE_CODE};
     use crate::core::{AppState, Command};
     use crate::models::survey::{LineMeta, Project, StartAt};
     use crate::models::{ShotData, ShotUpdates};
@@ -237,8 +238,12 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     let app = tauri::test::mock_app();
     app.manage(AppState::new().unwrap());
     let state = || app.state::<AppState>();
+    let reload_refusal = || {
+        tauri::async_runtime::block_on(project::project_file_reload_refusal(app.handle().clone()))
+    };
 
-    // Nothing open: nothing to say.
+    // Nothing open: nothing to say, and nothing to reopen.
+    assert!(reload_refusal().is_some());
     assert!(!project::has_unsaved_changes(state()));
     assert_eq!(project::take_conversion_notice(state()), None);
     assert_eq!(project::project_read_only_reason(state()), None);
@@ -271,12 +276,38 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     std::fs::write(&path, &theirs).unwrap();
     let refused = project::save_project(state(), None, None);
     assert!(!refused.success);
-    assert!(refused
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .starts_with(EXTERNALLY_MODIFIED_CODE));
+    let error = refused.error.unwrap_or_default();
+    assert!(error.starts_with(EXTERNALLY_MODIFIED_CODE), "{error}");
+    // Changed, not gone: the prompt may offer the file's version, which opens.
+    assert!(
+        !error.contains(FILE_MISSING_MARKER),
+        "a changed file is not a missing one: {error}"
+    );
+    assert_eq!(reload_refusal(), None);
     assert!(project::has_unsaved_changes(state()));
+
+    // Moved away: the refusal says the file is gone (the prompt then offers
+    // no reopen), and the reopen check refuses before any close. Injection:
+    // dropping the marker from `guard_refusal`, or answering `None` from the
+    // check, fails here.
+    let moved = dir.path().join("moved.stalx");
+    std::fs::rename(&path, &moved).unwrap();
+    let refused = project::save_project(state(), None, None);
+    let error = refused.error.unwrap_or_default();
+    assert!(
+        error.starts_with(&format!(
+            "{EXTERNALLY_MODIFIED_CODE}: {FILE_MISSING_MARKER}: "
+        )),
+        "{error}"
+    );
+    assert!(error.contains("moved or deleted"), "{error}");
+    assert!(reload_refusal().is_some());
+    assert!(project::has_unsaved_changes(state()), "the edits are kept");
+    // Something that is not a project in its place: still no reopen.
+    std::fs::write(&path, b"not a project").unwrap();
+    assert!(reload_refusal().is_some());
+    std::fs::rename(&moved, &path).unwrap();
+    assert_eq!(reload_refusal(), None);
     let overwritten = project::save_project_overwriting(state(), None);
     assert!(overwritten.success, "{:?}", overwritten.error);
     assert!(!project::has_unsaved_changes(state()));

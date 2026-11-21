@@ -8,15 +8,15 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { saveProjectAs } from '../../utils/projectActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
-import { classifySaveError } from '../../utils/saveErrors';
+import { classifySaveError, isFileMissingError } from '../../utils/saveErrors';
 import { extractFilename } from '../../utils/path';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 
 type Choice = 'overwrite' | 'saveAs' | 'reload';
 
 /**
- * The save prompt for a file another program changed since Stalagmight opened
- * it (`.stalx` v2, plan 6.5's external-modification guard): the save was
+ * The save prompt for a file another program changed, moved or deleted since
+ * Stalagmight opened it (`.stalx` v2, plan 6.5's external-modification guard): the save was
  * refused with `EXTERNALLY_MODIFIED` and nothing was written. The user decides
  * which version to keep, so this is a modal moment (docs/notifications.md:
  * data at risk), with three answers:
@@ -26,7 +26,13 @@ type Choice = 'overwrite' | 'saveAs' | 'reload';
  *   and moves the session to the new one.
  * - Use the file's version: reopen the file as it is now, discarding the
  *   unsaved changes. Not offered for a SpeleoDB project: its copy is managed
- *   by the sync, which has its own reload.
+ *   by the sync, which has its own reload. Not offered for a file that is
+ *   GONE either (moved or deleted: the refusal carries `FILE_MISSING`): there
+ *   is no file's version, and the prompt says the file was moved or deleted.
+ *   The answer first asks the backend whether the file opens as it is now
+ *   (`project_file_reload_refusal`), and closes the session (dropping the
+ *   unsaved changes) only when it does: a reopen that fails after the close
+ *   would leave the user with neither version.
  *
  * "Decide later" keeps editing; autosave stays paused (the autosave banner
  * says why) until a save lands.
@@ -37,6 +43,10 @@ export default function SaveConflictDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const filePath = useProjectStore((s) => s.project?.file_path ?? null);
   const linked = useSpeleoStore((s) => s.link !== null);
+  // Every opener hands the refusal over (`surfaceSaveFailure`, the SpeleoDB
+  // exit's keep-the-lock save): moved or deleted reads differently, and
+  // offers no reopen.
+  const missing = useUIStore((s) => isFileMissingError(typeof s.dialogData.error === 'string' ? s.dialogData.error : null));
   const [busy, setBusy] = useState<Choice | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,6 +83,16 @@ export default function SaveConflictDialog() {
       }
       const path = filePath;
       if (!path) return;
+      // The close below drops the unsaved changes, so it happens only for a
+      // file the reopen will take: gone, unreadable or no longer a project
+      // keeps the session and says why.
+      const refusal = await invokeIpc<string | null>('project_file_reload_refusal', undefined, {
+        purpose: "check the file opens before dropping the unsaved changes for the file's version",
+      });
+      if (refusal) {
+        setError(t('dialogs.saveConflict.reloadRefused', { error: refusal }));
+        return;
+      }
       // The path is the open one, so a plain load would be refused as already
       // open and change nothing. Close the session first: the user chose to
       // lose the unsaved changes, and the close drops them without saving.
@@ -92,7 +112,7 @@ export default function SaveConflictDialog() {
 
   return (
     <DialogWrapper
-      title={t('dialogs.saveConflict.title')}
+      title={t(missing ? 'dialogs.saveConflict.missing.title' : 'dialogs.saveConflict.title')}
       onClose={closeDialog}
       size="md"
       closeOnBackdropClick={false}
@@ -100,9 +120,11 @@ export default function SaveConflictDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="save-conflict-lead">
-          {t('dialogs.saveConflict.lead', { fileName })}
+          {t(missing ? 'dialogs.saveConflict.missing.lead' : 'dialogs.saveConflict.lead', { fileName })}
         </p>
-        <p className="text-sm text-text-secondary">{t('dialogs.saveConflict.unsaved')}</p>
+        <p className="text-sm text-text-secondary">
+          {t(missing ? 'dialogs.saveConflict.missing.unsaved' : 'dialogs.saveConflict.unsaved')}
+        </p>
 
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="save-conflict-error">
@@ -112,7 +134,9 @@ export default function SaveConflictDialog() {
 
         <ul className="space-y-2">
           <li className="flex items-start justify-between gap-3">
-            <span className="text-sm text-text-secondary pt-1">{t('dialogs.saveConflict.overwriteDetail')}</span>
+            <span className="text-sm text-text-secondary pt-1">
+              {t(missing ? 'dialogs.saveConflict.missing.overwriteDetail' : 'dialogs.saveConflict.overwriteDetail')}
+            </span>
             <Button
               variant="primary"
               onClick={() => void run('overwrite')}
@@ -125,13 +149,15 @@ export default function SaveConflictDialog() {
           </li>
           {!linked && (
             <li className="flex items-start justify-between gap-3">
-              <span className="text-sm text-text-secondary pt-1">{t('dialogs.saveConflict.saveAsDetail')}</span>
+              <span className="text-sm text-text-secondary pt-1">
+                {t(missing ? 'dialogs.saveConflict.missing.saveAsDetail' : 'dialogs.saveConflict.saveAsDetail')}
+              </span>
               <Button onClick={() => void run('saveAs')} disabled={busy !== null} data-testid="save-conflict-save-as">
                 {t('dialogs.saveConflict.saveAs')}
               </Button>
             </li>
           )}
-          {!linked && filePath && (
+          {!linked && !missing && filePath && (
             <li className="flex items-start justify-between gap-3">
               <span className="text-sm text-text-secondary pt-1">{t('dialogs.saveConflict.reloadDetail')}</span>
               <Button variant="danger" onClick={() => void run('reload')} disabled={busy !== null} data-testid="save-conflict-reload">

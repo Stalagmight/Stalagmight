@@ -9,7 +9,7 @@ use crate::persistence::stalx_v2::{
 };
 
 use super::legacy_upgrade::{self, UpgradeError};
-use super::open_file::{FileOrigin, EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+use super::open_file::{guard_refusal, FileOrigin, READ_ONLY_FILE_CODE};
 use super::project_io::{generator, same_file};
 use super::AppState;
 
@@ -763,7 +763,7 @@ impl AppState {
 fn rename_write_failure(e: &WriteError) -> CommandResult {
     match e {
         WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
-            CommandResult::failure(format!("{EXTERNALLY_MODIFIED_CODE}: {e}"))
+            CommandResult::failure(guard_refusal(e))
         }
         WriteError::Io { .. } => CommandResult::failure(format!("Failed to rename project: {e}")),
     }
