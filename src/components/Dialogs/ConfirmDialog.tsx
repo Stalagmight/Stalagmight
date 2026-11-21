@@ -8,14 +8,34 @@ import { DialogWrapper } from './DialogWrapper';
 import type { DeleteShotImpact, LineRelationships } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { SplitNameFields, useSplitNames } from './SplitNameFields';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+
+/** `"Upstream Side" and its 2 shots (13.0 m)`: the line a delete removes, by
+ *  name, with what goes with it (demo finding I-9: the dialog said "this
+ *  line"). Only the name when the line has no shots. */
+export function describeLineForDelete(
+  line: { name: string | null; shots: ReadonlyArray<{ length: number }> },
+  lengthDecimals: number,
+): string {
+  const name = `"${lineDisplayName(line.name)}"`;
+  const count = line.shots.length;
+  if (count === 0) return name;
+  const length = line.shots.reduce((sum, shot) => sum + shot.length, 0);
+  const shots = count === 1 ? '1 shot' : `${count} shots`;
+  return `${name} and its ${shots} (${formatFixed(length, undefined, lengthDecimals)} m)`;
+}
 
 export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShot, deleteLine, deleteLastShotAndLine, deleteShotAndSplit } = useProjectStore();
+  const precision = useDecimalPrecision();
 
   const type = dialogData.type as 'station' | 'shot' | 'line' | 'last-shot' | undefined;
   const message = dialogData.message as string | undefined;
   const lineId = dialogData.lineId as number | undefined;
+  const line = useProjectStore((s) => (lineId === undefined ? undefined : s.project?.lines.find((l) => l.id === lineId)));
   const shotId = dialogData.shotId as number | undefined;
   const totalShots = dialogData.totalShots as number | undefined;
   const splitRequired = dialogData.splitRequired as boolean | undefined;
@@ -182,9 +202,13 @@ export default function ConfirmDialog() {
       case 'shot':
         return 'Are you sure you want to delete this shot?';
       case 'last-shot':
-        return 'Deleting the last shot will remove the entire line. Continue?';
+        return line
+          ? `Deleting the last shot will remove the entire line "${lineDisplayName(line.name)}". Continue?`
+          : 'Deleting the last shot will remove the entire line. Continue?';
       case 'line':
-        return 'Are you sure you want to delete this line and all its shots?';
+        return line
+          ? `Delete the line ${describeLineForDelete(line, precision.length)}?`
+          : 'Are you sure you want to delete this line and all its shots?';
       default:
         return 'Are you sure?';
     }
@@ -201,7 +225,7 @@ export default function ConfirmDialog() {
   return (
     <DialogWrapper title={getTitle()} onClose={closeDialog} size="md" data-testid="confirm-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary">{message ?? getDefaultMessage()}</p>
+        <p className="text-text-secondary" data-testid="confirm-dialog-message">{message ?? getDefaultMessage()}</p>
 
         {type === 'station' && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">

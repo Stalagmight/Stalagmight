@@ -1994,8 +1994,9 @@ user to delete the connected shots instead.
 
 **Deleting a Line:**
 1. Right-click line in Sections Panel → Delete
-2. Confirmation: "Are you sure you want to delete this line and all its
-   shots?", plus a list of what goes with it: its connections to other lines
+2. Confirmation naming the line: "Delete the line "Upstream Side" and its 2
+   shots (13.0 m)?" (demo finding I-9; deleting a line's last shot names it
+   too), plus a list of what goes with it: its connections to other lines
    (the shared station stays for them), the closures and zero datums on stations
    only this line passes, its map placement, and hand-moved station positions
 3. Confirm → Line removed
