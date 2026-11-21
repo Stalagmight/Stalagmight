@@ -61,10 +61,42 @@
 //! edited line's end of it survives on the partner line under its own id and
 //! name, with the partner's station as its alias, where the atomic route
 //! deletes that closure with its station and the partner keeps its own
-//! station. The comparison undoes exactly those promotions (the ones the
-//! singles' own previews reported whose survivor is a station of the edited
-//! line the atomic route deleted) before it compares the stored surveys
-//! (seed 3063). A loop closure between two partner pieces the range cuts
+//! station (seed 3063). The singles also promote such a closure the other
+//! way round, the edited line's piece moving onto the partner: 4.2 moves the
+//! piece of the closure's first end unless only the other is held by a
+//! datum, and after the first single delete neither piece is (farm seeds
+//! 17505500, 17510437). Either way the next single delete takes the merged
+//! station off the edited line again (it is the next removed slot), so the
+//! intermediate merge leaves two traces and nothing else. On the partner's
+//! station: the edited line's end stays as an alias with no line (plan 5.1;
+//! when that end was the survivor, the station goes back to its first
+//! alias's identity, U1-3, which can be the partner station's other alias,
+//! so the same two ids are swapped: seed 17517958), and the merge joined the
+//! two ends' comments (plan 5.1, survivor first), which the station keeps
+//! for its other lines (plan 5.4; seeds 17503128, 17509825). On the edited
+//! line's piece: dragged by the merge, it is cut loose again where the merge
+//! left it (a fresh placement), while the atomic route held it at its still
+//! point (plan 4.1 (a); seed 17510437; seed 17510181 drags it although the
+//! range promotes the same closure the same way, since the range has
+//! already cut the edited line off the moving piece). So a promotion of a
+//! single delete with one end on the edited line that the atomic route no
+//! longer has (deleted, or re-identified by U1-3: seed 17515357) is matched
+//! by its other end's slot on a partner line in both routes, and the
+//! comparison asserts that every line through that junction shows it by the
+//! same name in both, that the singles' ids are the atomic route's plus at
+//! most the edited line's end, that the singles' comment is the join of the
+//! two ends' comments as they were when that delete ran, and that the atomic
+//! route's is the partner end's own (that same join when the range promoted
+//! the closure too), before it gives the singles' junction the atomic
+//! route's station record. And when a single delete's sweep promoted
+//! anything and the routes leave the edited line's first station apart, the
+//! lines of its piece (in the atomic result) are compared as partners are,
+//! under three positive assertions: the atomic route left that station
+//! exactly where it was measured (its piece holding no datum), every slot of
+//! those lines and every placement on them is the atomic route's moved by
+//! one vector, and a single delete that moved that station without a datum
+//! in its piece promoted a closure (each single delete is checked against
+//! plan 4.1 (a) on its own). A loop closure between two partner pieces the range cuts
 //! apart is promoted by the range's own sweep, which moves one of the two
 //! pieces onto the other by the closure's measured gap (plan 5.5; two free
 //! pieces: the piece of the closure's first end moves, plan 4.2), so the
@@ -426,7 +458,9 @@ struct Documented {
     /// the lines of every piece the atomic route cut loose and placed (the
     /// edited line's own head, when the junction it leaves was what tied it
     /// to a datum: the single deletes drag it by the first gap-close while
-    /// it is still attached, the same divergence seen from the other side).
+    /// it is still attached, the same divergence seen from the other side),
+    /// and the lines of the edited line's piece a single delete's merge
+    /// dragged ([`Dragged`]).
     allowed: BTreeSet<LineId>,
     /// The measured layout before either route ran (the twins are asserted
     /// equal there), so "the atomic route is the one that did not move it"
@@ -440,10 +474,11 @@ struct Documented {
     /// docs).
     propagation: [f64; 3],
     /// The closures the singles' sweep promoted on an intermediate state
-    /// (module docs), as `(survivor, retired)`: the survivor is a station the
-    /// atomic route deleted, the retired one its partner-side end, which the
-    /// atomic route kept.
-    singles_promotions: Vec<(StationId, StationId)>,
+    /// with one end on the edited line that the atomic route no longer has
+    /// (module docs): their junctions, found by the other end's slot.
+    absorbed: Vec<Mirrored>,
+    /// The edited line's piece the singles' sweep dragged (module docs).
+    dragged: Option<Dragged>,
     /// The closures the range's own sweep promoted, each with the piece it
     /// moved (module docs).
     range_promotions: Vec<RangePromotion>,
@@ -465,13 +500,48 @@ struct RangePromotion {
 /// A closure both routes promoted, in opposite directions (module docs),
 /// found by its id; its junction is found by slot, on a partner line (one
 /// neither route edits), since the delete can give a station back an alias
-/// identity (U1) and a preview names it as it was.
+/// identity (U1) and a preview names it as it was. Also a closure only the
+/// singles promoted with an end on the edited line (`absorbed`).
 struct Mirrored {
     closure: ClosureId,
     /// The singles' junction id.
     singles_id: StationId,
     /// The atomic route's junction, which the comparison gives the singles'.
     atomic_station: Station,
+    /// For a closure the singles' sweep promoted with one end on the edited
+    /// line: what that merge must have left (module docs).
+    absorbed: Option<Absorbed>,
+}
+
+/// What a singles' merge of an edited line's station and a partner's leaves
+/// on the junction (module docs).
+struct Absorbed {
+    /// The edited line's end, which the singles may keep as an alias.
+    edited_end: StationId,
+    /// The singles' comment: the two ends' comments joined (plan 5.1).
+    comment: Option<String>,
+    /// The atomic route's: the partner end's own, or the same join when the
+    /// range promoted the closure too.
+    atomic_comment: Option<String>,
+}
+
+/// The edited line's piece the singles' sweep dragged (module docs): the
+/// lines of its first station's piece in the atomic result, and how far the
+/// singles left that station from the atomic route's.
+struct Dragged {
+    head: StationId,
+    lines: BTreeSet<LineId>,
+    shift: [f64; 2],
+    /// Whether the atomic route had to hold `head` still: not when the
+    /// range's own sweep merged the edited line's piece with another.
+    held: bool,
+}
+
+/// A promotion one single delete's preview reported, with the survey that
+/// delete started from (the preview names stations as they were there).
+struct SinglePromotion {
+    promotion: Promotion,
+    before: Project,
 }
 
 /// Every reference to station `from` in `p` made to `to` (lines, hand
@@ -503,40 +573,14 @@ fn rekey(p: &mut Project, from: StationId, to: StationId) {
     }
 }
 
-/// `p` with each promotion `(survivor, retired)` the singles' sweep made
-/// undone: the survivor, which carries `retired` as an alias, becomes
-/// `retired` again under that alias's name, everywhere it is referenced.
-/// Only a promotion whose alias is still there is undone; any other trace of
-/// the merge (a joined comment) is left for the comparison to report.
-fn undo_promotions(p: &Project, promotions: &[(StationId, StationId)]) -> Project {
-    let mut p = p.clone();
-    for &(survivor, retired) in promotions {
-        if p.stations.contains_key(&retired) {
-            continue;
-        }
-        let Some(mut station) = p.stations.remove(&survivor) else {
-            continue;
-        };
-        let Some(at) = station.aliases.iter().position(|a| a.id == retired) else {
-            p.stations.insert(survivor, station);
-            continue;
-        };
-        let alias = station.aliases.remove(at);
-        station.id = retired;
-        if let Some(name) = alias.name {
-            station.name = name;
-        }
-        p.stations.insert(retired, station);
-        rekey(&mut p, survivor, retired);
-    }
-    p
-}
-
-/// `p` (the singles' survey) with each mirrored junction given the atomic
-/// route's identity: the station record the atomic route kept, under its
-/// id, everywhere it is referenced. What a line shows of the junction is
-/// asserted equal first ([`mirrored_junction_problems`]).
-fn adopt_atomic_junctions(p: &Project, mirrored: &[Mirrored]) -> Project {
+/// `p` (the singles' survey) with each mirrored (or absorbed) junction
+/// given the atomic route's identity: the station record the atomic route
+/// kept, under its id, everywhere it is referenced. What a line shows of the
+/// junction is asserted first ([`mirrored_junction_problems`]).
+fn adopt_atomic_junctions<'a>(
+    p: &Project,
+    mirrored: impl Iterator<Item = &'a Mirrored>,
+) -> Project {
     let mut p = p.clone();
     for m in mirrored {
         let atomic_id = m.atomic_station.id;
@@ -630,7 +674,230 @@ fn mirrored_promotion(
             .stations
             .get(&station_at_slot(atomic, slot)?)?
             .clone(),
+        absorbed: None,
     })
+}
+
+/// What a merge leaves of the survivor's and the retired station's comments
+/// (plan 5.1, restated): both, the survivor's first, a blank line apart; one
+/// text once; an empty comment counts as none.
+fn joined_comment(survivor: Option<String>, retired: Option<String>) -> Option<String> {
+    let keep = survivor.filter(|c| !c.is_empty());
+    let gone = retired.filter(|c| !c.is_empty());
+    match (keep, gone) {
+        (Some(k), Some(g)) if k == g => Some(k),
+        (Some(k), Some(g)) => Some(format!("{k}\n\n{g}")),
+        (k, g) => k.or(g),
+    }
+}
+
+/// A closure a single delete's sweep promoted with one end on the edited
+/// line (as it was when that delete ran) that the atomic route no longer
+/// has, and its other end a station the atomic route kept (module docs):
+/// the junction in both routes, found by that other end's slot on a line
+/// other than the edited one, and what the singles' merge must have left on
+/// it. `range_promoted` says the range's own sweep promoted the closure the
+/// same way.
+fn absorbed_promotion(
+    single: &SinglePromotion,
+    atomic: &Project,
+    singles: &Project,
+    edited: LineId,
+    range_promoted: bool,
+) -> Option<Mirrored> {
+    let before = &single.before;
+    let promotion = &single.promotion;
+    let on_edited: BTreeSet<StationId> = before
+        .line_stations(edited)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .collect();
+    let gone = |s: StationId| on_edited.contains(&s) && !atomic.stations.contains_key(&s);
+    let (edited_end, partner_end) = match (gone(promotion.survivor), gone(promotion.retired)) {
+        (true, false) => (promotion.survivor, promotion.retired),
+        (false, true) => (promotion.retired, promotion.survivor),
+        _ => return None,
+    };
+    if !atomic.stations.contains_key(&partner_end) {
+        return None;
+    }
+    let closure = &promotion.closure;
+    let via = if closure.a == partner_end {
+        closure.a_via
+    } else {
+        closure.b_via
+    };
+    let line = via.filter(|l| *l != edited).or_else(|| {
+        before
+            .topology()
+            .lines_of(partner_end)
+            .into_iter()
+            .find(|l| *l != edited)
+    })?;
+    let index = before
+        .line_stations(line)?
+        .iter()
+        .position(|s| *s == partner_end)?;
+    let comment_of = |s: StationId| before.stations.get(&s).and_then(|st| st.comment.clone());
+    let comment = joined_comment(
+        comment_of(promotion.survivor),
+        comment_of(promotion.retired),
+    );
+    let atomic_comment = if range_promoted {
+        comment.clone()
+    } else {
+        comment_of(partner_end)
+    };
+    Some(Mirrored {
+        closure: closure.id,
+        singles_id: station_at_slot(singles, (line, index))?,
+        atomic_station: atomic
+            .stations
+            .get(&station_at_slot(atomic, (line, index))?)?
+            .clone(),
+        absorbed: Some(Absorbed {
+            edited_end,
+            comment,
+            atomic_comment,
+        }),
+    })
+}
+
+/// Whether the piece of `station` holds a datum.
+fn piece_holds_datum(p: &Project, station: StationId) -> bool {
+    let topology = p.topology();
+    let Some(component) = topology.component_of(station) else {
+        return false;
+    };
+    p.datums
+        .iter()
+        .any(|d| topology.component_of(d.station) == Some(component))
+}
+
+/// The edited line's piece the singles' sweep dragged on the way (module
+/// docs), or `None` when the routes leave its first station `head` together
+/// (then everything stays strict). `range_junctions` are the stations of
+/// the atomic result the range's own sweep promoted closures onto.
+fn dragged_piece(
+    atomic: &Project,
+    singles: &Project,
+    head: StationId,
+    range_junctions: &[StationId],
+) -> Option<Dragged> {
+    let a = atomic.raw_positions().xy(head)?;
+    let s = singles.raw_positions().xy(head)?;
+    let shift = [s[0] - a[0], s[1] - a[1]];
+    if shift[0].abs().max(shift[1].abs()) <= POSITION_TOLERANCE_M {
+        return None;
+    }
+    let topology = atomic.topology();
+    let component = topology.component_of(head)?;
+    let lines = atomic
+        .lines()
+        .iter()
+        .filter(|l| {
+            l.stations()
+                .any(|st| topology.component_of(st) == Some(component))
+        })
+        .map(|l| l.id)
+        .collect();
+    let held = !range_junctions
+        .iter()
+        .any(|s| topology.component_of(*s) == Some(component));
+    Some(Dragged {
+        head,
+        lines,
+        shift,
+        held,
+    })
+}
+
+/// The positive assertions on a dragged piece (module docs): the atomic
+/// route held its head where it was measured (`pre`) unless a datum holds it
+/// or the range's own sweep merged the piece with another, the singles'
+/// layout of its lines is the atomic route's moved by the one shift, and
+/// both hold as many placements on it. Which stations those name may differ:
+/// the merge drops the moving piece's placement (plan 4.2) and the piece cut
+/// loose again takes its lowest station (plan 4.1 step 2; seed 17510181).
+fn dragged_problems(
+    pre: &Project,
+    atomic: &Project,
+    singles: &Project,
+    d: &Dragged,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let (raw_pre, raw_atomic, raw_singles) = (
+        pre.raw_positions(),
+        atomic.raw_positions(),
+        singles.raw_positions(),
+    );
+    if d.held && !piece_holds_datum(atomic, d.head) {
+        let (was, is) = (raw_pre.xy(d.head), raw_atomic.xy(d.head));
+        let held = matches!((was, is), (Some(w), Some(i))
+            if (w[0] - i[0]).abs().max((w[1] - i[1]).abs()) <= POSITION_TOLERANCE_M);
+        if !held {
+            problems.push(format!(
+                "the ATOMIC route moved the edited line's first station {} (its still point, \
+                 plan 4.1 (a)): was {was:?}, now {is:?}",
+                d.head
+            ));
+        }
+    }
+    let moved = |a: [f64; 2]| [a[0] + d.shift[0], a[1] + d.shift[1]];
+    let apart = |a: [f64; 2], b: [f64; 2]| {
+        (a[0] - b[0]).abs().max((a[1] - b[1]).abs()) > POSITION_TOLERANCE_M
+    };
+    let mut stations = BTreeSet::new();
+    for &line in &d.lines {
+        let (Some(on_atomic), Some(on_singles)) =
+            (atomic.line_stations(line), singles.line_stations(line))
+        else {
+            problems.push(format!("dragged line {line} is missing from one route"));
+            continue;
+        };
+        if on_atomic.len() != on_singles.len() {
+            problems.push(format!(
+                "dragged line {line} has {} stations after the range and {} after the singles",
+                on_atomic.len(),
+                on_singles.len()
+            ));
+            continue;
+        }
+        for (index, (a, s)) in on_atomic.iter().zip(on_singles).enumerate() {
+            stations.insert(*a);
+            match (raw_atomic.xy(*a), raw_singles.xy(*s)) {
+                (Some(at), Some(st)) if !apart(moved(at), st) => {}
+                (at, st) => problems.push(format!(
+                    "slot {line}:{index} of the dragged piece is not the atomic route's moved by \
+                     {:?}: atomic {at:?}, singles {st:?}",
+                    d.shift
+                )),
+            }
+        }
+    }
+    let placed = |p: &Project, on: &BTreeSet<StationId>| -> Vec<StationId> {
+        p.placements
+            .iter()
+            .filter(|pl| on.contains(&pl.station))
+            .map(|pl| pl.station)
+            .collect()
+    };
+    let on_singles: BTreeSet<StationId> = d
+        .lines
+        .iter()
+        .filter_map(|line| singles.line_stations(*line))
+        .flatten()
+        .copied()
+        .collect();
+    let (placed_atomic, placed_singles) = (placed(atomic, &stations), placed(singles, &on_singles));
+    if placed_atomic.len() != placed_singles.len() {
+        problems.push(format!(
+            "the dragged piece holds the placements {placed_atomic:?} after the range and \
+             {placed_singles:?} after the singles"
+        ));
+    }
+    problems
 }
 
 /// What the user sees of a mirrored junction must not depend on the route:
@@ -661,25 +928,47 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
             ));
         }
     }
-    if a.comment != s.comment {
-        problems.push(format!(
-            "the junction of closure {} (promoted both ways) holds the comment {:?} after the \
-             range and {:?} after the singles",
-            m.closure, a.comment, s.comment
-        ));
-    }
     let ids = |station: &Station| -> BTreeSet<StationId> {
         std::iter::once(station.id)
             .chain(station.aliases.iter().map(|alias| alias.id))
             .collect()
     };
-    if ids(a) != ids(s) {
+    let Some(absorbed) = &m.absorbed else {
+        if a.comment != s.comment {
+            problems.push(format!(
+                "the junction of closure {} (promoted both ways) holds the comment {:?} after \
+                 the range and {:?} after the singles",
+                m.closure, a.comment, s.comment
+            ));
+        }
+        if ids(a) != ids(s) {
+            problems.push(format!(
+                "the junction of closure {} (promoted both ways) keeps the ids {:?} after the \
+                 range and {:?} after the singles",
+                m.closure,
+                ids(a),
+                ids(s)
+            ));
+        }
+        return problems;
+    };
+    if s.comment != absorbed.comment || a.comment != absorbed.atomic_comment {
         problems.push(format!(
-            "the junction of closure {} (promoted both ways) keeps the ids {:?} after the range \
-             and {:?} after the singles",
+            "the junction of closure {} (promoted by a single delete) holds the comment {:?} \
+             after the singles and {:?} after the range, where the merge gives {:?} and the \
+             range {:?}",
+            m.closure, s.comment, a.comment, absorbed.comment, absorbed.atomic_comment
+        ));
+    }
+    let extra: BTreeSet<StationId> = ids(s).difference(&ids(a)).copied().collect();
+    if !ids(a).is_subset(&ids(s)) || extra.iter().any(|id| *id != absorbed.edited_end) {
+        problems.push(format!(
+            "the junction of closure {} (promoted by a single delete) keeps the ids {:?} after \
+             the range and {:?} after the singles: only the edited line's end {} may be extra",
             m.closure,
             ids(a),
-            ids(s)
+            ids(s),
+            absorbed.edited_end
         ));
     }
     problems
@@ -718,17 +1007,16 @@ impl Documented {
         self.strip_partner_placements(&observed.project, observed.stored.clone())
     }
 
-    /// The singles' stored survey with their intermediate promotions undone
-    /// ([`undo_promotions`]), the mirrored junctions under the atomic route's
-    /// identity ([`adopt_atomic_junctions`]) and the partner placements left
-    /// out.
+    /// The singles' stored survey with the mirrored and absorbed junctions
+    /// under the atomic route's identity ([`adopt_atomic_junctions`]) and the
+    /// partner placements left out.
     fn singles_without_promotions(&self, observed: &Observed) -> serde_json::Value {
-        if self.singles_promotions.is_empty() && self.mirrored.is_empty() {
+        if self.absorbed.is_empty() && self.mirrored.is_empty() {
             return self.without_partner_placements(observed);
         }
         let project = adopt_atomic_junctions(
-            &undo_promotions(&observed.project, &self.singles_promotions),
-            &self.mirrored,
+            &observed.project,
+            self.mirrored.iter().chain(&self.absorbed),
         );
         let stored = stored_of(&project, observed.mask);
         self.strip_partner_placements(&project, stored)
@@ -1309,6 +1597,11 @@ const RANGE_PROMOTION_SHAPE: &str = "range-promotion";
 /// The doomed-anchor shape where both routes promoted one closure, in
 /// opposite directions (module docs).
 const MIRRORED_PROMOTION_SHAPE: &str = "mirrored-promotion";
+/// A closure a single delete's sweep promoted with an end on the edited line
+/// the atomic route no longer has (module docs).
+const ABSORBED_PROMOTION_SHAPE: &str = "absorbed-promotion";
+/// The edited line's piece a single delete's merge dragged (module docs).
+const DRAGGED_PIECE_SHAPE: &str = "dragged-piece";
 
 const PAIRS: &[Pair] = &[
     Pair {
@@ -1414,17 +1707,19 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     if !ranged.success {
         return None;
     }
-    let mut promoted = Vec::new();
+    // The edited line's first station: every single delete's still point
+    // (plan 4.1 (a)) unless its piece holds a datum.
+    let head = pre.line(line_id)?.start;
+    let mut promoted: Vec<SinglePromotion> = Vec::new();
+    let mut head_moved = Vec::new();
     for _ in start..=end {
         let live = shot_ids(&twins.right, line_id);
         let &target = live.get(start)?;
-        if let Some(preview) = twins
-            .right
-            .get_project_state()
-            .and_then(|p| p.preview_delete_shot(line_id, target).ok())
-        {
-            promoted.extend(preview.promoted_closures);
-        }
+        let before_step = twins.right.get_project_state()?;
+        let step: Vec<Promotion> = before_step
+            .preview_delete_shot(line_id, target)
+            .map(|preview| preview.promoted_closures)
+            .unwrap_or_default();
         let single = twins.right.execute(Command::DeleteShot {
             line_id,
             shot_id: target,
@@ -1434,28 +1729,58 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
             // check on each shot, the loop guard): no state to compare.
             return None;
         }
+        let after_step = twins.right.get_project_state()?;
+        if step.is_empty() && !piece_holds_datum(&after_step, head) {
+            let (was, is) = (
+                before_step.raw_positions().xy(head),
+                after_step.raw_positions().xy(head),
+            );
+            if let (Some(was), Some(is)) = (was, is) {
+                if (was[0] - is[0]).abs().max((was[1] - is[1]).abs()) > POSITION_TOLERANCE_M {
+                    head_moved.push(format!(
+                        "the single delete of shot {target} moved the edited line's first \
+                         station {head} from {was:?} to {is:?} and promoted nothing (plan 4.1 \
+                         (a): its still point)"
+                    ));
+                }
+            }
+        }
+        promoted.extend(step.into_iter().map(|promotion| SinglePromotion {
+            promotion,
+            before: before_step.clone(),
+        }));
     }
     let mut cut_loose = Vec::new();
     let documented = partners.map(|partners| {
         let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id);
         cut_loose = problems;
         let edited_head = lines.contains(&line_id);
-        let mut allowed = partners.clone();
-        allowed.extend(lines);
-        let propagation = propagation_bound(&allowed, &raw_of(&twins.left), &raw_of(&twins.right));
-        // A closure the range promoted too is none of the intermediate kind:
-        // the mirrored kind when the range moved its other end. Of the rest,
-        // only a promotion whose survivor is a station of the edited line
-        // that the atomic route deleted, and whose retired end it kept, is
-        // the intermediate-state kind (module docs).
         let atomic = twins.left.get_project_state();
         let singles = twins.right.get_project_state();
-        let edited: BTreeSet<StationId> = pre
-            .line_stations(line_id)
-            .unwrap_or_default()
-            .iter()
-            .copied()
-            .collect();
+        let mut allowed = partners.clone();
+        allowed.extend(lines);
+        // The edited line's piece, when a single delete's merge dragged it
+        // (module docs): compared as the partners are, asserted rigid.
+        let dragged = match (&atomic, &singles) {
+            (Some(atomic), Some(singles)) if !promoted.is_empty() => {
+                let range_junctions: Vec<StationId> = atomic_promotions
+                    .iter()
+                    .filter_map(|range| {
+                        station_at_slot(atomic, junction_slot(&pre, &range.closure, line_id)?)
+                    })
+                    .collect();
+                dragged_piece(atomic, singles, head, &range_junctions)
+            }
+            _ => None,
+        };
+        if let Some(d) = &dragged {
+            allowed.extend(d.lines.iter().copied());
+        }
+        let propagation = propagation_bound(&allowed, &raw_of(&twins.left), &raw_of(&twins.right));
+        // A closure the range promoted the other way is the mirrored kind.
+        // Any other promotion of the singles with one end on the edited line
+        // that the atomic route no longer has is the absorbed kind (module
+        // docs), whether or not the range promoted it too.
         let moves_a = |p: &Promotion| p.retired == p.closure.a;
         let range_promotions = atomic.as_ref().map_or_else(Vec::new, |atomic| {
             atomic_promotions
@@ -1464,27 +1789,23 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
                 .collect()
         });
         let mut mirrored = Vec::new();
-        let mut singles_promotions = Vec::new();
-        for single in &promoted {
-            match atomic_promotions
-                .iter()
-                .find(|a| a.closure.id == single.closure.id)
-            {
-                Some(range) if moves_a(range) != moves_a(single) => {
-                    if let (Some(atomic), Some(singles)) = (&atomic, &singles) {
+        let mut absorbed = Vec::new();
+        if let (Some(atomic), Some(singles)) = (&atomic, &singles) {
+            for single in &promoted {
+                let range = atomic_promotions
+                    .iter()
+                    .find(|a| a.closure.id == single.promotion.closure.id);
+                match range {
+                    Some(range) if moves_a(range) != moves_a(&single.promotion) => {
                         mirrored.extend(mirrored_promotion(&pre, atomic, singles, line_id, range));
                     }
-                }
-                Some(_) => {}
-                None => {
-                    let (survivor, retired) = (single.survivor, single.retired);
-                    if edited.contains(&survivor)
-                        && atomic.as_ref().is_some_and(|p| {
-                            !p.stations.contains_key(&survivor) && p.stations.contains_key(&retired)
-                        })
-                    {
-                        singles_promotions.push((survivor, retired));
-                    }
+                    _ => absorbed.extend(absorbed_promotion(
+                        single,
+                        atomic,
+                        singles,
+                        line_id,
+                        range.is_some(),
+                    )),
                 }
             }
         }
@@ -1494,7 +1815,8 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
                 allowed,
                 before,
                 propagation,
-                singles_promotions,
+                absorbed,
+                dragged,
                 range_promotions,
                 mirrored,
             },
@@ -1513,11 +1835,18 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
         if !documented.mirrored.is_empty() {
             *found.shapes.entry(MIRRORED_PROMOTION_SHAPE).or_insert(0) += 1;
         }
+        if !documented.absorbed.is_empty() {
+            *found.shapes.entry(ABSORBED_PROMOTION_SHAPE).or_insert(0) += 1;
+        }
+        if documented.dragged.is_some() {
+            *found.shapes.entry(DRAGGED_PIECE_SHAPE).or_insert(0) += 1;
+        }
         found
             .problems
-            .extend(documented_divergence_problems(twins, documented));
+            .extend(documented_divergence_problems(twins, &pre, documented));
         found.problems.extend(cut_loose);
     }
+    found.problems.extend(head_moved);
     found.absorb(
         twins
             .unwind_and_compare(Mask::Strict)
@@ -1665,15 +1994,22 @@ fn pieces_cut_loose(
 ///    it was.
 /// 3. THE MIRRORED JUNCTION: what a line shows of it is the same in both
 ///    routes ([`mirrored_junction_problems`]).
-fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec<String> {
+fn documented_divergence_problems(
+    twins: &Twins,
+    pre: &Project,
+    documented: &Documented,
+) -> Vec<String> {
     let atomic = raw_of(&twins.left);
     let singles = raw_of(&twins.right);
     let p = twins.left.get_project_state().expect("a project is open");
     let topology = p.topology();
     let mut problems = Vec::new();
     if let Some(singles_project) = twins.right.get_project_state() {
-        for m in &documented.mirrored {
+        for m in documented.mirrored.iter().chain(&documented.absorbed) {
             problems.extend(mirrored_junction_problems(&p, &singles_project, m));
+        }
+        if let Some(dragged) = &documented.dragged {
+            problems.extend(dragged_problems(pre, &p, &singles_project, dragged));
         }
     }
     for (key, was) in &documented.before {
@@ -2413,7 +2749,9 @@ fn metamorphic_gate() {
 /// and 168 a piece whose placement station stayed while the sweep moved its
 /// still point onto it. Injections: a zero `propagation` bound fails 3023,
 /// no promotion undo fails 3063, the placement station alone fails 3019, the
-/// still point alone fails 168. Farm seeds 17514597 and 17515360 (the
+/// still point alone fails 168 (and, since the absorbed kind replaced the
+/// promotion undo, giving the singles' junction no atomic identity fails
+/// 3063). Farm seeds 17514597 and 17515360 (the
 /// sweep's 4 repeats, with closures) pin the promotion both routes make in
 /// opposite directions: the old promotion filter panics on the first (the v2
 /// encoder refuses the renamed junction), the range's own promotion moves
@@ -2464,6 +2802,68 @@ fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
         mirrored >= 2,
         "seeds 17514597 and 17515360 no longer reach the mirrored promotion ({mirrored}): re-pin \
          them"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// Farm seeds (with closures, the sweep's 4 repeats) where a single delete's
+/// sweep promotes a closure with an end on the edited line on the way, and
+/// the next single delete takes the merged station off the edited line again
+/// (module docs). 17503128 and 17507685: the partner moved onto the edited
+/// line's end, which leaves its comment, alone or joined with the partner's,
+/// on the partner's station. 17517958 and 17509825: that end went back to
+/// its first alias's identity, so the junction keeps the same two ids the
+/// other way round (and, on 17509825, the edited line's comment). 17505500
+/// and 17510437: the edited line's piece moved onto the partner, so the
+/// partner's station keeps the edited line's end as an alias and the edited
+/// line's piece is cut loose again where the merge left it; on 17510437's
+/// other repeats the range's own sweep merges the edited line's piece onto a
+/// partner too, so the head is not held there. 17515357: the range promotes
+/// the same closure the same way, after the edited line's end went back to
+/// its alias identity, so only the singles keep that end's own id.
+/// 17510181: the range promotes the same closure moving only partner lines,
+/// the singles drag the edited line's piece with them, and that piece's
+/// placement names another station. Injections: halving the dragged shift
+/// fails 17505500, 17510181 and 17510437; holding the head still on every
+/// dragged piece fails 17510437; joining the comments retired first fails
+/// 17507685; any other extra id than the edited line's end fails 17505500.
+#[test]
+fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
+    let _config = crate::test_helpers::isolated_config();
+    let mut problems = Vec::new();
+    let mut absorbed = 0;
+    let mut dragged = 0;
+    for seed in [
+        17_503_128, 17_505_500, 17_507_685, 17_509_825, 17_510_181, 17_510_437, 17_515_357,
+        17_517_958,
+    ] {
+        let outcomes = run_pairs(seed, 4, true, GATE_PRELUDE);
+        let outcome = &outcomes["range-shift-is-n-single-deletes"];
+        absorbed += outcome
+            .shapes
+            .get(ABSORBED_PROMOTION_SHAPE)
+            .copied()
+            .unwrap_or(0);
+        dragged += outcome
+            .shapes
+            .get(DRAGGED_PIECE_SHAPE)
+            .copied()
+            .unwrap_or(0);
+        problems.extend(outcome.problems.iter().cloned());
+    }
+    assert!(
+        absorbed >= 10,
+        "the pinned seeds no longer reach a promotion of the single deletes with an end on the \
+         edited line ({absorbed}): re-pin them"
+    );
+    assert!(
+        dragged >= 6,
+        "the pinned seeds no longer drag the edited line's piece ({dragged}): re-pin them"
     );
     assert!(
         problems.is_empty(),
