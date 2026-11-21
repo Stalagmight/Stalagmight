@@ -1,12 +1,12 @@
 import { useCollaboratorsSync } from '../../store/speleoCollaboratorsStore';
 import { lineDisplayName } from '../../utils/stationIdentity';
 import { LeftWorkspace } from './LeftWorkspace';
-import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
-import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
+import { useAutoSave } from '../../hooks/useAutoSave';
+import { SaveStatus } from './SaveStatus';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
@@ -952,69 +952,6 @@ export default function SingleSystemView() {
         />
       </footer>
     </div>
-  );
-}
-
-function SaveStatus({
-  status,
-  countdown,
-  isDirty,
-  onSave,
-}: {
-  status: AutoSaveStatus;
-  countdown: number;
-  isDirty: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  const linked = useSpeleoStore((s) => s.remoteProjectId !== null);
-
-  let text: string;
-  let className = '';
-
-  switch (status) {
-    case 'saving':
-      text = t('singleView.status.saving');
-      break;
-    case 'saved':
-      text = linked ? 'Saved locally' : t('singleView.status.saved');
-      break;
-    case 'pending':
-      text = t('singleView.status.autoSaveCountdown', { seconds: countdown });
-      break;
-    case 'error':
-      text = t('singleView.status.saveError');
-      className = 'text-red-400';
-      break;
-    case 'idle':
-    default:
-      text = isDirty
-        ? t('singleView.status.unsavedChanges')
-        : linked ? 'Saved locally' : t('singleView.status.saved');
-      if (isDirty) className = 'text-yellow-400';
-      break;
-  }
-
-  // On a failed save, the status doubles as a retry - clicking it runs the same
-  // save as the burger-menu Save button.
-  if (status === 'error') {
-    return (
-      <button
-        type="button"
-        data-testid="save-status"
-        onClick={() => onSave()}
-        title={t('common.actions.save')}
-        className={`${className} cursor-pointer hover:underline`}
-      >
-        {text}
-      </button>
-    );
-  }
-
-  return (
-    <span data-testid="save-status" className={className}>
-      {text}
-    </span>
   );
 }
 

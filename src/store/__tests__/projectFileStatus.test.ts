@@ -176,3 +176,47 @@ describe('the converting save', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Demo issue N-6: the status bar said "Saved" while the file on disk was still
+ * the 0.6.0 file, including for a conversion that raised no notice at all. The
+ * file status now reads whether the file is still a 0.6.0 file (a peek), and
+ * the converting save (to the file or a Save As elsewhere) clears it.
+ * Injection: dropping the `project_file_is_legacy` read from checkFileStatus,
+ * or the clear from noteLegacyConverted, fails these.
+ */
+describe('the old format on disk', () => {
+  const legacyOpen = (legacy: boolean) =>
+    ipc.mockImplementation(async (command: string) => {
+      if (command === 'project_file_is_legacy') return legacy;
+      if (command === 'save_project') {
+        return { success: true, saved_path: '/a.stalx', warnings: [], error: null, line_ids: [], legacy_converted: 'saved' };
+      }
+      return null;
+    });
+
+  it('is read with the file status, even when the conversion raised no notice', async () => {
+    legacyOpen(true);
+    await useProjectStore.getState().checkFileStatus();
+    expect(useProjectStore.getState().legacyFileOnDisk).toBe(true);
+    expect(useProjectStore.getState().conversionNotice).toBeNull();
+    expect(ipc).toHaveBeenCalledWith('project_file_is_legacy', undefined, expect.anything());
+  });
+
+  it('is false for a version 2 file', async () => {
+    legacyOpen(false);
+    await useProjectStore.getState().checkFileStatus();
+    expect(useProjectStore.getState().legacyFileOnDisk).toBe(false);
+  });
+
+  it('ends with the converting save', async () => {
+    legacyOpen(true);
+    await useProjectStore.getState().checkFileStatus();
+    await useProjectStore.getState().saveProject();
+    expect(useProjectStore.getState().legacyFileOnDisk).toBe(false);
+  });
+
+  it('is cleared with the rest of the file status on load, create and close', () => {
+    expect(FILE_STATUS_CLEARED.legacyFileOnDisk).toBe(false);
+  });
+});

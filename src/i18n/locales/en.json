@@ -3089,7 +3089,9 @@
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",
       "autoSaveCountdown": "Auto-save in {{seconds}}s",
-      "saveError": "Auto-save didn't run - not saved"
+      "saveError": "Auto-save didn't run - not saved",
+      "readOnly": "Read-only",
+      "oldFormat": "Old format: converted when you save"
     }
   },
   "gasPanel": {
