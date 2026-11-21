@@ -184,6 +184,17 @@ regions). Read the comment blocks in those two files plus
   you save", not "Saved", banner or not (N-6). The history-discarded banner
   (`history-discarded-banner`) is unchanged: it also covers an old file's
   history, which the conversion drops.
+- **An upload that replaced someone's revision is a banner, and stops an exit.**
+  When a SpeleoDB upload lands on top of a revision another session uploaded
+  between the push's check and the upload (R3), the upload succeeded but that
+  revision's work is no longer the latest: data at risk of being overlooked, so
+  never a toast. The `replaced_revision` kind of `SpeleoBanner` names the revision
+  (description, short id, author), says its changes are not in the upload and
+  that it is still in the Revision History to view or restore, and stays until
+  dismissed; it replaces the success toast (one event, one surface). The exit and
+  sign-out prompts that ran the upload stop instead of closing, so the banner is
+  read first. An upload refused because another session uploaded first is the
+  divergence prompt, like any divergence.
 
 ## Command-failure contract
 

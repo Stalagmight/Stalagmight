@@ -24,7 +24,11 @@ SpeleoDB sync state and the display toggles (see
 Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Save Changes action share
 `dispatchProjectSave`. Local projects use the existing local save flow. Linked
 projects collect a required change description, save locally, then upload only with
-fresh permission and editing-lock verification. Missing locks show an explanation
+fresh permission and editing-lock verification, and only onto the revision the copy
+came from: when SpeleoDB's latest revision is one this session did not upload
+(another session of the same account holds the same lock, R3) nothing is uploaded
+and the divergence prompt opens (see [SpeleoDB integration](SpeleoDB.md#save-switching-and-exit)).
+Missing locks show an explanation
 and recovery controls; recovery never uploads automatically. A clean linked project
 reports No changes to upload. Offline and uncertain uploads never report success.
 Ordinary successful upload retains the editing lock. Save Changes, menu Save and
