@@ -315,7 +315,9 @@ describe('export failure surface', () => {
     );
   });
 
-  it('stays silent when the export succeeds', async () => {
+  // A success raises no failure toast; its one toast is the success receipt
+  // naming the file (demo finding I-13; before it the export said nothing).
+  it('raises only the success receipt when the export succeeds', async () => {
     const exportCsv = vi.fn(async () => undefined);
     useProjectStore.setState({
       project: buildProject([line(1)], [ZERO_DATUM]),
@@ -327,7 +329,9 @@ describe('export failure surface', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     await waitFor(() => expect(dataProps.onComplete).toHaveBeenCalled());
-    expect(useUIStore.getState().toasts).toHaveLength(0);
+    expect(useUIStore.getState().toasts.map((t) => [t.key, t.kind])).toEqual([
+      [TOAST_KEYS.EXPORT_SUCCEEDED, 'success'],
+    ]);
   });
 
   it('does not toast when the pre-export anchor check throws - that check fails OPEN', async () => {
@@ -347,6 +351,9 @@ describe('export failure surface', () => {
 
     await waitFor(() => expect(exportTmlOk).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('tml-unanchored-warning-dialog')).not.toBeInTheDocument();
-    expect(useUIStore.getState().toasts).toHaveLength(0);
+    // No failure toast: only the export's own success receipt (I-13).
+    await waitFor(() =>
+      expect(useUIStore.getState().toasts.map((t) => t.key)).toEqual([TOAST_KEYS.EXPORT_SUCCEEDED]),
+    );
   });
 });
