@@ -57,13 +57,13 @@ Files:
 
 SpeleoDB:
 
-- **Pushes send the version 2 JSON** (`application/json`, `project.stalx`); until the server accepts it, every push (Save Changes, Done, the close and quit prompts) fails with one error, "This SpeleoDB server does not accept projects saved by this version yet" (`UploadFormatRefused`: a 400, 406, 415 or 422 to a version 2 body, or a 5xx other than 503/504 after which the history shows nothing landed), and the project stays dirty and locked as after any failed push; Publish to such a server reports that the server project is empty and the local copy unchanged, and never creates a second one (10.1, review G-speleodb-2/3). Why: the product decision; see the rollout prerequisites.
+- **Pushes send the version 2 JSON** (`application/json`, `project.stalx`); until the server accepts it, every push (Save Changes, Done, the close and quit prompts) fails with one error, "This SpeleoDB server does not accept projects saved by this version yet" (`UploadFormatRefused`: a 400, 406 or 422 to a version 2 body whose reason names the file type, the media type or SQLite, any 415, or a 5xx other than 503/504 whose reason names them after which the history shows nothing landed; any other refusal shows the server's own reason, Deviation V3-O3), and the project stays dirty and locked as after any failed push; Publish to such a server reports that the server project is empty and the local copy unchanged, and never creates a second one (10.1, review G-speleodb-2/3). Why: the product decision; see the rollout prerequisites.
 - **Sync bookkeeping is durable at once**: every SpeleoDB state change, clear-on-lock included, is a local-only save; "Uploaded without undo history" shows only when every entry was cut; a download made by a newer build opens read-only, and a Restore of one is refused (View still shows it; review G-speleodb-8); legacy revisions are converted on download, and an Unwind step onto one is refused, its SQLite history never being converted (G-speleodb-5); stripping a foreign copy's link upgrades a legacy copy to version 2 (backup kept); logout keeps the open project's Recents row while its link is dirty; Publish refuses an invalid survey or a read-only file (N10, N11). Why: there is no live database to defer a change to.
 
 Exports, imports and readers:
 
 - **CSV and JSON `from_id` / `to_id` are the shared Station ID at a junction** (12.2). Why: one station.
-- **Ariane export**: ids are Station IDs, stable across exports; every closure, migrated `Tie`s included, is a CLOSURE row (0.6.0 dropped such a merge silently); a station comment is written once; all lines at a hub are adjacent in the walk (X1 to X4). Why: the station graph gives each station one id and one comment.
+- **Ariane export**: ids are Station IDs, stable across exports; every closure, migrated `Tie`s included, is a CLOSURE row (0.6.0 dropped such a merge silently); a station comment is written once; all lines at a hub are adjacent in the walk (X1 to X4); a comment left out because its station's row is a START (as in 0.6.0) is now named in a warning (V3-N14). Why: the station graph gives each station one id and one comment.
 - **Image export** draws one comment and one star per station, the Levels histogram counts each station once, and the dive profile has no zero-length point at a junction (X7, X8). Why: one station per junction.
 - **Compass, Walls and Ariane imports store each station's file identity** in `Station.external` (written to the file, not shown); a reversed Origin or Manual import line places the file's first station exactly (Q1, N6). Why: plan 1.2 and 10.5.
 - **An import placed on an existing station keeps the file's name for it as an alias** of the junction, under a retired Station ID minted for it (what Merge Stations keeps of the station it retires); the alias names the new line, which therefore shows the junction by it, so the line's own stations are named around that name and keep the file's names even where one is the junction's own (per-line names, review findings D-migration-upgrade-8, UX-3 and U1): the same names as 0.6.0's per-slot branch and as opening the equivalent 0.6.0 file (the migration). Only a line that keeps no alias (the file gives the junction no name of its own) has a station whose file name is the junction's take a letter suffix (`12` -> `12a`), which the import receipt names (wave D, I-import-export-4; aligned with per-line names in U1). Why: one station, and a line keeps the names it was surveyed with.
@@ -593,7 +593,7 @@ A batch that moves several slots of one station (today's co-located `move_statio
 ### 10.1 SpeleoDB
 
 - Push: the canonical v2 bytes in a "for push" mode (no `local`, no redo; undo only in Full mode, cut at the watermark), filename `project.stalx`, content type `application/json`. Fallback without history when over 5 MiB, as today.
-- The server currently rejects non-SQLite uploads; until it accepts v2, a push fails with one dedicated error, "This SpeleoDB server does not accept projects saved by this version yet" (the project stays dirty and locked, as after any failed push), and Publish says the server project stayed empty. This is called out in the PR.
+- The server currently rejects non-SQLite uploads; until it accepts v2, a push fails with one dedicated error, "This SpeleoDB server does not accept projects saved by this version yet" (the project stays dirty and locked, as after any failed push), and Publish says the server project stayed empty. This is called out in the PR. As built, only a refusal whose reason names the format gets that line; a server that reads v2 and refuses a file shows its own reason (Deviation V3-O3).
 - Pull/install/revisions/unwind: sniff; SQLite revisions are migrated in memory (7), v2 opened directly. 0.6.0's `drop_inherited_undo` (now `speleodb_clear_inherited_undo`), display-setting restore and the dirty columns map to the v2 `history` and `local` members.
 
 ### 10.2 stalx-reader
@@ -1004,7 +1004,8 @@ Changes to sections 6.1 to 6.6 that the format review findings led to
 - **R7. The header probe does not depend on member order** (6.1, F13):
   `probe_path` stops at the first body member only when every header member
   it reads came before it, else it reads the file to its end; Recents uses
-  `probe_path_listing`, which keeps the canonical-order read.
+  `probe_path_listing`, which keeps the canonical-order read. Amended by
+  Deviation V3-O1: it also stops there when the header is canonical.
 - **R8. Local-only rewrites.** A `summary` that is not an object is left out
   instead of failing the rewrite (6.5 mode 4, Recents rename); the rewrite
   starts from the bytes the open or the last write kept (`FileState`'s
@@ -1272,3 +1273,61 @@ untrue. Labels `DM1`...
   tune yet; `warn_depth_change_per_shot_max` measures something else (one
   shot's depth change).
 
+## Deviations (package V3, backend leftovers of the U5 review and demo issue N-14)
+
+- **V3-O1. A canonical header ends at the body, linked or not** (amends R7,
+  6.1). R7's early stop needed all six header members, so an unlinked file,
+  or one without local state (every downloaded revision: the push mode
+  writes no `local`), was read and parsed to its end by each link check
+  (logout's forget-recents over every Recents entry, the foreign-copy probe,
+  the cached-copies listing, the revision undo-mode read): 200 checks of a
+  3.5 MB unlinked file took 17 s in a debug build. `probe_path` /
+  `probe_bytes` now also stop at the first body member when the header
+  before it is in the canonical form (the header members in table order, the
+  first four on the first line, each later one preceded by `,` and a
+  newline, `requires`, `generator`, `summary` and `project` present) and
+  `summary.speleodb` names the same project as the `speleodb` member, or
+  both are absent. The same 200 checks read 64 KiB each and take 6 ms. A
+  header in any other form is still read to its end; the summary check
+  catches a link moved below the body by hand. What it cannot catch: a
+  file in Stalagmight's exact layout whose `local` (or `speleodb`, with the
+  summary edited to match) was moved below the body. file-format.md section
+  4 says a writer of the canonical layout must keep the canonical order.
+  Tests: `format_v2_probe_tests.rs` (bytes read per header shape, the
+  timing check, the slow path for three non-canonical shapes).
+- **V3-O2. The unlink's migration runs outside the project lock** (amends
+  UR6). `persist_local_state_upgrading` ran the full legacy migration under
+  the `project` guard, blocking every command for seconds on a large file.
+  It now migrates without the guard, as the open does, and commits under it
+  only while the project is the one migrated: the same path and SpeleoDB
+  session generation, still legacy, the guard's fingerprint unchanged (an
+  edit meanwhile does not matter: the upgrade writes the survey on disk, and
+  the local state is read at the commit). A save, Save As or reload of ours
+  in between makes it start over (a converted file then gets the local-only
+  save); the third attempt migrates under the guard. Another program's
+  change is refused by the write's guard, as before. Tests:
+  `closed_upgrade_tests.rs` (a save during the migration, another program's
+  change during it).
+- **V3-O3. A format refusal is read from the server's reason too** (amends
+  10.1, 12.1, D-186's display-only rule for this one case). The status
+  alone cannot tell a server without v2 from one that reads v2 and refuses
+  this file: SpeleoDB answers both with a 400 whose `error` wraps the file
+  processor's reason. `contract::upload_refusal(status, message)`: a reason
+  naming the file type, the media type or SQLite ("Invalid file type
+  received: `application/json` ...", "expected a valid SQLite database",
+  SQLite's "file is not a database"), or any 415, is the format refusal; any
+  other refusal is a `Status` error with the server's reason (its action
+  still `map_status`'s), and a 5xx without such a reason stays unconfirmed
+  without the history read. A DEBUG instance answers with an HTML 500 that
+  names no reason, so it now reads as unconfirmed. Tests: the contract unit
+  test and `speleodb_push_v2_tests.rs`, whose loopback server now answers
+  with SpeleoDB's bodies.
+- **V3-N14. The Ariane export says it left out entrance station comments**
+  (amends X4, 10.5). A comment on a station whose only row is a START has no
+  place in the file. 0.6.0 dropped it too, with a debug log only (checked
+  against its `tml.rs` at 1f41128eb: the fold skips START, deliberately "not
+  as an export note"), so parity is kept and the loss is now told:
+  `build_rows` returns `LeftOut { datums, station_comments }` and the export
+  returns the `station-comments-not-written` note, a warning toast
+  ("Comments on entrance stations were left out - Ariane has no place for
+  them").
