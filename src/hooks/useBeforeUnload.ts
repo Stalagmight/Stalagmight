@@ -176,8 +176,10 @@ export function useBeforeUnload(
           // The questions. Latched (see above) until they are answered, and
           // released synchronously as this block ends. The tier-2 guard's own
           // question is asked inside: it awaits the backend's unsaved-changes
-          // flag first, and a close request arriving during that round trip
-          // joins this attempt like any other. What the guard starts (a dialog,
+          // flag first, bounded (`UNSAVED_ASK_BOUND_MS`: a backend that never
+          // answers gets the prompt, not a latch held for good), and a close
+          // request arriving during that round trip joins this attempt like
+          // any other. What the guard starts (a dialog,
           // a lock hand-back) re-issues the close only after an IPC of its own,
           // so that close always finds the latch released.
           askingQuestions.current = true;

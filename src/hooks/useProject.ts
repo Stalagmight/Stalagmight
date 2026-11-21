@@ -14,7 +14,7 @@ import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
 import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
-import { openProjectHasUnsavedChanges } from '../utils/unsavedChanges';
+import { askOpenProjectUnsaved } from '../utils/unsavedChanges';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -70,8 +70,11 @@ export function useProject() {
     }
     // Unsaved changes: the frontend's edits, or changes only the backend
     // tracks (a 0.6.0 file's SpeleoDB bookkeeping), asked as every exit asks.
-    const unsaved = await openProjectHasUnsavedChanges();
-    debugLog('[useProject] handleCloseProject called, unsaved:', unsaved);
+    // A project that moved during the ask is not the one the user closed:
+    // nothing is asked about it and nothing is closed.
+    const { unsaved, stillOpen } = await askOpenProjectUnsaved();
+    debugLog('[useProject] handleCloseProject called, unsaved:', unsaved, 'stillOpen:', stillOpen);
+    if (!stillOpen) return { success: false, error: 'Superseded' };
     if (unsaved) {
       // Open styled dialog - the dialog will handle the actual close
       openDialog('unsaved-changes');
