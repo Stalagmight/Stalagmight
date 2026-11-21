@@ -4106,6 +4106,10 @@ fn test_delete_shot_removes_shot() {
     assert!(line.shots.is_empty());
 }
 
+/// The second half takes the colour the frontend sends (`colorB`, the
+/// colour a new line gets, as Split Line Here's second half; demo finding
+/// I-9: both halves of a Delete & Split kept the line's colour). Injection:
+/// dropping `color_b` from the split leaves line B in line A's colour.
 #[test]
 fn test_delete_shot_and_split_creates_new_line() {
     let app = app_with_state();
@@ -4113,6 +4117,8 @@ fn test_delete_shot_and_split_creates_new_line() {
     let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
     let line_state = get_line(state(&app), id).unwrap();
     let shot_id = line_state.shots[1].id;
+    let color = line_state.color.clone();
+    assert_ne!(color, "#00aa55");
 
     let result = shot::delete_shot_and_split(
         state(&app),
@@ -4120,6 +4126,7 @@ fn test_delete_shot_and_split_creates_new_line() {
         shot_id,
         "Line A".to_string(),
         "Line B".to_string(),
+        Some("#00aa55".to_string()),
     );
     assert_success(&result);
     let new_id = result.line_id.expect("new line id");
@@ -4130,6 +4137,49 @@ fn test_delete_shot_and_split_creates_new_line() {
     assert_eq!(line_b.name, Some("Line B".to_string()));
     assert_eq!(line_a.shots.len(), 1);
     assert_eq!(line_b.shots.len(), 1);
+    assert_eq!(line_a.color, color);
+    assert_eq!(line_b.color, "#00aa55");
+}
+
+/// The range split colours its second half the same way (I-9); without a
+/// colour both halves keep the line's, as 0.6.0's split did.
+#[test]
+fn test_delete_shot_range_split_colours_the_new_line() {
+    let app = app_with_state();
+    create_project(&app);
+    let shots = (1..=5).map(|i| shot_data(f64::from(i))).collect();
+    let id = create_line_with_shots(&app, shots);
+    let line_state = get_line(state(&app), id).unwrap();
+    let (first, last) = (line_state.shots[1].id, line_state.shots[2].id);
+    let color = line_state.color.clone();
+
+    let result = shot::delete_shot_range_split(
+        state(&app),
+        id,
+        first,
+        last,
+        "Line A".to_string(),
+        "Line B".to_string(),
+        Some("#123456".to_string()),
+    );
+    assert_success(&result);
+    let new_id = result.line_id.expect("new line id");
+    assert_eq!(get_line(state(&app), id).unwrap().color, color);
+    assert_eq!(get_line(state(&app), new_id).unwrap().color, "#123456");
+
+    assert!(state(&app).undo().success);
+    let result = shot::delete_shot_range_split(
+        state(&app),
+        id,
+        first,
+        last,
+        "Line A".to_string(),
+        "Line B".to_string(),
+        None,
+    );
+    assert_success(&result);
+    let new_id = result.line_id.expect("new line id");
+    assert_eq!(get_line(state(&app), new_id).unwrap().color, color);
 }
 
 #[test]

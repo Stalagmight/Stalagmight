@@ -170,6 +170,28 @@ test.describe('Line Split Dialog', () => {
     await expect(page.getByTestId('split-line-dialog')).toBeHidden({ timeout: 5000 });
   });
 
+  test('the second half gets a new colour, as Split Line Here gives it (I-9)', async ({ page }) => {
+    const { lineId, shotId, lineName } = await getIds(page);
+    await openSplitDialog(page, lineId, shotId, lineName);
+    await page.getByTestId('split-confirm').click();
+    await expect(page.getByTestId('split-line-dialog')).toBeHidden({ timeout: 5000 });
+
+    const sent = await page.evaluate((id) => {
+      const win = window as any;
+      const lines = win.__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number; color: string }>;
+      const calls = (win.__MOCK_DELETE_SPLIT_CALLS__ ?? []) as Array<{ colorB?: string }>;
+      return {
+        colorB: calls[0]?.colorB ?? null,
+        lineColor: lines.find((l) => l.id === id)?.color ?? null,
+        used: lines.map((l) => l.color.toLowerCase()),
+      };
+    }, lineId);
+    // A colour no line uses: never the split line's own.
+    expect(sent.colorB).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(sent.used).not.toContain(sent.colorB!.toLowerCase());
+    expect(sent.colorB!.toLowerCase()).not.toBe(sent.lineColor?.toLowerCase());
+  });
+
   test('IPC error shows error message in dialog', async ({ page }) => {
     const { lineId, shotId, lineName } = await getIds(page);
 

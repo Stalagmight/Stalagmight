@@ -109,7 +109,9 @@ pub(crate) fn delete_shot_impl(
     state.execute(Command::DeleteShot { line_id, shot_id })
 }
 
-/// Delete a mid-line shot and split the line into two named lines
+/// Delete a mid-line shot and split the line into two named lines. The
+/// second line takes `color_b` (JS `colorB`, the colour a new line gets, as
+/// Split Line Here's second half) when given, else the line's colour.
 #[tauri::command]
 pub fn delete_shot_and_split(
     state: State<AppState>,
@@ -117,8 +119,9 @@ pub fn delete_shot_and_split(
     shot_id: ShotId,
     name_a: String,
     name_b: String,
+    color_b: Option<String>,
 ) -> CommandResult {
-    delete_shot_and_split_impl(state.inner(), line_id, shot_id, name_a, name_b)
+    delete_shot_and_split_impl(state.inner(), line_id, shot_id, name_a, name_b, color_b)
 }
 
 pub(crate) fn delete_shot_and_split_impl(
@@ -127,8 +130,9 @@ pub(crate) fn delete_shot_and_split_impl(
     shot_id: ShotId,
     name_a: String,
     name_b: String,
+    color_b: Option<String>,
 ) -> CommandResult {
-    state.execute_delete_shot_and_split(line_id, shot_id, name_a, name_b)
+    state.execute_delete_shot_and_split_with_color(line_id, shot_id, name_a, name_b, color_b)
 }
 
 /// Split a line in two at a mid-line station or a point along a shot,
@@ -239,7 +243,8 @@ pub(crate) fn preview_delete_shot_range_impl(
     Ok(project.delete_range_impact(&preview))
 }
 
-/// Delete a contiguous interior range of shots and split the line into two
+/// Delete a contiguous interior range of shots and split the line into two;
+/// the second line takes `color_b` (JS `colorB`) when given.
 #[tauri::command]
 pub fn delete_shot_range_split(
     state: State<AppState>,
@@ -248,14 +253,15 @@ pub fn delete_shot_range_split(
     end_shot_id: ShotId,
     name_a: String,
     name_b: String,
+    color_b: Option<String>,
 ) -> CommandResult {
     delete_shot_range_split_impl(
         state.inner(),
         line_id,
         start_shot_id,
         end_shot_id,
-        name_a,
-        name_b,
+        (name_a, name_b),
+        color_b,
     )
 }
 
@@ -264,10 +270,16 @@ pub(crate) fn delete_shot_range_split_impl(
     line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
-    name_a: String,
-    name_b: String,
+    names: (String, String),
+    color_b: Option<String>,
 ) -> CommandResult {
-    state.execute_delete_shot_range_split(line_id, start_shot_id, end_shot_id, name_a, name_b)
+    state.execute_delete_shot_range_split_with_color(
+        line_id,
+        start_shot_id,
+        end_shot_id,
+        names,
+        color_b,
+    )
 }
 
 /// Delete a contiguous range of shots by gap-closing (shift geometry)

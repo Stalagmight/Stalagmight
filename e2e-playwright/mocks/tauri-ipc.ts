@@ -5893,9 +5893,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
-          case 'delete_shot_and_split':
+          case 'delete_shot_and_split': {
+            // Recorded so a spec can read the second half's colour (`colorB`,
+            // demo finding I-9) the dialog sent.
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_DELETE_SPLIT_CALLS__ as unknown[] | undefined;
+            win.__MOCK_DELETE_SPLIT_CALLS__ = [...(Array.isArray(existing) ? existing : []), args ?? null];
             return { success: true, line_ids: [] };
+          }
 
           case 'split_line_preview':
             // Still registered, but the frontend no longer asks: on the station

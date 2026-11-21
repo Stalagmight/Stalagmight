@@ -477,3 +477,22 @@ export function getNextLineColor(usedColors: string[], resolvedTheme: string): s
   // If all palette colors used, generate a random distinct color
   return generateRandomColor(usedColors);
 }
+
+/**
+ * The colour of a split's second half, which is a new line: the colour a new
+ * line gets (the next palette colour no line uses, the split line's own
+ * included), so the two halves never share one. Split Line Here and Delete
+ * Shot's Split (and the range split) colour it alike (demo finding I-9: a
+ * Delete & Split left both halves in the line's colour). Compared lowercase:
+ * the palette is, a stored colour may not be.
+ */
+export function splitSecondHalfColor(
+  lines: ReadonlyArray<{ color: string }> | null | undefined,
+  lineColor: string,
+  resolvedTheme: string,
+): string {
+  return getNextLineColor(
+    (lines ?? []).map((l) => l.color.toLowerCase()).concat(lineColor.toLowerCase()),
+    resolvedTheme,
+  );
+}
