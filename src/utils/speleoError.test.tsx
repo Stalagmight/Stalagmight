@@ -101,22 +101,28 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
 
   it('keeps the genuinely useful causes distinguishable', () => {
     const refused = humanizeSpeleoError(dto({ transport: 'Refused' }));
+    const dropped = humanizeSpeleoError(dto({ transport: 'Dropped' }));
     const timeout = humanizeSpeleoError(dto({ transport: 'Timeout' }));
     const dns = humanizeSpeleoError(dto({ transport: 'Dns' }));
     const tls = humanizeSpeleoError(dto({ transport: 'Tls' }));
     const unknown = humanizeSpeleoError(dto({ transport: 'Unknown' }));
 
-    for (const line of [refused, timeout, dns, tls, unknown]) {
+    for (const line of [refused, dropped, timeout, dns, tls, unknown]) {
       expect(line).toContain(ENDPOINT);
     }
     expect(refused).toMatch(/could not connect/i);
+    // F1: the connection was made, so it must not say it could not connect (a
+    // write may have reached the server).
+    expect(dropped).toMatch(/connection .* was lost/i);
+    expect(dropped).not.toMatch(/could not connect/i);
     expect(timeout).toMatch(/did not respond in time/i);
     expect(dns).toMatch(/could not find/i);
     expect(tls).toMatch(/secure connection/i);
-    // The catch-all (EINVAL and friends) stays generic but actionable.
+    // The catch-all (a reply that is not HTTP, and the like) stays generic but
+    // actionable.
     expect(unknown).toMatch(/check your network connection/i);
-    // Four of the five say something the others do not.
-    expect(new Set([refused, timeout, dns, tls, unknown]).size).toBe(5);
+    // Each says something the others do not.
+    expect(new Set([refused, dropped, timeout, dns, tls, unknown]).size).toBe(6);
   });
 
   it('names the server the call was made to when the caller knows it', () => {

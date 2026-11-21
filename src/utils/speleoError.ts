@@ -31,6 +31,9 @@ function transportCause(e: unknown): TransportCause | null {
 
 const TRANSPORT_KEYS: Record<TransportCause, string> = {
   Refused: 'speleodb.transport.refused',
+  // F1: connected, then closed or reset before the whole reply. Not "could not
+  // connect": a write may have reached the server.
+  Dropped: 'speleodb.transport.dropped',
   Timeout: 'speleodb.transport.timeout',
   Dns: 'speleodb.transport.dns',
   Tls: 'speleodb.transport.tls',

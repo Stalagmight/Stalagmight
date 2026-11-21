@@ -3911,6 +3911,7 @@
     },
     "transport": {
       "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
+      "dropped": "The connection to SpeleoDB at {{endpoint}} was lost before it finished answering. Check your network connection and try again.",
       "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",
       "dns": "Could not find the SpeleoDB server at {{endpoint}}. Check the address in Settings and your network connection.",
       "tls": "Could not set up a secure connection to SpeleoDB at {{endpoint}}. Check the server's certificate and the address in Settings.",
