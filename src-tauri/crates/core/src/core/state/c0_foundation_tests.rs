@@ -265,6 +265,50 @@ fn a_save_refuses_a_file_changed_on_disk_until_told_to_overwrite() {
     assert_eq!(project_of(&reopened).lines()[0].shots[0].length, 11.25);
 }
 
+/// A file that is GONE (moved or deleted by another program) is refused with
+/// the guard's code AND the missing marker, by the save and by a local-only
+/// save alike, so the save prompt offers no reopen of a file that is not
+/// there (pre-PR review finding 1). A changed file carries no marker.
+/// Injection: mapping `found_len: None` (or `read_unchanged`'s `NotFound`) to
+/// the plain `ExternallyModified` drops the marker and fails here.
+#[test]
+fn a_save_says_a_moved_or_deleted_file_is_missing() {
+    let missing = format!(
+        "{}: {}: ",
+        super::EXTERNALLY_MODIFIED_CODE,
+        super::FILE_MISSING_MARKER
+    );
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let state = open(&path);
+    assert!(set_length(&state, 11.25).success);
+
+    std::fs::remove_file(&path).unwrap();
+    let r = state.execute(Command::SaveProject { path: None });
+    let error = r.error.unwrap_or_default();
+    assert!(error.starts_with(&missing), "{error}");
+    assert!(error.contains("moved or deleted"), "{error}");
+    assert!(!path.exists(), "nothing was written");
+    // The local-only save (a display toggle) reads the file first.
+    let error = state
+        .save_display_setting("showGrid", "true")
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with(&missing), "{error}");
+
+    // Back, but changed: the plain code, no marker.
+    std::fs::write(&path, b"someone else's").unwrap();
+    let error = state
+        .execute(Command::SaveProject { path: None })
+        .error
+        .unwrap_or_default();
+    assert!(
+        error.starts_with(super::EXTERNALLY_MODIFIED_CODE)
+            && !error.contains(super::FILE_MISSING_MARKER),
+        "{error}"
+    );
+}
+
 #[test]
 fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     let dir = TempDir::new().unwrap();

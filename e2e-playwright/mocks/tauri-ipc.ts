@@ -1177,6 +1177,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // - __MOCK_SET_EXTERNALLY_MODIFIED__(true): the next saves to the open
       //   file are refused with `EXTERNALLY_MODIFIED: ...`, as the guard does,
       //   until `save_project_overwriting` writes over it (or the spec clears it).
+      //   `'missing'` instead: the file was moved or deleted, so the refusal
+      //   carries `FILE_MISSING` and `project_file_reload_refusal` says the
+      //   file would not open again.
       // - __MOCK_SET_READ_ONLY_REASON__(text): the file was made with a newer
       //   Stalagmight; `project_read_only_reason` answers `text`, saves are
       //   refused with `READ_ONLY_FILE: ...`.
@@ -1187,14 +1190,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       //   (`legacy_converted`: `saved` to the open file, `saved_as_new_file`
       //   elsewhere), once, as the backend does; until then
       //   `project_file_is_legacy` answers true (the status bar's old format).
-      let mockExternallyModified = false;
+      let mockExternallyModified: boolean | 'missing' = false;
       let mockReadOnlyReason: string | null = null;
       let mockConversionNotice: unknown = null;
       let mockLegacyOrigin = false;
       let mockBackendDirty = false;
       const mockSaveCalls: Array<{ command: string; path: string | null }> = [];
-      (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean) => {
-        mockExternallyModified = !!on;
+      (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean | 'missing') => {
+        mockExternallyModified = on === 'missing' ? 'missing' : !!on;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_READ_ONLY_REASON__ = (reason: string | null) => {
         mockReadOnlyReason = reason;
@@ -1577,6 +1580,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ? `${saveDirectoryArg}/${sanitizedName}.stalx`
                 : `/mock/Documents/stalagmight/${sanitizedName}.stalx`);
             projectPath = resolvedPath;
+            mockBackendDirty = false;
 
             currentProject = {
               id: 1,
@@ -1620,6 +1624,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'load_project_full': {
             // Consolidated load_project_full command for loading progress feature
             projectPath = (args?.path as string) ?? null;
+            mockBackendDirty = false;
             const now = new Date().toISOString();
             lineCounter = 0;
 
@@ -2185,7 +2190,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (cmd === 'save_project' && mockExternallyModified && toOpenFile) {
               return {
                 success: false,
-                error: `EXTERNALLY_MODIFIED: ${projectPath ?? 'the project file'} was changed by another program since it was opened`,
+                error: mockExternallyModified === 'missing'
+                  ? `EXTERNALLY_MODIFIED: FILE_MISSING: ${projectPath ?? 'the project file'} was moved or deleted by another program since it was opened`
+                  : `EXTERNALLY_MODIFIED: ${projectPath ?? 'the project file'} was changed by another program since it was opened`,
                 warnings: [],
                 line_ids: [],
               };
@@ -2224,6 +2231,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'close_project': {
             currentProject = null;
             projectPath = null;
+            mockBackendDirty = false;
             return { success: true, line_ids: [] };
           }
 
@@ -5560,8 +5568,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'has_unsaved_changes':
             // The backend's dirty flag. Only a warning ignore sets it in the
             // mock (every other edit goes through executeCommand, which dirties
-            // the frontend itself); a save clears it.
+            // the frontend itself); a save clears it, and so do a close and an
+            // open (the flag belongs to the open project).
             return mockBackendDirty;
+
+          case 'project_file_reload_refusal':
+            // Whether the open file opens again as it is now: not when it was
+            // moved or deleted (`__MOCK_SET_EXTERNALLY_MODIFIED__('missing')`).
+            if (!projectPath) return 'the project has no file to open again';
+            return mockExternallyModified === 'missing' ? `File not found: ${projectPath}` : null;
 
           case 'history_discarded_from_earlier_version':
             // Whether the discarded history was written by an earlier version of the

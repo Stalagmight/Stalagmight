@@ -57,6 +57,8 @@ beforeEach(() => {
   useSpeleoStore.setState({ link: null });
   listenMock.mockImplementation(async () => () => {});
   invokeIpcMock.mockImplementation(async (cmd: string) => {
+    // The open asks whether the open project holds unsaved changes: it does not.
+    if (cmd === 'has_unsaved_changes') return false;
     if (cmd !== 'take_pending_launch_files') throw new Error(`unexpected command ${cmd}`);
     const batch = queued;
     queued = [];

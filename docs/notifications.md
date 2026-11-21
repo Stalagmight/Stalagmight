@@ -152,10 +152,12 @@ regions). Read the comment blocks in those two files plus
   [saving.md](saving.md#the-external-modification-guard)) puts data at risk
   either way, so `surfaceSaveFailure` opens `SaveConflictDialog`: Keep my
   version, Save as a new file, Use the file's version (not for a SpeleoDB copy,
-  whose reload belongs to the sync), or Decide later. An autosave refused the
-  same way raises no modal (a background save never does): it goes to the
-  autosave banner ("changed by another program") and autosave pauses until a
-  save lands; the banner's Save opens the prompt.
+  whose reload belongs to the sync, nor for a file that was moved or deleted:
+  the refusal carries `FILE_MISSING`, and the prompt says "moved or deleted"),
+  or Decide later. An autosave refused the same way raises no modal (a
+  background save never does): it goes to the autosave banner ("changed by
+  another program", or "moved or deleted by another program") and autosave
+  pauses until a save lands; the banner's Save opens the prompt.
 - **A read-only file and a converted file are banners, not dialogs.** A file
   made with a newer Stalagmight opens read-only with a banner naming the reason
   (`read-only-file-banner`, no button: there is nothing to do here but update),

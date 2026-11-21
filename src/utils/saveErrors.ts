@@ -38,11 +38,23 @@ export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
 /**
  * Marker for a save the external-modification guard refused (`.stalx` v2, plan
  * 6.5): the file on disk is not what the app last read or wrote, so another
- * program changed it. Mirrors `EXTERNALLY_MODIFIED_CODE` in
+ * program changed, moved or deleted it ({@link FILE_MISSING} tells the last
+ * two apart). Mirrors `EXTERNALLY_MODIFIED_CODE` in
  * `src-tauri/crates/core/src/core/state/open_file.rs`. Routed to the save
  * prompt (reload / overwrite / save as), never to a bare error.
  */
 export const EXTERNALLY_MODIFIED = 'EXTERNALLY_MODIFIED';
+
+/**
+ * Marker right after {@link EXTERNALLY_MODIFIED} when the guard refused
+ * because the file is GONE - moved or deleted by another program
+ * (`EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted ...`).
+ * Mirrors `FILE_MISSING_MARKER` (same Rust file as the code). Still routed to
+ * the save prompt, which then offers no "Use the file's version": there is no
+ * file to reopen, and the reopen would fail after the close dropped the
+ * unsaved changes.
+ */
+export const FILE_MISSING = 'FILE_MISSING';
 
 /**
  * Marker for a save refused because the project is open read-only: the file
@@ -84,6 +96,15 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
  */
 export function stripSaveErrorMarker(error: string, marker: string): string {
   return error.startsWith(marker) ? error.slice(marker.length).replace(/^:\s*/, '') : error;
+}
+
+/**
+ * True if the guard refused the save because the file is gone (moved or
+ * deleted), not changed: {@link FILE_MISSING} right after the guard's code.
+ */
+export function isFileMissingError(error?: string | null): boolean {
+  if (!error || classifySaveError(error) !== 'externally-modified') return false;
+  return stripSaveErrorMarker(error, EXTERNALLY_MODIFIED).startsWith(`${FILE_MISSING}:`);
 }
 
 /** True if a save `CommandResult.error` carries the permission marker. */

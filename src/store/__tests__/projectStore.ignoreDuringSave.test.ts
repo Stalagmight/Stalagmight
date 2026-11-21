@@ -67,3 +67,49 @@ it('an ignore after the save completed still marks the project unsaved', async (
   await useProjectStore.getState().unresolveWarning(1, 2, 'SHORT_SHOT');
   expect(useProjectStore.getState().isDirty).toBe(true);
 });
+
+/**
+ * Pre-PR review finding 3: the reply to the ignore's `has_unsaved_changes` (and
+ * the fail-safe of a failed one) was correlated by `created_at` alone, so a
+ * reopen of the SAME file during the round trip (same path, same `created_at`,
+ * a new load) took the previous session's "unsaved" and marked the reopened
+ * project dirty; on a 0.6.0 file that arms autosave, which converts a file the
+ * user only looked at. It is the load's now (`loading.clientOpId`). Injection:
+ * dropping the clientOpId comparison sets isDirty in both cases.
+ */
+it.each(['answered', 'failed'] as const)('a reopen of the same file during the round trip does not take the reply (%s)', async (outcome) => {
+  const reply = deferred<boolean>();
+  ipc.mockImplementation(async (command: string) => {
+    if (command === 'has_unsaved_changes') {
+      const dirty = await reply.promise;
+      if (outcome === 'failed') throw new Error('synthetic IPC failure');
+      return dirty;
+    }
+    if (command === 'get_project_warnings') return [];
+    return undefined;
+  });
+  const loading = useProjectStore.getState().loading;
+  useProjectStore.setState({ isDirty: false, loading: { ...loading, clientOpId: 1 } });
+  const resolving = useProjectStore.getState().resolveWarning(1, 2, 'SHORT_SHOT');
+  await vi.waitFor(() => expect(ipc).toHaveBeenCalledWith('has_unsaved_changes', undefined, expect.anything()));
+  // The same file opens again meanwhile: same path and created_at, a new load.
+  useProjectStore.setState({
+    project: { file_path: '/a.stalx', created_at: 'A' } as never,
+    isDirty: false,
+    loading: { ...loading, clientOpId: 2 },
+  });
+  reply.resolve(true);
+  await resolving;
+  expect(useProjectStore.getState().isDirty).toBe(false);
+});
+
+it('the same load still takes the reply', async () => {
+  ipc.mockImplementation(async (command: string) => {
+    if (command === 'has_unsaved_changes') return true;
+    if (command === 'get_project_warnings') return [];
+    return undefined;
+  });
+  useProjectStore.setState({ isDirty: false });
+  await useProjectStore.getState().resolveWarning(1, 2, 'SHORT_SHOT');
+  expect(useProjectStore.getState().isDirty).toBe(true);
+});

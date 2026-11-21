@@ -13,6 +13,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { askSpeleoExit, closeKeepingLock, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { RELEASE_CANCELLED, settleOpenLockBeforeLeaving } from './speleoReleaseFailure';
+import { openProjectHasUnsavedChanges } from './unsavedChanges';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -357,15 +358,19 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
  * - The same state on an UPDATE RESTART asks nothing: it keeps the lock and the
  *   local changes (saving unsaved edits first) and restarts, so the user resumes
  *   exactly where they were - the "Keep the lock" end state without the question.
- * - Otherwise unsaved changes get the ordinary unsaved-changes dialog.
+ * - Otherwise unsaved changes get the ordinary unsaved-changes dialog: the
+ *   frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+ *   SpeleoDB bookkeeping), asked of the backend here as every exit asks it
+ *   ({@link openProjectHasUnsavedChanges}). Hence async: the close listener
+ *   awaits it.
  * - A clean SpeleoDB project hands its lock back before the quit goes on
  *   ({@link quitAfterHandingBackLock}): a release that fails or is uncertain asks
  *   "Couldn't hand back the lock", and Cancel there abandons the quit. The bounded
  *   silent release at process exit stays only for the exits the app cannot
  *   intercept.
  */
-export function guardQuit(): boolean {
-  const { project, isDirty } = useProjectStore.getState();
+export async function guardQuit(): Promise<boolean> {
+  const { project } = useProjectStore.getState();
   if (!project) return false;
 
   if (openProjectNeedsSpeleoExitPrompt()) {
@@ -380,7 +385,7 @@ export function guardQuit(): boolean {
     return true;
   }
 
-  if (isDirty) {
+  if (await openProjectHasUnsavedChanges()) {
     openExitPrompt('unsaved-changes', { pendingQuit: true });
     return true;
   }

@@ -99,21 +99,51 @@ describe('quitApp', () => {
 });
 
 describe('guardQuit', () => {
-  it('lets a clean project quit immediately', () => {
-    expect(guardQuit()).toBe(false);
+  it('lets a clean project quit immediately', async () => {
+    expect(await guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it('quits immediately with no project open at all', () => {
+  it('quits immediately with no project open at all', async () => {
     useProjectStore.setState({ project: null, isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(false);
+    expect(await guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it('blocks on unsaved-to-disk changes', () => {
+  it('blocks on unsaved-to-disk changes', async () => {
     useProjectStore.setState({ isDirty: true });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
+  });
+
+  /**
+   * Pre-PR review finding 2: a project opened from a 0.6.0 file can hold changes
+   * only the backend tracks (SpeleoDB bookkeeping that waits for the converting
+   * save): `isDirty` is false while `has_unsaved_changes` is true. The quit read
+   * `isDirty` alone, so it quit and the close dropped them. Injection: reading
+   * `isDirty` alone again quits here with no prompt.
+   */
+  it('asks about changes only the backend tracks, with isDirty false', async () => {
+    invokeIpcMock.mockImplementation((async (command: string) => command === 'has_unsaved_changes') as never);
+    expect(await guardQuit()).toBe(true);
+    expect(invokeIpcMock).toHaveBeenCalledWith('has_unsaved_changes', undefined, expect.anything());
+    expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
+    // A SpeleoDB copy we hold no lock over gets the same prompt, not a silent hand-back.
+    openDialog.mockClear();
+    useSpeleoStore.setState({ link: link({ editState: 'read-only', hasUnpushedEdits: false }) });
+    expect(await guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_settle_open_lock', expect.anything(), expect.anything());
+    expect(closeMock).not.toHaveBeenCalled();
+  });
+
+  it('asks when the backend cannot say: a question is cheaper than lost changes', async () => {
+    invokeIpcMock.mockImplementation((async (command: string) => {
+      if (command === 'has_unsaved_changes') throw new Error('backend gone');
+      return null;
+    }) as never);
+    expect(await guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
   });
 
@@ -125,8 +155,9 @@ describe('guardQuit', () => {
     { editState: 'read-only' as const, hasUnpushedEdits: false },
   ])('hands the lock back without a prompt, then quits: %j', async (state) => {
     useSpeleoStore.setState({ link: link(state) });
-    invokeIpcMock.mockResolvedValueOnce({ success: true, warnings: [], error: null, line_ids: [] } as never);
-    expect(guardQuit()).toBe(true);
+    invokeIpcMock.mockImplementation((async (command: string) =>
+      command === 'speleodb_settle_open_lock' ? { success: true, warnings: [], error: null, line_ids: [] } : null) as never);
+    expect(await guardQuit()).toBe(true);
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_settle_open_lock', { releaseLock: true }, expect.anything());
     expect(consumeQuitConfirmation()).toBe(true);
@@ -136,34 +167,34 @@ describe('guardQuit', () => {
 
   // The bug this guards: saved (autosaved) work under our lock used to quit with
   // no question, and the exit released the lock over it.
-  it('asks the exit prompt for SAVED but un-uploaded work under our lock', () => {
+  it('asks the exit prompt for SAVED but un-uploaded work under our lock', async () => {
     useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(useSpeleoExitPrompt.getState().request?.reason).toBe('quit');
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it('read-only with unsaved work gets the ordinary unsaved-changes prompt', () => {
+  it('read-only with unsaved work gets the ordinary unsaved-changes prompt', async () => {
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
     expect(useSpeleoExitPrompt.getState().request).toBeNull();
   });
 
   // Composition: BOTH dirty. The SpeleoDB prompt is the only one raised: its upload
   // and its keep both save the unsaved part first.
-  it('raises only the SpeleoDB prompt when the project is both disk-dirty and unpushed', () => {
+  it('raises only the SpeleoDB prompt when the project is both disk-dirty and unpushed', async () => {
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(openDialog).not.toHaveBeenCalled();
     expect(useSpeleoExitPrompt.getState().request?.reason).toBe('quit');
   });
 
   it('continues the quit once the prompt has carried out an answer', async () => {
     useSpeleoStore.setState({ link: link() });
-    guardQuit();
+    await guardQuit();
     useSpeleoExitPrompt.getState().request?.settle(true);
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
     expect(consumeQuitConfirmation()).toBe(true);
@@ -171,7 +202,7 @@ describe('guardQuit', () => {
 
   it('a cancelled prompt does not quit', async () => {
     useSpeleoStore.setState({ link: link() });
-    guardQuit();
+    await guardQuit();
     useSpeleoExitPrompt.getState().request?.settle(false);
     await Promise.resolve();
     await Promise.resolve();
@@ -202,7 +233,7 @@ describe('guardQuit on an update restart', () => {
     closeMock.mockClear();
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(useSpeleoExitPrompt.getState().request).toBeNull();
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
     expect(saveProject).toHaveBeenCalledTimes(1);
@@ -218,7 +249,7 @@ describe('guardQuit on an update restart', () => {
     saveProject.mockResolvedValue({ success: false, warnings: [], error: 'disk full', line_ids: [] });
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     await vi.waitFor(() => expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ message: 'disk full' })));
     expect(closeProject).not.toHaveBeenCalled();
     expect(closeMock).not.toHaveBeenCalled();
@@ -234,7 +265,7 @@ describe('guardQuit on an update restart', () => {
  * were with nothing to restore.
  */
 describe('guardQuit leaves the dialog on screen alone', () => {
-  it('does not touch the dialog slot when raising the SpeleoDB prompt', () => {
+  it('does not touch the dialog slot when raising the SpeleoDB prompt', async () => {
     useSpeleoStore.setState({ link: link() });
     useProjectStore.setState({ isDirty: true });
     useUIStore.setState({
@@ -242,17 +273,17 @@ describe('guardQuit leaves the dialog on screen alone', () => {
       dialogData: { dmpFile: { lines: 3 } },
     });
 
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(openDialog).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('dmp-selection');
     expect(useSpeleoExitPrompt.getState().request?.reason).toBe('quit');
   });
 
-  it('carries the displaced dialog into the unsaved-changes prompt alongside pendingQuit', () => {
+  it('carries the displaced dialog into the unsaved-changes prompt alongside pendingQuit', async () => {
     useProjectStore.setState({ isDirty: true });
     useUIStore.setState({ activeDialog: 'dmp-import-new', dialogData: { dmpFile: {} } });
 
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', {
       pendingQuit: true,
       cancelReturnsTo: 'dmp-import-new',
@@ -260,11 +291,11 @@ describe('guardQuit leaves the dialog on screen alone', () => {
     });
   });
 
-  it('a second X while the prompt is up replaces it rather than stacking a second one', () => {
+  it('a second X while the prompt is up replaces it rather than stacking a second one', async () => {
     useSpeleoStore.setState({ link: link() });
-    guardQuit();
+    await guardQuit();
     const first = useSpeleoExitPrompt.getState().request;
-    guardQuit();
+    await guardQuit();
     const second = useSpeleoExitPrompt.getState().request;
     expect(second).not.toBe(first);
     expect(second?.reason).toBe('quit');
@@ -279,9 +310,9 @@ describe('the one-shot quit confirmation', () => {
     expect(consumeQuitConfirmation()).toBe(false);
   });
 
-  it('is NOT armed by a guarded quit that never reached performQuit', () => {
+  it('is NOT armed by a guarded quit that never reached performQuit', async () => {
     useProjectStore.setState({ isDirty: true });
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     expect(consumeQuitConfirmation()).toBe(false);
   });
 

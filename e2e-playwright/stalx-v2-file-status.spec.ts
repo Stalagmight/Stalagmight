@@ -4,7 +4,8 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
 /**
  * The `.stalx` v2 file contract in the UI (plan 6.4, 6.5, 7.2.10):
  * - a save refused because another program changed the file
- *   (`EXTERNALLY_MODIFIED`) asks which version to keep;
+ *   (`EXTERNALLY_MODIFIED`) asks which version to keep; one it moved or
+ *   deleted (`FILE_MISSING`) says so and offers no reopen;
  * - a file made with a newer Stalagmight is open read-only, with a banner, and
  *   the editing controls are off;
  * - an old-format file the conversion moved stations in says so once, and the
@@ -19,7 +20,7 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
  */
 
 type MockWindow = {
-  __MOCK_SET_EXTERNALLY_MODIFIED__: (on: boolean) => void;
+  __MOCK_SET_EXTERNALLY_MODIFIED__: (on: boolean | 'missing') => void;
   __MOCK_SET_READ_ONLY_REASON__: (reason: string | null) => void;
   __MOCK_SET_CONVERSION_NOTICE__: (notice: unknown) => void;
   __MOCK_SET_LEGACY_ORIGIN__: (on: boolean) => void;
@@ -70,6 +71,29 @@ test.describe('.stalx v2 file status', () => {
     // Not a raw error.
     await expect(page.getByTestId('error-dialog')).toHaveCount(0);
 
+    await page.getByTestId('save-conflict-overwrite').click();
+    await expect(dialog).not.toBeVisible();
+    await expect.poll(() => isDirty(page)).toBe(false);
+    expect(await saveCalls(page)).toEqual(['save_project', 'save_project_overwriting']);
+  });
+
+  test('a save refused because the file was moved or deleted keeps the edits and offers no reopen', async ({ page }) => {
+    await createProject(page, 'Moved Elsewhere');
+    await makeDirty(page);
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_EXTERNALLY_MODIFIED__('missing'));
+
+    await page.keyboard.press('Control+s');
+    const dialog = page.getByTestId('save-conflict-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('The project file was moved or deleted');
+    await expect(page.getByTestId('save-conflict-lead')).toContainText('was moved or deleted by another program');
+    await expect(page.getByTestId('save-conflict-lead')).not.toContainText('Another program changed');
+    // No file's version to take: only the answers that keep the edits.
+    await expect(page.getByTestId('save-conflict-reload')).toHaveCount(0);
+    await expect(page.getByTestId('save-conflict-save-as')).toBeVisible();
+    expect(await isDirty(page)).toBe(true);
+
+    // Keep my version puts it back where it was.
     await page.getByTestId('save-conflict-overwrite').click();
     await expect(dialog).not.toBeVisible();
     await expect.poll(() => isDirty(page)).toBe(false);

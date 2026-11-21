@@ -95,7 +95,11 @@ pub fn take_conversion_notice(
 /// Whether the open project has changes no save has written yet (the
 /// backend's dirty flag). Warning ignores mark it without an undo entry
 /// (plan 6.5), so the frontend reads it after one to keep its own dirty flag,
-/// which autosave and the exit prompt watch, in step.
+/// which autosave watches, in step. Every exit (quit, close, switch, New
+/// Project, an account change) asks it too before it leaves the project: on a
+/// 0.6.0 file it also counts the SpeleoDB bookkeeping that waits for the
+/// converting save, which the frontend's flag leaves out so autosave does not
+/// convert a file the user only looked at.
 #[tauri::command]
 pub fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
     state.has_unsaved_changes()
@@ -109,6 +113,24 @@ pub fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
 #[tauri::command]
 pub fn project_read_only_reason(state: State<'_, AppState>) -> Option<String> {
     state.read_only_reason()
+}
+
+/// Why the open project's file could not be opened again as it is on disk
+/// now, or `None` when it would (`AppState::project_file_reload_refusal`).
+/// The save prompt's "Use the file's version" asks before it closes the
+/// session, so the unsaved changes are never dropped for a reopen that would
+/// fail. Off the main thread: it reads and decodes the whole file.
+#[tauri::command]
+pub async fn project_file_reload_refusal<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .project_file_reload_refusal()
+    })
+    .await
+    .unwrap_or_else(|e| Some(format!("the check of the file failed: {e}")))
 }
 
 /// Whether the open project's file on disk is still a 0.6.0 file: opened

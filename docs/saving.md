@@ -258,7 +258,12 @@ Every write of a project file, the local-only ones included, goes through
    permissions) and `sync_all` it: one data sync
 3. Check the guard (below)
 4. `rename(<file>.tmp, <file>)` - atomic on POSIX, nearly atomic on Windows; no
-   handle on the destination is open across it
+   handle on the destination is open across it. A first save (`Guard::Absent`:
+   nothing may be there) instead hard-links the temp to `<file>` and unlinks
+   the temp on Unix, so a file that appeared after the check in step 3 refuses
+   the save (`Exists`) instead of being replaced. Where the volume has no hard
+   links, and on Windows, it is the checked rename, with that brief window
+   open
 5. Sync the folder (Unix; a failure is logged, not returned: the file is
    already in place. The warning is logged once per run, later failures at
    debug level, so a network or removable volume does not repeat it on every
@@ -285,8 +290,11 @@ written. Just before the rename, a destination whose length or SHA-256 differs
 (another program, a sync client, a second Stalagmight wrote it, or it was moved
 or deleted) refuses the save with `EXTERNALLY_MODIFIED: <path> was changed by
 another program since it was opened`; nothing is written and the edits stay in
-memory. A touch or a rewrite with the same bytes is no change. The
-local-only saves are guarded the same way.
+memory. A file that is gone (moved or deleted) is refused with
+`EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted by another
+program since it was opened` (`FILE_MISSING_MARKER`, `guard_refusal`). A touch
+or a rewrite with the same bytes is no change. The local-only saves are
+guarded the same way.
 
 The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
 
@@ -295,7 +303,11 @@ The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
 - **Save as a new file**: the Save As flow, which leaves the changed file alone
   and moves the session to the new one;
 - **Use the file's version**: reopen the file as it is now, discarding the
-  unsaved changes;
+  unsaved changes. Not offered for a file that is gone (`FILE_MISSING`; the
+  prompt then says the file was moved or deleted). Before it closes the
+  session it asks `project_file_reload_refusal`, which reads and decodes the
+  file as an open would and changes nothing: a file that would not open
+  keeps the session, and the unsaved changes, with the reason shown;
 - **Decide later**: keep editing.
 
 A SpeleoDB-managed copy gets only Keep my version: its reload belongs to the
@@ -338,7 +350,11 @@ per-machine or sync state.
 
 The first save of a migrated legacy file (its origin is `Legacy` in
 `FileState`) writes version 2 over it, through `legacy_upgrade::upgrade`
-(`core/state/legacy_upgrade.rs`). Until a save writes the open project (to
+(`core/state/legacy_upgrade.rs`), as does every other write over a 0.6.0 file
+of the user's (a Recents rename, a link strip, a Save As onto one). The one
+write over a legacy file that keeps no backup is a SpeleoDB download
+installed over a 0.6.0 copy in the pull cache (`install_cache_bytes`,
+`Guard::Overwrite`): that copy's data is on the server. Until a save writes the open project (to
 its own path, or a Save As elsewhere) the status bar reads "Old format:
 converted when you save" instead of "Saved": the frontend asks
 `project_file_is_legacy` with the rest of the file status, and the converting
@@ -386,7 +402,10 @@ settle already rewrote it, the session's guard follows the new bytes, so the
 next save works. A failed write removes the copy step 4 kept while the original
 still holds the same bytes (never a copy an earlier upgrade kept), so an
 autosave retried on a read-only folder does not fill the backups folder. The next upgrade of the same file removes what a
-killed one left behind (the hidden settled copy, a partial backup). An original
+killed one left behind (the hidden settled copy, a partial backup). Nothing
+else is ever removed from the backups folder: it is not pruned, so every
+original an upgrade kept stays there (Recovery offers the ones of the
+project's path) until the user deletes it. An original
 whose unfinished changes SQLite cannot fold in (a damaged pair) is never
 replaced, not even by Keep my version: there would be no whole copy of it. The
 save says so ("the original's unfinished changes could not be finished") and
@@ -498,9 +517,15 @@ autosave, and autosave would convert the 0.6.0 file the user only looked at
 (demo issue I-6). A close without a save drops it, as it drops any other view
 state. Display toggles and SpeleoDB state changes of a version 2 file are
 durable at once and set nothing. A save clears every flag. The frontend keeps
-its own `isDirty` for the indicator, autosave and the close, switch and quit
-prompts; it asks the backend after an Ignore, and never marks the project
-unsaved for a display toggle.
+its own `isDirty` for the indicator and autosave; it asks the backend after an
+Ignore, and never marks the project unsaved for a display toggle. Every way out
+of a project (quit and the window X, close, opening another project, local or
+from SpeleoDB, New Project, an account change, and the saves "Keep the lock"
+and "Quit now" make first) asks `openProjectHasUnsavedChanges`
+(`src/utils/unsavedChanges.ts`): `isDirty`, or else the backend's flag, read at
+that moment. So a 0.6.0 file's `local_pending_asks` gets the unsaved-changes
+prompt, while it still never arms autosave (that would convert a file the user
+only looked at); a failed ask counts as unsaved.
 
 ## Failure classification
 
@@ -514,7 +539,7 @@ mirrors the markers; `saveFeedback.ts` turns them into copy.
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
-| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
+| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk (`FILE_MISSING` after it: the file was moved or deleted) | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
 | `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only notice (warning toast, key `edit-disabled`), never the error dialog |
 | (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 

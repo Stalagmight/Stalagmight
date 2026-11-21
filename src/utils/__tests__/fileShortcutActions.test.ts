@@ -48,16 +48,18 @@ describe('runFileShortcutAction("new_file")', () => {
     expect(useUIStore.getState().activeDialog).toBe('new-project');
   });
 
-  it('opens new-project directly when the open project is clean', () => {
+  // The guard asks the backend's unsaved-changes flag too (a clean frontend
+  // can still hold changes only the backend tracks), so it answers a tick later.
+  it('opens new-project directly when the open project is clean', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
     runFileShortcutAction('new_file');
-    expect(useUIStore.getState().activeDialog).toBe('new-project');
+    await vi.waitFor(() => expect(useUIStore.getState().activeDialog).toBe('new-project'));
   });
 
-  it('defers to the unsaved-changes dialog when a dirty project is open (Ctrl+N guard)', () => {
+  it('defers to the unsaved-changes dialog when a dirty project is open (Ctrl+N guard)', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
     runFileShortcutAction('new_file');
-    expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    await vi.waitFor(() => expect(useUIStore.getState().activeDialog).toBe('unsaved-changes'));
     expect(useUIStore.getState().dialogData).toMatchObject({ pendingNewProject: true });
   });
 });

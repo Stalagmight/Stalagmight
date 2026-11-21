@@ -456,12 +456,13 @@ pub(super) fn read_history(raw: &RawValue, limits: &CountLimits) -> Result<Histo
         .map_err(|_| "the history member is not an object".to_string())?;
     let mut history = History::default();
     let mut total = 0usize;
+    let mut unknown = UnknownKeys::default();
     for (key, value) in pairs {
         let list = match key.as_ref() {
             "undo" => &mut history.undo,
             "redo" => &mut history.redo,
             other => {
-                tracing::info!(key = %other, "Dropped an unknown history key from a .stalx file");
+                unknown.note(other);
                 continue;
             }
         };
@@ -474,7 +475,44 @@ pub(super) fn read_history(raw: &RawValue, limits: &CountLimits) -> Result<Histo
             list.push(RawJson::from_canonical(text));
         }
     }
+    unknown.log();
     Ok(history)
+}
+
+/// The unknown `history` keys a read dropped, logged once as a count and the
+/// first few names cut short: a hostile file can carry thousands of them, and
+/// each as long as a member may be.
+#[derive(Default)]
+struct UnknownKeys {
+    count: usize,
+    first: Vec<String>,
+}
+
+impl UnknownKeys {
+    /// How many names the log line shows, and how many characters of each.
+    const SHOWN: usize = 3;
+    const CHARS: usize = 32;
+
+    fn note(&mut self, key: &str) {
+        self.count += 1;
+        if self.first.len() < Self::SHOWN {
+            let mut cut: String = key.chars().take(Self::CHARS).collect();
+            if cut.len() < key.len() {
+                cut.push_str("...");
+            }
+            self.first.push(cut);
+        }
+    }
+
+    fn log(&self) {
+        if self.count > 0 {
+            tracing::info!(
+                count = self.count,
+                first = ?self.first,
+                "Dropped unknown history keys from a .stalx file"
+            );
+        }
+    }
 }
 
 /// The elements of an array, at most `max` (else an error).
@@ -720,4 +758,34 @@ pub(super) fn read_strings(
         },
     )
     .map_err(|e| typed(e, ctx, whole, raw.get()))
+}
+
+#[cfg(test)]
+mod unknown_keys_tests {
+    use super::UnknownKeys;
+
+    /// Pre-PR review nit: every unknown `history` key was logged in full, one
+    /// line each, so a hostile file could fill the log. The read keeps a count
+    /// and at most a few names, each cut short. Injection: keeping every key,
+    /// or every key whole, fails here.
+    #[test]
+    fn unknown_history_keys_are_a_count_and_a_few_short_names() {
+        let mut unknown = UnknownKeys::default();
+        let long = "k".repeat(1000);
+        for _ in 0..10_000 {
+            unknown.note(&long);
+        }
+        unknown.note("x");
+        assert_eq!(unknown.count, 10_001);
+        assert_eq!(unknown.first.len(), UnknownKeys::SHOWN);
+        assert!(unknown
+            .first
+            .iter()
+            .all(|k| k.chars().count() == UnknownKeys::CHARS + 3 && k.ends_with("...")));
+
+        let mut short = UnknownKeys::default();
+        short.note("x");
+        assert_eq!(short.count, 1);
+        assert_eq!(short.first, ["x"]);
+    }
 }

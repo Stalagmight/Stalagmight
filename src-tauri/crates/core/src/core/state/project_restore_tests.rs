@@ -1328,3 +1328,75 @@ fn backup_kinds_go_over_the_wire_as_the_dialog_reads_them() {
         ["pre_upgrade", "pre_restore", "backup", "interrupted_save"]
     );
 }
+
+/// The names in `dir`, without reading any file (a sparse file over the cap
+/// sits there in the tests below).
+fn listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A sparse file one byte over the size cap at `dir/file` (nothing is written).
+fn over_the_cap(dir: &Path, file: &str) -> PathBuf {
+    let path = dir.join(file);
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(stalx_v2::MAX_PROJECT_FILE_BYTES + 1)
+        .unwrap();
+    path
+}
+
+/// Pre-PR review finding 4: the restore copied a user-picked backup of any
+/// size beside the project, then read the copy whole. One byte over the cap
+/// is refused before anything is copied: no staged file is ever created (the
+/// folder is not even modified), and the project is untouched. Injection:
+/// dropping the size check before the copy stages a GiB beside the project
+/// (the copy's own cap still refuses it), which creates and removes the
+/// staged file and so moves the folder's modification time; dropping both
+/// caps refuses it later, in the open check, with another message.
+#[test]
+fn a_backup_over_the_size_cap_is_refused_before_it_is_copied() {
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), "cave.stalx", "Current");
+    let before = std::fs::read(&project).unwrap();
+    let huge = over_the_cap(dir.path(), "cave.stalx.backup");
+    let names_before = listing(dir.path());
+    let folder_modified = || std::fs::metadata(dir.path()).unwrap().modified().unwrap();
+    let modified_before = folder_modified();
+
+    let err = state()
+        .restore_project_from_backup(&project, &huge)
+        .unwrap_err();
+
+    assert!(
+        err.starts_with("Not restored: cave.stalx.backup is larger than")
+            && err.contains("Nothing was changed"),
+        "{err}"
+    );
+    assert_eq!(listing(dir.path()), names_before, "nothing was staged");
+    assert_eq!(
+        folder_modified(),
+        modified_before,
+        "no staged copy was ever created"
+    );
+    assert_eq!(std::fs::read(&project).unwrap(), before);
+}
+
+/// The open check of a staged copy reads at most the cap too (defence in
+/// depth: the staging refuses a larger backup first). Injection: reading the
+/// staged copy with `std::fs::read` again reads it whole and refuses it as
+/// "not a Stalagmight project".
+#[test]
+fn the_open_check_refuses_a_copy_over_the_size_cap_without_reading_it() {
+    let dir = TempDir::new().unwrap();
+    let staged = over_the_cap(dir.path(), ".cave.stalx.restore-x.stalx");
+    let err = state()
+        .check_opens(&staged, &dir.path().join("cave.stalx.backup"))
+        .unwrap_err();
+    assert!(err.contains("larger than"), "{err}");
+    assert!(err.contains("Nothing was changed"), "{err}");
+}

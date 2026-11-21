@@ -6,6 +6,7 @@ import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransit
 import { discardWorkspaceDrafts, workspaceDraftNotice, type AccountTarget } from './workspaceDrafts';
 import { askExitChoice } from './exitConfirm';
 import { saveOpenProjectLocally } from './saveOpenProjectLocally';
+import { openProjectHasUnsavedChanges } from './unsavedChanges';
 
 /**
  * Account replacement protects the unsaved survey snapshot and unsent SpeleoDB
@@ -31,7 +32,9 @@ export async function protectAccountTransition(
   const before = useProjectStore.getState();
   const project = before.project;
   const generation = useSpeleoStore.getState().sessionGeneration;
-  const dirty = (opts.unsaved ?? true) && before.isDirty;
+  // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+  // SpeleoDB bookkeeping), asked as every exit asks.
+  const dirty = (opts.unsaved ?? true) && await openProjectHasUnsavedChanges();
   const drafts = opts.account ? workspaceDraftNotice(opts.account) : null;
   if (!dirty && !drafts) return true;
   const request = reserveProjectRequest();

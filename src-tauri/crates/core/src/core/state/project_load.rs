@@ -202,6 +202,32 @@ pub(super) fn conversion_refusal_reason(error: &MigrateError) -> String {
 }
 
 impl AppState {
+    /// Why the open project's file could not be opened again as it is on
+    /// disk now, or `None` when it would: read and decoded (or converted, for
+    /// a 0.6.0 file) exactly as an open reads it, with nothing changed. The
+    /// save prompt's "Use the file's version" asks first, because it closes
+    /// the session, and with it the unsaved changes, before it opens the file
+    /// again: a file that is gone, unreadable or not a project any more must
+    /// refuse before that close, not after it. A project with no file has
+    /// nothing to reopen.
+    pub fn project_file_reload_refusal(&self) -> Option<String> {
+        let Some(path) = self.open_file_path() else {
+            return Some("the project has no file to open again".to_string());
+        };
+        match self.read_project_file(&path) {
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(
+                    code = %e.code,
+                    purpose = "never drop unsaved changes for a reopen that would fail",
+                    "The open project's file would not open again: {}",
+                    e.message
+                );
+                Some(e.message)
+            }
+        }
+    }
+
     /// Read the project file at `path` into memory (no state changes).
     pub(crate) fn read_project_file(&self, path: &Path) -> Result<Opened, LoadError> {
         let options = DecodeOptions::default();

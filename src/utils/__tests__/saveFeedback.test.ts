@@ -22,6 +22,7 @@ import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
 import {
   EXTERNALLY_MODIFIED,
+  FILE_MISSING,
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
   FS_PERMISSION_DENIED,
@@ -191,6 +192,11 @@ describe('autosaveFailureMessage (#429)', () => {
       i18n.t('banners.autosave.externallyModified'),
     );
     expect(autosaveFailureMessage(`${READ_ONLY_FILE}: x`)).toBe(i18n.t('banners.autosave.readOnlyFile'));
+    // A file that is gone is not "changed": the banner says moved or deleted.
+    const missing = autosaveFailureMessage(`${EXTERNALLY_MODIFIED}: ${FILE_MISSING}: x`);
+    expect(missing).toBe(i18n.t('banners.autosave.externallyMissing'));
+    expect(missing).toContain('moved or deleted');
+    expect(missing).not.toContain(FILE_MISSING);
   });
 
   it('relays an unmarked failure as the backend wrote it', () => {

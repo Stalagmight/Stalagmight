@@ -263,7 +263,7 @@ describe('Project switch', () => {
 describe('Quit', () => {
   it('a clean release quits with no question', async () => {
     replies.speleodb_settle_open_lock = [released];
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledOnce());
     expect(useReleaseFailurePrompt.getState().request).toBeNull();
   });
@@ -272,7 +272,7 @@ describe('Quit', () => {
     await requestUpdateRestart();
     closeMock.mockReset();
     replies.speleodb_settle_open_lock = [failed()];
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     const prompt = await waitForPrompt();
     expect(prompt.reason).toBe('quit');
     prompt.settle('cancel');
@@ -283,7 +283,7 @@ describe('Quit', () => {
 
   it.each(['retry', 'keep'] as const)('quits only once the user settles it (%s)', async (answer) => {
     replies.speleodb_settle_open_lock = [failed(), answer === 'retry' ? released : ok];
-    expect(guardQuit()).toBe(true);
+    expect(await guardQuit()).toBe(true);
     const prompt = await waitForPrompt();
     await flush();
     expect(closeMock).not.toHaveBeenCalled();

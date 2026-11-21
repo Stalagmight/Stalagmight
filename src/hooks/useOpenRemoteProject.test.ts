@@ -549,7 +549,23 @@ describe('useOpenRemoteProject (#218)', () => {
       unregister();
       expect(discard).not.toHaveBeenCalled();
       expect(confirmMock).not.toHaveBeenCalled();
-      expect(invokeIpcMock).not.toHaveBeenCalled();
+      // Only the unsaved-changes question was asked of the backend: nothing downloaded.
+      expect(invokeIpcMock.mock.calls.map((call) => call[0])).toEqual(['has_unsaved_changes']);
+    });
+
+    /**
+     * Pre-PR review finding 2: the remote open read `isDirty` alone, so changes
+     * only the backend tracks (a 0.6.0 copy's SpeleoDB bookkeeping) were dropped
+     * by the switch with no question. Injection: reading `isDirty` alone again
+     * opens with no question here.
+     */
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s asks about changes only the backend tracks', async (action) => {
+      invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'has_unsaved_changes' ? true : { local_path: '/cache/p1.stalx' }));
+      confirmMock.mockResolvedValue(false);
+      expect(await hook()[action](SUMMARY)).toEqual({ status: 'cancelled' });
+      expect(confirmMock).toHaveBeenCalledOnce();
+      expect(invokeIpcMock.mock.calls.map((call) => call[0])).toEqual(['has_unsaved_changes']);
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s stays put when saving the edits fails', async (action) => {
@@ -563,7 +579,11 @@ describe('useOpenRemoteProject (#218)', () => {
     it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s protects edits made during download', async (action) => {
       const downloaded = deferredOpen<{ local_path: string }>();
       const entered = deferredOpen<void>();
-      invokeIpcMock.mockImplementation(() => { entered.resolve(); return downloaded.promise; });
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'has_unsaved_changes') return Promise.resolve(false);
+        entered.resolve();
+        return downloaded.promise;
+      });
       const pending = hook()[action](SUMMARY);
       await entered.promise;
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx', name: 'Edited' } as never, isDirty: true });

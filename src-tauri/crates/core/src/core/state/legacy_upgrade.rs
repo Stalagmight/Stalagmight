@@ -1,9 +1,17 @@
 //! The first version 2 write over a legacy (SQLite) `.stalx` (plan 7.2.10):
 //! the original is made whole, kept in the app-data backups folder, and only
-//! then replaced. Every write over a legacy file goes through [`upgrade`]: the
-//! first save of an opened one, a Recents rename and a SpeleoDB link strip of
-//! a closed one, and a Save As or Save a Copy onto one (the 0.6.0 file it
-//! replaces is kept like any other original).
+//! then replaced. Every write over a legacy file whose survey exists only on
+//! this computer goes through [`upgrade`]: the first save of an opened one, a
+//! Recents rename and a SpeleoDB link strip of a closed one, and a Save As or
+//! Save a Copy onto one (the 0.6.0 file it replaces is kept like any other
+//! original).
+//!
+//! One write over a legacy file does not: installing a SpeleoDB download
+//! over a 0.6.0 copy in the pull cache
+//! (`speleodb_reload::install_cache_bytes`, `write_atomic` with
+//! `Guard::Overwrite`) keeps no backup. That copy's data is on the server
+//! (the local-edits guard ran first, or the user chose to discard its
+//! changes); its SQLite sidecars are set aside and removed with it.
 //!
 //! A legacy file is not always one file (`persistence::legacy_settle`). Beside
 //! a file an old build was killed writing sits a HOT `-journal`, and only the

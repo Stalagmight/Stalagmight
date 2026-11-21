@@ -19,6 +19,7 @@ import {
 import { askExitChoice } from '../utils/exitConfirm';
 import { saveOpenProjectLocally } from '../utils/saveOpenProjectLocally';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { openProjectHasUnsavedChanges } from '../utils/unsavedChanges';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
@@ -241,9 +242,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   // that also lists any unsent SpeleoDB input the switch drops (frontend#10).
   const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
     if (!current()) return null;
-    const { project, isDirty } = useProjectStore.getState();
+    const { project } = useProjectStore.getState();
     if (!project) return { project: null };
-    if (!isDirty) return await confirmWorkspaceDrafts(current) && current() ? { project: null } : null;
+    // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+    // SpeleoDB bookkeeping), asked as every exit asks.
+    const unsaved = await openProjectHasUnsavedChanges();
+    if (!current() || useProjectStore.getState().project !== project) return null;
+    if (!unsaved) return await confirmWorkspaceDrafts(current) && current() ? { project: null } : null;
     const drafts = workspaceDraftNotice();
     // Never discard-only (frontend#6): a project with a file of its own can save
     // its edits on this computer first, then the open goes on.

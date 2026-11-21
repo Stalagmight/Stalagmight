@@ -272,9 +272,10 @@ mod tests {
     }
 
     /// The backups the dialog offers: version 2 and SQLite files beside the
-    /// project, a complete `.tmp`, never a torn one, nor a sidecar.
+    /// project, a complete `.tmp`, never a torn copy (a torn `.backup.2`, a
+    /// torn `.tmp`), nor a sidecar.
     #[test]
-    fn list_backups_offers_both_formats_and_skips_a_torn_temp() {
+    fn list_backups_offers_both_formats_and_a_complete_temp_never_a_torn_copy() {
         let dir = tempfile::TempDir::new().unwrap();
         let project = v2_file(dir.path(), "cave.stalx", "Current", 2);
         v2_file(dir.path(), "cave.stalx.backup", "Older", 2);
@@ -304,6 +305,17 @@ mod tests {
         assert_eq!(
             sorted,
             ["cave.stalx.backup", "cave.stalx.backup.1", "cave.stalx.tmp"]
+        );
+
+        // A torn `.tmp` (a save interrupted mid-write) is not offered either.
+        let other = tempfile::TempDir::new().unwrap();
+        let other_project = v2_file(other.path(), "cave.stalx", "Current", 2);
+        std::fs::write(other.path().join("cave.stalx.tmp"), &torn[..torn.len() / 2]).unwrap();
+        let offered = crate::test_helpers::with_isolated_config(|| list_backups(other_project));
+        assert!(
+            offered.is_empty(),
+            "a torn temp is offered: {:?}",
+            offered.iter().map(|b| &b.path).collect::<Vec<_>>()
         );
     }
 
