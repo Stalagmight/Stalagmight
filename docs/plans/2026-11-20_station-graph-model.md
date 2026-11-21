@@ -1511,8 +1511,9 @@ themselves. Labels `JP1`...
   unless its own sweep merged the piece or a datum holds it, the singles'
   slots are the atomic route's moved by one vector, both hold as many
   placements on it, and a single delete moves that station only by a merge
-  that made a junction on its piece. Pinned in
+  that made a junction on its piece (found by either end's id or alias: U1
+  can give it a third identity in the same step, seed 17504401). Pinned in
   `a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces`
-  (eight seeds; injections in its docs). Not changed: U1's restore takes the
+  (nine seeds; injections in its docs). Not changed: U1's restore takes the
   first alias in list order, so a delete after a merge is not its exact
   inverse in station ids (seed 17517958: the junction's id moves from 6 to 8).
