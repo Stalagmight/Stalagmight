@@ -639,3 +639,49 @@ fn a_copy_without_a_digest_keeps_its_mark() {
         });
     }
 }
+
+/// The digest describes the BASE it was recorded for: a link change to another
+/// BASE or another project drops it, an edit (same BASE) keeps it.
+///
+/// Injection: drop the clear in `FileState::set_speleo_link` and the digest
+/// outlives the BASE it describes (binding the hash to the BASE id keeps that
+/// from ever matching; this keeps the state from carrying it at all).
+#[test]
+fn the_digest_goes_with_its_base() {
+    use super::open_file::FileState;
+    let mut link = server_link("https://sdb.example");
+    link.base_commit_sha = Some(BASE.to_owned());
+    let mut file = FileState::default();
+    file.set_speleo_link(Some(&link));
+    file.extras.local.speleodb.base_survey = Some("sha256:recorded".to_owned());
+
+    link.has_unpushed_edits = true;
+    link.last_edit_at = Some("2026-11-21T10:00:00Z".to_owned());
+    file.set_speleo_link(Some(&link));
+    assert!(
+        file.extras.local.speleodb.base_survey.is_some(),
+        "an edit keeps it"
+    );
+
+    link.base_commit_sha = Some(NEWER.to_owned());
+    file.set_speleo_link(Some(&link));
+    assert_eq!(
+        file.extras.local.speleodb.base_survey, None,
+        "a new BASE drops it"
+    );
+
+    file.extras.local.speleodb.base_survey = Some("sha256:recorded".to_owned());
+    link.project_id = "22222222-2222-2222-2222-222222222222".to_owned();
+    file.set_speleo_link(Some(&link));
+    assert_eq!(
+        file.extras.local.speleodb.base_survey, None,
+        "another project drops it"
+    );
+
+    file.extras.local.speleodb.base_survey = Some("sha256:recorded".to_owned());
+    file.set_speleo_link(None);
+    assert_eq!(
+        file.extras.local.speleodb.base_survey, None,
+        "an unlink drops it"
+    );
+}
