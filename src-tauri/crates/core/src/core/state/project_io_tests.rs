@@ -871,6 +871,68 @@ fn a_display_toggle_keeps_a_newer_builds_local_state() {
     }
 }
 
+/// Opening a linked version 2 file whose undo mode was never set writes the
+/// mode this machine materializes (the one write an open of a version 2
+/// file makes, saving.md) and copies the history byte for byte: with a
+/// Disabled default the persisted window would cut 30 entries to 20 before
+/// the user did anything (review finding J-docs-tests-truth-3). Injection:
+/// write it with `persist_local_state`, as before, and the history is cut.
+#[test]
+fn an_open_that_materializes_the_undo_mode_keeps_the_history() {
+    let _config = crate::test_helpers::isolated_config();
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("linked.stalx");
+    write_v2(&path, &survey("Linked"), &Extras::default());
+    {
+        let state = AppState::new().unwrap();
+        state.config.lock().unwrap().general.undo_persist_limit = 100;
+        assert!(
+            state
+                .execute(Command::OpenProject { path: path.clone() })
+                .success
+        );
+        for k in 0..30 {
+            assert!(set_length(&state, 4.0 + f64::from(k)).success);
+        }
+        assert!(state.execute(Command::SaveProject { path: None }).success);
+    }
+    assert_eq!(decoded(&path).extras.history.undo.len(), 30);
+    let unset = super::stalx_fixtures::link(
+        "https://sdb.example",
+        "11111111-2222-3333-4444-555555555555",
+        "Linked",
+        Some("abc"),
+        false,
+    );
+    assert_eq!(unset.undo_mode, None);
+    super::stalx_fixtures::relink(&path, Some(&unset));
+    let before = history_member(&path);
+
+    let state = AppState::new().unwrap();
+    {
+        let mut config = state.config.lock().unwrap();
+        config.speleodb.undo_mode = UndoMode::Disabled;
+        config.general.undo_persist_limit = 20;
+    }
+    assert!(
+        state
+            .execute(Command::OpenProject { path: path.clone() })
+            .success
+    );
+
+    assert_eq!(
+        decoded(&path).extras.speleodb.unwrap().undo_mode,
+        Some(UndoMode::Disabled),
+        "the open wrote the materialized mode"
+    );
+    assert_eq!(
+        history_member(&path),
+        before,
+        "and kept the history byte for byte"
+    );
+}
+
 /// Renaming the open project outside the history (Recent Projects, the
 /// SpeleoDB name fold) never wedges undo: an earlier Project Settings rename
 /// and every older entry still undo, and redo, as 0.6.0's snapshot undo did

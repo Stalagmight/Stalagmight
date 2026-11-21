@@ -44,7 +44,10 @@ Files:
 
 - **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
 - **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Why: the product decision, with the original kept restorable.
-- **A conversion that changed what a line shows says so once** with the count and the largest move (a torn legacy merge collapsed into one station, or an unexplained raw difference), the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; Computed View differences are logged, not shown (C4, G4, E10; review findings UX-1, UX-3). Why: data never moves or changes name silently.
+- **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Why: data never moves or changes name silently.
+- **A 0.6.0 file this build cannot convert is not called corrupt**: it opens as "This file needs converting ..., and this version cannot convert it: <reason>", and Attempt Repair never rewrites a file that opens or that only the conversion refuses, nor says it succeeded while the open still fails (UR4). Why: the recovery dialog and its repair are for damage.
+- **A Save As onto another 0.6.0 file upgrades it**: the 0.6.0 file it replaces is kept in Recovery, and no SQLite sidecar is left beside the JSON file (UR5). Why: an old build would roll a journal into the JSON file.
+- **Local state of an open 0.6.0 file counts as unsaved**: a display toggle (or SpeleoDB bookkeeping) waits for the upgrading save and the close prompt asks; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it.
 - **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). Why: never rewrite what this build would lose.
 - **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
 - **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned (12.2, 6.5, C11, N9). Why: ignores are survey content.
@@ -838,7 +841,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 - **C1. How an undo entry is held.** The stack keeps the decoded `HistoryEntry` (its changeset carries the session shot ids of an in-session capture, so in-session steps give every shot its id back) AND its canonical text (`encode_entry`, computed once at push or read from the file). The byte budget counts the text, which is exactly what a save writes and a push carries, and a save copies it instead of re-encoding the history. A decoded entry (no session ids) is validated after its step and rolled back with the inverse step on a violation (U10).
 - **C2. No live database: `FileState`.** Everything the file holds besides the survey and the history (link identity, `local` sync state, unwind chain, watermark, display settings, ignored warnings, preserved members, `requires`, the read-only reason) lives in memory beside the guard fingerprint, the origin (new / v2 / legacy) and a dirty flag. The local-only durable save (6.5 mode 4) rewrites `speleodb`, `local` and `history` from it; while the survey has unsaved changes it writes the history the file last held, never the in-memory stacks (they would describe a body the file does not have). On a legacy or never-saved project it only marks `local_pending`; the first real save writes it.
 - **C3. The upgrade backup** is a COPY of the SQLite original at `<app data>/backups/<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, with any `-journal` / `-wal` / `-shm` sidecar MOVED beside it before the rename (R2 L19) and moved back if the write fails (superseded by H1: a hot journal moved away from the unsettled original left it as another survey). `list_backups` does not list that folder yet (recovery package). Resolved in wave A: `list_project_backups` lists the originals beside the project's own backups (N12).
-- **C4. Conversion notice** whenever `verification.moved().slots > 0` or the raw comparison has an unexplained mismatch (G4); Computed View differences never raise it (G2); `AppState::take_conversion_notice()` returns it once. The IPC and the banner are the frontend's.
+- **C4. Conversion notice** whenever `verification.moved().slots > 0` or the raw comparison has an unexplained mismatch (G4), or a depth changed (UR2); Computed View differences never raise it (G2); `AppState::take_conversion_notice()` returns it once. The IPC and the banner are the frontend's.
 - **C5. Undo and redo stamp `modified_at`, bump the revision and mark the file dirty**; on a linked project they set the SpeleoDB dirty bit (not a forward edit: the Unwind position stays, as in 0.6.0).
 - **C6. Save a Copy** of a managed project is `Mode::DetachedCopy` when the explicit destination is not the open file (`unlinked_copy_path`); an explicit destination that IS the open file is a normal save (0.6.0 refused it).
 - **C7. The guard.** A save to the open file expects the fingerprint last read or written; the first write of a project created in this session expects nothing there (`Guard::Absent`); its first implicit save (a deferred project's reserved path) moves to the next free name when a file appeared there, and writes over an empty placeholder, as 0.6.0 did (wave B); an explicit Save As destination is overwritten (the dialog confirmed). A refusal is `EXTERNALLY_MODIFIED: ...`; `AppState::save_project_overwriting` is the Overwrite answer. A read-only file refuses edits, undo, redo and saves with `READ_ONLY_FILE: ...`.
@@ -923,8 +926,8 @@ as another survey, and Recovery refused the backup pair. Labels `H1`...
 
 - **H1. The upgrade settles the original before anything else** (replaces C3
   and the "moved into the backups folder" of 7.2.10). Every write over a legacy
-  file (the first save, a Recents rename, a SpeleoDB link strip) goes through
-  `core::state::legacy_upgrade::upgrade`: check the guard; if a hot journal or
+  file (the first save, a Recents rename, a SpeleoDB link strip, a Save As
+  onto one, UR5) goes through `core::state::legacy_upgrade::upgrade`: check the guard; if a hot journal or
   a WAL with frames is beside the original, fold them into a private copy
   (`persistence::legacy_settle`, the frozen reader's own rule), stage it beside
   the original, sync, check the guard again and rename it over the original;
@@ -950,9 +953,10 @@ as another survey, and Recovery refused the backup pair. Labels `H1`...
   it would lose them.
 - **H4. Permissions.** Settling replaces the original by a rename, so it needs
   only a writable folder, as the version 2 write does: a write-protected legacy
-  file in a writable folder upgrades and keeps its permission bits. On
-  write-protected media the upgrade is refused with `PERMISSION_DENIED` and
-  changes nothing.
+  file in a writable folder upgrades and keeps its permission bits (Unix; on
+  Windows a rename cannot replace a read-only file, so the upgrade of one is
+  refused like its version 2 write, UR8). On write-protected media the
+  upgrade is refused with `PERMISSION_DENIED` and changes nothing.
 
 ## Deviations (review fixes: the file format)
 
@@ -1004,3 +1008,78 @@ Changes to sections 6.1 to 6.6 that the format review findings led to
   `saved_bytes`, used only while their fingerprint is the guard's), so a
   display toggle reads the file once under the project lock, by the guard.
   Toggles are not coalesced: each still rewrites the file with one fsync.
+
+## Deviations (review fixes, package Y2: the upgrade routes)
+
+What the review of the upgrade routes found and how it was fixed (review
+findings D-migration-upgrade-4 to -12, J-docs-tests-truth-3, -6, -7). Labels
+`UR1`...
+
+- **UR1. Every upgrade route owes what the upgrading save does.** A Recents
+  rename and a SpeleoDB link strip of a CLOSED legacy file now rewrite the
+  `.plnx` pins with the record parity of the migration they wrote (N8's
+  `upgrade_dive_plan_anchors`, as `dive_plan::upgrade_dive_plan_anchors_beside`)
+  and keep the conversion notice for the next open of that path in the
+  session (`AppState::finish_closed_upgrade`, `pending_upgrade_notices`; an
+  open that finds a legacy file there again drops it). Before, both dropped
+  the parity and the notice: a 0.6.0 one-neighbour pin landed one station
+  off, and moved stations were written with no notice.
+- **UR2. The conversion notice says depth changes and unplaced stations**
+  (amends C4, G4). `Verification::moved()` counts horizontal moves only (a
+  torn merge, an unexplained finite horizontal difference);
+  `depth_changed()` counts `SnapAlignmentChanged` and unexplained depth
+  differences; `unplaced()` the slots with no finite migrated position. Each
+  raises the notice and is worded on its own; a depth-only difference no
+  longer reads "0 stations moved by up to 0.00 m", nor a missing slot "by up
+  to inf m". Computed View differences still never raise it (C4): they are a
+  derived view's declared behaviour changes, logged with their classes, and
+  every class is now bounded (UR3), so a solver regression beyond the bound
+  is an unexplained mismatch the fuzz oracles and the corpus run fail on.
+- **UR3. Every declared difference class is bounded** (amends G2, G9, G10).
+  A class is decided per component and accepted any magnitude there. Each
+  now explains a slot only within the migrated solve's maximum principle for
+  that component (the sum of its closure gaps, GPS fix offsets and unmet
+  shots; depth: its closure depth gaps), plus the slot's raw difference,
+  plus what 0.6.0's view moved the slot from its raw position
+  (`verify::class_bound`, the triangle inequality). Beyond it the slot is a
+  mismatch. This is the smallest honest rule: it needs no second solve, it
+  holds for every class (0.6.0's own wild moves are data, not budget), and
+  it catches a regression that moves stations further than the component's
+  misclosures, not one inside them (a prediction would need re-solving with
+  0.6.0's semantics). `verify::INJECTED_SHIFT_M` injects such a regression
+  in `a_declared_class_never_explains_more_than_the_component_can_move`.
+- **UR4. A conversion refusal is not corruption.** `MigrateError::is_conversion_refusal`
+  (an invalid migrated project, line or station ids out of range or used up,
+  the frozen reader's size cap) opens as `CANNOT_CONVERT` with the reason;
+  only the frozen reader's damage refusals stay `CORRUPT`. The legacy Attempt
+  Repair runs only on a file the open refuses for damage, and says it
+  succeeded only when the open then accepts the file (N12 amended). No
+  synthetic 0.6.0 file the frozen reader accepts and the conversion refuses
+  is known; the mapping and the repair decision are tested on synthetic
+  errors, the repair on a foreign-key violation.
+- **UR5. Save As onto another legacy file goes through the upgrade** (amends
+  H1, C7): settle, sidecars removed, the replaced file kept under the
+  destination's name, write. A settle there never moves the open file's
+  guard. 0.6.0's Save As left the sidecars too; the JSON file must not.
+- **UR6. Local state of an open legacy file is never silently lost** (amends
+  C2). `has_unsaved_changes` is `dirty` or, on a legacy origin,
+  `local_pending`; the frontend asks it after a display toggle
+  (`localStateDirty.ts`), so the close, switch and quit prompts ask and
+  autosave upgrades the file. A SpeleoDB unlink is written at once: the file
+  is upgraded with the survey it holds on disk (migrated again; the session's
+  unsaved edits and ignores stay unsaved) and the session's local state
+  (`persist_local_state_upgrading`), as N11 does for a closed copy. Other
+  SpeleoDB bookkeeping of a clean legacy file is honest in the backend flag
+  but the frontend only asks after a toggle (open: see the package report).
+- **UR7. What an open writes** (amends 6.6, 7.2 "the original file is
+  untouched until the first save"). The app's open rolls a legacy file's hot
+  journal back in place through its SpeleoDB-link probe (SQLite's own
+  recovery, as 0.6.0's open did), before the fingerprint; and a linked
+  version 2 file without an undo mode gets this machine's by a local-only
+  save, which now copies the history byte for byte (it cut it to the
+  persisted window). Both are documented in saving.md ("What an open
+  writes"); the upgrade's settle step runs where the rollback could not (a
+  write-protected file, an open without the probe).
+- **UR8. The staged settled copy carries only Unix mode bits**, as
+  `write_atomic`'s temp does: on Windows a read-only staged copy could not be
+  removed after its refused rename (not run on Windows).

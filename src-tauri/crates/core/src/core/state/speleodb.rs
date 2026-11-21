@@ -1299,7 +1299,8 @@ impl AppState {
     pub fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
         self.speleodb_release_held_lock_abandoning();
         self.with_file(|file| file.set_speleo_link(None));
-        self.persist_local_state()
+        // Durable at once, a legacy file included (upgraded first).
+        self.persist_local_state_upgrading()
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         self.speleodb_set_open_gate(None);
         Ok(())

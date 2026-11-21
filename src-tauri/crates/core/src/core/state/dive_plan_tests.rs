@@ -2447,6 +2447,126 @@ mod legacy {
             "endpoint"
         );
     }
+
+    /// A plan pinned on K's two ends before K was reversed (the one-neighbour
+    /// pins only the record parity places), stored beside `w`'s file.
+    fn plan_on_line_ends(w: &Written, dir: &TempDir) -> (PathBuf, i64) {
+        let plan = PersistedDivePlanSnapshot {
+            origin: Some(w.before[0].0.clone()),
+            endpoint: Some(w.before[5].0.clone()),
+            waypoints: Vec::new(),
+            diver: default_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: Vec::new(),
+        };
+        let plnx = dir.path().join("cave.plnx");
+        let store = PlnxStore::open(&plnx).unwrap();
+        store.ensure_identity(&w.created_at, "Legacy").unwrap();
+        let id = store
+            .insert(
+                "Old plan",
+                "2026-01-02T03:04:05+00:00",
+                2,
+                &to_disk_string(&plan).unwrap(),
+            )
+            .unwrap()
+            .id;
+        (plnx, id)
+    }
+
+    /// The plan's anchors are in this build's form, and reopened as version 2
+    /// (no record parity) both ends land on their stations.
+    fn assert_line_end_pins_land(w: &Written, plnx: &Path, id: i64) {
+        let row = PlnxStore::open(plnx).unwrap().get(id).unwrap().unwrap();
+        let upgraded: PersistedDivePlanSnapshot = from_disk_str(&row.snapshot_json).unwrap();
+        assert!(
+            upgraded.anchors().all(|a| !written_by_legacy(a)),
+            "the closed upgrade rewrote the 0.6.0 anchors"
+        );
+        assert_eq!(
+            row.meta.updated_at, "2026-01-02T03:04:05+00:00",
+            "not a user edit"
+        );
+        let reopened = open(&w.path);
+        assert!(reopened.with_file(|f| f.legacy_parity.is_none()));
+        let loaded = reopened.load_dive_plan(id).unwrap();
+        assert_eq!(loaded.stale_ref_count, 0);
+        let project = project_of(&reopened);
+        let s = &loaded.snapshot;
+        assert!(
+            near(xy(&project, s.origin.unwrap()), w.before[0].1),
+            "origin"
+        );
+        assert!(
+            near(xy(&project, s.endpoint.unwrap()), w.before[5].1),
+            "endpoint"
+        );
+    }
+
+    /// A Recents rename of the CLOSED 0.6.0 file upgrades it to version 2,
+    /// and rewrites its dive plans' 0.6.0 pins with the parity of the
+    /// migration it wrote, as the upgrading save does (review finding
+    /// D-migration-upgrade-4). Injection: drop `finish_closed_upgrade` from
+    /// `upgrade_and_rename` and both line-end pins land one station off.
+    #[test]
+    fn a_recents_rename_upgrade_rewrites_0_6_0_pins() {
+        crate::app_dirs::init_for_test();
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = TempDir::new().unwrap();
+            let w = write_legacy(&dir);
+            let (plnx, id) = plan_on_line_ends(&w, &dir);
+            let state = AppState::new().unwrap();
+            let renamed = state.set_project_name_for_path(w.path.clone(), "Renamed".to_string());
+            assert!(renamed.success, "{:?}", renamed.error);
+            assert_eq!(
+                crate::persistence::stalx_v2::sniff(&std::fs::read(&w.path).unwrap()),
+                crate::persistence::stalx_v2::Format::V2,
+                "the rename upgraded the file"
+            );
+            assert_line_end_pins_land(&w, &plnx, id);
+        });
+    }
+
+    /// Stripping the SpeleoDB link of a CLOSED 0.6.0 copy upgrades it and
+    /// rewrites its dive plans' 0.6.0 pins the same way (D-migration-upgrade-4).
+    /// Injection: drop `finish_closed_upgrade` from `write_strip`.
+    #[test]
+    fn a_link_strip_upgrade_rewrites_0_6_0_pins() {
+        crate::app_dirs::init_for_test();
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = TempDir::new().unwrap();
+            let w = write_legacy(&dir);
+            let link = crate::models::SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                project_name: "Linked".to_owned(),
+                base_commit_sha: None,
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: None,
+            };
+            super::super::super::stalx_fixtures::write_legacy_link_only(&w.path, &link);
+            let (plnx, id) = plan_on_line_ends(&w, &dir);
+            let state = AppState::new().unwrap();
+            state
+                .speleodb_remove_link_at(
+                    w.path.clone(),
+                    crate::core::loading::SpeleoManagedFile {
+                        path: w.path.display().to_string(),
+                        project_id: link.project_id,
+                        project_name: link.project_name,
+                        endpoint: link.endpoint,
+                        can_open_remote: true,
+                    },
+                )
+                .unwrap();
+            assert_line_end_pins_land(&w, &plnx, id);
+        });
+    }
 }
 
 // ----- the gas field per revision (C9) ---------------------------------------

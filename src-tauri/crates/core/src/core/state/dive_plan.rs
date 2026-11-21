@@ -41,15 +41,16 @@
 //!
 //! The record parity lives only in memory (a version 2 file has no place for it), so
 //! [`AppState::upgrade_dive_plan_anchors`] rewrites a migrated project's 0.6.0 pins in the
-//! station-graph form while the parity is still known. It is meant to run on the save that
-//! writes the upgraded `.stalx`; without it, a 0.6.0 one-neighbour pin on a line reversed
+//! station-graph form while the parity is still known. It runs on every write that upgrades
+//! the `.stalx`: the upgrading save, and a Recents rename or a SpeleoDB link strip of a closed
+//! legacy file ([`upgrade_dive_plan_anchors_beside`]). Without it, a 0.6.0 one-neighbour pin on a line reversed
 //! after the pin was saved lands one station off once the upgraded file is reopened.
 //!
 //! Design: `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,25 @@ struct PlnxContext {
     path: PathBuf,
     project_created_at: String,
     project_name: String,
+}
+
+impl PlnxContext {
+    /// The `.plnx` beside the `.stalx` at `stalx`, for `project` (its identity).
+    fn beside(stalx: &Path, project: &Project) -> Self {
+        let stem = stalx.file_stem().map_or_else(
+            || "dive_plans".to_string(),
+            |s| s.to_string_lossy().to_string(),
+        );
+        let path = match stalx.parent() {
+            Some(dir) => dir.join(format!("{stem}.plnx")),
+            None => PathBuf::from(format!("{stem}.plnx")),
+        };
+        Self {
+            path,
+            project_created_at: project.created_at.to_rfc3339(),
+            project_name: project.name.clone(),
+        }
+    }
 }
 
 /// Whether an existing `.plnx` belongs to the open project.
@@ -777,6 +797,100 @@ fn written_by_legacy(anchor: &StoredAnchor) -> bool {
     }
 }
 
+/// Rewrite the 0.6.0 anchors of the `.plnx` beside a legacy file that is upgraded to
+/// version 2 while it is CLOSED (a Recents rename, a SpeleoDB link strip): the
+/// [`AppState::upgrade_dive_plan_anchors`] of the upgrading save, against the project
+/// that write holds and the record parity its migration carried (review finding
+/// D-migration-upgrade-4). Without it a 0.6.0 one-neighbour pin on a line reversed after
+/// the pin was saved lands one station off once the upgraded file is opened: the version
+/// 2 file keeps no parity. Returns how many plans were rewritten; a missing `.plnx` or one
+/// of another project is left alone.
+pub(super) fn upgrade_dive_plan_anchors_beside(
+    stalx: &Path,
+    project: &Project,
+    parity: &LegacyParity,
+) -> Result<usize, String> {
+    let ctx = PlnxContext::beside(stalx, project);
+    if !ctx.path.exists() || probe_ownership(&ctx)? != Ownership::Owned {
+        return Ok(0);
+    }
+    let resolver = Resolver::new(project, Some(parity));
+    upgrade_plnx_rows(&ctx, |p| Ok(reanchor_legacy(&resolver, p)))
+}
+
+/// The rows half of the anchor upgrade: every plan of the `.plnx` at `ctx.path` that holds
+/// a 0.6.0 anchor is rewritten through `reanchor`, keeping its name and `updated_at`.
+fn upgrade_plnx_rows(
+    ctx: &PlnxContext,
+    reanchor: impl Fn(PersistedDivePlanSnapshot) -> Result<PersistedDivePlanSnapshot, String>,
+) -> Result<usize, String> {
+    let store =
+        PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
+    let rows = store
+        .list()
+        .map_err(|e| format!("Could not read dive plans: {e}"))?;
+    let mut rewritten = 0;
+    for meta in rows {
+        let Some(row) = store
+            .get(meta.id)
+            .map_err(|e| format!("Could not read the dive plan: {e}"))?
+        else {
+            continue;
+        };
+        let persisted: PersistedDivePlanSnapshot = match crate::models::disk_names::from_disk_str(
+            &row.snapshot_json,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                // Left alone: `load_dive_plan` reports it when the plan is opened.
+                tracing::warn!(plan = meta.id, error = %e, "an unreadable dive plan was not upgraded");
+                continue;
+            }
+        };
+        if !persisted.anchors().any(written_by_legacy) {
+            continue;
+        }
+        let upgraded = reanchor(persisted)?;
+        let json = crate::models::disk_names::to_disk_string(&upgraded)
+            .map_err(|e| format!("Could not serialize the dive plan: {e}"))?;
+        store
+            .update(
+                meta.id,
+                &meta.name,
+                &meta.updated_at,
+                DIVE_PLAN_SCHEMA_VERSION as i32,
+                &json,
+            )
+            .map_err(|e| format!("Could not save the dive plan: {e}"))?;
+        rewritten += 1;
+    }
+    Ok(rewritten)
+}
+
+/// `p` with every 0.6.0 anchor that places (through `r`) replaced by the anchor of its
+/// station.
+fn reanchor_legacy(
+    r: &Resolver<'_>,
+    mut p: PersistedDivePlanSnapshot,
+) -> PersistedDivePlanSnapshot {
+    let renew = |anchor: &mut StoredAnchor| {
+        if !written_by_legacy(anchor) {
+            return;
+        }
+        if let Some(fresh) = r.place(anchor).and_then(|s| to_anchor(r.project, Some(s))) {
+            *anchor = fresh;
+        }
+    };
+    p.origin.iter_mut().for_each(renew);
+    p.endpoint.iter_mut().for_each(renew);
+    p.waypoints.iter_mut().for_each(renew);
+    p.stage_drop_overrides.iter_mut().flatten().for_each(renew);
+    p.marked_points
+        .iter_mut()
+        .for_each(|m| renew(&mut m.station));
+    p
+}
+
 impl AppState {
     /// Resolve the `.plnx` sibling path + project identity for the open project.
     /// `Err` (user-facing) if no project is open or it has never been saved (no path
@@ -799,19 +913,7 @@ impl AppState {
             Some(path) if !self.initial_save_deferred() => path,
             _ => return Err("Save the project before saving dive plans.".to_string()),
         };
-        let stem = stalx.file_stem().map_or_else(
-            || "dive_plans".to_string(),
-            |s| s.to_string_lossy().to_string(),
-        );
-        let path = match stalx.parent() {
-            Some(dir) => dir.join(format!("{stem}.plnx")),
-            None => PathBuf::from(format!("{stem}.plnx")),
-        };
-        Ok(PlnxContext {
-            path,
-            project_created_at: p.created_at.to_rfc3339(),
-            project_name: p.name.clone(),
-        })
+        Ok(PlnxContext::beside(stalx, p))
     }
 
     /// Run `f` with a [`Resolver`] on the open project (and, for a project migrated from
@@ -1013,81 +1115,12 @@ impl AppState {
             return Ok(0);
         };
         let rewritten = if ctx.path.exists() && probe_ownership(&ctx)? == Ownership::Owned {
-            self.upgrade_plnx_rows(&ctx)?
+            upgrade_plnx_rows(&ctx, |p| self.with_resolver(|r| reanchor_legacy(r, p)))?
         } else {
             0
         };
         self.with_file(|file| file.legacy_parity = None);
         Ok(rewritten)
-    }
-
-    /// The rows half of [`Self::upgrade_dive_plan_anchors`].
-    fn upgrade_plnx_rows(&self, ctx: &PlnxContext) -> Result<usize, String> {
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
-        let rows = store
-            .list()
-            .map_err(|e| format!("Could not read dive plans: {e}"))?;
-        let mut rewritten = 0;
-        for meta in rows {
-            let Some(row) = store
-                .get(meta.id)
-                .map_err(|e| format!("Could not read the dive plan: {e}"))?
-            else {
-                continue;
-            };
-            let persisted: PersistedDivePlanSnapshot =
-                match crate::models::disk_names::from_disk_str(&row.snapshot_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        // Left alone: `load_dive_plan` reports it when the plan is opened.
-                        tracing::warn!(plan = meta.id, error = %e, "an unreadable dive plan was not upgraded");
-                        continue;
-                    }
-                };
-            if !persisted.anchors().any(written_by_legacy) {
-                continue;
-            }
-            let upgraded = self.reanchor_legacy(persisted)?;
-            let json = crate::models::disk_names::to_disk_string(&upgraded)
-                .map_err(|e| format!("Could not serialize the dive plan: {e}"))?;
-            store
-                .update(
-                    meta.id,
-                    &meta.name,
-                    &meta.updated_at,
-                    DIVE_PLAN_SCHEMA_VERSION as i32,
-                    &json,
-                )
-                .map_err(|e| format!("Could not save the dive plan: {e}"))?;
-            rewritten += 1;
-        }
-        Ok(rewritten)
-    }
-
-    /// `p` with every 0.6.0 anchor that places replaced by the anchor of its station.
-    fn reanchor_legacy(
-        &self,
-        mut p: PersistedDivePlanSnapshot,
-    ) -> Result<PersistedDivePlanSnapshot, String> {
-        self.with_resolver(|r| {
-            let renew = |anchor: &mut StoredAnchor| {
-                if !written_by_legacy(anchor) {
-                    return;
-                }
-                if let Some(fresh) = r.place(anchor).and_then(|s| to_anchor(r.project, Some(s))) {
-                    *anchor = fresh;
-                }
-            };
-            p.origin.iter_mut().for_each(renew);
-            p.endpoint.iter_mut().for_each(renew);
-            p.waypoints.iter_mut().for_each(renew);
-            p.stage_drop_overrides.iter_mut().flatten().for_each(renew);
-            p.marked_points
-                .iter_mut()
-                .for_each(|m| renew(&mut m.station));
-            p
-        })
     }
 
     /// Canonicalize an IPC snapshot's positional refs to stable anchors against the open

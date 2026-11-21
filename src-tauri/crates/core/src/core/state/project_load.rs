@@ -14,7 +14,14 @@
 //!   dropped with the existing banner; the conversion notice is kept when
 //!   the verification moved slots or left anything unexplained.
 //!
-//! Load is pure: the project in memory is exactly the file's (no heals).
+//! Load is pure: the project in memory is exactly the file's (no heals), and
+//! nothing derived is written back. An open writes at most two things, both
+//! state the file already implies (docs/saving.md, "What an open writes"):
+//! the link probe of `load_project_full` rolls a legacy file's hot journal
+//! back into it in place (SQLite's own recovery, as 0.6.0's open did), and a
+//! linked file whose undo mode was never set gets this machine's, by a
+//! local-only save that copies the history byte for byte
+//! ([`AppState::persist_pending_local_state`]).
 //!
 //! The read runs without any lock (a legacy migration takes seconds), so the
 //! file can change between the read and the commit: one of our own writes
@@ -142,7 +149,7 @@ fn decode_error(path: &Path, error: &DecodeError) -> LoadError {
 }
 
 /// The load error of a migration refusal.
-fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
+pub(super) fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
     match error {
         MigrateError::Legacy(LegacyError::NewerSchema { found, supported }) => {
             LoadError::newer_schema(
@@ -164,6 +171,14 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
                 LoadError::new("IO", e.to_string())
             }
         }
+        refusal if refusal.is_conversion_refusal() => {
+            tracing::warn!(
+                class = refusal.class(),
+                purpose = "never call a healthy file corrupt",
+                "this build cannot convert a legacy project"
+            );
+            LoadError::cannot_convert(&conversion_refusal_reason(refusal), &path_text(path))
+        }
         other => {
             tracing::warn!(
                 class = other.class(),
@@ -171,6 +186,18 @@ fn migrate_error(path: &Path, error: &MigrateError) -> LoadError {
             );
             LoadError::corrupt(other.to_string(), &path_text(path))
         }
+    }
+}
+
+/// What a file the conversion refuses needs, in words
+/// ([`MigrateError::is_conversion_refusal`]).
+pub(super) fn conversion_refusal_reason(error: &MigrateError) -> String {
+    match error {
+        MigrateError::Legacy(LegacyError::TooLarge { max }) => format!(
+            "it is larger than the {} MiB this version reads",
+            max / (1024 * 1024)
+        ),
+        other => other.to_string(),
     }
 }
 
@@ -359,6 +386,18 @@ impl AppState {
                 file.conversion = Some(notice);
             }
         }
+        // A legacy file this session upgraded while it was closed (a Recents
+        // rename, a SpeleoDB link strip) left its notice for this open. An open
+        // that reads a legacy file there again (a restored original) has its own.
+        if let Some(notice) = project
+            .file_path
+            .as_deref()
+            .and_then(|p| self.take_pending_upgrade_notice(p))
+        {
+            if file.origin == super::open_file::FileOrigin::V2 && file.conversion.is_none() {
+                file.conversion = Some(notice);
+            }
+        }
         // A legacy NULL undo mode is materialized from this machine's default
         // on first open, and made durable (#303).
         let mut link = file.speleo_link();
@@ -410,11 +449,13 @@ impl AppState {
     }
 
     /// Write durable state the commit changed in memory only (a materialized
-    /// undo mode), now that no guard is held. A failure leaves it in memory
+    /// undo mode), now that no guard is held. The one write an open of a
+    /// version 2 file makes; it copies the file's history byte for byte
+    /// (review finding J-docs-tests-truth-3). A failure leaves it in memory
     /// for the next save.
     pub(super) fn persist_pending_local_state(&self) {
         if self.with_file(|f| f.local_pending) {
-            if let Err(e) = self.persist_local_state() {
+            if let Err(e) = self.persist_local_state_keeping_history() {
                 tracing::warn!(error = %e, "Could not write the materialized undo mode; it stays in memory");
             }
         }

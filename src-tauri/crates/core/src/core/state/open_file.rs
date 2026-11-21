@@ -13,7 +13,9 @@
 //!   on read-only projects and unknown `requires`. It is never used on a
 //!   legacy (SQLite) file not yet upgraded, nor on a project never saved:
 //!   there the change waits in memory for the first real save
-//!   (`local_pending`).
+//!   (`local_pending`), and on a legacy file it counts as unsaved
+//!   ([`AppState::has_unsaved_changes`]); only a SpeleoDB unlink upgrades a
+//!   legacy file at once ([`AppState::persist_local_state_upgrading`]).
 //!
 //! Lock order: `project` -> `file` -> `undo_stack` (`file` takes the place
 //! `database` had). Nothing is taken while `file` is held except
@@ -61,15 +63,24 @@ pub(crate) enum FileOrigin {
     Legacy,
 }
 
-/// The one-line notice an upgrade shows when the migration moved stations
-/// (plan 7.2.10, G4: whenever `verification.moved().slots > 0` or anything is
-/// unexplained) or changed a name a line showed (review findings
-/// D-migration-upgrade-8, UX-3 and UX-1: a merged station now goes by one
-/// name on all its lines, and a true clash is lettered).
+/// The one-line notice an upgrade shows when the migration changed what the
+/// user sees (plan 7.2.10, G4, C4): stations moved in plan (a torn legacy merge
+/// collapsed, or an unexplained raw difference), stations whose depth changed
+/// (a snap's derived alignment changed a depth tie, or an unexplained one),
+/// stations the conversion could not place, or a name a line showed (review
+/// findings D-migration-upgrade-8, UX-3 and UX-1: a merged station now goes by
+/// one name on all its lines, and a true clash is lettered). Computed View
+/// differences never raise it (C4).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConversionNotice {
     pub(crate) slots_moved: usize,
     pub(crate) max_displacement_m: f64,
+    /// Slots whose depth changed beyond the 1e-9 m tolerance, and by how much
+    /// at most (review finding D-migration-upgrade-6).
+    pub(crate) depth_changed: usize,
+    pub(crate) max_depth_change_m: f64,
+    /// Slots with no finite migrated position.
+    pub(crate) unplaced: usize,
     pub(crate) unexplained: usize,
     /// The slots whose name changed, in slot order (survey content: shown,
     /// never logged).
@@ -101,6 +112,9 @@ impl ConversionNotice {
             None => (!names_changed.is_empty() || comments_joined > 0).then_some(Self {
                 slots_moved: 0,
                 max_displacement_m: 0.0,
+                depth_changed: 0,
+                max_depth_change_m: 0.0,
+                unplaced: 0,
                 unexplained: 0,
                 names_changed,
                 comments_joined,
@@ -110,36 +124,58 @@ impl ConversionNotice {
 
     pub(crate) fn of(verification: &Verification) -> Option<Self> {
         let moved = verification.moved();
-        let unexplained = verification.mismatches.len();
-        (moved.slots > 0 || unexplained > 0).then_some(Self {
+        let depth = verification.depth_changed();
+        let notice = Self {
             slots_moved: moved.slots,
             max_displacement_m: moved.max_displacement_m,
-            unexplained,
+            depth_changed: depth.slots,
+            max_depth_change_m: depth.max_displacement_m,
+            unplaced: verification.unplaced(),
+            unexplained: verification.mismatches.len(),
             names_changed: Vec::new(),
             comments_joined: 0,
-        })
+        };
+        (notice.slots_moved > 0
+            || notice.depth_changed > 0
+            || notice.unplaced > 0
+            || notice.unexplained > 0)
+            .then_some(notice)
     }
 
     pub(crate) fn message(&self) -> String {
-        let mut parts = Vec::new();
-        if self.slots_moved > 0 || self.unexplained > 0 {
-            parts.push(format!(
+        let mut what = Vec::new();
+        if self.slots_moved > 0 {
+            what.push(format!(
                 "{} stations moved by up to {:.2} m",
                 self.slots_moved, self.max_displacement_m
             ));
         }
+        if self.depth_changed > 0 {
+            what.push(format!(
+                "{} stations changed depth by up to {:.2} m",
+                self.depth_changed, self.max_depth_change_m
+            ));
+        }
+        if self.unplaced > 0 {
+            what.push(format!("{} stations could not be placed", self.unplaced));
+        }
         if !self.names_changed.is_empty() {
-            parts.push(self.names_part());
+            what.push(self.names_part());
         }
         match self.comments_joined {
             0 => {}
-            1 => parts.push("a merged station's two comments were joined".to_string()),
-            n => parts.push(format!("the comments of {n} merged stations were joined")),
+            1 => what.push("a merged station's two comments were joined".to_string()),
+            n => what.push(format!("the comments of {n} merged stations were joined")),
+        }
+        if what.is_empty() {
+            // `of` and `of_migration` raise no notice without one of the
+            // counts above; never "0 stations moved" all the same.
+            what.push("some positions differ from the old version's".to_owned());
         }
         format!(
-            "Converted from the old file format; {}; \
-             the original is kept (Recent Projects: right-click, Restore an earlier copy).",
-            parts.join("; ")
+            "Converted from the old file format; {}; the original is kept (Recent Projects: \
+             right-click, Restore an earlier copy).",
+            what.join("; ")
         )
     }
 
@@ -441,6 +477,18 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(false)
+    }
+
+    /// [`Self::persist_local_state`] for the write an OPEN makes (a
+    /// materialized undo mode): it copies the file's `history` member byte
+    /// for byte, so an open never changes the history on disk, whatever the
+    /// persisted window (review finding J-docs-tests-truth-3).
+    pub(super) fn persist_local_state_keeping_history(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(true)
+    }
+
+    fn persist_local_state_guarded(&self, keep_history: bool) -> Result<(), LocalSaveError> {
         // Under the `project` guard, for the whole save: every change of the
         // survey, of the stacks and of the dirty flag happens under it (an
         // undo pops its entry before it marks the project dirty), so only
@@ -450,7 +498,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = guard.as_ref().and_then(|p| p.file_path.clone());
-        let result = self.persist_local_state_at(path);
+        let result = self.persist_local_state_with(path, keep_history);
         drop(guard);
         result
     }
@@ -462,6 +510,16 @@ impl AppState {
     pub(crate) fn persist_local_state_at(
         &self,
         path: Option<PathBuf>,
+    ) -> Result<(), LocalSaveError> {
+        self.persist_local_state_with(path, false)
+    }
+
+    /// [`Self::persist_local_state_at`]; `keep_history` copies the file's
+    /// `history` member verbatim (the open's write).
+    fn persist_local_state_with(
+        &self,
+        path: Option<PathBuf>,
+        keep_history: bool,
     ) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
@@ -484,7 +542,7 @@ impl AppState {
             None => Arc::from(read_unchanged(&path, &expected)?),
         };
         let mut extras = file.extras.clone();
-        let keep_file_history = !file.dirty && file.history_unread;
+        let keep_file_history = keep_history || !file.dirty && file.history_unread;
         extras.history = if file.dirty || keep_file_history {
             file.saved_history.clone()
         } else {
@@ -505,14 +563,163 @@ impl AppState {
         Ok(())
     }
 
+    /// What a write that upgraded the CLOSED legacy file at `path` to version
+    /// 2 (a Recents rename, a SpeleoDB link strip) still owes, as the
+    /// upgrading save does it (review finding D-migration-upgrade-4): the
+    /// `.plnx` beside it rewritten with the record parity of the migration
+    /// that was written (`project`), and the conversion notice kept for the
+    /// next open of `path` in this session. Never fails the write, which
+    /// already happened.
+    pub(super) fn finish_closed_upgrade(
+        &self,
+        path: &Path,
+        project: &crate::models::survey::Project,
+        parity: Option<&LegacyParity>,
+        notice: Option<ConversionNotice>,
+    ) {
+        if let Some(parity) = parity {
+            match super::dive_plan::upgrade_dive_plan_anchors_beside(path, project, parity) {
+                Ok(0) => {}
+                Ok(plans) => tracing::info!(plans, "Rewrote the dive plans' 0.6.0 anchors"),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    purpose = "upgrade dive-plan anchors on a closed file's upgrade",
+                    "Could not rewrite the dive plans' 0.6.0 anchors; they keep the 0.6.0 form"
+                ),
+            }
+        }
+        let Some(notice) = notice else {
+            return;
+        };
+        tracing::info!(
+            moved = notice.slots_moved,
+            depth_changed = notice.depth_changed,
+            unplaced = notice.unplaced,
+            unexplained = notice.unexplained,
+            purpose = "never move stations silently",
+            "A closed legacy file's conversion changed positions; its next open says so"
+        );
+        let mut pending = self
+            .pending_upgrade_notices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.retain(|(p, _)| !super::project_io::same_file(p, path));
+        pending.push((path.to_path_buf(), notice));
+    }
+
+    /// The notice [`Self::finish_closed_upgrade`] kept for `path`, taken.
+    pub(super) fn take_pending_upgrade_notice(&self, path: &Path) -> Option<ConversionNotice> {
+        let mut pending = self
+            .pending_upgrade_notices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = pending
+            .iter()
+            .position(|(p, _)| super::project_io::same_file(p, path))?;
+        Some(pending.remove(at).1)
+    }
+
     /// The conversion notice of a legacy open, taken once.
     pub fn take_conversion_notice(&self) -> Option<String> {
         self.with_file(|file| file.conversion.take().map(|n| n.message()))
     }
 
-    /// Whether the open project has changes no save has written yet.
+    /// Whether the open project has changes no save has written yet: survey
+    /// edits, ignores, and on a legacy (SQLite) file not yet upgraded the
+    /// local state that waits for the upgrading save (display toggles,
+    /// SpeleoDB bookkeeping, `local_pending`). Those were written in place at
+    /// once by 0.6.0; here only a save writes them, so "Don't save" on close
+    /// discards them and the close prompt must ask (review finding
+    /// D-migration-upgrade-5).
     pub fn has_unsaved_changes(&self) -> bool {
-        self.with_file(|file| file.dirty)
+        self.with_file(|file| file.dirty || file.origin == FileOrigin::Legacy && file.local_pending)
+    }
+
+    /// A local-only save that must be durable at once on a legacy (SQLite)
+    /// file too: a SpeleoDB unlink, which a following open of another file
+    /// would otherwise lose (the frontend's Save as unmanaged file closes the
+    /// cache copy right after it; review finding D-migration-upgrade-5). On a
+    /// legacy-origin project the file is upgraded first, as stripping a
+    /// closed copy's link upgrades it (plan N11): the survey AS IT IS ON DISK
+    /// (migrated again; the session's unsaved edits and ignores stay unsaved)
+    /// with the session's local state, the original kept in Recovery, the
+    /// `.plnx` pins rewritten. Anything else is
+    /// [`Self::persist_local_state`].
+    pub(crate) fn persist_local_state_upgrading(&self) -> Result<(), LocalSaveError> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = guard.as_ref().and_then(|p| p.file_path.clone());
+        let legacy = self.with_file(|f| f.origin == FileOrigin::Legacy && f.fingerprint.is_some());
+        let result = match (path, legacy) {
+            (Some(path), true) => self.upgrade_legacy_on_disk(&path),
+            (path, _) => self.persist_local_state_with(path, false),
+        };
+        drop(guard);
+        result
+    }
+
+    /// [`Self::persist_local_state_upgrading`]'s upgrade; the caller holds the
+    /// `project` guard.
+    fn upgrade_legacy_on_disk(&self, path: &Path) -> Result<(), LocalSaveError> {
+        let config = self.get_config();
+        let migrated =
+            crate::persistence::migrate::migrate_path_for_app(path, &config.closure_adjustment)
+                .map_err(|e| {
+                    LocalSaveError::Io(format!("could not read {}: {e}", path.display()))
+                })?;
+        let mut project = migrated.project;
+        if !migrated.extras.validation_stored {
+            project.settings.validation = config.validation;
+        }
+        let parity = migrated.extras.legacy_parity.clone();
+        let on_disk =
+            FileState::from_migrated(migrated.extras, None, &migrated.report);
+        let mut file = self
+            .file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(expected) = file.fingerprint.clone() else {
+            return Ok(());
+        };
+        let mut extras = on_disk.extras;
+        extras.speleodb.clone_from(&file.extras.speleodb);
+        extras.local = file.extras.local.clone();
+        extras.generator = super::project_io::generator();
+        let bytes = crate::persistence::stalx_v2::encode(
+            &project,
+            &extras,
+            crate::persistence::stalx_v2::Mode::Normal,
+        )
+        .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
+        match super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(&expected)) {
+            Ok(fingerprint) => {
+                file.fingerprint = Some(fingerprint);
+                file.origin = FileOrigin::V2;
+                file.saved_history = History::default();
+                file.history_unread = false;
+                file.local_pending = false;
+            }
+            Err(failure) => {
+                if let Some(settled) = failure.settled {
+                    file.fingerprint = Some(settled);
+                }
+                return Err(match failure.error {
+                    super::legacy_upgrade::UpgradeError::Write(e) => write_error(&e),
+                    other => LocalSaveError::Io(other.to_string()),
+                });
+            }
+        }
+        drop(file);
+        tracing::info!(
+            path = ?path,
+            purpose = "make a SpeleoDB unlink durable on a legacy file",
+            "Upgraded a legacy project's file to write its local state"
+        );
+        self.finish_closed_upgrade(path, &project, Some(&parity), None);
+        self.with_file(|file| file.legacy_parity = None);
+        Ok(())
     }
 
     /// Why the open file is read-only ("made with a newer Stalagmight", plan

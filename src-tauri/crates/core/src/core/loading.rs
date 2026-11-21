@@ -116,6 +116,25 @@ impl LoadError {
         Self::with_details("CORRUPT", message, path)
     }
 
+    /// The open was refused because this build cannot convert a 0.6.0 file
+    /// that is not damaged (`MigrateError::is_conversion_refusal`): `reason`
+    /// says what the file needs. Never `CORRUPT`, so the recovery dialog and
+    /// its Attempt Repair are not offered for a healthy file (review findings
+    /// D-migration-upgrade-9, J-docs-tests-truth-6). `path` rides in
+    /// `details`.
+    pub fn cannot_convert(reason: &str, path: &str) -> Self {
+        Self::with_details(
+            "CANNOT_CONVERT",
+            format!(
+                "This file needs converting from the Stalagmight 0.6.0 file format, and this \
+                 version cannot convert it: {}. The file was not changed, and Stalagmight 0.6.0 \
+                 still opens it.",
+                clamp_quoted_error(reason)
+            ),
+            path,
+        )
+    }
+
     /// The open was refused because the file's database schema holds something
     /// Stalagmight never creates (a view, trigger or virtual table, or an object
     /// named like a SQLite pragma), so it was changed by another program and

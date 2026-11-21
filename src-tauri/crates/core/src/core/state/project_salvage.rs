@@ -21,7 +21,10 @@
 //!
 //! A legacy SQLite file keeps 0.6.0's SQLite repair and table-by-table export
 //! (`persistence::recovery`); the export's full project comes from the frozen
-//! 0.6.0 reader.
+//! 0.6.0 reader. The repair runs only on a file the open refuses for damage
+//! (never on one that opens, nor on one this build cannot convert, which is
+//! not damaged), and says it succeeded only when the open then accepts the
+//! file.
 //!
 //! The open project needs neither: the load refuses an invalid file and every
 //! edit validates before it commits, so there is nothing to repair in it (0.6.0's
@@ -63,7 +66,7 @@ impl AppState {
             Format::V2 => repair_v2(path, &bytes, &fingerprint),
             Format::Legacy => {
                 drop(bytes);
-                repair_legacy(path)
+                repair_legacy(path, &self.get_config().closure_adjustment)
             }
             Format::Unknown => {
                 Err("Repair failed: this is not a Stalagmight project file".to_string())
@@ -215,27 +218,114 @@ fn repair_v2(path: &Path, bytes: &[u8], fingerprint: &Fingerprint) -> Result<Rep
     })
 }
 
-/// 0.6.0's SQLite repair (backup, REINDEX, VACUUM, quick check).
-fn repair_legacy(path: &Path) -> Result<RepairResult, String> {
+/// 0.6.0's SQLite repair (backup, REINDEX, VACUUM, quick check), run only on
+/// a file the open refuses for damage, and judged by the open itself: a
+/// success says the project opens again (review findings
+/// D-migration-upgrade-9, J-docs-tests-truth-6).
+///
+/// - A file the open accepts needs no repair: nothing is written.
+/// - A file this build cannot CONVERT (`MigrateError::is_conversion_refusal`:
+///   0.6.0's own open accepts it) is not damaged: nothing is written, and the
+///   message says what it needs. 0.6.0's REINDEX and VACUUM could not change
+///   that, and would only rewrite a healthy original.
+/// - Otherwise the repair runs, then the open is tried again: "succeeded" only
+///   when it opens; a repair that leaves the open refusing says so, with why.
+fn repair_legacy(
+    path: &Path,
+    adjustment: &crate::models::config::ClosureAdjustmentConfig,
+) -> Result<RepairResult, String> {
+    let open = |path: &Path| {
+        crate::persistence::migrate::migrate_path_for_app(path, adjustment).map(|_| ())
+    };
+    if let Some(unrepaired) = legacy_without_repair(open(path).as_ref()) {
+        return Ok(unrepaired);
+    }
     match recovery::attempt_repair(path) {
-        Ok((backup_path, integrity_ok)) => {
-            let message = if integrity_ok {
-                "Repair succeeded - database integrity restored.".to_string()
-            } else {
-                "Repair completed but integrity check still fails. \
-                 Try exporting salvageable data instead."
-                    .to_string()
-            };
-            Ok(RepairResult {
-                success: integrity_ok,
-                backup_path: backup_path.display().to_string(),
-                message,
-            })
-        }
+        Ok((backup_path, integrity_ok)) => Ok(legacy_repaired(
+            &backup_path,
+            integrity_ok,
+            open(path).as_ref(),
+        )),
         Err(e) => {
             tracing::error!(error = %e, "Repair failed");
             Err(format!("Repair failed: {e}"))
         }
+    }
+}
+
+/// [`repair_legacy`]'s answer without a repair, from what the open said: a
+/// file that opens or that this build cannot convert is never repaired.
+/// `None`: the file is damaged, repair it.
+pub(super) fn legacy_without_repair(
+    open: Result<&(), &crate::persistence::migrate::MigrateError>,
+) -> Option<RepairResult> {
+    match open {
+        Ok(()) => Some(RepairResult {
+            success: true,
+            backup_path: String::new(),
+            message: "Nothing to repair: the project opens as it is. Nothing was changed."
+                .to_string(),
+        }),
+        Err(e) if e.is_conversion_refusal() => {
+            tracing::warn!(
+                class = e.class(),
+                purpose = "never rewrite a healthy original",
+                "Not repairing a legacy file this build cannot convert"
+            );
+            Some(RepairResult {
+                success: false,
+                backup_path: String::new(),
+                message: format!(
+                    "Not repaired: the file is not damaged. It needs converting from the \
+                     Stalagmight 0.6.0 file format, and this version cannot convert it: {}. \
+                     Nothing was changed, and Stalagmight 0.6.0 still opens it.",
+                    crate::core::loading::clamp_quoted_error(
+                        &super::project_load::conversion_refusal_reason(e)
+                    )
+                ),
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+/// [`repair_legacy`]'s answer after 0.6.0's repair ran: a success only when
+/// the integrity check passes AND the open then accepts the file.
+fn legacy_repaired(
+    backup: &Path,
+    integrity_ok: bool,
+    reopened: Result<&(), &crate::persistence::migrate::MigrateError>,
+) -> RepairResult {
+    let (success, message) = match (integrity_ok, reopened) {
+        (true, Ok(())) => (
+            true,
+            "Repair succeeded - database integrity restored, and the project opens.".to_string(),
+        ),
+        (false, _) => (
+            false,
+            "Repair completed but integrity check still fails. \
+             Try exporting salvageable data instead."
+                .to_string(),
+        ),
+        (true, Err(e)) => {
+            tracing::warn!(
+                class = e.class(),
+                "The repaired legacy file still does not open"
+            );
+            (
+                false,
+                format!(
+                    "Repair completed, but the project still cannot be opened ({}). \
+                     Try exporting salvageable data instead.",
+                    crate::core::loading::clamp_quoted_error(&e.to_string())
+                ),
+            )
+        }
+    };
+    RepairResult {
+        success,
+        backup_path: backup.display().to_string(),
+        message,
     }
 }
 
