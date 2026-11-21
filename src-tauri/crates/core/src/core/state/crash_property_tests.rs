@@ -655,6 +655,11 @@ fn the_crash_properties_are_deterministic() {
 /// ```
 ///
 /// `STALAGMIGHT_RUST_CRASH_FIRST_SEED=n` starts the seed window at `n` (default 1).
+/// Progress, slow seeds (over `STALAGMIGHT_RUST_SWEEP_SLOW_SECS`, default 30)
+/// and the slowest seed are printed as the sweep goes
+/// ([`crate::test_helpers::SweepClock`]): a seed costs about 4 s in a debug
+/// build (the v2 states, then the four upgrade kinds), so a window that runs
+/// out of time says how far it got.
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the crash-property GATE_SEEDS"]
 fn crash_property_sweep() {
@@ -672,8 +677,11 @@ fn crash_property_sweep() {
     let mut checked = 0;
     let mut skipped = 0;
     let mut notes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut clock = crate::test_helpers::SweepClock::from_env("crash sweep");
     for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_CRASH_FIRST_SEED", seeds) {
+        let started = std::time::Instant::now();
         let outcome = check_crash_states(seed, moves, extra);
+        let v2_secs = started.elapsed().as_secs_f64();
         checked += outcome.checked;
         if outcome.checked == 0 {
             skipped += 1;
@@ -682,8 +690,15 @@ fn crash_property_sweep() {
             *notes.entry(id.to_string()).or_default() += count;
         }
         let mut problems = outcome.problems;
+        let mut upgrade = Vec::new();
         for kind in Kind::ALL {
+            let at = std::time::Instant::now();
             problems.extend(check_upgrade_states(seed, kind, &mut notes));
+            upgrade.push(format!("{} {:.1} s", kind.id(), at.elapsed().as_secs_f64()));
+        }
+        let detail = format!("v2 states {v2_secs:.1} s, upgrade {}", upgrade.join(", "));
+        for line in clock.seed_done(seed, started.elapsed().as_secs_f64(), &detail) {
+            println!("{line}");
         }
         if !problems.is_empty() {
             dirty.push(seed);
@@ -694,7 +709,8 @@ fn crash_property_sweep() {
     }
     println!(
         "crash sweep: {seeds} seed(s), {checked} injected v2 state(s), {skipped} seed(s) skipped; \
-         measured: {notes:?}; seeds with a failure ({}): {dirty:?}",
+         measured: {notes:?}; {}; seeds with a failure ({}): {dirty:?}",
+        clock.summary(),
         dirty.len()
     );
 }

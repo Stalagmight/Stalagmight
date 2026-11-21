@@ -102,6 +102,12 @@ mod test_helpers;
 mod adjust_floor_tests;
 #[cfg(test)]
 #[expect(
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod adjust_precision_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::panic,
     clippy::float_cmp,
@@ -155,6 +161,12 @@ mod legacy_convert;
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod legacy_crosscheck_tests;
+#[cfg(test)]
+#[expect(
+    clippy::float_cmp,
+    reason = "test module: an exact zero correction is what it checks"
+)]
+mod lsq_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

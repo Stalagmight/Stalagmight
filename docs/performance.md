@@ -3,9 +3,9 @@
 This document covers key algorithmic decisions and their performance
 characteristics, for both the Rust backend and the WebGL frontend.
 
-## Loop Closure Adjustment - Sparse PCG Solver
+## Loop Closure Adjustment - Sparse Solver
 
-**File:** `src-tauri/crates/models/src/survey/lsq.rs` (`solve_reduced_laplacian`), driven by `survey/adjust.rs` (`Project::adjusted_positions`)
+**File:** `src-tauri/crates/models/src/survey/lsq.rs` (`Grounded`), driven by `survey/adjust.rs` (`Project::adjusted_positions`)
 
 The loop closure adjustment solves a weighted least-squares system to distribute
 survey errors across the network. The normal equations form a weighted graph
@@ -16,7 +16,8 @@ azimuth, scaled by line quality).
 ### Problem structure
 
 The normal matrix A^T A is:
-- **Symmetric positive-definite** (graph Laplacian)
+- **Symmetric positive-definite** (a graph Laplacian grounded at the held
+  groups: datums, hard GPS fixes or the gauge)
 - **Extremely sparse** - at most ~3 non-zeros per row (each station group
   connects to a small number of neighbors via shots)
 - **Dimension n** = number of unknown station groups (groups connected via
@@ -25,43 +26,73 @@ The normal matrix A^T A is:
 X and Y axes are solved independently since they have different per-shot weights
 (the azimuth orientation affects directional uncertainty differently).
 
-### Algorithm: Jacobi-preconditioned Conjugate Gradient
+### What is solved: corrections, not coordinates
 
-Instead of assembling a dense n×n matrix and using LU decomposition (O(n³)), the
-solver uses a sparse representation and iterative Conjugate Gradient:
+The unknowns are each free group's **correction** from its raw position (its
+lowest member's), not its absolute coordinates. Per axis the system is
+`sum_j w_ij (d_i - d_j) + g_i d_i = r_i`: positive edge weights between free
+groups, ground weights `g` for shots to held groups and for soft GPS fixes, and
+right-hand sides `r` that are each shot's weight times what the current
+positions leave of its vector (and each soft fix's weight times its offset).
+In exact arithmetic it is the same minimiser as the absolute form.
 
-1. **Sparse assembly:** diagonal entries in `diag_x[i]` / `diag_y[i]`,
-   off-diagonal entries in adjacency list `adj[i] = [(j, w_x, w_y), ...]`.
-   A `macro_rules! add_sparse!` macro handles the fixed/unknown group indexing
-   to avoid borrow issues with mutable arrays.
+Why: weights can be 1e14 apart (a zero-length connector on a line of quality
+0.25 weighs 3.4e8, a 100 km shot 5e-6 across). Solved for coordinates of 1e5 m,
+the right-hand side carried `eps x weight x coordinate` of rounding and the
+diagonal (a float sum, reduced by subtraction) leaked to ground; a part of the
+survey held by one weak shot turned that into hundreds of metres (migration fuzz
+farm seed 34022454: 809 m, where the exact solution moves 10.7 m). In the
+correction form a satisfied shot contributes exactly nothing, the operator is
+applied as differences (a rigid shift of a part is exactly no current), and the
+elimination only adds positive terms.
 
-2. **Sparse matrix-vector product** (`spmv`): iterates diagonal + adjacency
-   list - O(nnz) per call.
+### Algorithm
 
-3. **Jacobi preconditioner:** M = diag(A), trivially inverted. Good enough for
-   graph Laplacians where the diagonal dominance ensures fast convergence.
+1. **Assembly:** per shot between groups an `Observation` (its two ends, free
+   or held, its vector plus the hand-move difference, its two weights; an axis
+   whose weight is not a positive number is not observed); edges in `adj[i] =
+   [(j, w_x, w_y), ...]`, ground weights per axis.
 
-4. **Exact degree-≤2 reduction, then CG:** `solve_reduced_laplacian` peels
-   degree-1 spurs and series-reduces degree-2 chains exactly in O(n), runs
-   Jacobi-PCG on the surviving 2-core (≈ one node per eligible closure), then
-   back-substitutes.
+2. **Exact elimination (GTH form):** every node of current degree up to 8 is
+   eliminated, lowest degree first (ties by node), both axes in lockstep:
+   the pivot `p_u = g_u + sum w_uv` is summed afresh, a neighbour's ground grows
+   by `w_uv g_u / p_u`, the fill-in between two neighbours is
+   `w_ua w_ub / p_u`. Degree-1 and degree-2 nodes (spurs and chains, the bulk
+   of a cave survey) go first, as the former peeling of degree 1 and 2 did; the bound
+   caps one step's fill-in at 28 edges. A zero pivot (an axis nothing holds)
+   is left to the core.
 
-**Complexity:** O(n) peeling plus PCG over the tiny 2-core, vs O(n²) for the
-former full-system PCG on a single long loop and O(n³) for dense LU.
+3. **Core:** whatever survives (a dense web of loops) is solved with a
+   Jacobi-preconditioned conjugate gradient applied in difference form, from
+   zero corrections, to a 1e-12 relative residual, at most `min(n, 10,000)`
+   iterations.
 
-**Tolerance:** 1e-12 relative residual norm, max 10,000 iterations.
+4. **Refinement:** the solve runs 3 passes on one factoring. Each pass
+   recomputes the right-hand side from the positions the previous pass left,
+   so the rounding of the first pass's large currents (a group's offset times a
+   strong weight), which a weakly held part amplifies, is corrected by the
+   next. A pass whose currents are all exactly zero stops the loop: a survey
+   with nothing to close keeps its raw positions to the bit.
 
-### Why not a direct sparse solver?
+**Complexity:** O(n log n) elimination (a heap of degrees), each step bounded
+by the degree cap, plus 3 back-substitutions and the conjugate gradient over
+whatever core is left, vs O(n²) for the former full-system PCG on a single
+long loop and O(n³) for dense LU.
 
-A sparse Cholesky (LDL^T) factorization would also work and give exact results
-in one pass. However:
+**Precision:** on the migration fuzz farm's seeds the solve agrees with a
+100-digit solve of the same least squares within 5e-9 m (the absolute-coordinate
+solve was off by up to 807 m); `adjust_precision_tests` pins the weakly held
+part.
+
+### Why not a library sparse solver?
+
+A sparse Cholesky (LDL^T) factorization from a library would also work.
+However:
 - It requires a sparse matrix library (e.g., `sprs`, `cholmod` bindings) - an
   extra dependency.
-- The graph Laplacian structure makes CG converge extremely fast (typically
-  under 50 iterations for survey networks), so the iterative approach is both
-  simpler and fast enough.
-- The PCG implementation is ~50 lines of pure Rust with no dependencies beyond
-  `std`.
+- The bounded elimination above is a sparse factorization of exactly the shape
+  a cave survey has (trees, chains and a few loops), in positive arithmetic, in
+  a hundred lines of pure Rust with no dependencies beyond `std`.
 
 ### Profiling results
 

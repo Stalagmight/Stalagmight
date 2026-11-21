@@ -379,13 +379,119 @@ pub fn sweep_seeds(first_var: &str, count: u32) -> std::ops::Range<u32> {
     first..first.saturating_add(count)
 }
 
+/// The wall time of an ignored robustness sweep, seed by seed, so a window a
+/// fuzz farm runs out of time on still says how far it got, at what rate,
+/// and which seeds were slow (the farm's crash-property window 19004214
+/// timed out after an hour with nothing in its log but "running 1 test": no
+/// seed hung, every seed of the build took about 4 s where an earlier one
+/// took 1 s, and the window had been sized for the earlier rate).
+///
+/// Its lines start with the sweep's name, never with `seed N:` (a failure's
+/// form). Seeds over `slow_secs` get a line each; every `every` seeds a
+/// progress line gives the count, the time so far and the mean.
+#[cfg(any(test, feature = "test-support"))]
+pub struct SweepClock {
+    name: &'static str,
+    slow_secs: f64,
+    every: u32,
+    seeds: u32,
+    total_secs: f64,
+    slowest: Option<(u32, f64)>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl SweepClock {
+    /// Seeds slower than this many seconds get a line of their own, unless
+    /// `STALAGMIGHT_RUST_SWEEP_SLOW_SECS` says otherwise.
+    pub const SLOW_SECS: f64 = 30.0;
+    /// A progress line every this many seeds.
+    pub const EVERY: u32 = 25;
+
+    /// A clock for the sweep `name`, with the slow threshold from the
+    /// environment.
+    #[must_use]
+    pub fn from_env(name: &'static str) -> Self {
+        let slow_secs = std::env::var("STALAGMIGHT_RUST_SWEEP_SLOW_SECS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|secs| secs.is_finite() && *secs >= 0.0)
+            .unwrap_or(Self::SLOW_SECS);
+        Self::new(name, slow_secs, Self::EVERY)
+    }
+
+    #[must_use]
+    pub fn new(name: &'static str, slow_secs: f64, every: u32) -> Self {
+        Self {
+            name,
+            slow_secs,
+            every: every.max(1),
+            seeds: 0,
+            total_secs: 0.0,
+            slowest: None,
+        }
+    }
+
+    /// Record that `seed` took `secs` (`detail` says where the time went);
+    /// the lines to print now.
+    pub fn seed_done(&mut self, seed: u32, secs: f64, detail: &str) -> Vec<String> {
+        self.seeds += 1;
+        self.total_secs += secs;
+        if self.slowest.is_none_or(|(_, worst)| secs > worst) {
+            self.slowest = Some((seed, secs));
+        }
+        let mut lines = Vec::new();
+        if secs > self.slow_secs {
+            lines.push(format!(
+                "{}: slow seed {seed} took {secs:.1} s ({detail})",
+                self.name
+            ));
+        }
+        if self.seeds.is_multiple_of(self.every) {
+            lines.push(format!(
+                "{}: {} seed(s) in {:.0} s, {:.2} s per seed, last {seed}",
+                self.name,
+                self.seeds,
+                self.total_secs,
+                self.mean_secs()
+            ));
+        }
+        lines
+    }
+
+    /// The mean seconds per seed so far (0 before the first seed).
+    #[must_use]
+    pub fn mean_secs(&self) -> f64 {
+        if self.seeds == 0 {
+            0.0
+        } else {
+            self.total_secs / f64::from(self.seeds)
+        }
+    }
+
+    /// For the sweep's last line: the time, the mean and the slowest seed.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let slowest = self.slowest.map_or_else(
+            || "none".to_string(),
+            |(seed, secs)| format!("{seed} ({secs:.1} s)"),
+        );
+        format!(
+            "{:.0} s, {:.2} s per seed, slowest seed {slowest}",
+            self.total_secs,
+            self.mean_secs()
+        )
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::{current_config_dir, isolated_config, real_config_resolution, ConfigHandoff};
+    use super::{
+        current_config_dir, isolated_config, real_config_resolution, ConfigHandoff, SweepClock,
+    };
     use crate::config::Config;
     use std::path::PathBuf;
 
@@ -558,5 +664,33 @@ mod tests {
             Some(cfg.path()),
             "and the thread's isolation comes back afterwards"
         );
+    }
+
+    /// A sweep's clock names a slow seed when it finishes, gives progress at
+    /// a fixed stride, and ends with the slowest seed: what a farm window
+    /// that times out needs in its log.
+    #[test]
+    fn the_sweep_clock_names_slow_seeds_and_reports_progress() {
+        let mut clock = SweepClock::new("crash sweep", 30.0, 3);
+        assert_eq!(clock.summary(), "0 s, 0.00 s per seed, slowest seed none");
+        assert!(clock.seed_done(7, 4.0, "v2 1.0 s").is_empty());
+        assert_eq!(
+            clock.seed_done(8, 95.5, "v2 1.0 s, upgrade 94.5 s"),
+            vec!["crash sweep: slow seed 8 took 95.5 s (v2 1.0 s, upgrade 94.5 s)".to_string()]
+        );
+        // The third seed: a progress line, and no slow line at 30 s exactly.
+        assert_eq!(
+            clock.seed_done(9, 30.0, "v2 1.0 s"),
+            vec!["crash sweep: 3 seed(s) in 130 s, 43.17 s per seed, last 9".to_string()]
+        );
+        assert_eq!(
+            clock.summary(),
+            "130 s, 43.17 s per seed, slowest seed 8 (95.5 s)"
+        );
+        // Every line starts with the sweep's name, never a failure's `seed N:`.
+        let mut clock = SweepClock::new("crash sweep", 0.0, 1);
+        for line in clock.seed_done(1, 1.0, "") {
+            assert!(line.starts_with("crash sweep: "), "{line}");
+        }
     }
 }

@@ -1,207 +1,271 @@
 //! The least-squares linear algebra of the Closures Computed View.
 //!
-//! Copied from `models/src/project/lsq.rs` (`Project::solve_reduced_laplacian`
-//! and `Project::pcg_axis`, private there) unchanged apart from being free
-//! functions and indexing the core with a vector instead of a `HashMap`
-//! lookup (a lookup only; no iteration order reaches a result). The old copy
-//! is deleted with `models::project`; see its doc comments for the history
-//! (#81 exact peeling, #413 finding 21 determinism, Codex #86 the warm-start
-//! residual reference).
+//! **The system.** Per axis, one grounded weighted Laplacian in the
+//! corrections `d` the solve adds to its reference positions (each free
+//! group's lowest member's raw position):
+//!
+//! ```text
+//! sum_j w_ij (d_i - d_j) + g_i d_i = r_i
+//! ```
+//!
+//! with `w_ij > 0` the summed weights of the shots between free groups `i`
+//! and `j`, `g_i >= 0` the weights tying group `i` to held positions (shots
+//! to held groups, soft GPS fixes) and `r_i` the misclosure currents: each
+//! shot's weight times what its reference ends do not satisfy of its vector,
+//! each soft fix's weight times its offset. The caller assembles `w`, `g` and
+//! `r` from differences of nearby positions, never from absolute
+//! coordinates.
+//!
+//! **Why this form (migration fuzz seed 34022454).** 0.6.0 (and this module
+//! until then) solved for absolute coordinates, `A x = A^T W b`, with the
+//! diagonal stored as a float sum and every elimination step subtracting
+//! from it (`d_v -= w^2 / p_u`). Both lose what a survey that mixes shot
+//! weights 1e14 apart needs: the right-hand side carries `eps x weight x
+//! coordinate` of rounding (a 1e5 m coordinate under a 3e8 weight is 1e-2 of
+//! spurious current), the diagonal's rounding is a leak to ground of `eps x
+//! weight`, and a part of the survey hanging off one weak (100 km) shot turns
+//! either into hundreds of metres: the seed's exact solution moves no
+//! station more than 10.7 m, the absolute solve moved it 809 m. Here the
+//! right-hand side is the misclosure (exact for a satisfied shot), the
+//! operator is applied as differences `d_i - d_j` (a rigid shift of a part
+//! is exactly no current), and elimination only adds positive terms (the
+//! pivot `p_u = g_u + sum w_uv` is summed afresh, the neighbour's ground
+//! grows by `w_uv g_u / p_u`, the fill-in is `w_ua w_ub / p_u`), so no step
+//! cancels. In exact arithmetic it is the same minimiser.
+//!
+//! **The solve.** Exact Gaussian elimination of every node whose current
+//! degree is at most `MAX_PEEL_DEGREE`, lowest degree first (leaves and
+//! series chains, the bulk of a cave survey, go first, as the degree-2
+//! peeling of #81 did), both axes in lockstep; whatever core survives is
+//! solved with Jacobi-PCG from zero corrections (a null-space direction keeps
+//! its reference position), then the eliminated nodes are recovered in
+//! reverse order. The caller refines: it solves again for what the corrected
+//! positions leave (`adjust::SOLVE_PASSES`), on the same factoring. The
+//! working adjacency is a `BTreeMap` per node and the elimination order a
+//! heap of `(degree, node)`, so every float sum runs in a fixed order and the
+//! solve is bit-reproducible (#413 finding 21).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 
-/// Solve the two SPD weighted-Laplacian systems `A x = atb_x` and
-/// `A y = atb_y` sharing the sparsity `adj` (symmetric off-diagonal entries
-/// `(j, off_x, off_y)`, the negative edge weights).
-///
-/// Exact Gaussian elimination of every node whose current off-diagonal degree
-/// is at most 2 (leaf back-substitution and series reduction), carried for
-/// both axes in lockstep; the surviving 2-core (about the cycle space) is
-/// solved with Jacobi-PCG warm-started at `x0`, then the peeled nodes are
-/// recovered in reverse order. The working adjacency is a `BTreeMap` per node,
-/// so every float sum runs in node order and the solve is bit-reproducible.
-pub(crate) fn solve_reduced_laplacian(
+/// The largest current degree a node is eliminated at exactly; a node of a
+/// higher degree is left to the core's conjugate gradient (it bounds the
+/// fill-in of one step to `MAX_PEEL_DEGREE^2 / 2` edges).
+const MAX_PEEL_DEGREE: usize = 8;
+
+/// One exact elimination step: the node, its neighbours at that point with
+/// their weight ratios `w_uv / p_u` per axis, and its pivots.
+struct Step {
+    u: usize,
+    nbrs: Vec<(usize, f64, f64)>,
+    px: f64,
+    py: f64,
+}
+
+/// The two grounded weighted-Laplacian systems (module docs), factored: the
+/// exact elimination steps in order and the core left to the conjugate
+/// gradient. The right-hand side comes later ([`Self::solve`]), so the
+/// solve's refinement passes reuse one factoring.
+pub(crate) struct Grounded {
     n: usize,
-    diag_x: &[f64],
-    diag_y: &[f64],
-    atb_x: &[f64],
-    atb_y: &[f64],
-    adj: &[Vec<(usize, f64, f64)>],
-    x0_x: &[f64],
-    x0_y: &[f64],
-) -> (Vec<f64>, Vec<f64>) {
-    // A node is only eliminated when its current pivot is safely positive
-    // relative to its original diagonal; a collapsed pivot means a null-space
-    // (floating) axis, left to the warm-started PCG.
-    const PIVOT_REL: f64 = 1e-9;
+    steps: Vec<Step>,
+    /// The core's nodes, ascending.
+    core: Vec<usize>,
+    /// The core's edges, `(local j, w_x, w_y)`.
+    core_adj: Vec<Vec<(usize, f64, f64)>>,
+    core_ground: [Vec<f64>; 2],
+}
 
-    struct Elim {
-        u: usize,
-        nbrs: Vec<(usize, f64, f64)>,
-        dxu: f64,
-        dyu: f64,
-        cxu: f64,
-        cyu: f64,
-    }
-
-    let mut dx = diag_x.to_vec();
-    let mut dy = diag_y.to_vec();
-    let mut cx = atb_x.to_vec();
-    let mut cy = atb_y.to_vec();
-    let mut nbr: Vec<BTreeMap<usize, (f64, f64)>> = vec![BTreeMap::new(); n];
-    for (i, row) in adj.iter().enumerate() {
-        for &(j, ox, oy) in row {
-            let e = nbr[i].entry(j).or_insert((0.0, 0.0));
-            e.0 += ox;
-            e.1 += oy;
-        }
-    }
-
-    let mut eliminated = vec![false; n];
-    let mut order: Vec<Elim> = Vec::new();
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| nbr[i].len() <= 2).collect();
-    while let Some(u) = queue.pop_front() {
-        if eliminated[u] || nbr[u].len() > 2 {
-            continue;
-        }
-        let (pdx, pdy) = (dx[u], dy[u]);
-        if pdx <= PIVOT_REL * diag_x[u] || pdy <= PIVOT_REL * diag_y[u] {
-            continue;
-        }
-        let nbrs: Vec<(usize, f64, f64)> =
-            nbr[u].iter().map(|(&v, &(ox, oy))| (v, ox, oy)).collect();
-        let (pcx, pcy) = (cx[u], cy[u]);
-        eliminated[u] = true;
-        order.push(Elim {
-            u,
-            nbrs: nbrs.clone(),
-            dxu: pdx,
-            dyu: pdy,
-            cxu: pcx,
-            cyu: pcy,
-        });
-        for &(v, _, _) in &nbrs {
-            nbr[v].remove(&u);
-        }
-        for &(v, ox, oy) in &nbrs {
-            cx[v] -= ox * pcx / pdx;
-            cy[v] -= oy * pcy / pdy;
-            dx[v] -= ox * ox / pdx;
-            dy[v] -= oy * oy / pdy;
-        }
-        for a in 0..nbrs.len() {
-            for b in (a + 1)..nbrs.len() {
-                let (i, oxa, oya) = nbrs[a];
-                let (j, oxb, oyb) = nbrs[b];
-                let fx = -(oxa * oxb) / pdx;
-                let fy = -(oya * oyb) / pdy;
+impl Grounded {
+    /// Factor the systems with ground weights `ground_x` / `ground_y` and
+    /// the symmetric edges `adj` (`(j, w_x, w_y)`, positive weights, or zero
+    /// on an axis the shot does not observe).
+    pub(crate) fn factor(
+        ground_x: &[f64],
+        ground_y: &[f64],
+        adj: &[Vec<(usize, f64, f64)>],
+    ) -> Self {
+        let n = ground_x.len();
+        let mut gx = ground_x.to_vec();
+        let mut gy = ground_y.to_vec();
+        let mut nbr: Vec<BTreeMap<usize, (f64, f64)>> = vec![BTreeMap::new(); n];
+        for (i, row) in adj.iter().enumerate() {
+            for &(j, wx, wy) in row {
                 let e = nbr[i].entry(j).or_insert((0.0, 0.0));
-                e.0 += fx;
-                e.1 += fy;
-                let e = nbr[j].entry(i).or_insert((0.0, 0.0));
-                e.0 += fx;
-                e.1 += fy;
+                e.0 += wx;
+                e.1 += wy;
             }
         }
-        for &(v, _, _) in &nbrs {
-            if !eliminated[v] && nbr[v].len() <= 2 {
-                queue.push_back(v);
-            }
-        }
-    }
 
-    let mut sol_x = vec![0.0; n];
-    let mut sol_y = vec![0.0; n];
-    let core: Vec<usize> = (0..n).filter(|&i| !eliminated[i]).collect();
-    if !core.is_empty() {
-        let k = core.len();
+        let mut eliminated = vec![false; n];
+        let mut steps: Vec<Step> = Vec::new();
+        // Lowest current degree first, then lowest node: deterministic, and
+        // the degree-1 and degree-2 nodes (spurs and chains) go before any
+        // node whose elimination fills in.
+        let mut heap: BinaryHeap<Reverse<(usize, usize)>> = (0..n)
+            .filter(|&i| nbr[i].len() <= MAX_PEEL_DEGREE)
+            .map(|i| Reverse((nbr[i].len(), i)))
+            .collect();
+        while let Some(Reverse((degree, u))) = heap.pop() {
+            if eliminated[u] || nbr[u].len() != degree {
+                continue;
+            }
+            let px = nbr[u].values().fold(gx[u], |s, w| s + w.0);
+            let py = nbr[u].values().fold(gy[u], |s, w| s + w.1);
+            // A zero pivot is an axis with nothing holding it (a floating
+            // part): left to the core, where it keeps its reference.
+            if !(px > 0.0 && px.is_finite() && py > 0.0 && py.is_finite()) {
+                continue;
+            }
+            let weights: Vec<(usize, f64, f64)> =
+                nbr[u].iter().map(|(&v, &(wx, wy))| (v, wx, wy)).collect();
+            eliminated[u] = true;
+            let (gux, guy) = (gx[u], gy[u]);
+            let mut nbrs = Vec::with_capacity(weights.len());
+            for &(v, wx, wy) in &weights {
+                nbr[v].remove(&u);
+                let (tx, ty) = (wx / px, wy / py);
+                gx[v] += tx * gux;
+                gy[v] += ty * guy;
+                nbrs.push((v, tx, ty));
+            }
+            // Fill-in between each pair of neighbours: `w_ua w_ub / p_u`.
+            for (k, &(a, tax, tay)) in nbrs.iter().enumerate() {
+                for &(b, wbx, wby) in &weights[k + 1..] {
+                    let (fx, fy) = (tax * wbx, tay * wby);
+                    let e = nbr[a].entry(b).or_insert((0.0, 0.0));
+                    e.0 += fx;
+                    e.1 += fy;
+                    let e = nbr[b].entry(a).or_insert((0.0, 0.0));
+                    e.0 += fx;
+                    e.1 += fy;
+                }
+            }
+            for &(v, _, _) in &nbrs {
+                if nbr[v].len() <= MAX_PEEL_DEGREE {
+                    heap.push(Reverse((nbr[v].len(), v)));
+                }
+            }
+            steps.push(Step { u, nbrs, px, py });
+        }
+
+        let core: Vec<usize> = (0..n).filter(|&i| !eliminated[i]).collect();
         let mut local = vec![usize::MAX; n];
         for (li, &g) in core.iter().enumerate() {
             local[g] = li;
         }
-        let cdx: Vec<f64> = core.iter().map(|&g| dx[g]).collect();
-        let cdy: Vec<f64> = core.iter().map(|&g| dy[g]).collect();
-        let crx: Vec<f64> = core.iter().map(|&g| cx[g]).collect();
-        let cry: Vec<f64> = core.iter().map(|&g| cy[g]).collect();
-        let mut cadj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); k];
-        for (li, &g) in core.iter().enumerate() {
-            for (&v, &(ox, oy)) in &nbr[g] {
-                if local[v] != usize::MAX {
-                    cadj[li].push((local[v], ox, oy));
-                }
-            }
-        }
-        let cx0: Vec<f64> = core.iter().map(|&g| x0_x[g]).collect();
-        let cy0: Vec<f64> = core.iter().map(|&g| x0_y[g]).collect();
-        let csx = pcg_axis(k, &cdx, &crx, &cadj, 0, &cx0);
-        let csy = pcg_axis(k, &cdy, &cry, &cadj, 1, &cy0);
-        for (li, &g) in core.iter().enumerate() {
-            sol_x[g] = csx[li];
-            sol_y[g] = csy[li];
+        let core_adj: Vec<Vec<(usize, f64, f64)>> = core
+            .iter()
+            .map(|&g| {
+                nbr[g]
+                    .iter()
+                    .filter(|(&v, _)| local[v] != usize::MAX)
+                    .map(|(&v, &(wx, wy))| (local[v], wx, wy))
+                    .collect()
+            })
+            .collect();
+        let core_ground = [
+            core.iter().map(|&g| gx[g]).collect(),
+            core.iter().map(|&g| gy[g]).collect(),
+        ];
+        Self {
+            n,
+            steps,
+            core,
+            core_adj,
+            core_ground,
         }
     }
 
-    for rec in order.iter().rev() {
-        let mut sx = rec.cxu;
-        let mut sy = rec.cyu;
-        for &(v, ox, oy) in &rec.nbrs {
-            sx -= ox * sol_x[v];
-            sy -= oy * sol_y[v];
+    /// The corrections `(d_x, d_y)` for the misclosure currents `rhs_x` /
+    /// `rhs_y`.
+    pub(crate) fn solve(&self, rhs_x: &[f64], rhs_y: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let mut rx = rhs_x.to_vec();
+        let mut ry = rhs_y.to_vec();
+        let mut at: Vec<(f64, f64)> = Vec::with_capacity(self.steps.len());
+        for step in &self.steps {
+            let (rux, ruy) = (rx[step.u], ry[step.u]);
+            at.push((rux, ruy));
+            for &(v, tx, ty) in &step.nbrs {
+                rx[v] += tx * rux;
+                ry[v] += ty * ruy;
+            }
         }
-        sol_x[rec.u] = sx / rec.dxu;
-        sol_y[rec.u] = sy / rec.dyu;
+        let mut sol_x = vec![0.0; self.n];
+        let mut sol_y = vec![0.0; self.n];
+        if !self.core.is_empty() {
+            let pick =
+                |values: &[f64]| -> Vec<f64> { self.core.iter().map(|&g| values[g]).collect() };
+            let csx = pcg_axis(&self.core_ground[0], &pick(&rx), &self.core_adj, 0);
+            let csy = pcg_axis(&self.core_ground[1], &pick(&ry), &self.core_adj, 1);
+            for (li, &g) in self.core.iter().enumerate() {
+                sol_x[g] = csx[li];
+                sol_y[g] = csy[li];
+            }
+        }
+        for (step, &(rux, ruy)) in self.steps.iter().zip(&at).rev() {
+            let mut sx = rux / step.px;
+            let mut sy = ruy / step.py;
+            for &(v, tx, ty) in &step.nbrs {
+                sx += tx * sol_x[v];
+                sy += ty * sol_y[v];
+            }
+            sol_x[step.u] = sx;
+            sol_y[step.u] = sy;
+        }
+        (sol_x, sol_y)
     }
-    (sol_x, sol_y)
 }
 
 /// Jacobi-preconditioned conjugate gradient for one axis (`axis` selects the
-/// off-diagonal weight) of the small reduced core, warm-started at `x0` (a
-/// null-space direction stays at its measured value), converging relative to
-/// the initial residual `|b - A x0|`.
-fn pcg_axis(
-    n: usize,
-    diag: &[f64],
-    rhs: &[f64],
-    adj: &[Vec<(usize, f64, f64)>],
-    axis: usize,
-    x0: &[f64],
-) -> Vec<f64> {
-    let off = |e: (usize, f64, f64)| if axis == 0 { e.1 } else { e.2 };
-    let spmv = |x: &[f64]| -> Vec<f64> {
-        let mut y = vec![0.0; n];
-        for i in 0..n {
-            y[i] += diag[i] * x[i];
-            for &edge in &adj[i] {
-                y[i] += off(edge) * x[edge.0];
-            }
-        }
-        y
+/// weight) of the reduced core, from zero corrections (a null-space
+/// direction keeps its reference position), converging relative to the
+/// right-hand side. The operator is applied in difference form (module
+/// docs).
+fn pcg_axis(ground: &[f64], rhs: &[f64], adj: &[Vec<(usize, f64, f64)>], axis: usize) -> Vec<f64> {
+    let n = rhs.len();
+    let weight = |e: &(usize, f64, f64)| if axis == 0 { e.1 } else { e.2 };
+    let apply = |x: &[f64]| -> Vec<f64> {
+        (0..n)
+            .map(|i| {
+                adj[i]
+                    .iter()
+                    .fold(ground[i] * x[i], |s, e| s + weight(e) * (x[i] - x[e.0]))
+            })
+            .collect()
     };
     let max_iter = n.min(10_000);
     let tol = 1e-12;
-    let inv_diag: Vec<f64> = diag
-        .iter()
-        .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 1.0 })
+    // A node nothing weighs on this axis keeps its reference position: its
+    // equation (`0 = r`) is dropped.
+    let inv_diag: Vec<f64> = (0..n)
+        .map(|i| {
+            let d = adj[i].iter().fold(ground[i], |s, e| s + weight(e));
+            if d > 0.0 && d.is_finite() {
+                1.0 / d
+            } else {
+                0.0
+            }
+        })
         .collect();
 
-    let mut x = x0.to_vec();
-    let ax0 = spmv(&x);
-    let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&b, &a)| b - a).collect();
-    let mut z: Vec<f64> = r
+    let mut x = vec![0.0; n];
+    let mut r: Vec<f64> = rhs
         .iter()
-        .zip(inv_diag.iter())
-        .map(|(&ri, &mi)| ri * mi)
+        .zip(&inv_diag)
+        .map(|(&b, &m)| if m > 0.0 { b } else { 0.0 })
         .collect();
+    let mut z: Vec<f64> = r.iter().zip(&inv_diag).map(|(&ri, &mi)| ri * mi).collect();
     let mut p = z.clone();
-    let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+    let mut rz: f64 = r.iter().zip(&z).map(|(&ri, &zi)| ri * zi).sum();
     let r0_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
-    if r0_norm_sq < tol * tol {
+    if r0_norm_sq == 0.0 {
         return x;
     }
     for _ in 0..max_iter {
-        let ap = spmv(&p);
-        let pap: f64 = p.iter().zip(ap.iter()).map(|(&pi, &api)| pi * api).sum();
-        if pap.abs() < 1e-30 {
+        let ap = apply(&p);
+        let pap: f64 = p.iter().zip(&ap).map(|(&pi, &api)| pi * api).sum();
+        if !(pap > 0.0 && pap.is_finite()) {
             break;
         }
         let alpha = rz / pap;
@@ -216,7 +280,7 @@ fn pcg_axis(
         for i in 0..n {
             z[i] = r[i] * inv_diag[i];
         }
-        let rz_new: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+        let rz_new: f64 = r.iter().zip(&z).map(|(&ri, &zi)| ri * zi).sum();
         let beta = rz_new / rz;
         for i in 0..n {
             p[i] = z[i] + beta * p[i];

@@ -139,7 +139,10 @@ pub(super) fn legacy_rewrite_precision_m(length: f64, depth_change: f64, horizon
 /// `eps x kappa x scale`, the form of an elimination's forward-error bound,
 /// with `kappa` the spread of the component's per-axis shot weights (largest
 /// over smallest), which sets the normal matrix's condition number, and
-/// `scale` its largest raw coordinate. The weights are the floored ones
+/// `scale` the largest coordinate its solve handles: of its raw layout, and
+/// of the GPS positions its datums hold or pull it to (0.6.0 solved for
+/// absolute coordinates, so its rounding scales with the solution; farm seed
+/// 34019254's fixes held a 17 m survey 2 km away). The weights are the floored ones
 /// ([`ShotSigmas::axes`]): they are 0.6.0's wherever no shot is under the
 /// floor, and a component with one is [`ExpectedClass::LegacyWeightsDegenerate`]
 /// (a degenerate weight would make this bound vacuous). 0.6.0 solved
@@ -256,7 +259,8 @@ struct SolveFacts {
     /// The smallest and largest finite per-axis weight of its legacy shots
     /// (floored, [`legacy_solve_precision_m`]).
     weights: (f64, f64),
-    /// Its largest raw horizontal coordinate (absolute, legacy).
+    /// Its largest horizontal coordinate (absolute, legacy): of its raw
+    /// layout and of its datums' local GPS positions.
     scale_m: f64,
 }
 
@@ -419,6 +423,24 @@ fn verify_adjusted(
                 if magnitude.is_finite() {
                     f.scale_m = f.scale_m.max(magnitude);
                 }
+            }
+        }
+    }
+    // The positions 0.6.0's solve held or pulled the component to: its
+    // datums' local GPS positions (farm seed 34019254: GPS fixes 2 km off a
+    // 17 m raw layout).
+    if let Some(frame) = lp.frame_datum() {
+        for datum in &lp.zero_datums {
+            let Some(&k) = lp
+                .resolve_key(&datum.station_ref)
+                .and_then(|slot| solve_of_line.get(&slot.line_id))
+            else {
+                continue;
+            };
+            let (east, north) = stalagmight_legacy::models::gps_to_local(&datum.gps, &frame.gps);
+            let magnitude = east.abs().max(north.abs());
+            if magnitude.is_finite() {
+                facts[k].scale_m = facts[k].scale_m.max(magnitude);
             }
         }
     }
