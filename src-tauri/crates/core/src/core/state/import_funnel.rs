@@ -18,12 +18,16 @@
 //!   recorded as a merge and nothing moves: the new line hangs off the
 //!   station it was placed on. The junction keeps its name; a comment the
 //!   file gives it is joined to its own (the merge rule, plan 5.1); a
-//!   different name the file gives it is kept as an alias of the junction,
-//!   under a retired Station ID minted for it, as Merge Stations keeps the
-//!   retired station's (I-import-export-4). A station of the new line whose
-//!   file name is the junction's takes a letter suffix (names are unique on
-//!   a line, invariant 8) and the receipt says so: 0.6.0 kept a name per
-//!   slot, so neither was needed there.
+//!   different name the file gives it is kept as an alias of the junction on
+//!   the new line, under a retired Station ID minted for it, as Merge
+//!   Stations keeps the retired station's (I-import-export-4). The new line
+//!   then knows the junction by that alias, so its own stations keep the
+//!   file's names even where one is the junction's (invariant 8's alias
+//!   exemption, as after a merge or a 0.6.0 conversion; 0.6.0 kept a name
+//!   per slot). Only where the line has no such alias (the file gives the
+//!   junction no other name, or no Station ID is left) does a station of the
+//!   new line whose file name is the junction's take a letter suffix, and
+//!   the receipt says so.
 //!
 //! One line that cannot be imported costs the user that line, never the file
 //! (#814): a line the project refuses is left out, a line whose placement
@@ -56,7 +60,7 @@ use crate::models::{
     AzimuthReference, Coordinates, CreditEdit, CreditEditKind, ExistingShotUpdate, GpsCoordinates,
     ImportClosure, ImportLineConfig, ImportPlacement, LineId, Section, SectionId, ShotData,
     StationId, StationRef, SurveyCredit, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
-    SECTION_PALETTE,
+    MAX_STATION_ID, SECTION_PALETTE,
 };
 
 use super::command_import::VirtualShotMode;
@@ -297,6 +301,17 @@ impl LineBuilder {
             junction_alias,
             renamed,
         } = station_names(project, config, n, junction);
+        // The alias's retired id is minted before the line's stations, so the
+        // id `station_names` counted on is the one it gets.
+        let junction_alias = match junction_alias {
+            Some(name) => Some((
+                project
+                    .mint_station_id()
+                    .map_err(|e| LineError::Fatal(e.to_string()))?,
+                name,
+            )),
+            None => None,
+        };
         let mut chain = Vec::with_capacity(n + 1);
         for (index, name) in names.into_iter().enumerate() {
             match junction {
@@ -351,8 +366,8 @@ impl LineBuilder {
 
         apply_station_comments(project, config, &chain, junction);
         apply_external_ids(project, config, &chain);
-        if let (Some(j), Some(name)) = (junction, junction_alias) {
-            keep_file_name_as_alias(project, j.station, name);
+        if let (Some(j), Some((alias, name))) = (junction, junction_alias) {
+            keep_file_name_as_alias(project, j.station, alias, name, id);
         }
         steps.push(ImportStep::CreateLine { line: id });
         match plan {
@@ -690,7 +705,9 @@ struct StationNames {
     /// In chain order.
     names: Vec<String>,
     /// The file's own name for the junction station, when it is not the
-    /// junction's: kept as an alias ([`keep_file_name_as_alias`]).
+    /// junction's and a Station ID is left for it: kept as an alias on the
+    /// new line ([`keep_file_name_as_alias`]), so the line's own stations
+    /// were named without the junction's name in the way.
     junction_alias: Option<String>,
     /// Stations whose file name is the junction's, `(file name, name now)`.
     renamed: Vec<(String, String)>,
@@ -735,6 +752,20 @@ fn station_names(
             .get(&j.station)
             .map(|s| (j.index, s.name.clone()))
     });
+    // The file's own different name for the junction, kept as an alias on
+    // this line when a Station ID is left for it (minted first, before the
+    // line's stations): the line then knows the junction by it, and the
+    // junction's own name need not be unique on the line (invariant 8).
+    let junction_alias = fixed
+        .as_ref()
+        .and_then(|(index, name)| {
+            file_names
+                .get(*index)
+                .cloned()
+                .flatten()
+                .filter(|file| file != name)
+        })
+        .filter(|_| project.counters.next_station_id < MAX_STATION_ID);
     if let Some((index, name)) = &fixed {
         if let Some(slot) = names.get_mut(*index) {
             *slot = Some(name.clone());
@@ -745,16 +776,28 @@ fn station_names(
     }
     settle_line_station_names(&mut names);
     let mut names: Vec<String> = names.into_iter().map(Option::unwrap_or_default).collect();
-    let mut junction_alias = None;
     let mut renamed = Vec::new();
     if let Some((index, name)) = fixed {
-        let mut taken: HashSet<String> = names.iter().cloned().collect();
-        taken.insert(name.clone());
-        for (i, slot) in names.iter_mut().enumerate() {
-            if i != index && *slot == name {
-                let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
-                taken.insert(fresh.clone());
-                *slot = fresh;
+        if junction_alias.is_some() {
+            // The line knows the junction by the file's name, so the first
+            // station the file itself names as the junction is named keeps
+            // that name (the seeds and the settle above still avoided it).
+            let first = file_names
+                .iter()
+                .enumerate()
+                .position(|(i, file)| i != index && file.as_deref() == Some(name.as_str()));
+            if let Some(slot) = first.and_then(|i| names.get_mut(i)) {
+                slot.clone_from(&name);
+            }
+        } else {
+            let mut taken: HashSet<String> = names.iter().cloned().collect();
+            taken.insert(name.clone());
+            for (i, slot) in names.iter_mut().enumerate() {
+                if i != index && *slot == name {
+                    let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
+                    taken.insert(fresh.clone());
+                    *slot = fresh;
+                }
             }
         }
         for (i, (file, now)) in file_names.iter().zip(&names).enumerate() {
@@ -764,11 +807,6 @@ fn station_names(
                 }
             }
         }
-        junction_alias = file_names
-            .get(index)
-            .cloned()
-            .flatten()
-            .filter(|file| *file != name);
         if let Some(slot) = names.get_mut(index) {
             *slot = name;
         }
@@ -780,24 +818,24 @@ fn station_names(
     }
 }
 
-/// Keep `name`, the file's own name for the existing station `station` a new
-/// line joins, as an alias of that station under a retired Station ID minted
-/// for it: what Merge Stations keeps of the station it retires, and what the
-/// migration keeps of a 0.6.0 merge member. Without an id left the name is
-/// not kept (the import itself does not depend on it).
-fn keep_file_name_as_alias(project: &mut Project, station: StationId, name: String) {
-    let Ok(id) = project.mint_station_id() else {
-        tracing::warn!(
-            purpose = "keep the file's name for a joined station",
-            "No Station ID left for the alias; the file's name is not kept"
-        );
-        return;
-    };
+/// Keep `name`, the file's own name for the existing station `station` the
+/// new line `line` joins, as an alias of that station on that line under the
+/// retired Station ID `id` minted for it: what Merge Stations keeps of the
+/// station it retires (the moving line knows the junction by it), and what
+/// the migration keeps of a 0.6.0 merge member. Detaching the line gives it
+/// this id and name back.
+fn keep_file_name_as_alias(
+    project: &mut Project,
+    station: StationId,
+    id: StationId,
+    name: String,
+    line: LineId,
+) {
     if let Some(station) = project.stations.get_mut(&station) {
         station.aliases.push(StationAlias {
             id,
             name: Some(name),
-            line: None,
+            line: Some(line),
         });
     }
 }

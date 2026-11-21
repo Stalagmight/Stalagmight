@@ -430,11 +430,15 @@ indexes, so the import records each station's MNemo number as its **name**
   reversed import exactly like `station_comments`.
 - **At a junction.** A line placed on an existing station starts ON that
   station, which keeps its own name; the line's own number for it is kept as
-  an alias of the junction (under a retired Station ID, as Merge Stations keeps
-  the station it retires). Names are unique on a line, so a station of the new
-  line whose number is the junction's name takes a letter (`12a`), and the
-  import summary says so, naming the line, the junction and the new name.
-  0.6.0 kept a name per slot, so it needed neither.
+  an alias of the junction on the new line (under a retired Station ID, as
+  Merge Stations keeps the station it retires). The new line knows the
+  junction by that alias, so its own stations keep their numbers even where
+  one is the junction's name (a line placed on station `12` keeps its own
+  `12`, as 0.6.0 kept a name per slot and as a merge or the conversion of a
+  0.6.0 file leaves it). Only when the line keeps no alias (the file gives
+  the junction no number of its own) does a station whose number is the
+  junction's name take a letter (`12a`), and the import summary says so,
+  naming the line, the junction and the new name.
 - **After import.** A name belongs to its station, so it follows the station
   through later inserts, deletes, splits and reverses; a merge keeps the
   surviving station's name and the other one's as an alias. On the map, the Display menu's **Station
