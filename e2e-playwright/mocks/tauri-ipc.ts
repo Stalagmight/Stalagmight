@@ -4,6 +4,7 @@ import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
+import type { BackupInfo } from '../../src/types/ipc/BackupInfo';
 
 /** The wire shape of a ts-rs generated type: serde writes i64 as a JSON
  *  number, so fields the generated interfaces declare as `bigint` arrive as
@@ -1133,6 +1134,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Per-path project-name overrides applied by set_project_name_for_path,
       // so list_recent_projects reflects renames within a test.
       const recentNameOverrides: Record<string, string> = {};
+
+      // Restore an earlier copy (list_backups / restore_from_backup), as the
+      // backend answers them: every project has the 0.6.0 original its first
+      // save kept; a restore keeps the replaced file as
+      // `<project>.stalx.pre-restore`, which the next listing offers first
+      // (newest first). Restores are recorded for assertions. Specs that need
+      // another list still override through __MOCK_IPC_OVERRIDES__.
+      const restoredAt: Record<string, string> = {};
+      const restoreCalls: Array<{ projectPath: string; backupPath: string }> = [];
+      (window as unknown as Record<string, unknown>).__MOCK_GET_RESTORE_CALLS__ = () => [...restoreCalls];
+      const fileNameOf = (path: string): string => path.split(/[\\/]/).pop() ?? path;
+      const preRestoreNameOf = (path: string): string => `${fileNameOf(path).replace(/\.[^.]*$/, '')}.stalx.pre-restore`;
 
       // [#473] Whether the loaded project's undo/redo history was unreadable and
       // discarded. Default false - every existing spec opens a project whose
@@ -5521,6 +5534,43 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // the store + Rust tests cover the recents-removal side effect.
             console.log('[Mock IPC] delete_project called with:', args);
             return { success: true, line_ids: [] };
+
+          case 'list_backups': {
+            const path = String(args?.path ?? '');
+            const stem = fileNameOf(path).replace(/\.[^.]*$/, '');
+            const backups: Array<TmlWire<BackupInfo>> = [];
+            const restored = restoredAt[path];
+            if (restored) {
+              backups.push({
+                path: path.slice(0, path.length - fileNameOf(path).length) + preRestoreNameOf(path),
+                sizeBytes: 4608,
+                modifiedAt: restored,
+                kind: 'pre_restore',
+              });
+            }
+            backups.push({
+              path: `/mock/app-data/backups/${stem}.0123456789ab.20261120T101112.123456789Z.pre-v2.stalx`,
+              sizeBytes: 184320,
+              modifiedAt: '2026-11-20T12:11:12.123Z',
+              kind: 'pre_upgrade',
+            });
+            return backups;
+          }
+
+          case 'restore_from_backup': {
+            const projectPath = String(args?.projectPath ?? '');
+            const backupPath = String(args?.backupPath ?? '');
+            restoreCalls.push({ projectPath, backupPath });
+            restoredAt[projectPath] = new Date().toISOString();
+            const kept = preRestoreNameOf(projectPath);
+            if (fileNameOf(backupPath) === kept) {
+              return `Restored ${kept}, the copy the last restore kept. The two files swapped places: ${kept} now holds the file it replaced, so restoring it again switches back.`;
+            }
+            const from = backupPath.endsWith('.pre-v2.stalx')
+              ? 'Restored the original from before the upgrade to the new format.'
+              : `Restored from ${fileNameOf(backupPath)}.`;
+            return `${from} The file it replaced is kept as ${kept} and is listed with the earlier copies, so you can switch back.`;
+          }
 
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');

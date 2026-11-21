@@ -1164,3 +1164,40 @@ alias exemption.
   stays. The e2e IPC mock shows each member slot by its own name, sends the
   alias lines, and answers `preview_detach_line` with `kept`; its contract
   checks both. The migration gates stopped requiring `names_changed` (above).
+
+## Deviations (usability fixes, package U2: Restore an earlier copy)
+
+What the real-app demo found in Recent Projects' "Restore an earlier copy"
+(issue I-2: one click on a list row replaced the project; rows were raw file
+names with a hash and a nanosecond stamp; the copy a restore keeps was never
+listed; a restored original saved again was kept twice). Labels `RE`...
+
+- **RE1. Each backup says what it is.** `BackupInfo` gains `kind`
+  (`BackupKind`: `pre_upgrade`, `pre_restore`, `backup`, `interrupted_save`),
+  and `modified_at` is one fixed-width UTC form with milliseconds; the list is
+  sorted newest first by the file time itself. The dialog
+  (`RestoreBackupPicker`) words each kind ("Original before the upgrade to the
+  new format", "The file as it was before the last restore", "Backup", "Copy
+  from a save that was interrupted") with a local date and the size; the file
+  name is only in the row's tooltip.
+- **RE2. A row selects; Restore restores.** The sentence under the list says
+  what Restore does and where the current file is kept, and Restore is
+  disabled until a copy is chosen. The damaged-file dialog's Restore from
+  Backup gets the same confirm (decided, not inherited): its list and wording
+  are the same, a misclick there swaps the damaged file for the wrong copy
+  just as fast, and one more click is cheap next to a wrong restore. The
+  result can be closed without opening the project.
+- **RE3. The `.pre-restore` copy is listed** (amends #720's "the dialog never
+  offers it"; the copy beside the file a link names, never a hard link to the
+  project). Restoring it swaps the two files (#720's F5 fix), so a restore can
+  be undone from the dialog; the confirm says so, and warns when another
+  restore would replace that copy.
+- **RE4. An original is kept once** (amends H1 step 4 and H2).
+  `legacy_upgrade::keep` writes nothing when a kept original of the same
+  project has the same bytes, and a failed write removes only a copy that
+  upgrade itself wrote, never the earlier one. The upgrade crash oracle
+  (`legacy_upgrade_tests::inspect`) now also fails a next save that keeps a
+  second copy of the original.
+- **RE5. The restore message names the copy as the list does**: a
+  pre-upgrade original in words, a backup by its file name, never by the
+  app-data path.

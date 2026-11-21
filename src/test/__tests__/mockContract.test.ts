@@ -241,8 +241,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   // `__MOCK_IPC_OVERRIDES__` escape hatch, set per-spec, not the shared switch.
   attempt_repair: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts',
   export_salvageable_data: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts',
-  list_backups: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts / recovery-integrity.spec.ts',
-  restore_from_backup: 'covered via __MOCK_IPC_OVERRIDES__ in corruption-recovery.spec.ts / recovery-integrity.spec.ts',
 
   // Undo/redo history dropdown: covered via a spec-local invoke override
   // layered on top of the shared mock, not the shared switch itself.

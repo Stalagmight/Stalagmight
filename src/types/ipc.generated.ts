@@ -173,6 +173,7 @@ export * from './ipc/MemoryStats';
 export * from './ipc/RingLogEntry';
 export * from './ipc/LogsSince';
 export * from './ipc/BackupInfo';
+export * from './ipc/BackupKind';
 export * from './ipc/RepairResult';
 export * from './ipc/SalvagedData';
 export * from './ipc/RawTableData';
