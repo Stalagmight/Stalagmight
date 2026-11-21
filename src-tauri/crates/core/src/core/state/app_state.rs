@@ -214,12 +214,14 @@ pub struct AppState {
     /// returning `HistoryDropped::EarlierVersion`), not because it was unreadable. The
     /// banner says which. Reset with the flag it qualifies.
     pub(super) history_from_earlier_version: AtomicBool,
-    /// A legacy SpeleoDB revision the pull migrated into the cache at this
-    /// path: its conversion notice, for the open of that path that follows
-    /// (the cache then holds version 2, so the open has nothing to compare).
-    /// Taken by the next commit of an open of the same path.
+    /// A legacy SpeleoDB revision the pull migrated into the cache: its
+    /// conversion notice, for the open of that cache copy that follows (the
+    /// cache then holds version 2, so the open has nothing to compare). Taken
+    /// by the next commit of an open of the same path, which shows it only
+    /// when it opened exactly the bytes the pull installed; an open of another
+    /// path leaves it.
     pub(super) pending_download_notice:
-        Mutex<Option<(PathBuf, super::conversion_notice::ConversionNotice)>>,
+        Mutex<Option<super::speleodb_cache_install::PendingDownloadNotice>>,
     /// Legacy files upgraded to version 2 while closed (a Recents rename, a
     /// SpeleoDB link strip) whose conversion moved something: the notice the
     /// next open of that path in this session shows (review finding
