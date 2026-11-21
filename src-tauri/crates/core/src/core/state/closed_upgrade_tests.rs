@@ -11,7 +11,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use super::legacy_upgrade_tests::{forget_backups, unique_stem};
-use super::project_save_tests::write_legacy_drift;
+use super::project_save_tests::{write_legacy_drift, write_legacy_unchanged};
 use super::stalx_fixtures::write_legacy_link_only;
 use super::AppState;
 use crate::core::loading::SpeleoManagedFile;
@@ -56,7 +56,7 @@ fn a_recents_rename_upgrade_keeps_the_conversion_notice_for_the_next_open() {
         let drifted = dir.path().join(format!("{stem}.stalx"));
         write_legacy_drift(&drifted, true);
         let other = dir.path().join(format!("{stem}-other.stalx"));
-        write_legacy_drift(&other, false);
+        write_legacy_unchanged(&other);
         let state = AppState::new().unwrap();
 
         let renamed = state.set_project_name_for_path(drifted.clone(), "Renamed".to_owned());
@@ -134,9 +134,10 @@ fn a_legacy_file_back_at_the_path_drops_the_closed_upgrade_notice() {
                 .set_project_name_for_path(path.clone(), "Renamed".to_owned())
                 .success
         );
-        // The clean survey, as a 0.6.0 file, back at the path.
+        // A survey whose conversion changes nothing a line shows, as a 0.6.0
+        // file, back at the path.
         std::fs::remove_file(&path).unwrap();
-        write_legacy_drift(&path, false);
+        write_legacy_unchanged(&path);
 
         assert_eq!(notice_of_open(&state, &path), None);
         assert!(state.close_project().success);

@@ -943,6 +943,17 @@ fn a_conversion_that_joined_comments_says_so() {
 /// line offset drifted 5 m and a dangling merge row names A, the cascade's
 /// seed), or the same survey clean.
 pub(super) fn write_legacy_drift(path: &Path, drift: bool) {
+    write_legacy_merge(path, drift, false);
+}
+
+/// [`write_legacy_drift`]'s clean survey with both merged slots named `J`:
+/// its conversion moves nothing and changes no name a line shows, so it
+/// raises no conversion notice at all.
+pub(super) fn write_legacy_unchanged(path: &Path) {
+    write_legacy_merge(path, false, true);
+}
+
+fn write_legacy_merge(path: &Path, drift: bool, same_name: bool) {
     use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
 
     let flat = |azimuth: f64| ShotData {
@@ -963,6 +974,11 @@ pub(super) fn write_legacy_drift(path: &Path, drift: bool) {
     let a = add(vec![flat(90.0)]);
     let b = add(vec![flat(0.0), flat(0.0)]);
     let c = add(vec![flat(90.0)]);
+    if same_name {
+        for sr in [slot(b, 1), slot(c, 0)] {
+            p.set_station_name(sr, "J").unwrap();
+        }
+    }
     p.merge_stations(slot(c, 0), slot(b, 1)).unwrap();
     if drift {
         p.adjust_line_offset(c, 5.0, 0.0);
