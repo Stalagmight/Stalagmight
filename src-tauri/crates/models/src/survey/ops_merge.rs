@@ -231,10 +231,10 @@ impl Project {
 
     /// What merging `a` with `b` would do (demo issue I-4): the merge run on a
     /// copy, its raw layout compared with this one's (as the Delete Shot
-    /// preview measures a split's weld). `None` when the merge is refused.
+    /// preview measures a split's weld). `None` when the merge is refused
+    /// (the copy's `merge_stations` checks [`Self::merge_refusal`]).
     /// Read-only.
     pub fn merge_preview(&self, a: StationId, b: StationId) -> Option<MergeMove> {
-        self.merge_refusal(a, b).ok()?;
         let (stationary, moving) = self.merge_direction(a, b);
         let before = self.raw_positions();
         let depths_m = [before.z(a)?, before.z(b)?];
