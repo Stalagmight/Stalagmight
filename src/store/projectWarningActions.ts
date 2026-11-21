@@ -33,21 +33,44 @@ export function createProjectWarningActions(
   get: StoreApi<ProjectStore>['getState'],
   nextTreeGeneration: () => number,
 ): ProjectWarningActions {
-  /** Follow the backend's dirty flag after an ignore changed (see above). */
+  /**
+   * Follow the backend's dirty flag after an ignore changed (see above).
+   *
+   * The reply belongs to the project open when the ignore was issued: the same
+   * file, the same `created_at` AND the same load (`loading.clientOpId`, which
+   * every open bumps), as `checkFileStatus` correlates. `created_at` alone let a
+   * reopen of the same file during the round trip take the reply, and a false
+   * `isDirty` on a 0.6.0 file the user had only reopened would arm autosave,
+   * which converts it.
+   */
   const syncDirtyAfterIgnore = async (): Promise<void> => {
-    const issuedFor = get().project?.created_at ?? null;
-    if (issuedFor !== null) set({ projectTreeGeneration: nextTreeGeneration() });
+    const issued = get();
+    const project = issued.project;
+    if (project === null) return;
+    const pathAtStart = project.file_path ?? null;
+    const createdAtStart = project.created_at ?? null;
+    const opAtStart = issued.loading.clientOpId;
+    const current = () => {
+      const cur = get();
+      return (
+        cur.project !== null &&
+        (cur.project.file_path ?? null) === pathAtStart &&
+        (cur.project.created_at ?? null) === createdAtStart &&
+        cur.loading.clientOpId === opAtStart
+      );
+    };
+    set({ projectTreeGeneration: nextTreeGeneration() });
     try {
       const dirty = await invokeIpc<boolean>('has_unsaved_changes', undefined, {
         purpose: 'keep the unsaved-changes state in step after a warning ignore',
       });
       // Only ever SET it from here: a cleared backend flag says nothing about
       // edits the frontend is still tracking (a save in flight clears both).
-      if (dirty && (get().project?.created_at ?? null) === issuedFor) set({ isDirty: true });
+      if (dirty && current()) set({ isDirty: true });
     } catch (e) {
       // The ignore itself landed; failing safe means assuming it is unsaved.
       console.error('Failed to read the unsaved-changes flag:', e);
-      if ((get().project?.created_at ?? null) === issuedFor) set({ isDirty: true });
+      if (current()) set({ isDirty: true });
     }
   };
 
