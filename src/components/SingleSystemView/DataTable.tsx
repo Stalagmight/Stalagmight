@@ -260,7 +260,20 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
-export default function DataTable({ lines }: DataTableProps) {
+/**
+ * The data table of the open project. Its view of one project - the line it
+ * shows, the grid's row and column selection and scroll, unsaved draft rows -
+ * starts over when another project opens (keyed on `projectOpenGeneration`):
+ * line ids are small per-project integers, so a kept line id used to open the
+ * next project on whichever of its lines had that id, at the old row and
+ * column (demo finding I-12).
+ */
+export default function DataTable(props: DataTableProps) {
+  const openGeneration = useProjectStore((s) => s.projectOpenGeneration);
+  return <ProjectDataTable key={openGeneration} {...props} />;
+}
+
+function ProjectDataTable({ lines }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const [selectedLineId, setSelectedLineId] = useState<number | null>(

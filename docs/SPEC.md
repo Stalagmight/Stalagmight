@@ -1002,6 +1002,11 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
+The data table's line, its row and column selection and its scroll belong to
+the open project: opening another project starts the table on that project's
+first line, at the top (an edit, save or reload of the same project keeps
+them; demo finding I-12).
+
 #### 6.3.1 Detail Panel Hyperlinks
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, lines).

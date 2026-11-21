@@ -142,4 +142,17 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
     expect(after.dataFormat).toBe('csv');
     expect(after.imageOptions).toEqual(DEFAULT_IMAGE_OPTIONS);
   });
+
+  // Demo finding I-12: the data table is keyed on `projectOpenGeneration`, so
+  // every committed load must move it - and a refresh of the same project must
+  // not, or every edit would throw the user's table position away.
+  // Injection: dropping `projectOpenGeneration` from the load's `set` fails it.
+  it('moves the project-open generation on a load, not on a refresh', async () => {
+    const before = useProjectStore.getState().projectOpenGeneration;
+    await useProjectStore.getState().loadProject('/mock/loaded.stalx');
+    const loaded = useProjectStore.getState().projectOpenGeneration;
+    expect(loaded).toBeGreaterThan(before);
+    useProjectStore.setState((s) => ({ projectTreeGeneration: s.projectTreeGeneration + 1 }));
+    expect(useProjectStore.getState().projectOpenGeneration).toBe(loaded);
+  });
 });
