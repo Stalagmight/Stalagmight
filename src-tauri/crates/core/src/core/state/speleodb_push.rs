@@ -912,6 +912,21 @@ impl AppState {
         let push_floor = chrono::Utc::now();
         let push_start = push_floor.to_rfc3339();
 
+        // From here the upload may land, and when its answer is lost nobody knows
+        // whether SpeleoDB's latest revision is BASE or this upload (#193). BASE's
+        // survey digest (S2) says a copy holding BASE's survey has nothing to
+        // upload, which is true only while the server holds nothing of this copy
+        // past BASE: after a lost answer, an edit taken back would read as clean
+        // and stay on the server. So the digest goes now, in the save just below
+        // (a crash during the upload cannot bring it back), and the landing
+        // records the new one when the answer names the revision, or a 304 says
+        // BASE holds what went up. Until then the mark is taken at its word, as
+        // on any copy without a digest.
+        {
+            let _project = self.speleodb_push_project_guard(generation)?;
+            self.with_file(|file| file.extras.local.speleodb.base_survey = None);
+        }
+
         // A push first saves (plan 6.5): the local copy and the commit describe the
         // same survey, and an unsaved survey is never uploaded without being on disk.
         // The save's own refusal rides the error (review G-speleodb-8): a file open

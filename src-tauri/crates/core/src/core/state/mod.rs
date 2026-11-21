@@ -453,6 +453,13 @@ mod speleodb_explicit_release_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_fix_interactions_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_foreign_claim_tests;

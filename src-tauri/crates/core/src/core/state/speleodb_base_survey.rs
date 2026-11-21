@@ -27,6 +27,13 @@
 //! Only the mark goes: `last_edit_at` stays, so a push in flight still sees
 //! that an edit came after it started, and its landing keeps the copy marked.
 //!
+//! The digest holds only while the server holds nothing of this copy past
+//! BASE. An upload may land with its answer lost (#193), and then SpeleoDB's
+//! latest revision may be ours, past BASE: a survey taken back to BASE's is a
+//! change to upload, not a clean copy. So every upload drops the digest in the
+//! save it starts with (`speleodb_upload`), and only a confirmed landing (or a
+//! new install) records one again.
+//!
 //! What it never does: count a copy as clean whose survey differs from BASE's,
 //! or whose BASE digest is not known (a 0.6.0 copy, a version 2 copy installed
 //! before the digest existed, a Restore, which marks the copy over a BASE it

@@ -534,12 +534,16 @@ fn after_a_confirmed_upload_a_lost_edit_leaves_no_un_uploaded_work() {
     });
 }
 
-/// The push fence holds when the mark is cleared while an upload is in flight:
+/// The push fence holds for an edit taken back while an upload is in flight:
 /// the edit taken back (and saved) during the upload is not in what went up,
-/// so the copy stays marked over the new BASE.
+/// so the copy stays marked over the new BASE. The save during the upload
+/// clears nothing: BASE's digest went with the upload (an upload out may have
+/// made a revision of ours past BASE), so the mark is taken at its word until
+/// the landing records the new BASE's digest. The landing's late-edit fence
+/// (`has_unpushed_edits = true`) keeps it marked as well.
 ///
-/// Injection: drop the landing's `has_unpushed_edits = true` for an edit after
-/// the push started, and the copy ends clean over a BASE it does not hold.
+/// Injection: keep the digest when the upload is sent (drop the clear in
+/// `speleodb_upload`) and the save during the upload clears the mark.
 #[test]
 fn an_edit_taken_back_during_an_upload_stays_un_uploaded() {
     crate::test_helpers::with_isolated_config(|| {
@@ -577,9 +581,9 @@ fn an_edit_taken_back_during_an_upload_stays_un_uploaded() {
         *shared.lock().expect("state slot") = None;
         assert_eq!(
             *cleared.lock().expect("slot"),
-            Some(Some(true)),
+            Some(None),
             "the edit was taken back and saved during the upload, which held the \
-             (old) BASE again"
+             (old) BASE again, and cleared nothing: the digest went with the upload"
         );
 
         let link = open_link(&state);
