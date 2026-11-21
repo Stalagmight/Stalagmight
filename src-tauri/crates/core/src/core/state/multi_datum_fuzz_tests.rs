@@ -34,11 +34,27 @@
 //!   by a small amount that grows with each re-frame. The tolerance is
 //!   `2e-6 * 2^k + eps * (2^k - 1)`: `eps` the largest such discrepancy over
 //!   every GPS the chain has seen, `k` the re-frames so far.
-//! - `frame-change-moved`: a frame change moved one station relative to
-//!   another (plan 4.3: the survey translates rigidly, the new frame station
-//!   to the origin), or removing a placement datum that held its piece alone
-//!   moved anything (both when the topology stays: a sweep promotion moves a
-//!   piece on purpose).
+//! - `frame-change-moved`: a frame change moved a station other than plan
+//!   4.3 says, or removing a placement datum that held its piece alone moved
+//!   anything (both when the topology stays: a sweep promotion moves a piece
+//!   on purpose). Plan 4.3 translates the survey by `T = -P_before(new frame
+//!   station)` and gives every other placement datum `i` the correction
+//!   `c_i = P_before(i) + T - gps_to_local(G_i, G_new)`, which holds its
+//!   piece in place despite the tangent plane's non-additivity, but stores
+//!   it only from `CORRECTION_EPSILON_M` (1e-9 m) on: a piece whose `c_i` is
+//!   smaller lands on `gps_to_local(G_i, G_new)`, `c_i` away from the rigid
+//!   place. So the move is rigid only up to that: each piece must move by
+//!   `T`, or by `T - c_i` when its datum stores no correction (`c_i`
+//!   re-derived with the float operations of `settle_anchors`, and failing
+//!   when it is `CORRECTION_EPSILON_M` or more), every station within
+//!   `EXACT_M` of that (its piece laid out again from its anchor). Two pieces
+//!   each left under 1e-9 m off, in opposite directions, sit up to 2e-9 m
+//!   apart (seed 21238760: 0.64e-9 and 0.75e-9 m, 1.25e-9 m apart): the
+//!   farm's 1.0e-9 to 1.25e-9 m failures (seeds 21238760, 21260685,
+//!   21358582, 21386535), which the earlier check, every station against the
+//!   first one's own move within `EXACT_M`, took for a non-rigid move (its
+//!   true bound is `2 * CORRECTION_EPSILON_M + EXACT_M`); the exact per-piece
+//!   move keeps `EXACT_M` instead of widening it.
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
 //!   `adjust.rs`: constraint groups over the closures the solve ties,
@@ -55,6 +71,17 @@
 //!   stand higher), with every shot's session id back in the session. Every
 //!   forward step is undone and redone at once; random undo and redo steps go
 //!   deeper. `undo-across-reopen`: the same, for a state from before a reopen.
+//!   The session ids of a random step are compared only between states of
+//!   this session, and not on a line that a step outside it (an entry
+//!   decoded from the file, or one across the reopen) gave other ids since
+//!   the reopen: a decoded entry mints fresh ids for the shots it re-creates
+//!   (undo-redo.md), and an entry of the session gives back only the ids it
+//!   captured for the lines it touches, so which ids such a line has at a
+//!   recorded depth depends on the path back to it (seed 21388232: a decoded
+//!   redo of a combine gives two shots of line 3 new ids, and the undo of the
+//!   next forward step rightly restores those, not the ones recorded at that
+//!   depth before). The at-once undo and redo of every forward step compare
+//!   every line's ids, always.
 //! - `reopen-drift`: save and reopen changed the canonical text, the raw
 //!   layout or the computed view (bit for bit).
 //! - `refusal-mutated`: a refused command changed the project.
@@ -243,6 +270,12 @@ fn same_up_to_counters(want: &str, got: &str) -> Option<String> {
 /// The first difference between `want` and `got` (to the bit), if any;
 /// `ids` also compares the session shot ids.
 fn diff(want: &Snap, got: &Snap, ids: bool) -> Option<String> {
+    diff_except(want, got, ids.then_some(&BTreeSet::new()))
+}
+
+/// [`diff`], comparing the session shot ids (with `ids`) of every line but
+/// those in it.
+fn diff_except(want: &Snap, got: &Snap, ids: Option<&BTreeSet<LineId>>) -> Option<String> {
     if let Some(d) = same_up_to_counters(&want.text, &got.text) {
         if want.datums != got.datums {
             return Some(format!(
@@ -252,10 +285,42 @@ fn diff(want: &Snap, got: &Snap, ids: bool) -> Option<String> {
         }
         return Some(d);
     }
-    if ids && want.ids != got.ids {
-        return Some(format!("session shot ids {:?} -> {:?}", want.ids, got.ids));
+    let skip = ids?;
+    let differs = want
+        .lines
+        .iter()
+        .zip(&want.ids)
+        .zip(got.lines.iter().zip(&got.ids))
+        .any(|(((line, _), w), ((_, _), g))| !skip.contains(line) && w != g);
+    if differs || want.ids.len() != got.ids.len() {
+        return Some(format!(
+            "session shot ids {:?} -> {:?} (lines left out: {skip:?})",
+            want.ids, got.ids
+        ));
     }
     None
+}
+
+/// The lines whose session shot ids differ between `before` and `after`
+/// (a line on one side only included).
+fn lines_with_other_ids(before: &Snap, after: &Snap) -> BTreeSet<LineId> {
+    let was: BTreeMap<LineId, &Vec<u32>> = before
+        .lines
+        .iter()
+        .map(|(line, _)| *line)
+        .zip(&before.ids)
+        .collect();
+    let is: BTreeMap<LineId, &Vec<u32>> = after
+        .lines
+        .iter()
+        .map(|(line, _)| *line)
+        .zip(&after.ids)
+        .collect();
+    was.keys()
+        .chain(is.keys())
+        .filter(|line| was.get(*line) != is.get(*line))
+        .copied()
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +441,79 @@ fn component_lines(p: &Project, station: StationId) -> BTreeSet<LineId> {
         .unwrap_or_default()
 }
 
+/// Where a frame change that removed the frame datum (alone on its piece)
+/// puts each piece, re-derived as plan 4.3 states it (module docs,
+/// `frame-change-moved`).
+struct FrameShift {
+    /// `T = -P_before(new frame station)`: the move of every piece whose
+    /// placement is a `Placement`, the new frame, or a datum whose
+    /// correction holds it.
+    translation: [f64; 2],
+    /// The move of each piece (by component) whose placement datum the change
+    /// left without a correction: `T - c`, `c` the correction not stored.
+    dropped: BTreeMap<usize, [f64; 2]>,
+    /// A correction left out although it is `CORRECTION_EPSILON_M` or more:
+    /// its station and value.
+    significant: Option<(StationId, [f64; 2])>,
+}
+
+impl FrameShift {
+    /// Compute it from the state before (`p0`, `s0`) and the datums after
+    /// (`s1`): for each placement datum `i` after the change, other than the
+    /// new frame, with no correction, `c = (P_before(i) + T) -
+    /// gps_to_local(G_i, G_new)` in the order and the float operations of
+    /// `Project::settle_anchors` (so the comparison against `EXACT_M` is the
+    /// layout's rounding only).
+    fn of(p0: &Project, s0: &Snap, s1: &Snap) -> Option<Self> {
+        let gps = |row: &DatumRow| {
+            p0.datums
+                .iter()
+                .find(|d| d.station == row.station && gps_bits(&d.gps) == row.gps)
+                .map(|d| d.gps)
+        };
+        let frame_index = s1.datums.iter().position(|d| d.role.is_some())?;
+        let frame = &s1.datums[frame_index];
+        let frame_gps = gps(frame)?;
+        let [fx, fy, _] = s0.xyz.get(&frame.station)?;
+        let translation = [-fx, -fy];
+        let topology = p0.topology();
+        let mut dropped = BTreeMap::new();
+        let mut significant = None;
+        for (i, row) in s1.datums.iter().enumerate() {
+            if i == frame_index
+                || row.role != Some(DatumRole::Placement)
+                || row.correction.is_some()
+            {
+                continue;
+            }
+            let (Some(g), Some([x, y, _]), Some(c)) = (
+                gps(row),
+                s0.xyz.get(&row.station),
+                topology.component_of(row.station),
+            ) else {
+                continue;
+            };
+            let (bx, by) = gps_to_local(&g, &frame_gps);
+            let at = [x + translation[0], y + translation[1]];
+            let left_out = [at[0] - bx, at[1] - by];
+            if (left_out[0] * left_out[0] + left_out[1] * left_out[1]).sqrt()
+                >= CORRECTION_EPSILON_M
+            {
+                significant = Some((row.station, left_out));
+            }
+            dropped.insert(
+                c,
+                [translation[0] - left_out[0], translation[1] - left_out[1]],
+            );
+        }
+        Some(Self {
+            translation,
+            dropped,
+            significant,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // A chain
 // ---------------------------------------------------------------------------
@@ -398,6 +536,8 @@ struct Stats {
     frame_changes: usize,
     frame_gps_edits: usize,
     rigid_reframes: usize,
+    /// Pieces a rigid re-frame left without their sub-nanometre correction.
+    left_out: usize,
     promotions: usize,
     held_fixes: usize,
     placed_merges: usize,
@@ -417,6 +557,10 @@ struct Chain {
     cursor: usize,
     /// Timeline entries below this index predate the last reopen.
     reopened_at: usize,
+    /// Lines a step outside the session gave other session shot ids since
+    /// the last reopen: their ids are left out of the in-session comparison
+    /// (module docs, `undo-inexact`).
+    reminted: BTreeSet<LineId>,
     /// Timeline entries below this index are out of reach: a reopen keeps
     /// the newest `window` entries of each stack (the persisted window,
     /// `general.undo_persist_limit`, as 0.6.0 saved it).
@@ -480,6 +624,7 @@ impl Chain {
             timeline: Vec::new(),
             cursor: 0,
             reopened_at: 0,
+            reminted: BTreeSet::new(),
             floor: 0,
             window,
             gps_seen: Vec::new(),
@@ -874,24 +1019,40 @@ impl Chain {
                 && removed.is_some_and(|r| r.role == Some(DatumRole::Placement))
             {
                 if frame_before == Some(*k) {
-                    // A frame change: one translation for every station.
-                    let Some((s, t)) = s0.xyz.iter().find_map(|(s, [x, y, _])| {
-                        let [nx, ny, _] = s1.xyz.get(s)?;
-                        Some((*s, [nx - x, ny - y]))
-                    }) else {
+                    // A frame change: one translation for every station, but
+                    // for the correction plan 4.3 does not store (module docs).
+                    let Some(shift) = FrameShift::of(p0, s0, s1) else {
                         return Ok(());
                     };
+                    let t = shift.translation;
+                    stats.left_out += shift.dropped.len();
+                    if let Some((station, d)) = shift.significant {
+                        return Err(fail(
+                            "frame-change-moved",
+                            format!(
+                                "{op}: the frame change left the placement datum at station \
+                                 {station} without its correction {d:?} (at least \
+                                 CORRECTION_EPSILON_M)"
+                            ),
+                        ));
+                    }
+                    let topology = p0.topology();
                     for (u, [x, y, _]) in &s0.xyz {
                         let Some([nx, ny, _]) = s1.xyz.get(u) else {
                             continue;
                         };
-                        let off = (nx - x - t[0]).hypot(ny - y - t[1]);
+                        let e = topology
+                            .component_of(*u)
+                            .and_then(|c| shift.dropped.get(&c))
+                            .copied()
+                            .unwrap_or(t);
+                        let off = (nx - x - e[0]).hypot(ny - y - e[1]);
                         if off > EXACT_M {
                             return Err(fail(
                                 "frame-change-moved",
                                 format!(
-                                    "{op}: station {u} moved {off} m relative to station {s} \
-                                     (translation {t:?})"
+                                    "{op}: station {u} moved {off} m from where the frame change \
+                                     puts it (translation {t:?}, its piece {e:?})"
                                 ),
                             ));
                         }
@@ -1119,10 +1280,16 @@ impl Chain {
         }
         let p = project(&self.state);
         let now = snap(&p);
-        // Session ids are exact only for entries recorded in this session.
+        // Session ids are exact only for entries recorded in this session,
+        // and then only on lines no step outside it gave other ids (module
+        // docs, `undo-inexact`).
         let in_session = target >= self.reopened_at && self.cursor >= self.reopened_at;
-        if let Some(d) = diff(&self.timeline[target], &now, in_session) {
+        let ids = in_session.then_some(&self.reminted);
+        if let Some(d) = diff_except(&self.timeline[target], &now, ids) {
             return Err(fail(class, d));
+        }
+        if !in_session {
+            self.reminted.extend(lines_with_other_ids(&prev, &now));
         }
         self.cursor = target;
         self.note(&prev, &now, &p, stats);
@@ -1182,6 +1349,9 @@ impl Chain {
             }
         }
         self.reopened_at = self.timeline.len();
+        // Every line has fresh session ids now, and the session's own entries
+        // start from them.
+        self.reminted.clear();
         self.floor = self.floor.max(self.cursor.saturating_sub(self.window));
         let top = (self.cursor + self.window).min(self.timeline.len() - 1);
         self.timeline.truncate(top + 1);
@@ -1340,10 +1510,10 @@ fn datum_command_chains_keep_every_invariant() {
     }
     eprintln!(
         "datum fuzz seeds {first}..{} x {steps} steps: {} steps, applied {:?}, {} refused, {} \
-         skipped, {} merges of two placed pieces, {} reopens, {} re-frames ({} rigid), {} \
-         frame GPS edits with another placed piece, {} promotions, {} hard fixes held, at most \
-         {} stored corrections, largest re-frame discrepancy {:.3e} m, muted {:?} (mute list \
-         {mute:?})",
+         skipped, {} merges of two placed pieces, {} reopens, {} re-frames ({} rigid, {} \
+         pieces left without a correction below 1e-9 m), {} frame GPS edits with another \
+         placed piece, {} promotions, {} hard fixes held, at most {} stored corrections, \
+         largest re-frame discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
         first + seeds,
         stats.steps,
         stats.applied,
@@ -1353,6 +1523,7 @@ fn datum_command_chains_keep_every_invariant() {
         stats.reopens,
         stats.frame_changes,
         stats.rigid_reframes,
+        stats.left_out,
         stats.frame_gps_edits,
         stats.promotions,
         stats.held_fixes,
@@ -1414,6 +1585,16 @@ const PINNED_CHAINS: &[&str] = &[
     // its spot, on a piece the frame correction moves.
     "1436150;twin(3:0,0,-);datum(2:1,-28.76717640316142,44.73562740619891,5.0);acc(0,0.5);acc(0,5.0);datum(2:0,73.16789539354458,-38.58700483932714,-);twin(4:3,1,-);merge(3:0,2:0);datum(4:4,25.196609454458898,59.09807127063376,5.0);delshot(1,0);unmerge(0:1,4:2);acc(5,0.5);twin(0:1,3,-)",
     "50124619;delsec(4);acc(0,50.0);delshot(3,1);reopen;undo;reopen;datum(1:0,-21.964371565441986,48.867914065325635,0.5);datum(2:3,-19.025474508692568,96.3596903811504,-);delshot(2,1);rm(1);split(1,1,b);datum(3:0,37.86557792113264,57.57345304260396,1000.0);merge(3:2,2:2);combine(4:start,1:end);unmerge(4:0,3:2);rm(0);rm(0);merge(3:0,2:1);combine(3:end,2:end);twin(3:3,0,0.5);acc(0,50.0);merge(3:2,4:2);split(4,1,b);datum(0:1,-0.10493873460938649,-0.2260835289914435,0.0);merge(0:0,3:2);unmerge(3:2,5:1);delshot(0,0);merge(3:1,0:0);closure(3:2,5:0);unmerge(3:1,0:0);combine(5:start,4:end);delsec(5);reopen;merge(0:0,3:3);split(3,2,b);acc(0,1000.0);closure(0:0,4:2);datum(4:0,-79.63158641198679,38.92858175150428,1000.0);merge(3:1,3:2);twin(3:0,2,0.0)",
+    // frame-change-moved on the station graph (farm, oracle): removing the frame
+    // datum leaves two pieces each without a sub-nanometre correction, in
+    // opposite directions (plan 4.3 stores none below 1e-9 m).
+    "21238760;split(3,1,b);acc(2,5.0);moveline(2,1.8246132930839778,-13.38302855755132);unmerge(5:1,1:0);datum(1:2,14.217829524963243,-9.461795310957076,1000.0);rm(0)",
+    "21260685;datum(3:0,-16.355543176609316,78.92206613528182,1000.0);acc(0,5.0);delshot(0,0);split(2,1,b);unmerge(1:0,2:0);moveline(4,26.04585141602501,14.674815921793368);combine(5:start,4:start);split(5,2,a);datum(6:0,0.0,0.0,-);datum(3:0,31.898860599661177,-70.97837958220417,0.0);acc(0,0.0);reopen;unmerge(2:1,6:0);reopen;merge(6:1,1:0);undo;datum(7:1,-65.96044246884357,3.9058934490597577,-);combine(6:start,2:end);datum(0:0,27.334059779507164,-3.8010410996787267,50.0);unmerge(7:0,5:2);rm(1);rm(0)",
+    "21358582;moveline(1,23.989596697205286,26.100220720043716);unmerge(1:0,2:0);datum(0:0,9.714314800746084,38.384866351878635,1000.0);closure(0:2,2:1);merge(0:0,0:2);merge(1:1,0:2);undo;datum(2:1,17.18433301182218,3.726026499187079,5.0);reopen;split(0,1,a);unmerge(0:1,3:0);datum(1:0,-48.59961271192891,-24.291198771012326,50.0);datum(3:0,81.28491702858402,47.94156485999375,1000.0);undo;rm(0)",
+    "21386535;split(2,1,a);rm(0);undo;undo;reopen;datum(2:0,13.31702378387722,-0.5722510361117945,0.5);merge(4:3,3:1);split(0,3,a);datum(1:0,-32.506745580926584,-6.978230786834713,0.0);datum(0:1,30.569865475122697,15.449040364770058,50.0);datum(4:3,9.12996580959162,24.224460584936992,50.0);undo;acc(3,0.0);delshot(0,0);closure(1:4,1:5);unmerge(4:3,3:0);closure(5:1,4:2);split(0,1,a);undo;addshot(1,-1,328.0116178584927,11.925847705520932,5.629544100772953,12.687782760455642);datum(5:0,0.0,0.0,-);rm(5);unmerge(0:1,2:0);rm(0)",
+    // undo-inexact (farm, oracle): a decoded redo of a combine gives two shots
+    // fresh session ids after a reopen; the undo of the next step restores those.
+    "21388232;merge(1:0,2:1);closure(2:2,3:2);merge(1:1,4:2);merge(2:0,2:0);rm(0);addshot(0,-1,311.48096417379907,16.54140333133441,14.315794202913873,13.179313529669974);datum(3:3,28.615889006448004,76.90656890111846,1000.0);acc(1,50.0);datum(2:0,0.0,0.0,50.0);unmerge(1:1,4:2);unmerge(3:0,1:0);combine(3:start,1:start);reopen;datum(4:2,22.920860699933062,-1.7866806091210328,0.0);undo;undo;redo;redo;unmerge(3:2,2:1);undo",
 ];
 
 #[test]
