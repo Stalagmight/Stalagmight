@@ -1198,7 +1198,10 @@ fn test_project_stats_count_a_junction_once() {
     let stats = project.survey_stats(&raw, false);
     assert_eq!(stats.station_count, 3);
     assert_eq!(stats.slot_count, 4);
-    assert_eq!(stats.to_project_stats().station_count, 4);
+    assert_eq!(stats.junction_count, 1);
+    // The wire counts what the file summary counts (review finding UX-8).
+    assert_eq!(stats.to_project_stats().station_count, 3);
+    assert_eq!(stats.to_project_stats().junction_count, 1);
 }
 
 /// Test 32: Penetration distance - linear survey

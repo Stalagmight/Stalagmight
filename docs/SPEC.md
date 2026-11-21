@@ -324,7 +324,7 @@ Project (Cave System)
 │   └── modified_at: DateTime
 ├── Stations{}   (by StationId, ascending)
 │   ├── id: StationId (u32, project-unique, never reused: the Station ID, shown)
-│   ├── name: String (unique among the stations of every line it is on, shown)
+│   ├── name: String (unique among the stations of every line it is on, except a line that knows it by an alias; shown)
 │   ├── comment: Option<String>
 │   ├── aliases: [{ id, name, line }] (the stations merged into this one; line = the line that knew it by that alias)
 │   └── external: Option<String> (an imported identity, attribute only)

@@ -134,6 +134,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
+    "command.preview_detach_line",
     "command.preview_zero_datum",
     "command.pull_mnemo",
     "command.push_frontend_log",
@@ -1226,7 +1227,9 @@ mod tests {
         //   - 2 the integrity banner's IPC, unreachable on the station graph
         //       (every edit and load validates): command.check_project_integrity,
         //       command.repair_project_integrity = 750.
-        assert_eq!(EVENT_NAMES.len(), 750);
+        //   + 1 the Detach dialog's naming preview (review finding UX-4):
+        //       command.preview_detach_line = 751.
+        assert_eq!(EVENT_NAMES.len(), 751);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
