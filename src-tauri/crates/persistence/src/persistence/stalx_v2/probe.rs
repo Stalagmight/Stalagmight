@@ -4,12 +4,23 @@
 //! cached-copies listing and every other link reader (plan 6.1).
 //!
 //! The format does not fix the member order (`docs/file-format.md` section
-//! 4), so [`probe_bytes`] and [`probe_path`] find a header member wherever it
-//! is: they stop at the first body member only when every header member they
-//! read came before it (always so in a file Stalagmight wrote with a link and
-//! per-machine state), and otherwise skip the body to the end of the file
-//! (review finding C-file-format-11). [`probe_path_listing`] trusts the
-//! canonical order and always stops there: for display-only listings.
+//! 4), so [`probe_bytes`] and [`probe_path`] stop at the first body member
+//! only when nothing they read can still follow it:
+//!
+//! - every header member they read came before it, or
+//! - the header before it is in the canonical form Stalagmight writes
+//!   (section 8: the known header members in table order, the first four on
+//!   the first line and every later one on a line of its own, `requires`,
+//!   `generator`, `summary` and `project` among them) and the `summary`
+//!   names the same SpeleoDB project as the `speleodb` member (or, like it,
+//!   none). A writer that keeps that layout keeps the order with it; the
+//!   summary check catches a link moved below the body by hand (review
+//!   finding O1 of package U5: an unlinked file, or one without local
+//!   state, used to be read to its end).
+//!
+//! Otherwise they skip the body to the end of the file (review finding
+//! C-file-format-11). [`probe_path_listing`] trusts the canonical order and
+//! always stops there: for display-only listings.
 
 use std::fmt;
 use std::io::Read as _;
@@ -68,10 +79,10 @@ pub struct Header {
     pub project: Option<ProjectInfo>,
     pub speleodb: Option<SpeleoDbLink>,
     pub local: Option<LocalState>,
-    /// Every header member the file has was seen: each one the probe reads
-    /// came before the first survey member, or the read reached the end of
-    /// the file. ([`probe_path_listing`] sets it at the first survey member:
-    /// it trusts the canonical order.)
+    /// Every header member the file has was seen: the read reached the first
+    /// survey member with nothing it reads still to come (see the module
+    /// docs), or the end of the file. ([`probe_path_listing`] sets it at the
+    /// first survey member: it trusts the canonical order.)
     pub complete: bool,
 }
 
@@ -120,6 +131,9 @@ fn probe_bytes_with(bytes: &[u8], scan: Scan) -> Header {
         complete: &mut complete,
         scan,
         seen: 0,
+        bytes,
+        canonical: true,
+        last: None,
     });
     header.complete = complete || result.is_ok();
     header
@@ -128,8 +142,16 @@ fn probe_bytes_with(bytes: &[u8], scan: Scan) -> Header {
 /// The header of the file at `path`, reading as few bytes as it can (64 KiB
 /// first, doubling while the header is not complete, up to the decoder's
 /// size cap). Member order does not matter (see the module docs): a file
-/// whose header members are not all before its body is read to its end.
+/// Stalagmight wrote is read from its first 64 KiB whatever its header
+/// holds, and a file whose header is neither canonical nor whole before its
+/// body is read to its end.
 pub fn probe_path(path: &Path) -> std::io::Result<Header> {
+    probe_path_with(path, Scan::Whole).map(|(header, _)| header)
+}
+
+/// [`probe_path`], with how many bytes of the file it read.
+#[cfg(test)]
+pub(super) fn probe_path_counting(path: &Path) -> std::io::Result<(Header, usize)> {
     probe_path_with(path, Scan::Whole)
 }
 
@@ -139,10 +161,11 @@ pub fn probe_path(path: &Path) -> std::io::Result<Header> {
 /// listed without them. Never for a decision about a link or sync state:
 /// those read [`probe_path`].
 pub fn probe_path_listing(path: &Path) -> std::io::Result<Header> {
-    probe_path_with(path, Scan::UntilBody)
+    probe_path_with(path, Scan::UntilBody).map(|(header, _)| header)
 }
 
-fn probe_path_with(path: &Path, scan: Scan) -> std::io::Result<Header> {
+/// The header, and how many bytes of the file the read took.
+fn probe_path_with(path: &Path, scan: Scan) -> std::io::Result<(Header, usize)> {
     const FIRST: usize = 64 * 1024;
     // The decoder's own cap: a larger file opens nowhere.
     const MOST: usize = super::MAX_V2_FILE_BYTES as usize;
@@ -157,7 +180,7 @@ fn probe_path_with(path: &Path, scan: Scan) -> std::io::Result<Header> {
         let header = probe_bytes_with(&bytes, scan);
         let at_end = read < want - have;
         if header.complete || at_end || want >= MOST || header.format != Format::V2 {
-            return Ok(header);
+            return Ok((header, bytes.len()));
         }
         want = want.saturating_mul(2).min(MOST);
     }
@@ -187,15 +210,101 @@ const READ: [&str; 6] = [
     "local",
 ];
 
-struct HeaderVisitor<'h> {
+/// The members of [`READ`] Stalagmight always writes (`requires`,
+/// `generator`, `summary`, `project`): a canonical header without one of them
+/// is not one the canonical stop trusts.
+const ALWAYS: u8 = 0b1111;
+
+/// The header members in the order of the canonical form
+/// (`docs/file-format.md` sections 4 and 8).
+const HEAD: [&str; 12] = [
+    "format",
+    "version",
+    "solver",
+    "requires",
+    "conventions",
+    "generator",
+    "summary",
+    "project",
+    "settings",
+    "counters",
+    "speleodb",
+    "local",
+];
+
+/// How many of [`HEAD`] the canonical form puts on the first line.
+const FIRST_LINE: usize = 4;
+
+struct HeaderVisitor<'h, 'b> {
     header: &'h mut Header,
     complete: &'h mut bool,
     scan: Scan,
     /// Which of [`READ`] the read has met.
     seen: u8,
+    /// The bytes read, for where each key sits.
+    bytes: &'b [u8],
+    /// Whether the members met so far are a canonical header: none out of
+    /// order, unknown or not where the layout puts it.
+    canonical: bool,
+    /// The index in [`HEAD`] of the last member met.
+    last: Option<usize>,
 }
 
-impl<'de> Visitor<'de> for HeaderVisitor<'_> {
+impl HeaderVisitor<'_, '_> {
+    /// Note the header member `key`: it keeps the header canonical when it
+    /// is a known header member after the previous one, at its place in the
+    /// layout.
+    fn note_header_key(&mut self, key: &str) {
+        if !self.canonical {
+            return;
+        }
+        let at = HEAD.iter().position(|k| *k == key);
+        self.canonical = match at {
+            Some(at) if self.last.is_none_or(|last| at > last) => {
+                self.last = Some(at);
+                if at < FIRST_LINE {
+                    key_follows(self.bytes, key, b"{") || key_follows(self.bytes, key, b",")
+                } else {
+                    key_follows(self.bytes, key, b",\n")
+                }
+            }
+            _ => false,
+        };
+    }
+
+    /// Whether the first body member, `key`, ends a canonical header that
+    /// nothing the probe reads can still follow (see the module docs).
+    fn canonical_header_ends_at(&self, key: &str) -> bool {
+        let link_agrees = self.header.summary.as_ref().is_some_and(|summary| {
+            summary.speleodb.as_deref()
+                == self.header.speleodb.as_ref().map(|l| l.project_id.as_str())
+        });
+        self.canonical
+            && self.seen & ALWAYS == ALWAYS
+            && link_agrees
+            && key_follows(self.bytes, key, b",\n")
+    }
+}
+
+/// Whether the key `key`, a slice of `bytes`, directly follows `before` and
+/// its opening quote. A key that is not a slice of `bytes` (an escaped one,
+/// which the parser unescapes into a string of its own) never does: no
+/// canonical key has an escape. A key in `bytes` starts before its end (its
+/// closing quote follows it).
+fn key_follows(bytes: &[u8], key: &str, before: &[u8]) -> bool {
+    let Some(start) = (key.as_ptr() as usize)
+        .checked_sub(bytes.as_ptr() as usize)
+        .filter(|&start| start < bytes.len())
+    else {
+        return false;
+    };
+    start
+        .checked_sub(before.len() + 1)
+        .and_then(|from| bytes.get(from..start))
+        .is_some_and(|prefix| prefix.ends_with(b"\"") && prefix.starts_with(before))
+}
+
+impl<'de> Visitor<'de> for HeaderVisitor<'_, '_> {
     type Value = ();
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -207,15 +316,21 @@ impl<'de> Visitor<'de> for HeaderVisitor<'_> {
         while let Some(key) = map.next_key::<Key<'de>>()? {
             let key = key.0;
             if BODY.contains(&key.as_ref()) {
-                if self.scan == Scan::UntilBody || self.seen == ALL {
-                    // Every member read is in: a later repeat is a duplicate
-                    // key, which no reader accepts.
+                if self.scan == Scan::UntilBody
+                    || self.seen == ALL
+                    || self.canonical_header_ends_at(&key)
+                {
+                    // Every member read is in (a later repeat is a duplicate
+                    // key, which no reader accepts), or the canonical form
+                    // puts none of the missing ones later.
                     *self.complete = true;
                     return Err(de::Error::custom("header complete"));
                 }
+                self.canonical = false;
                 map.next_value::<IgnoredAny>()?;
                 continue;
             }
+            self.note_header_key(&key);
             if let Some(bit) = READ.iter().position(|k| *k == key.as_ref()) {
                 self.seen |= 1 << bit;
             }
@@ -254,7 +369,7 @@ impl<'de> Visitor<'de> for HeaderVisitor<'_> {
     }
 }
 
-impl<'de> DeserializeSeed<'de> for HeaderVisitor<'_> {
+impl<'de> DeserializeSeed<'de> for HeaderVisitor<'_, '_> {
     type Value = ();
 
     fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {

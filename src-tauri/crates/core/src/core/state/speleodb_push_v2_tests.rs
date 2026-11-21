@@ -1,8 +1,9 @@
 //! The push on `.stalx` version 2, end to end against a loopback SpeleoDB:
 //! what the upload carries (plan 6.5 mode 2, 10.1), that every state change a
 //! landed push makes is durable at once (R2 B3), that a server still refusing
-//! non-SQLite uploads leaves the project dirty and locked (plan 12.1), and the
-//! clear-on-push of the pushed history (#303).
+//! non-SQLite uploads leaves the project dirty and locked (plan 12.1) while a
+//! refusal with the server's own reason shows that reason (review finding O3),
+//! and the clear-on-push of the pushed history (#303).
 //!
 //! All data is synthetic: the project is built by the encoder, the server is a
 //! loopback listener.
@@ -31,17 +32,34 @@ struct Seen {
     uploads: Vec<String>,
 }
 
+/// What SpeleoDB's upload view answers a file it refuses: `{"error": ...}`
+/// around the file processor's reason (`contract::UploadRefusal`). A server
+/// without version 2 refuses the JSON part's type...
+const NO_V2: &str = "An error occurred processing the file: [\"Invalid file type received: \
+                     `application/json`, expected one of: ['application/octet-stream', \
+                     'application/vnd.sqlite3']\"]";
+/// ...or fails reading it as SQLite (its generic 500).
+const NO_V2_SERVER_ERROR: &str =
+    "There has been a problem committing the files: file is not a database";
+/// A server that reads version 2 refuses a file it finds invalid with its
+/// own reason.
+const V2_REASON: &str = "An error occurred processing the file: ['Invalid STALAGMIGHT version 2 \
+                         file: `conventions` must be exactly the version 2 conventions.']";
+/// A server error with a reason of its own.
+const OTHER_SERVER_ERROR: &str = "There has been a problem accessing GitLab: `timed out`";
+
 /// How the loopback server answers an upload.
 #[derive(Clone, Copy)]
 enum Upload {
     /// 200 with `PUSHED`, which lands on the history.
     Accept,
-    /// `status` with nothing landed: a server that does not take version 2 yet
-    /// (the real server's answer is not recorded; the SDK declares 400, 406, 415
-    /// and 500 for the upload), or a transient failure.
-    Refuse(u16),
-    /// `status` AFTER the commit landed: the ambiguous server error.
-    FailAfterLanding(u16),
+    /// `status` and the reason given with nothing landed: a server that does
+    /// not take version 2 yet ([`NO_V2`]), one that finds the file invalid
+    /// ([`V2_REASON`]), or a transient failure.
+    Refuse(u16, &'static str),
+    /// `status` and the reason given AFTER the commit landed: the ambiguous
+    /// server error.
+    FailAfterLanding(u16, &'static str),
 }
 
 /// A loopback SpeleoDB: the lock is held by [`ME`], the history is `BASE` (and
@@ -88,12 +106,12 @@ fn server_touching(upload: Upload, touch: Option<PathBuf>) -> (String, Arc<Mutex
                 if let Ok(mut log) = log.lock() {
                     log.uploads.push(request.clone());
                 }
-                let refusal = r#"{"detail":"Synthetic refusal of the uploaded file."}"#;
+                let refusal = |reason: &str| serde_json::json!({ "error": reason }).to_string();
                 match upload {
-                    Upload::Refuse(status) => (status, refusal.to_owned()),
-                    Upload::FailAfterLanding(status) => {
+                    Upload::Refuse(status, reason) => (status, refusal(reason)),
+                    Upload::FailAfterLanding(status, reason) => {
                         landed = true;
-                        (status, refusal.to_owned())
+                        (status, refusal(reason))
                     }
                     Upload::Accept => {
                         if let Some(path) = &touch {
@@ -327,7 +345,7 @@ fn every_refusal_of_the_content_is_the_one_format_error_on_every_push() {
         crate::test_helpers::with_isolated_config(|| {
             let temp = tempfile::tempdir().expect("temp");
             let _cache = TestCacheRoot::set(temp.path());
-            let (endpoint, seen) = server(Upload::Refuse(status));
+            let (endpoint, seen) = server(Upload::Refuse(status, NO_V2));
             let (path, state) = editing(temp.path(), &endpoint);
             reverse_the_line(&state);
 
@@ -353,7 +371,7 @@ fn a_server_error_that_landed_nothing_is_the_same_refusal() {
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
-        let (endpoint, seen) = server(Upload::Refuse(500));
+        let (endpoint, seen) = server(Upload::Refuse(500, NO_V2_SERVER_ERROR));
         let (path, state) = editing(temp.path(), &endpoint);
         reverse_the_line(&state);
 
@@ -383,12 +401,13 @@ fn a_server_error_that_landed_nothing_is_the_same_refusal() {
 #[test]
 fn a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed() {
     // The ambiguity the ancestry recovery exists for is kept: a 5xx after the
-    // commit landed, and 503 (try later) or 504 (still working), are not a
-    // refusal of the file.
+    // commit landed, 503 (try later) or 504 (still working), and a 5xx with a
+    // reason of its own (O3) are not a refusal of the file.
     for upload in [
-        Upload::FailAfterLanding(500),
-        Upload::Refuse(503),
-        Upload::Refuse(504),
+        Upload::FailAfterLanding(500, NO_V2_SERVER_ERROR),
+        Upload::Refuse(503, NO_V2_SERVER_ERROR),
+        Upload::Refuse(504, NO_V2_SERVER_ERROR),
+        Upload::Refuse(500, OTHER_SERVER_ERROR),
     ] {
         crate::test_helpers::with_isolated_config(|| {
             let temp = tempfile::tempdir().expect("temp");
@@ -408,13 +427,54 @@ fn a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed() {
 }
 
 #[test]
+fn a_refusal_with_the_servers_own_reason_shows_that_reason() {
+    // Review finding O3 (package U5): once a server reads version 2, its
+    // refusal of a file it finds invalid is a validation error, not a version
+    // problem. Save Changes and Done show the server's reason with its status
+    // (the frontend frames it as any refused upload), never the format line,
+    // and the project stays dirty and locked as after any failed push.
+    // Injection: classify by status alone (a 400 is `Content` whatever the
+    // reason) and the DTO carries `format_refused`.
+    for status in [400, 406, 422] {
+        crate::test_helpers::with_isolated_config(|| {
+            let temp = tempfile::tempdir().expect("temp");
+            let _cache = TestCacheRoot::set(temp.path());
+            let (endpoint, seen) = server(Upload::Refuse(status, V2_REASON));
+            let (path, state) = editing(temp.path(), &endpoint);
+            reverse_the_line(&state);
+
+            let pushed = state
+                .speleodb_push_only(Some("Synthetic push".to_owned()))
+                .expect_err("Save Changes is refused");
+            let done = state
+                .speleodb_done(Some("Synthetic push".to_owned()))
+                .expect_err("Done is refused");
+            for refused in [&pushed, &done] {
+                assert_eq!(refused.format_refused, None, "{refused:?}");
+                assert_eq!(refused.status, Some(status), "{refused:?}");
+                assert_eq!(refused.message, V2_REASON, "the server's own reason");
+                assert_eq!(
+                    refused.action,
+                    crate::speleodb::contract::map_status(
+                        crate::speleodb::contract::Endpoint::UploadStalx,
+                        status
+                    )
+                );
+            }
+            assert_eq!(seen.lock().expect("log").uploads.len(), 2);
+            assert_kept_dirty_and_locked(&path, &state, &seen);
+        });
+    }
+}
+
+#[test]
 fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
     // Plan 12.1 (rollout prerequisite S0): until SpeleoDB accepts v2 uploads, a
     // push fails with the format error and nothing local is lost.
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
-        let (endpoint, seen) = server(Upload::Refuse(400));
+        let (endpoint, seen) = server(Upload::Refuse(400, NO_V2));
         let (path, state) = editing(temp.path(), &endpoint);
         reverse_the_line(&state);
 
@@ -539,7 +599,7 @@ fn publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice()
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(&temp.path().join("cache"));
-        let (endpoint, seen) = server(Upload::Refuse(415));
+        let (endpoint, seen) = server(Upload::Refuse(415, NO_V2));
         let local = temp.path().join("local.stalx");
         write_file(&local, &line_survey("Local"), &extras_for(None));
         let state = AppState::new().expect("state");

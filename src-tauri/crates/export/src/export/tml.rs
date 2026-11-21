@@ -293,7 +293,7 @@ struct DocumentHead<'a> {
 fn write_document(
     head: &DocumentHead<'_>,
     shots: &[ExportShot],
-    unwritten_datums: usize,
+    left_out: survey::LeftOut,
     n: &Names,
     profile: TmlProfile,
 ) -> Result<(Vec<u8>, Vec<String>)> {
@@ -316,8 +316,19 @@ fn write_document(
     // Same contract as the azimuth notes above (#438): a fact the FILE carries
     // and the project does not must reach the user, not just the log. The
     // detailed warn lives in the GPS pass; this is its UI-facing code.
-    if unwritten_datums > 0 {
+    if left_out.datums > 0 {
         notes.push("gps-anchors-not-written".to_string());
+    }
+    // A comment on an entrance's station has no row to ride (its row is a
+    // START), in 0.6.0 too; the file is silent about it, so the user is told
+    // (demo issue N-14). Each station is named in the debug log.
+    if left_out.station_comments > 0 {
+        tracing::info!(
+            comments = left_out.station_comments,
+            purpose = "tell the user what the Ariane file leaves out",
+            "Station comments on entrance stations left out of the .tml export"
+        );
+        notes.push("station-comments-not-written".to_string());
     }
     ensure_rooted_chain(shots, profile)?;
 

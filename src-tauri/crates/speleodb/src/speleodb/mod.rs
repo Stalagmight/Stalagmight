@@ -132,8 +132,10 @@ pub enum SpeleoDbError {
     UploadTooLarge { size: u64, limit: u64 },
     /// Plan 12.1 (rollout): the server refused the project file this build
     /// writes (`.stalx` version 2): it answered the upload of a version 2 file
-    /// with a refusal of the content ([`contract::upload_refusal`]), or with a
-    /// server error after which its history showed the upload had not landed.
+    /// with a refusal whose reason names the file type or the SQLite it
+    /// expected ([`contract::upload_refusal`]), or with a server error saying
+    /// so after which its history showed the upload had not landed. A refusal
+    /// with any other reason is a plain `Status` error carrying that reason.
     /// Nothing was uploaded; the copy stays dirty and the lock stays held, as
     /// after any failed push. One message wherever a push runs (Done, Save
     /// Changes, the close and quit prompts, Publish); `status` and the server's

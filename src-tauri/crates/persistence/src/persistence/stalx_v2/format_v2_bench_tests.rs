@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::format_v2_diff_tests::survey;
-use super::{decode, encode, probe_bytes, write_atomic, DecodeOptions, Extras, Guard, Mode};
+use super::{decode, encode, probe_path, write_atomic, DecodeOptions, Extras, Guard, Mode};
 
 fn median(mut v: Vec<Duration>) -> f64 {
     v.sort();
@@ -62,14 +62,16 @@ fn sizes_and_speeds() {
         let validate_ms = time(reps, || {
             let _ = p.validate();
         });
-        let probe_us = time(reps * 20, || {
-            let _ = probe_bytes(&bytes[..bytes.len().min(64 * 1024)]);
-        }) * 1e3;
         let path = dir.join(format!("bench-{lines}.stalx"));
         let _ = std::fs::remove_file(&path);
         let write_ms = time(reps, || {
             write_atomic(&path, &bytes, Guard::Overwrite).unwrap();
         });
+        // The link check of the (unlinked) file on disk, as every link reader
+        // makes it: it stops at the first body member (review finding O1).
+        let probe_us = time(reps * 20, || {
+            let _ = probe_path(&path).unwrap();
+        }) * 1e3;
         println!(
             "| {} | {} | {} | {encode_ms:.2} | {decode_ms:.2} | {validate_ms:.2} | {probe_us:.1} | {write_ms:.2} |",
             lines * 25,

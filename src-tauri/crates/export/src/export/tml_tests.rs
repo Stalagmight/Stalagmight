@@ -39,7 +39,8 @@ fn decision(project: &Project) -> AzimuthExport {
 /// The rows the export writes for `project` under `profile`, and how many
 /// datums ended up on no START.
 fn export_rows(project: &Project, profile: TmlProfile) -> (Vec<ExportShot>, usize) {
-    build_rows(project, profile, decision(project))
+    let (rows, left_out) = build_rows(project, profile, decision(project));
+    (rows, left_out.datums)
 }
 
 /// The user export's rows.

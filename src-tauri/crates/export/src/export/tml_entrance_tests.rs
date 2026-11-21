@@ -89,7 +89,8 @@ fn export(project: &Project, profile: TmlProfile) -> (Vec<ExportShot>, usize) {
             .filter(|line| !line.shots.is_empty())
             .map(|line| project.azimuth_reference_for(line)),
     );
-    build_rows(project, profile, decision)
+    let (rows, left_out) = build_rows(project, profile, decision);
+    (rows, left_out.datums)
 }
 
 fn uuid_of(project: &Project, line: LineId, shot: usize) -> Option<String> {

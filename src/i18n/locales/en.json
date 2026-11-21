@@ -1752,7 +1752,8 @@
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some lines have no declination - Ariane will re-correct all",
-        "gps-anchors-not-written": "Some zero datums could not be written to the file"
+        "gps-anchors-not-written": "Some zero datums could not be written to the file",
+        "station-comments-not-written": "Comments on entrance stations were left out - Ariane has no place for them"
       }
     },
     "tmlUnanchoredWarning": {
