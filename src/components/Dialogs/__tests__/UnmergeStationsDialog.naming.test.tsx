@@ -178,7 +178,7 @@ describe('Detach dialog naming', () => {
       expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
         'Branch: 0b, Station ID 12 (comes off)',
         'Main: 3a, Station ID 3 (stays)',
-        'Side: 0, Station ID 3 (stays)',
+        'Side: 0, Station ID 3 (stays; the Station ID it had here before the merge, 7, is kept as an alias)',
       ]),
     );
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -208,9 +208,9 @@ export default function UnmergeStationsDialog() {
   const otherLines = selected
     ? slots.filter((ref) => ref.line_id !== selected.line_id).map((ref) => labels.lineName(ref.line_id))
     : [];
-  /** A row's label: the line, or for a line that keeps the junction the
-   *  lines that then come off together (V-1). */
-  const rowLabel = (ref: StationRef, clicked: boolean): string => {
+  /** A row's label: the line (a line pill), or for a line that keeps the
+   *  junction the lines that then come off together, as a sentence (V-1). */
+  const rowLabel = (ref: StationRef, clicked: boolean): ReactNode => {
     const line = labels.lineName(ref.line_id);
     if (previews.get(ref.line_id)?.kept) {
       const others = listNames(
@@ -219,7 +219,7 @@ export default function UnmergeStationsDialog() {
       );
       return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', { line, others });
     }
-    return clicked ? t('dialogs.detachLine.thisLine', { line }) : line;
+    return <EntityBlob entity="line">{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
   };
 
   const handleConfirm = async () => {
@@ -294,7 +294,7 @@ export default function UnmergeStationsDialog() {
                         }}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
-                      <EntityBlob entity="line">{rowLabel(ref, i === 0)}</EntityBlob>
+                      {rowLabel(ref, i === 0)}
                     </label>
                   );
                 })}
@@ -374,7 +374,9 @@ function DetachResults({ preview }: { preview: DetachLinePreview }) {
             alias: r.alias_id,
           };
           const key = !r.comes_off
-            ? 'dialogs.detachLine.resultStays'
+            ? r.alias_id !== undefined
+              ? 'dialogs.detachLine.resultStaysAlias'
+              : 'dialogs.detachLine.resultStays'
             : r.alias_id !== undefined
               ? 'dialogs.detachLine.resultOffShared'
               : r.joined_with.length > 0
