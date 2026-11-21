@@ -1310,6 +1310,34 @@ fn the_offered_restore_copy_is_the_one_a_restore_keeps() {
     assert!(AppState::list_project_backups(&project).is_empty());
 }
 
+/// Pre-PR delta review finding 6: the first save's hard-link placement puts
+/// the file in place under both names, then unlinks the temp; a failed
+/// unlink (or a crash between the two) leaves `<project>.stalx.tmp` as a
+/// second name of the saved project. It is complete and decodes, so the list
+/// offered it as an interrupted save: "restoring" it would put the project
+/// over itself. The list skips a `.tmp` that is the project's own file, while
+/// a real leftover copy is still offered. Injection: dropping the same-file
+/// check of the `.tmp` entries lists the project's second name here.
+#[cfg(unix)]
+#[test]
+fn the_name_a_first_save_left_behind_is_not_an_interrupted_save() {
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("cave.stalx");
+    stalx_v2::write_atomic(&project, &v2_bytes("Current"), stalx_v2::Guard::Absent).unwrap();
+    let temp = stalx_v2::temp_path(&project);
+    std::fs::hard_link(&project, &temp).unwrap();
+    assert!(AppState::list_project_backups(&project).is_empty());
+
+    // A copy a save wrote but never put in place is still offered.
+    std::fs::remove_file(&temp).unwrap();
+    std::fs::write(&temp, v2_bytes("Interrupted")).unwrap();
+    let kinds: Vec<BackupKind> = AppState::list_project_backups(&project)
+        .into_iter()
+        .map(|b| b.kind)
+        .collect();
+    assert_eq!(kinds, [BackupKind::InterruptedSave]);
+}
+
 /// The kind's wire names are the ones the generated TypeScript type lists
 /// (`src/types/ipc/BackupKind.ts`), which the dialog words.
 #[test]
@@ -1331,6 +1359,7 @@ fn backup_kinds_go_over_the_wire_as_the_dialog_reads_them() {
 
 /// The names in `dir`, without reading any file (a sparse file over the cap
 /// sits there in the tests below).
+#[cfg(unix)]
 fn listing(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
@@ -1340,7 +1369,10 @@ fn listing(dir: &Path) -> Vec<String> {
     names
 }
 
-/// A sparse file one byte over the size cap at `dir/file` (nothing is written).
+/// A sparse file one byte over the size cap at `dir/file` (nothing is
+/// written). Unix only: NTFS may allocate the whole length, so the tests that
+/// use it run where a sparse file costs nothing.
+#[cfg(unix)]
 fn over_the_cap(dir: &Path, file: &str) -> PathBuf {
     let path = dir.join(file);
     std::fs::File::create(&path)
@@ -1352,12 +1384,14 @@ fn over_the_cap(dir: &Path, file: &str) -> PathBuf {
 
 /// Pre-PR review finding 4: the restore copied a user-picked backup of any
 /// size beside the project, then read the copy whole. One byte over the cap
-/// is refused before anything is copied: no staged file is ever created (the
-/// folder is not even modified), and the project is untouched. Injection:
-/// dropping the size check before the copy stages a GiB beside the project
-/// (the copy's own cap still refuses it), which creates and removes the
-/// staged file and so moves the folder's modification time; dropping both
-/// caps refuses it later, in the open check, with another message.
+/// is refused before anything is copied, with the pre-copy check's own
+/// words, and the project is untouched. Injection: dropping the size check
+/// before the copy stages the whole file beside the project and refuses it
+/// only after, in the copy's own cap, whose message says it grew while it
+/// was copied (pre-PR delta review finding 7: the test used to tell the two
+/// apart by the folder's modification time, which a coarse filesystem does
+/// not move); dropping both caps refuses it later still, in the open check.
+#[cfg(unix)]
 #[test]
 fn a_backup_over_the_size_cap_is_refused_before_it_is_copied() {
     let dir = TempDir::new().unwrap();
@@ -1365,24 +1399,22 @@ fn a_backup_over_the_size_cap_is_refused_before_it_is_copied() {
     let before = std::fs::read(&project).unwrap();
     let huge = over_the_cap(dir.path(), "cave.stalx.backup");
     let names_before = listing(dir.path());
-    let folder_modified = || std::fs::metadata(dir.path()).unwrap().modified().unwrap();
-    let modified_before = folder_modified();
 
     let err = state()
         .restore_project_from_backup(&project, &huge)
         .unwrap_err();
 
-    assert!(
-        err.starts_with("Not restored: cave.stalx.backup is larger than")
-            && err.contains("Nothing was changed"),
-        "{err}"
-    );
-    assert_eq!(listing(dir.path()), names_before, "nothing was staged");
     assert_eq!(
-        folder_modified(),
-        modified_before,
-        "no staged copy was ever created"
+        err,
+        format!(
+            "Not restored: cave.stalx.backup is larger than {} MiB, the most Stalagmight reads. \
+             Nothing was changed.",
+            stalx_v2::MAX_PROJECT_FILE_BYTES / (1024 * 1024)
+        ),
+        "refused by the check before the copy"
     );
+    assert!(!err.contains("while it was copied"), "{err}");
+    assert_eq!(listing(dir.path()), names_before, "nothing was staged");
     assert_eq!(std::fs::read(&project).unwrap(), before);
 }
 
@@ -1390,6 +1422,7 @@ fn a_backup_over_the_size_cap_is_refused_before_it_is_copied() {
 /// depth: the staging refuses a larger backup first). Injection: reading the
 /// staged copy with `std::fs::read` again reads it whole and refuses it as
 /// "not a Stalagmight project".
+#[cfg(unix)]
 #[test]
 fn the_open_check_refuses_a_copy_over_the_size_cap_without_reading_it() {
     let dir = TempDir::new().unwrap();

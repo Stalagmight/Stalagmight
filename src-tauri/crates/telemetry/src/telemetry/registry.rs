@@ -877,9 +877,9 @@ pub const EVENT_NAMES: &[&str] = &[
     // Whether the open file is still a 0.6.0 file, which the status bar says
     // instead of "Saved" until the first save converts it (demo issue N-6).
     "command.project_file_is_legacy",
-    // The save prompt's "Use the file's version" checks the file reopens
-    // before it closes the session (and drops the unsaved changes).
-    "command.project_file_reload_refusal",
+    // The save prompt's "Use the file's version": the open file read again
+    // and, only when it opens, put in place of the session (one operation).
+    "command.reload_project_full_binary",
     "action.dialog.save-conflict",
     "dialog-cancel.save-conflict",
     "dwell.dialog.save-conflict",
@@ -1237,8 +1237,9 @@ mod tests {
         //       command.preview_detach_line = 751.
         //   + 1 the status bar's "old format" state (demo issue N-6):
         //       command.project_file_is_legacy = 752.
-        //   + 1 the save prompt's reopen check (pre-PR review finding 1):
-        //       command.project_file_reload_refusal = 753.
+        //   + 1 the save prompt's reopen check (pre-PR review finding 1),
+        //       made the reload itself, one operation (pre-PR delta review
+        //       finding 2): command.reload_project_full_binary = 753.
         assert_eq!(EVENT_NAMES.len(), 753);
     }
 

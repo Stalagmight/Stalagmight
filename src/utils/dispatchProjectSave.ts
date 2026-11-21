@@ -7,6 +7,7 @@ import { saveOpenProjectLocally } from './saveOpenProjectLocally';
 import { canResumeSpeleoEditing } from './speleoPermission';
 import { TOAST_KEYS } from './toastKeys';
 import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 import i18n from '../i18n';
 
 /** The open linked project can be uploaded right now: we hold the lock, signed in, with write access. */
@@ -38,6 +39,11 @@ function notUploadedReason(link: SpeleoLinkState): string {
  *   uploaded, and the local save's result is returned (so Save and Close goes on
  *   to close).
  *
+ * A linked project with nothing to upload still saves on this computer when
+ * the backend holds changes the exit prompt would ask about (a 0.6.0 copy's
+ * SpeleoDB bookkeeping, `has_unsaved_changes`): "No changes to upload" there
+ * left them to the converting save the user had just asked for.
+ *
  * A file made with a newer Stalagmight is never saved here (the backend would
  * refuse it, `READ_ONLY_FILE`): the worded read-only notice says why, as it
  * does for a typed key, and nothing is returned (demo issue N-1). Save and
@@ -53,6 +59,9 @@ export async function dispatchProjectSave(opts?: { closeAfterSave?: boolean }) {
     const pending = getUploadContinuation(state.project.file_path);
     const closeAfterSave = opts?.closeAfterSave === true || pending?.closeAfterSave === true;
     if (!link.hasUnpushedEdits && !state.isDirty && !closeAfterSave) {
+      const asked = await askOpenProjectUnsaved();
+      if (!asked.stillOpen) return null;
+      if (asked.unsaved) return saveOpenProjectLocally();
       ui.showToast('No changes to upload', 'speleodb-no-upload-changes', 'info');
       return null;
     }

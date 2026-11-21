@@ -13,7 +13,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { askSpeleoExit, closeKeepingLock, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { RELEASE_CANCELLED, settleOpenLockBeforeLeaving } from './speleoReleaseFailure';
-import { openProjectHasUnsavedChanges } from './unsavedChanges';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -361,8 +361,11 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
  * - Otherwise unsaved changes get the ordinary unsaved-changes dialog: the
  *   frontend's edits, or changes only the backend tracks (a 0.6.0 file's
  *   SpeleoDB bookkeeping), asked of the backend here as every exit asks it
- *   ({@link openProjectHasUnsavedChanges}). Hence async: the close listener
- *   awaits it.
+ *   ({@link askOpenProjectUnsaved}). Hence async: the close listener awaits
+ *   it, and the ask is bounded, so a stalled backend still lets the prompt
+ *   open. A project that moved during the ask (a load or a close landed) is
+ *   decided again for what is open now: nothing is asked about, or done to,
+ *   the project that left.
  * - A clean SpeleoDB project hands its lock back before the quit goes on
  *   ({@link quitAfterHandingBackLock}): a release that fails or is uncertain asks
  *   "Couldn't hand back the lock", and Cancel there abandons the quit. The bounded
@@ -385,7 +388,9 @@ export async function guardQuit(): Promise<boolean> {
     return true;
   }
 
-  if (await openProjectHasUnsavedChanges()) {
+  const asked = await askOpenProjectUnsaved();
+  if (!asked.stillOpen) return guardQuit();
+  if (asked.unsaved) {
     openExitPrompt('unsaved-changes', { pendingQuit: true });
     return true;
   }

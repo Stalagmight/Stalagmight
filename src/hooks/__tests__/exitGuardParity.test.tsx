@@ -17,7 +17,7 @@
  *
  * Every exit routes through `needsSpeleoExitPrompt` and the awaited
  * `askSpeleoExit`, and the matrix below keeps them from drifting apart again.
- * The unsaved-changes question is one rule too: `openProjectHasUnsavedChanges`,
+ * The unsaved-changes question is one rule too: `askOpenProjectUnsaved`,
  * the frontend's `isDirty` OR the backend's `has_unsaved_changes` (changes
  * only the backend tracks, such as a 0.6.0 file's SpeleoDB bookkeeping).
  */

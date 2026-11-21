@@ -14,10 +14,13 @@
 //!   legacy (SQLite) file not yet upgraded, nor on a project never saved:
 //!   there the change waits in memory for the first real save
 //!   (`local_pending`). On a legacy file it counts as unsaved
-//!   ([`AppState::has_unsaved_changes`]), except a display toggle alone
+//!   ([`AppState::has_unsaved_changes`]) only when a close that drops it
+//!   changes what the user or the server sees (the rule on
+//!   `FileState::local_pending_asks`): not a display toggle
 //!   ([`AppState::persist_display_state`]: it never arms autosave, which
-//!   would convert the file); only a SpeleoDB unlink upgrades a legacy file
-//!   at once ([`AppState::persist_local_state_upgrading`]).
+//!   would convert the file), a materialized undo mode or a lock
+//!   re-verification time; only a SpeleoDB unlink upgrades a legacy file at
+//!   once ([`AppState::persist_local_state_upgrading`]).
 //!
 //! Lock order: `project` -> `file` -> `undo_stack` (`file` takes the place
 //! `database` had). Nothing is taken while `file` is held except
@@ -55,10 +58,21 @@ pub const EXTERNALLY_MODIFIED_CODE: &str = "EXTERNALLY_MODIFIED";
 /// close dropped the unsaved changes).
 pub const FILE_MISSING_MARKER: &str = "FILE_MISSING";
 
+/// Marker right after [`EXTERNALLY_MODIFIED_CODE`] when a FIRST save (the
+/// project's path was chosen free) found a file at that path
+/// (`WriteError::Exists`, from the guard's check or from the hard-link
+/// placement): `EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`.
+/// The file there is not this project's at all, so the prompt offers no
+/// "Use the file's version" (it would open a stranger's file in place of the
+/// project) and says that a file appeared at this location (pre-PR delta
+/// review finding 5).
+pub const FILE_EXISTS_MARKER: &str = "FILE_EXISTS";
+
 /// The coded failure of a write the guard refused (`ExternallyModified`,
 /// `Exists`), as every save path sends it to the frontend:
 /// [`EXTERNALLY_MODIFIED_CODE`], then [`FILE_MISSING_MARKER`] when the file
-/// is gone, then the sentence.
+/// is gone or [`FILE_EXISTS_MARKER`] when a first save found one, then the
+/// sentence.
 pub(crate) fn guard_refusal(e: &WriteError) -> String {
     write_error(e).to_string()
 }
@@ -124,11 +138,24 @@ pub(crate) struct FileState {
     /// Durable state changed in memory that only the next real save can
     /// write (legacy origin or never saved).
     pub(crate) local_pending: bool,
-    /// Part of that state is something the close prompt must ask about
-    /// (SpeleoDB bookkeeping, a project name, a materialized undo mode). A
-    /// display toggle alone is not (demo issue I-6): on a 0.6.0 file it would
-    /// arm autosave, and autosave would convert the file the user only looked
-    /// at. It waits for the next save, which writes it with the conversion.
+    /// Part of that state is something the close prompt must ask about. The
+    /// rule (pre-PR delta review finding 3): a deferred change asks when a
+    /// close that drops it changes what the user or the server sees
+    /// afterwards, and only then:
+    /// - asks: the SpeleoDB name fold (the next open shows the old name), the
+    ///   link's sync state (the dirty bit, BASE, the Unwind chain pointer,
+    ///   the inherited-history watermark), the history a confirmed push
+    ///   pruned (the next push would send the pruned entries again);
+    /// - does not ask: what the next open derives again identically (an undo
+    ///   mode materialized from this machine's default, which every open of
+    ///   the 0.6.0 file materializes the same way), what only paces a re-check
+    ///   (the lock re-verification time: the next edit re-verifies sooner),
+    ///   and view state (a display toggle, demo issue I-6).
+    ///
+    /// Asking about the second kind on a 0.6.0 file would ask "unsaved
+    /// changes" on every exit from a file the user only looked at, and arm
+    /// autosave, which would convert it. Either kind waits for the next save,
+    /// which writes it with the conversion.
     pub(crate) local_pending_asks: bool,
     /// Shown once after a legacy open that moved stations.
     pub(crate) conversion: Option<ConversionNotice>,
@@ -270,6 +297,9 @@ pub(crate) enum LocalSaveError {
     /// The file is gone (moved or deleted): coded with
     /// [`FILE_MISSING_MARKER`] after the guard's code.
     Missing(String),
+    /// A first save found a file at its path: coded with
+    /// [`FILE_EXISTS_MARKER`] after the guard's code.
+    Exists(String),
     Io(String),
     Encode(String),
 }
@@ -279,6 +309,7 @@ impl std::fmt::Display for LocalSaveError {
         match self {
             Self::ExternallyModified(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {m}"),
             Self::Missing(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {FILE_MISSING_MARKER}: {m}"),
+            Self::Exists(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {FILE_EXISTS_MARKER}: {m}"),
             Self::Io(m) | Self::Encode(m) => f.write_str(m),
         }
     }
@@ -326,9 +357,8 @@ pub(super) fn write_error(e: &WriteError) -> LocalSaveError {
         WriteError::ExternallyModified {
             found_len: None, ..
         } => LocalSaveError::Missing(e.to_string()),
-        WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
-            LocalSaveError::ExternallyModified(e.to_string())
-        }
+        WriteError::ExternallyModified { .. } => LocalSaveError::ExternallyModified(e.to_string()),
+        WriteError::Exists { .. } => LocalSaveError::Exists(e.to_string()),
         WriteError::Io { .. } => LocalSaveError::Io(e.to_string()),
     }
 }
@@ -388,9 +418,22 @@ impl AppState {
     /// [`Self::persist_local_state`] for the write an OPEN makes (a
     /// materialized undo mode): it copies the file's `history` member byte
     /// for byte, so an open never changes the history on disk, whatever the
-    /// persisted window (review finding J-docs-tests-truth-3).
+    /// persisted window (review finding J-docs-tests-truth-3). Deferred on a
+    /// 0.6.0 file, it does not make the project unsaved: every open derives
+    /// the same mode again (the rule on [`FileState::local_pending_asks`]).
     pub(super) fn persist_local_state_keeping_history(&self) -> Result<(), LocalSaveError> {
-        self.persist_local_state_guarded(true, true)
+        self.persist_local_state_guarded(true, false)
+    }
+
+    /// [`Self::persist_local_state_at`] for state whose loss at a close
+    /// changes nothing the user or the server sees (the lock re-verification
+    /// time): deferred on a 0.6.0 file, it does not make the project unsaved
+    /// (the rule on [`FileState::local_pending_asks`]).
+    pub(crate) fn persist_unasked_state_at(
+        &self,
+        path: Option<PathBuf>,
+    ) -> Result<(), LocalSaveError> {
+        self.persist_local_state_with(path, false, false)
     }
 
     /// `asks`: a change deferred on a legacy file makes the project unsaved
@@ -545,13 +588,15 @@ impl AppState {
 
     /// Whether the open project has changes no save has written yet: survey
     /// edits, ignores, and on a legacy (SQLite) file not yet upgraded the
-    /// local state that waits for the upgrading save (SpeleoDB bookkeeping,
-    /// `local_pending_asks`). Those were written in place at once by 0.6.0;
-    /// here only a save writes them, so "Don't save" on close discards them
-    /// and the close prompt must ask (review finding D-migration-upgrade-5).
-    /// A display toggle alone does not count (demo issue I-6): it waits for
-    /// the next save too, but asking about it, or letting autosave write it,
-    /// would convert a file the user only looked at.
+    /// local state that waits for the upgrading save and that a close would
+    /// lose for good (SpeleoDB bookkeeping, `local_pending_asks`). Those were
+    /// written in place at once by 0.6.0; here only a save writes them, so
+    /// "Don't save" on close discards them and the close prompt must ask
+    /// (review finding D-migration-upgrade-5). State the next open derives
+    /// again (a materialized undo mode), a re-verification time and a display
+    /// toggle do not count (the rule on [`FileState::local_pending_asks`]):
+    /// they wait for the next save too, but asking about them, or letting
+    /// autosave write them, would convert a file the user only looked at.
     pub fn has_unsaved_changes(&self) -> bool {
         self.with_file(|file| {
             file.dirty || file.origin == FileOrigin::Legacy && file.local_pending_asks

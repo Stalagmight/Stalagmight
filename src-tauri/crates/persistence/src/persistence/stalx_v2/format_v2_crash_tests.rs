@@ -149,6 +149,35 @@ fn a_first_save_never_replaces_a_file_that_appears_after_the_check() {
     assert_eq!(entries(dir.path()), vec!["cave.stalx".to_string()]);
 }
 
+/// Pre-PR delta review finding 6: the first save's hard-link placement puts
+/// the file in place under both names, then unlinks the temp. When that
+/// unlink fails (or the app dies between the two), `<dest>.tmp` is left as a
+/// second NAME of the saved file, not a copy of it. The next save's
+/// stale-temp removal unlinks only that name: the project keeps its content
+/// until the new one replaces it, and nothing is left beside it. Injection:
+/// dropping the stale-temp removal fails the next save at `CreateTemp`.
+#[cfg(unix)]
+#[test]
+fn the_name_a_first_save_left_behind_is_unlinked_by_the_next_save() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("cave.stalx");
+    let (old, new) = files(5);
+    let saved = write_atomic(&dest, &old, Guard::Absent).unwrap();
+    // The state a failed unlink (or a crash after the link) leaves.
+    let temp = temp_path(&dest);
+    std::fs::hard_link(&dest, &temp).unwrap();
+    let inode = |path: &Path| std::fs::metadata(path).unwrap().ino();
+    assert_eq!(inode(&temp), inode(&dest), "one file under two names");
+
+    let resaved = write_atomic(&dest, &new, Guard::Expect(&saved)).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), new);
+    let (_, read) = Fingerprint::read(&dest, u64::MAX).unwrap();
+    assert!(resaved.same_content(&read));
+    assert_eq!(entries(dir.path()), vec!["cave.stalx".to_string()]);
+}
+
 #[test]
 fn a_failure_at_any_step_keeps_the_old_file() {
     for stage in [

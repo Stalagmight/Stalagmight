@@ -4,8 +4,10 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
 /**
  * The `.stalx` v2 file contract in the UI (plan 6.4, 6.5, 7.2.10):
  * - a save refused because another program changed the file
- *   (`EXTERNALLY_MODIFIED`) asks which version to keep; one it moved or
- *   deleted (`FILE_MISSING`) says so and offers no reopen;
+ *   (`EXTERNALLY_MODIFIED`) asks which version to keep, and "Use the file's
+ *   version" is one reload that never closes the project first; one it moved
+ *   or deleted (`FILE_MISSING`), or a file that appeared where a first save
+ *   goes (`FILE_EXISTS`), says so and offers no reopen;
  * - a file made with a newer Stalagmight is open read-only, with a banner, and
  *   the editing controls are off;
  * - an old-format file the conversion moved stations in says so once, and the
@@ -20,7 +22,8 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
  */
 
 type MockWindow = {
-  __MOCK_SET_EXTERNALLY_MODIFIED__: (on: boolean | 'missing') => void;
+  __MOCK_SET_EXTERNALLY_MODIFIED__: (on: boolean | 'missing' | 'exists') => void;
+  __MOCK_EXIT_CALLS__?: Array<{ cmd: string; args: unknown }>;
   __MOCK_SET_READ_ONLY_REASON__: (reason: string | null) => void;
   __MOCK_SET_CONVERSION_NOTICE__: (notice: unknown) => void;
   __MOCK_SET_LEGACY_ORIGIN__: (on: boolean) => void;
@@ -48,6 +51,14 @@ const isDirty = (page: Page) =>
 
 const saveCalls = (page: Page) =>
   page.evaluate(() => (window as unknown as MockWindow).__MOCK_GET_SAVE_CALLS__().map((c) => c.command));
+
+/** The recorded close and reload calls, in order. */
+const closeAndReloadCalls = (page: Page) =>
+  page.evaluate(() =>
+    ((window as unknown as MockWindow).__MOCK_EXIT_CALLS__ ?? [])
+      .map((c) => c.cmd)
+      .filter((cmd) => cmd === 'close_project' || cmd === 'reload_project_full_binary'),
+  );
 
 test.describe('.stalx v2 file status', () => {
   test.beforeEach(async ({ page }) => {
@@ -98,6 +109,61 @@ test.describe('.stalx v2 file status', () => {
     await expect(dialog).not.toBeVisible();
     await expect.poll(() => isDirty(page)).toBe(false);
     expect(await saveCalls(page)).toEqual(['save_project', 'save_project_overwriting']);
+  });
+
+  // Pre-PR delta review finding 2: "Use the file's version" is ONE reload in
+  // place of the session; the project is never closed first.
+  test('"Use the file\'s version" reopens the file in place, without closing the project first', async ({ page }) => {
+    await createProject(page, 'Theirs Wins');
+    await makeDirty(page);
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_EXTERNALLY_MODIFIED__(true));
+
+    await page.keyboard.press('Control+s');
+    const dialog = page.getByTestId('save-conflict-dialog');
+    await expect(dialog).toBeVisible();
+    await page.getByTestId('save-conflict-reload').click();
+    await expect(dialog).not.toBeVisible();
+    await expect.poll(() => isDirty(page)).toBe(false);
+    expect(await closeAndReloadCalls(page)).toEqual(['reload_project_full_binary']);
+    // Still in the project, now the file's version.
+    await expect(page.getByTestId('save-status')).toBeVisible();
+  });
+
+  test('a reload of a file that would not open keeps the project, the edits and the prompt', async ({ page }) => {
+    await createProject(page, 'Gone Before Reload');
+    await makeDirty(page);
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_EXTERNALLY_MODIFIED__(true));
+    await page.keyboard.press('Control+s');
+    const dialog = page.getByTestId('save-conflict-dialog');
+    await expect(dialog).toBeVisible();
+    // The file goes away while the prompt is open.
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_EXTERNALLY_MODIFIED__('missing'));
+
+    await page.getByTestId('save-conflict-reload').click();
+    await expect(page.getByTestId('save-conflict-error')).toContainText('your unsaved changes were kept');
+    await expect(dialog).toBeVisible();
+    expect(await isDirty(page)).toBe(true);
+    expect(await closeAndReloadCalls(page)).toEqual(['reload_project_full_binary']);
+  });
+
+  // Pre-PR delta review finding 5: a file that appeared where a first save goes
+  // is not this project's, so there is no "file's version" to take.
+  test('a file that appeared where a first save goes is named, and offers no reopen', async ({ page }) => {
+    await createProject(page, 'Path Taken');
+    await makeDirty(page);
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_EXTERNALLY_MODIFIED__('exists'));
+
+    await page.keyboard.press('Control+s');
+    const dialog = page.getByTestId('save-conflict-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Another file is in the way');
+    await expect(page.getByTestId('save-conflict-lead')).toContainText('appeared at this location');
+    await expect(page.getByTestId('save-conflict-reload')).toHaveCount(0);
+    await expect(page.getByTestId('save-conflict-save-as')).toBeVisible();
+    await expect(page.getByTestId('save-conflict-overwrite')).toBeVisible();
+    expect(await isDirty(page)).toBe(true);
+    await page.getByTestId('save-conflict-cancel').click();
+    await expect(dialog).toHaveCount(0);
   });
 
   test('an autosave hit by the change says so in the banner, and Save now asks', async ({ page }) => {

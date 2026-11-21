@@ -1,7 +1,8 @@
 /**
  * The save prompt for a file another program changed (`.stalx` v2, plan 6.5):
  * keep my version (overwrite), save as a new file, or use the file's version;
- * and for one it moved or deleted (`FILE_MISSING`), only the first two.
+ * and for one it moved or deleted (`FILE_MISSING`), or a file that appeared
+ * where a first save goes (`FILE_EXISTS`), only the first two.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -35,9 +36,8 @@ beforeEach(() => {
   saveProjectOverwriting.mockResolvedValue({ success: true });
   loadProject.mockResolvedValue({ success: true });
   closeProject.mockResolvedValue({ success: true });
-  // The file opens as it is now: nothing refuses the reopen.
+  // The prompt itself sends no IPC: the reload is the store's `loadProject`.
   invokeIpc.mockImplementation(async (command: string) => {
-    if (command === 'project_file_reload_refusal') return null;
     throw new Error(`unexpected IPC ${command}`);
   });
   useProjectStore.setState({
@@ -87,27 +87,28 @@ describe('SaveConflictDialog', () => {
     expect(closeDialog).toHaveBeenCalled();
     unmount();
 
+    useUIStore.setState({ activeDialog: 'save-conflict' } as never);
     render(<SaveConflictDialog />);
     fireEvent.click(screen.getByTestId('save-conflict-reload'));
-    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx'));
-    // The open path would be refused as already open: the session closes first,
-    // dropping the unsaved changes, and only then is the file read again. And
-    // before the close, the backend confirmed the file opens as it is now.
-    expect(closeProject).toHaveBeenCalledOnce();
-    expect(closeProject.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(loadProject.mock.invocationCallOrder[0] ?? -Infinity);
-    expect(invokeIpc).toHaveBeenCalledWith('project_file_reload_refusal', undefined, expect.anything());
-    expect(invokeIpc.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(closeProject.mock.invocationCallOrder[0] ?? -Infinity);
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    // One backend operation reads the file and replaces the session with it:
+    // nothing is closed first.
+    expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx', { reload: true });
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(invokeIpc).not.toHaveBeenCalled();
   });
 
   /**
-   * Pre-PR review finding 1: "Use the file's version" closed the session (the
-   * unsaved changes went with it) and THEN found the file would not open,
-   * leaving neither version. It closes only for a file the backend says opens.
-   * Injection: dropping the `project_file_reload_refusal` check calls
-   * closeProject here.
+   * Pre-PR delta review finding 2: "Use the file's version" asked the backend
+   * whether the file opens, closed the session, then loaded the file. A sync
+   * client writing the file between those reads, or a load the frontend
+   * refused after the close, dropped the edits with neither version left. It
+   * is one reload now, and a reload that fails keeps the session, its
+   * unsaved changes and the prompt. Injection: closing the session before the
+   * reload (the old order) calls closeProject here.
    */
-  it('keeps the session and the changes when the file would not open again', async () => {
-    invokeIpc.mockResolvedValue('File not found: /caves/Main Sump.stalx');
+  it('a reload that fails keeps the session, the changes and the prompt, and says why', async () => {
+    loadProject.mockResolvedValue({ success: false, error: 'File not found: /caves/Main Sump.stalx' });
     render(<SaveConflictDialog />);
     fireEvent.click(screen.getByTestId('save-conflict-reload'));
     await waitFor(() =>
@@ -115,8 +116,8 @@ describe('SaveConflictDialog', () => {
         "The file can't be opened as it is now, so your unsaved changes were kept: File not found: /caves/Main Sump.stalx"
       )
     );
+    expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx', { reload: true });
     expect(closeProject).not.toHaveBeenCalled();
-    expect(loadProject).not.toHaveBeenCalled();
     expect(closeDialog).not.toHaveBeenCalled();
   });
 
@@ -148,12 +149,52 @@ describe('SaveConflictDialog', () => {
     expect(loadProject).not.toHaveBeenCalled();
   });
 
-  it('keeps the prompt and reads nothing when the close fails', async () => {
-    closeProject.mockResolvedValue({ success: false, error: 'Already closing' });
+  /**
+   * Pre-PR delta review finding 5: a FIRST save that found a file at its path
+   * (`FILE_EXISTS` after the guard's code: another program put a file where
+   * the project was to be saved) read as a changed file and offered "Use the
+   * file's version", which would open that stranger's file in the project's
+   * place. It says a file appeared there and offers only Save As and
+   * Overwrite. Injection: deriving the variant without `isFileExistsError`
+   * shows the reload button (and the changed-file wording) here.
+   */
+  it('says a file appeared where a first save goes, and offers no reopen of it', () => {
+    useUIStore.setState({
+      dialogData: { error: 'EXTERNALLY_MODIFIED: FILE_EXISTS: /caves/Main Sump.stalx already exists' },
+    } as never);
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-lead')).toHaveTextContent(
+      'A file named Main Sump.stalx appeared at this location'
+    );
+    expect(screen.getByTestId('save-conflict-lead')).not.toHaveTextContent('Another program changed');
+    expect(screen.getByText('Another file is in the way')).toBeInTheDocument();
+    expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
+    expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(invokeIpc).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the prompt when the reload is turned away without a reason', async () => {
+    loadProject.mockResolvedValue({ success: false });
     render(<SaveConflictDialog />);
     fireEvent.click(screen.getByTestId('save-conflict-reload'));
-    await waitFor(() => expect(screen.getByTestId('save-conflict-error')).toHaveTextContent('Already closing'));
-    expect(loadProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('save-conflict-error')).toHaveTextContent('That did not work'));
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('steps aside without closing a question the reload raised itself', async () => {
+    loadProject.mockImplementation(async () => {
+      useUIStore.setState({ activeDialog: 'unrecognised-shot-kind' } as never);
+      return { success: true };
+    });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() => expect(loadProject).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('save-conflict-reload')).not.toBeDisabled());
     expect(closeDialog).not.toHaveBeenCalled();
   });
 

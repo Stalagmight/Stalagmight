@@ -39,7 +39,7 @@ export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
  * Marker for a save the external-modification guard refused (`.stalx` v2, plan
  * 6.5): the file on disk is not what the app last read or wrote, so another
  * program changed, moved or deleted it ({@link FILE_MISSING} tells the last
- * two apart). Mirrors `EXTERNALLY_MODIFIED_CODE` in
+ * two apart), or a first save found a file at its path ({@link FILE_EXISTS}). Mirrors `EXTERNALLY_MODIFIED_CODE` in
  * `src-tauri/crates/core/src/core/state/open_file.rs`. Routed to the save
  * prompt (reload / overwrite / save as), never to a bare error.
  */
@@ -55,6 +55,17 @@ export const EXTERNALLY_MODIFIED = 'EXTERNALLY_MODIFIED';
  * unsaved changes.
  */
 export const FILE_MISSING = 'FILE_MISSING';
+
+/**
+ * Marker right after {@link EXTERNALLY_MODIFIED} when a FIRST save (the
+ * project's path was chosen free) found a file at that path
+ * (`EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`). Mirrors
+ * `FILE_EXISTS_MARKER` (same Rust file as the code). Still routed to the save
+ * prompt, which then offers no "Use the file's version": the file there is
+ * not this project's, and opening it would put a stranger's file in the
+ * project's place.
+ */
+export const FILE_EXISTS = 'FILE_EXISTS';
 
 /**
  * Marker for a save refused because the project is open read-only: the file
@@ -105,6 +116,15 @@ export function stripSaveErrorMarker(error: string, marker: string): string {
 export function isFileMissingError(error?: string | null): boolean {
   if (!error || classifySaveError(error) !== 'externally-modified') return false;
   return stripSaveErrorMarker(error, EXTERNALLY_MODIFIED).startsWith(`${FILE_MISSING}:`);
+}
+
+/**
+ * True if the guard refused a first save because a file appeared at its path:
+ * {@link FILE_EXISTS} right after the guard's code.
+ */
+export function isFileExistsError(error?: string | null): boolean {
+  if (!error || classifySaveError(error) !== 'externally-modified') return false;
+  return stripSaveErrorMarker(error, EXTERNALLY_MODIFIED).startsWith(`${FILE_EXISTS}:`);
 }
 
 /** True if a save `CommandResult.error` carries the permission marker. */

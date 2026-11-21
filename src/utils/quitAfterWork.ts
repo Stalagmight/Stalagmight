@@ -39,7 +39,7 @@ import { abandonUpdateRestart, performQuit, quitApp } from './quit';
 import { saveOpenProjectLocally } from './saveOpenProjectLocally';
 import { useSpeleoExitPrompt } from './speleoExit';
 import { useReleaseFailurePrompt } from './speleoReleaseFailure';
-import { openProjectHasUnsavedChanges } from './unsavedChanges';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 import { TOAST_KEYS } from './toastKeys';
 
 /**
@@ -215,8 +215,13 @@ export async function forceQuitNow(): Promise<void> {
   clearSettleTimer();
   useQuitWait.setState({ step: 'forcing', error: null });
   // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
-  // SpeleoDB bookkeeping), asked as every exit asks.
-  if (await openProjectHasUnsavedChanges()) {
+  // SpeleoDB bookkeeping), asked as every exit asks. A project that moved
+  // during the ask (the open the quit waited for landed) is asked about
+  // again: saving it on the old project's answer would convert a 0.6.0 file
+  // the user only opened.
+  let asked = await askOpenProjectUnsaved();
+  while (!asked.stillOpen) asked = await askOpenProjectUnsaved();
+  if (asked.unsaved) {
     const saved = await saveOpenProjectLocally();
     if (!saved?.success) {
       useQuitWait.setState({ step: 'force', error: saved?.error ?? i18n.t('quitWait.saveFailed') });

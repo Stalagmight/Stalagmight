@@ -1252,6 +1252,13 @@
         "unsaved": "Your unsaved changes are still here. Choose where to save them:",
         "overwriteDetail": "Save your version where the file was.",
         "saveAsDetail": "Save your version to a new file."
+      },
+      "exists": {
+        "title": "Another file is in the way",
+        "lead": "A file named {{fileName}} appeared at this location before Stalagmight could save the project there. It is not this project, so nothing was saved over it.",
+        "unsaved": "Your project is still here, with all its changes. Choose where to save it:",
+        "overwriteDetail": "Save your project over that file. The file that appeared there is lost.",
+        "saveAsDetail": "Save your project to a new file and leave that file alone."
       }
     },
     "importFailure": {
@@ -2845,6 +2852,7 @@
       "pathTooLong": "Save path too long - save to a shorter path.",
       "externallyModified": "The project file was changed by another program. Choose whether to keep your version or the file's.",
       "externallyMissing": "The project file was moved or deleted by another program. Save to put your version back, or save it as a new file.",
+      "externallyExists": "A different file appeared where the project is saved. Save it as a new file, or save over that file.",
       "readOnlyFile": "This project was made with a newer Stalagmight and is open read-only.",
       "genericFailure": "Failed to save project",
       "saveNow": "Save now",
@@ -4194,6 +4202,7 @@
     "errors": {
       "saveFailed": "Your changes could not be saved on this computer, so nothing was closed.",
       "closeFailed": "The project could not be closed. It is still open.",
+      "projectChanged": "Another project was opened while this was being decided, so nothing was saved or closed.",
       "newerChanges": "You made more changes while uploading. They are still on this computer, so the project stays open."
     },
     "restart": {

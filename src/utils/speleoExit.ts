@@ -34,7 +34,7 @@ import { getErrorMessage } from './ipc';
 import { RELEASE_CANCELLED } from './speleoReleaseFailure';
 import { classifySaveError } from './saveErrors';
 import { saveFailureLine } from './saveFeedback';
-import { openProjectHasUnsavedChanges } from './unsavedChanges';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 
 /** What the user is trying to do. Picks the wording only - the choices are the same. */
 export type SpeleoExitReason = 'close' | 'switch' | 'quit';
@@ -140,11 +140,14 @@ async function closeWith(opts: { releaseLock?: boolean; discardLocal?: boolean }
  * next open finds the copy sitting on the server tip and resumes editing under
  * the same lock, with no prompt (`speleodb_local_fast_forward_open`). Unsaved
  * means the frontend's edits or the backend's own (a 0.6.0 copy's SpeleoDB
- * bookkeeping), asked as every exit asks.
+ * bookkeeping), asked as every exit asks. A project that moved during the ask
+ * is not the one the answer was for: nothing is saved or closed.
  */
 export async function closeKeepingLock(): Promise<ExitCloseOutcome> {
   const store = useProjectStore.getState();
-  if (await openProjectHasUnsavedChanges()) {
+  const asked = await askOpenProjectUnsaved();
+  if (!asked.stillOpen) return { ok: false, error: i18n.t('speleoExitPrompt.errors.projectChanged') };
+  if (asked.unsaved) {
     let saved;
     try {
       saved = await store.saveProject();

@@ -163,7 +163,9 @@ happen during an open, both of state the file already implies:
   save ([below](#local-only-durable-saves)) that copies every other member,
   the history included, byte for byte, so an open never cuts or rewrites the
   history. A read-only file gets it too (local-only saves work there); a
-  legacy file keeps it in memory for the upgrading save.
+  legacy file keeps it in memory for the upgrading save, and it does not make
+  the project unsaved: every open of that file materializes the same mode, so
+  a close that drops it loses nothing ([Unsaved changes](#unsaved-changes)).
 
 ## Save Pipeline
 
@@ -263,7 +265,11 @@ Every write of a project file, the local-only ones included, goes through
    the temp on Unix, so a file that appeared after the check in step 3 refuses
    the save (`Exists`) instead of being replaced. Where the volume has no hard
    links, and on Windows, it is the checked rename, with that brief window
-   open
+   open. An unlink that fails after the link (or a crash between the two)
+   leaves `<file>.tmp` as a second NAME of the saved file, not a copy: step 1
+   of the next save unlinks that name only, and the recovery dialog never
+   offers it as an interrupted save (the backup list skips any file that is
+   the project's own, `same_file_on_disk`)
 5. Sync the folder (Unix; a failure is logged, not returned: the file is
    already in place. The warning is logged once per run, later failures at
    debug level, so a network or removable volume does not repeat it on every
@@ -292,9 +298,13 @@ or deleted) refuses the save with `EXTERNALLY_MODIFIED: <path> was changed by
 another program since it was opened`; nothing is written and the edits stay in
 memory. A file that is gone (moved or deleted) is refused with
 `EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted by another
-program since it was opened` (`FILE_MISSING_MARKER`, `guard_refusal`). A touch
-or a rewrite with the same bytes is no change. The local-only saves are
-guarded the same way.
+program since it was opened` (`FILE_MISSING_MARKER`, `guard_refusal`). A
+FIRST save (a project whose path was chosen free, `Guard::Absent`) that finds a
+file at that path, at the guard's check or at the hard-link placement, is
+refused with `EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`
+(`FILE_EXISTS_MARKER`): that file is not this project's. A touch or a rewrite
+with the same bytes is no change. The local-only saves are guarded the same
+way.
 
 The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
 
@@ -304,10 +314,19 @@ The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
   and moves the session to the new one;
 - **Use the file's version**: reopen the file as it is now, discarding the
   unsaved changes. Not offered for a file that is gone (`FILE_MISSING`; the
-  prompt then says the file was moved or deleted). Before it closes the
-  session it asks `project_file_reload_refusal`, which reads and decodes the
-  file as an open would and changes nothing: a file that would not open
-  keeps the session, and the unsaved changes, with the reason shown;
+  prompt then says the file was moved or deleted), nor for a file that
+  appeared where a first save goes (`FILE_EXISTS`; opening it would put a
+  stranger's file in the project's place, and the prompt says "A file named
+  ... appeared at this location"). It is ONE backend operation
+  (`reload_project_full_binary`, `AppState::do_reload_project_full`, through
+  `loadProject(path, { reload: true })`): the file is read and decoded (or
+  converted) once, as a load reads it, and replaces the session only when it
+  opened, in the load's own commit, which also refuses when the session moved
+  during the read. Nothing is closed first, so a file that would not open
+  keeps the session and the unsaved changes, with the reason shown in the
+  prompt. (It used to check the file, close the session, then load it: a
+  sync client writing the file between those reads, or a load the frontend
+  turned away after the close, lost the edits);
 - **Decide later**: keep editing.
 
 A SpeleoDB-managed copy gets only Keep my version: its reload belongs to the
@@ -508,24 +527,39 @@ backend's "changes no save has written": `FileState.dirty`, set by every
 recorded edit, by undo and redo, and by an Ignore or Unignore of a warning
 (ignored warnings are survey content: they ride the next save, and "Don't
 save" discards them); and, on a legacy file not yet upgraded, the local state
-waiting for the upgrading save that is not view state (`local_pending_asks`:
-SpeleoDB bookkeeping, a project name, a materialized undo mode), which 0.6.0
-wrote in place at once and which "Don't save" now discards. A display toggle
-on a legacy file waits for that save too (`local_pending`, through
-`persist_display_state`) but is not an unsaved change: counting it would arm
-autosave, and autosave would convert the 0.6.0 file the user only looked at
-(demo issue I-6). A close without a save drops it, as it drops any other view
-state. Display toggles and SpeleoDB state changes of a version 2 file are
-durable at once and set nothing. A save clears every flag. The frontend keeps
-its own `isDirty` for the indicator and autosave; it asks the backend after an
-Ignore, and never marks the project unsaved for a display toggle. Every way out
-of a project (quit and the window X, close, opening another project, local or
-from SpeleoDB, New Project, an account change, and the saves "Keep the lock"
-and "Quit now" make first) asks `openProjectHasUnsavedChanges`
-(`src/utils/unsavedChanges.ts`): `isDirty`, or else the backend's flag, read at
-that moment. So a 0.6.0 file's `local_pending_asks` gets the unsaved-changes
-prompt, while it still never arms autosave (that would convert a file the user
-only looked at); a failed ask counts as unsaved.
+waiting for the upgrading save that a close would lose for good
+(`local_pending_asks`), which 0.6.0 wrote in place at once and which "Don't
+save" now discards. The rule (`FileState::local_pending_asks`): a deferred
+change asks when a close that drops it changes what the user or the server
+sees afterwards. So the SpeleoDB name fold (the next open would show the old
+name), the link's sync state (the dirty bit, BASE, the Unwind chain pointer,
+the inherited-history watermark) and the history a confirmed push pruned (the
+next push would send it again) ask; an undo mode materialized from this
+machine's default (every open materializes the same one), the lock
+re-verification time (it only paces the next re-check) and a display toggle
+do not. Those wait for that save too (`local_pending`, through
+`persist_display_state`, `persist_unasked_state_at` and the open's own write)
+but are not unsaved changes: counting them would ask on every exit from a
+0.6.0 file the user only looked at, and arm autosave, which would convert it
+(demo issue I-6). A close without a save drops them. Display toggles and
+SpeleoDB state changes of a version 2 file are durable at once and set
+nothing. A save clears every flag. The frontend keeps its own `isDirty` for
+the indicator and autosave; it asks the backend after an Ignore, and never
+marks the project unsaved for a display toggle. Every way out of a project
+(quit and the window X, close, opening another project, local or from
+SpeleoDB, New Project, an account change, and the saves "Keep the lock" and
+"Quit now" make first), and an explicit Save of a SpeleoDB copy with nothing
+to upload, asks `askOpenProjectUnsaved` (`src/utils/unsavedChanges.ts`):
+`isDirty`, or else the backend's flag, read at that moment. So a 0.6.0 file's
+`local_pending_asks` gets the unsaved-changes prompt (and Ctrl+S saves it on
+this computer instead of saying "No changes to upload"), while it still never
+arms autosave. The ask is bounded (`UNSAVED_ASK_BOUND_MS`, 2 s): a backend that
+does not answer in time, or a failed ask, counts as unsaved, so the window X
+still gets its prompt from a stalled backend. And the answer belongs to the
+project it was asked about (its path, `created_at` and load): when a load or a
+close lands during the ask, no exit acts on the old answer. Quit, New Project,
+"Quit now" and an account change decide again for what is open now, an open
+is routed again, and close and "Keep the lock" step aside.
 
 ## Failure classification
 
@@ -539,7 +573,7 @@ mirrors the markers; `saveFeedback.ts` turns them into copy.
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
-| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk (`FILE_MISSING` after it: the file was moved or deleted) | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
+| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk (`FILE_MISSING` after it: the file was moved or deleted; `FILE_EXISTS`: a first save found a file at its path) | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
 | `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only notice (warning toast, key `edit-disabled`), never the error dialog |
 | (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 

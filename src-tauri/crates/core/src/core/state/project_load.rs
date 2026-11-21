@@ -67,6 +67,12 @@ pub(crate) struct Opened {
     /// Shots a legacy file stored with a kind 0.6.0 could not read (#27),
     /// for the load's notice; empty for a version 2 file.
     pub(crate) unrecognised_shot_kinds: Vec<crate::models::UnrecognisedShotKind>,
+    /// A reload of the open project's own file
+    /// ([`AppState::do_reload_project_full`]): the session (generation) it
+    /// replaces. The commit refuses it, with nothing committed, when that
+    /// session is no longer the open one or the open project no longer has
+    /// this path. `None` for every other open.
+    pub(crate) replacing: Option<u64>,
 }
 
 impl Opened {
@@ -89,6 +95,11 @@ impl Opened {
 /// commit; the last read is committed whatever the file holds by then.
 const OPEN_ATTEMPTS: usize = 3;
 
+/// The load error code of a reload [`AppState::do_reload_project_full`]
+/// refuses for a reason of its own (no file, a SpeleoDB copy, a session that
+/// moved); a file that does not open refuses with the load's own code.
+pub(crate) const RELOAD_REFUSED_CODE: &str = "RELOAD_REFUSED";
+
 /// What [`AppState::commit_opened`] does with a read the file no longer
 /// holds (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,9 +121,16 @@ impl IfChanged {
     }
 }
 
-/// The file changed between the read and the commit (see the module docs).
-#[derive(Debug)]
-pub(crate) struct ChangedWhileOpening;
+/// Why [`AppState::commit_opened`] committed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotCommitted {
+    /// The file changed between the read and the commit (see the module
+    /// docs): the caller reads it again.
+    ChangedWhileOpening,
+    /// A reload's session ([`Opened::replacing`]) is no longer the open one:
+    /// nothing is replaced, and the open does not read again.
+    SessionMoved,
+}
 
 fn path_text(path: &Path) -> String {
     path.display().to_string()
@@ -202,32 +220,6 @@ pub(super) fn conversion_refusal_reason(error: &MigrateError) -> String {
 }
 
 impl AppState {
-    /// Why the open project's file could not be opened again as it is on
-    /// disk now, or `None` when it would: read and decoded (or converted, for
-    /// a 0.6.0 file) exactly as an open reads it, with nothing changed. The
-    /// save prompt's "Use the file's version" asks first, because it closes
-    /// the session, and with it the unsaved changes, before it opens the file
-    /// again: a file that is gone, unreadable or not a project any more must
-    /// refuse before that close, not after it. A project with no file has
-    /// nothing to reopen.
-    pub fn project_file_reload_refusal(&self) -> Option<String> {
-        let Some(path) = self.open_file_path() else {
-            return Some("the project has no file to open again".to_string());
-        };
-        match self.read_project_file(&path) {
-            Ok(_) => None,
-            Err(e) => {
-                tracing::warn!(
-                    code = %e.code,
-                    purpose = "never drop unsaved changes for a reopen that would fail",
-                    "The open project's file would not open again: {}",
-                    e.message
-                );
-                Some(e.message)
-            }
-        }
-    }
-
     /// Read the project file at `path` into memory (no state changes).
     pub(crate) fn read_project_file(&self, path: &Path) -> Result<Opened, LoadError> {
         let options = DecodeOptions::default();
@@ -291,6 +283,7 @@ impl AppState {
                     history,
                     history_dropped,
                     unrecognised_shot_kinds: Vec::new(),
+                    replacing: None,
                 })
             }
             Format::Legacy => {
@@ -325,6 +318,7 @@ impl AppState {
                         .had_history
                         .then_some(HistoryDropped::EarlierVersion),
                     unrecognised_shot_kinds,
+                    replacing: None,
                 })
             }
             Format::Unknown => Err(LoadError::corrupt(
@@ -342,24 +336,40 @@ impl AppState {
     ///
     /// When the file no longer holds the bytes `opened` was read from
     /// (checked under the guard; module docs), [`IfChanged::ReadAgain`]
-    /// refuses with nothing committed: the caller reads it again.
+    /// refuses with nothing committed: the caller reads it again. A reload
+    /// ([`Opened::replacing`]) whose session is no longer the open one is
+    /// refused the same way, before anything else is checked.
     pub(crate) fn commit_opened(
         &self,
         opened: Opened,
         if_changed: IfChanged,
-    ) -> Result<u64, ChangedWhileOpening> {
-        self.speleodb_release_held_lock_detached();
+    ) -> Result<u64, NotCommitted> {
+        if opened.replacing.is_none() {
+            self.speleodb_release_held_lock_detached();
+        }
         let mut proj_guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(session) = opened.replacing {
+            let open_path = proj_guard.as_ref().and_then(|p| p.file_path.as_deref());
+            if self.speleodb_session_generation() != session
+                || open_path != opened.project.file_path.as_deref()
+            {
+                tracing::info!(
+                    purpose = "never replace a session the reload was not asked for",
+                    "The project changed while its file was read again; nothing was replaced"
+                );
+                return Err(NotCommitted::SessionMoved);
+            }
+        }
         if !opened.still_on_disk() {
             if if_changed == IfChanged::ReadAgain {
                 tracing::info!(
                     purpose = "keep the save guard on the bytes on disk",
                     "The project file changed while it was opened; reading it again"
                 );
-                return Err(ChangedWhileOpening);
+                return Err(NotCommitted::ChangedWhileOpening);
             }
             tracing::warn!(
                 attempts = OPEN_ATTEMPTS,
@@ -393,6 +403,7 @@ impl AppState {
             history,
             history_dropped,
             unrecognised_shot_kinds: _,
+            replacing: _,
         } = opened;
         // A pull that migrated a legacy revision into this cache path left its
         // conversion notice for the open of the copy it installed
@@ -437,13 +448,16 @@ impl AppState {
             }
         }
         // A legacy NULL undo mode is materialized from this machine's default
-        // on first open, and made durable (#303).
+        // on first open, and made durable (#303): at once in a version 2 file,
+        // by the converting save in a 0.6.0 one. It never asks on close: every
+        // open of the 0.6.0 file materializes the same mode, so a close that
+        // drops it loses nothing (pre-PR delta review finding 3; the rule on
+        // `FileState::local_pending_asks`).
         let mut link = file.speleo_link();
         if let Some(l) = link.as_mut() {
             if self.materialize_undo_mode(l) {
                 file.set_speleo_link(Some(l));
                 file.local_pending = true;
-                file.local_pending_asks = true;
             }
         }
         let watermark = file.extras.local.speleodb.inherited_through;
@@ -509,14 +523,18 @@ impl AppState {
                 Ok(opened) => opened,
                 Err(error) => return CommandResult::failure(error.message),
             };
-            if self
-                .commit_opened(opened, IfChanged::of_attempt(attempt))
-                .is_ok()
-            {
-                self.note_recent_project(&path);
-                return CommandResult::success();
+            match self.commit_opened(opened, IfChanged::of_attempt(attempt)) {
+                Ok(_) => {
+                    self.note_recent_project(&path);
+                    return CommandResult::success();
+                }
+                Err(NotCommitted::ChangedWhileOpening) => attempt += 1,
+                Err(NotCommitted::SessionMoved) => {
+                    return CommandResult::failure(
+                        "The project changed while it was opened".to_owned(),
+                    )
+                }
             }
-            attempt += 1;
         }
     }
 
@@ -610,15 +628,72 @@ impl AppState {
         }
         let cancel_token = self.start_new_load();
         let mut progress = ProgressEmitter::new_for_open(sink, Arc::clone(&cancel_token));
-        let result = self.load_full(&path, &mut progress);
+        let result = self.load_full(&path, &mut progress, None);
         self.clear_active_load(&cancel_token);
         result
     }
 
+    /// Open the open project's own file again as it is on disk now, in place
+    /// of the session (the `reload_project_full_binary` IPC: the save
+    /// prompt's "Use the file's version", plan 6.5), discarding the session's
+    /// unsaved changes as the user chose. ONE operation: the file is read and
+    /// decoded (or converted, for a 0.6.0 file) exactly as a load reads it,
+    /// and only a read that succeeded replaces the session, in the commit a
+    /// load makes; the result is the load's. A file that is gone, unreadable
+    /// or no longer a project, a session that moved during the read, or a
+    /// cancel refuses with the session and its unsaved changes untouched.
+    ///
+    /// It used to be a check (`project_file_reload_refusal`), a close and a
+    /// load: three reads of a file a sync client could rewrite between them,
+    /// and a load the frontend could still refuse after the close had
+    /// dropped the edits (pre-PR delta review finding 2). A SpeleoDB copy is
+    /// refused: its reload belongs to the sync.
+    pub fn do_reload_project_full(&self) -> Result<LoadProjectFullResult, LoadError> {
+        let sink = self
+            .get_event_sink()
+            .ok_or_else(|| LoadError::internal("EventSink not initialized"))?;
+        let (path, session) = {
+            let guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let path = guard.as_ref().and_then(|p| p.file_path.clone());
+            (path, self.speleodb_session_generation())
+        };
+        let Some(path) = path else {
+            return Err(LoadError::new(
+                RELOAD_REFUSED_CODE,
+                "the project has no file to open again",
+            ));
+        };
+        if self.speleo_link().is_some() {
+            return Err(LoadError::new(
+                RELOAD_REFUSED_CODE,
+                "a SpeleoDB copy is reloaded by its sync, not from the file",
+            ));
+        }
+        tracing::info!(path = ?path, purpose = "use the file's version", "Reloading the open project's file");
+        let cancel_token = self.start_new_load();
+        let mut progress = ProgressEmitter::new_for_open(sink, Arc::clone(&cancel_token));
+        let result = self.load_full(&path, &mut progress, Some(session));
+        self.clear_active_load(&cancel_token);
+        if let Err(e) = &result {
+            tracing::warn!(
+                code = %e.code,
+                purpose = "never drop unsaved changes for a reload that would fail",
+                "The open project's file was not opened again: {}",
+                e.message
+            );
+        }
+        result
+    }
+
+    /// `replacing`: a reload's session ([`Opened::replacing`]).
     fn load_full(
         &self,
         path: &Path,
         progress: &mut ProgressEmitter,
+        replacing: Option<u64>,
     ) -> Result<LoadProjectFullResult, LoadError> {
         progress.start_phase(LoadingPhase::OpeningFile);
         use super::speleodb_foreign::LinkedSpelling;
@@ -634,7 +709,7 @@ impl AppState {
         let mut attempt = 1;
         loop {
             let if_changed = IfChanged::of_attempt(attempt);
-            if let Some(result) = self.load_full_once(&path, progress, if_changed)? {
+            if let Some(result) = self.load_full_once(&path, progress, if_changed, replacing)? {
                 return Ok(result);
             }
             attempt += 1;
@@ -648,6 +723,7 @@ impl AppState {
         path: &Path,
         progress: &mut ProgressEmitter,
         if_changed: IfChanged,
+        replacing: Option<u64>,
     ) -> Result<Option<LoadProjectFullResult>, LoadError> {
         let cancelled = |progress: &ProgressEmitter| {
             if progress.is_cancelled() {
@@ -657,7 +733,8 @@ impl AppState {
             }
         };
         progress.start_phase(LoadingPhase::LoadingProjectData);
-        let opened = self.read_project_file(path)?;
+        let mut opened = self.read_project_file(path)?;
+        opened.replacing = replacing;
         cancelled(progress)?;
         progress.complete_phase(LoadingPhase::LoadingProjectData);
         progress.start_phase(LoadingPhase::ComputingStations);
@@ -691,7 +768,6 @@ impl AppState {
         // land before the seed, and keyed by the revision read now the opened
         // survey's layout would be cached as the edited one's. Keyed by the
         // commit's, it is merely stale then, and never read.
-        let mut opened = opened;
         let unrecognised = std::mem::take(&mut opened.unrecognised_shot_kinds);
         if !unrecognised.is_empty() {
             tracing::warn!(
@@ -700,9 +776,15 @@ impl AppState {
             );
         }
         self.set_unrecognised_shot_kinds(progress.loading_id(), unrecognised);
-        let Ok(revision) = self.commit_opened(opened, if_changed) else {
-            return Ok(None);
-        };
+        let revision =
+            match self.commit_opened(opened, if_changed) {
+                Ok(revision) => revision,
+                Err(NotCommitted::ChangedWhileOpening) => return Ok(None),
+                Err(NotCommitted::SessionMoved) => return Err(LoadError::new(
+                    RELOAD_REFUSED_CODE,
+                    "the project changed while its file was read again, so nothing was replaced",
+                )),
+            };
         *self
             .derived
             .lock()

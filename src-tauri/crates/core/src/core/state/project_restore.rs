@@ -218,7 +218,10 @@ impl AppState {
     ///   C3, [`BackupKind::PreUpgrade`]).
     ///
     /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, nor the
-    /// project itself under another name (a hard link), and neither is a file
+    /// project itself under another name (a hard link: among others the
+    /// `.tmp` a first save's hard-link placement leaves when its unlink
+    /// fails, which is the saved project, not an interrupted save), and
+    /// neither is a file
     /// a restore would only refuse: one that is empty, that is neither a SQLite
     /// file nor a version 2 file, or a version 2 file that does not end (a
     /// save torn before it finished).
@@ -888,15 +891,28 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
         .len()
         > MAX_PROJECT_FILE_BYTES
     {
-        return Err(too_large(source));
+        return Err(grew_too_large(source));
     }
     Ok(staged)
 }
 
-/// The refusal of a backup larger than any project Stalagmight reads.
+/// The refusal of a backup larger than any project Stalagmight reads, before
+/// a byte of it is copied.
 fn too_large(source: &Path) -> String {
     format!(
         "Not restored: {} is larger than {} MiB, the most Stalagmight reads. Nothing was changed.",
+        name(source),
+        MAX_PROJECT_FILE_BYTES / (1024 * 1024)
+    )
+}
+
+/// The refusal of a backup that passed [`too_large`]'s check and then grew
+/// past the cap while it was copied (the copy stops one byte past it). Its
+/// own words, so the check before the copy can be told from this one.
+fn grew_too_large(source: &Path) -> String {
+    format!(
+        "Not restored: {} grew past {} MiB, the most Stalagmight reads, while it was copied. \
+         Nothing was changed.",
         name(source),
         MAX_PROJECT_FILE_BYTES / (1024 * 1024)
     )

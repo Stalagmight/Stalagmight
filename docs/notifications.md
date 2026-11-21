@@ -153,10 +153,13 @@ regions). Read the comment blocks in those two files plus
   either way, so `surfaceSaveFailure` opens `SaveConflictDialog`: Keep my
   version, Save as a new file, Use the file's version (not for a SpeleoDB copy,
   whose reload belongs to the sync, nor for a file that was moved or deleted:
-  the refusal carries `FILE_MISSING`, and the prompt says "moved or deleted"),
-  or Decide later. An autosave refused the same way raises no modal (a
-  background save never does): it goes to the autosave banner ("changed by
-  another program", or "moved or deleted by another program") and autosave
+  the refusal carries `FILE_MISSING`, and the prompt says "moved or deleted";
+  nor for a file that appeared where a first save goes: `FILE_EXISTS`, and the
+  prompt says "A file named ... appeared at this location"), or Decide later.
+  An autosave refused the same way raises no modal (a background save never
+  does): it goes to the autosave banner ("changed by another program", "moved
+  or deleted by another program", or "A different file appeared where the
+  project is saved") and autosave
   pauses until a save lands; the banner's Save opens the prompt.
 - **A read-only file and a converted file are banners, not dialogs.** A file
   made with a newer Stalagmight opens read-only with a banner naming the reason

@@ -1,6 +1,7 @@
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
+  isFileExistsError,
   isFileMissingError,
   stripSaveErrorMarker,
   IGNORES_UNREADABLE,
@@ -99,8 +100,9 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
   }
 }
 
-/** The guard's refusal in words: a changed file, or one that is gone. */
+/** The guard's refusal in words: a changed file, one that is gone, or one that appeared where a first save goes. */
 function externallyModifiedLine(error: string): string {
+  if (isFileExistsError(error)) return i18n.t('banners.autosave.externallyExists');
   return i18n.t(isFileMissingError(error) ? 'banners.autosave.externallyMissing' : 'banners.autosave.externallyModified');
 }
 

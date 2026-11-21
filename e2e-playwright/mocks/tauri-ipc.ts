@@ -1178,8 +1178,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       //   file are refused with `EXTERNALLY_MODIFIED: ...`, as the guard does,
       //   until `save_project_overwriting` writes over it (or the spec clears it).
       //   `'missing'` instead: the file was moved or deleted, so the refusal
-      //   carries `FILE_MISSING` and `project_file_reload_refusal` says the
-      //   file would not open again.
+      //   carries `FILE_MISSING` and `reload_project_full_binary` refuses
+      //   with the session kept. `'exists'`: a first save found a file at its
+      //   path, so the refusal carries `FILE_EXISTS`.
       // - __MOCK_SET_READ_ONLY_REASON__(text): the file was made with a newer
       //   Stalagmight; `project_read_only_reason` answers `text`, saves are
       //   refused with `READ_ONLY_FILE: ...`.
@@ -1190,14 +1191,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       //   (`legacy_converted`: `saved` to the open file, `saved_as_new_file`
       //   elsewhere), once, as the backend does; until then
       //   `project_file_is_legacy` answers true (the status bar's old format).
-      let mockExternallyModified: boolean | 'missing' = false;
+      let mockExternallyModified: boolean | 'missing' | 'exists' = false;
       let mockReadOnlyReason: string | null = null;
       let mockConversionNotice: unknown = null;
       let mockLegacyOrigin = false;
       let mockBackendDirty = false;
       const mockSaveCalls: Array<{ command: string; path: string | null }> = [];
-      (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean | 'missing') => {
-        mockExternallyModified = on === 'missing' ? 'missing' : !!on;
+      (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean | 'missing' | 'exists') => {
+        mockExternallyModified = on === 'missing' || on === 'exists' ? on : !!on;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_READ_ONLY_REASON__ = (reason: string | null) => {
         mockReadOnlyReason = reason;
@@ -1491,6 +1492,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         // Home's remove-copy prompt and Settings' purge: specs assert the consent
         // flag each one carried.
         'speleodb_remove_cached_copy', 'speleodb_purge_cached_copies', 'speleodb_open_project',
+        // The save prompt's "Use the file's version": one reload, never a close first.
+        'reload_project_full_binary',
       ]);
 
       return function mockCommand(
@@ -2192,7 +2195,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 success: false,
                 error: mockExternallyModified === 'missing'
                   ? `EXTERNALLY_MODIFIED: FILE_MISSING: ${projectPath ?? 'the project file'} was moved or deleted by another program since it was opened`
-                  : `EXTERNALLY_MODIFIED: ${projectPath ?? 'the project file'} was changed by another program since it was opened`,
+                  : mockExternallyModified === 'exists'
+                    ? `EXTERNALLY_MODIFIED: FILE_EXISTS: ${projectPath ?? 'the project file'} already exists`
+                    : `EXTERNALLY_MODIFIED: ${projectPath ?? 'the project file'} was changed by another program since it was opened`,
                 warnings: [],
                 line_ids: [],
               };
@@ -5572,11 +5577,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // open (the flag belongs to the open project).
             return mockBackendDirty;
 
-          case 'project_file_reload_refusal':
-            // Whether the open file opens again as it is now: not when it was
-            // moved or deleted (`__MOCK_SET_EXTERNALLY_MODIFIED__('missing')`).
-            if (!projectPath) return 'the project has no file to open again';
-            return mockExternallyModified === 'missing' ? `File not found: ${projectPath}` : null;
+          case 'reload_project_full_binary': {
+            // "Use the file's version": the open file read again in place of
+            // the session, in one operation, and the load's payload back. A
+            // file that would not open (moved or deleted,
+            // `__MOCK_SET_EXTERNALLY_MODIFIED__('missing')`) refuses with the
+            // session and its unsaved changes kept.
+            if (!projectPath) {
+              throw { code: 'RELOAD_REFUSED', message: 'the project has no file to open again' };
+            }
+            if (mockExternallyModified === 'missing') {
+              throw { code: 'NOT_FOUND', message: `File not found: ${projectPath}` };
+            }
+            // The session is the file's now, and the guard is on its bytes.
+            mockExternallyModified = false;
+            return mockHandler('load_project_full_binary', { path: projectPath });
+          }
 
           case 'history_discarded_from_earlier_version':
             // Whether the discarded history was written by an earlier version of the

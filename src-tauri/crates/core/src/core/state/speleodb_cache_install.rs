@@ -169,6 +169,7 @@ impl PreparedDownload {
             history,
             history_dropped,
             unrecognised_shot_kinds: Vec::new(),
+            replacing: None,
         }
     }
 }

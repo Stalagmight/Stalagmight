@@ -30,7 +30,7 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
-import { openProjectHasUnsavedChanges } from './unsavedChanges';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 import type { CommandResult } from '../types/commands';
 
 /**
@@ -66,12 +66,14 @@ export async function newProjectGuarded(): Promise<void> {
     void askSpeleoExit('switch').then((closed) => {
       if (closed) useUIStore.getState().openDialog('new-project');
     });
-  } else if (await openProjectHasUnsavedChanges()) {
-    // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
-    // SpeleoDB bookkeeping), asked as every exit asks.
-    openDialog('unsaved-changes', { pendingNewProject: true });
   } else {
-    openDialog('new-project');
+    // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+    // SpeleoDB bookkeeping), asked as every exit asks. A project that moved
+    // during the ask is decided again for what is open now.
+    const asked = await askOpenProjectUnsaved();
+    if (!asked.stillOpen) return newProjectGuarded();
+    if (asked.unsaved) openDialog('unsaved-changes', { pendingNewProject: true });
+    else openDialog('new-project');
   }
 }
 

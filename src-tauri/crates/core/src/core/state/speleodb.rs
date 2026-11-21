@@ -1686,7 +1686,13 @@ impl AppState {
         {
             return;
         }
-        let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
+        {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_stamp_verified_held(project.as_ref(), now);
+        }
         let insecure_http = self.speleodb_insecure_http();
         let project_id = link.project_id;
         let probe = std::thread::spawn(move || {

@@ -255,8 +255,11 @@ fn place(temp: &Path, dest: &Path, guard: Guard<'_>) -> Result<(), WriteError> {
     if matches!(guard, Guard::Absent) {
         match std::fs::hard_link(temp, dest) {
             Ok(()) => {
-                // The new file is in place under both names; the temp's goes
-                // (a failure leaves a `.tmp` the next save removes).
+                // The new file is in place under both names; the temp's goes.
+                // A failure (or a crash before it) leaves `.tmp` as a second
+                // NAME of the saved file: the next save's stale-temp removal
+                // unlinks only that name, and the backup list never offers
+                // it (it is the project's own file).
                 if let Err(error) = std::fs::remove_file(temp) {
                     tracing::warn!(error = %error, "Saved the project, but could not remove its temporary name");
                 }

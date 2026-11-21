@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   EXTERNALLY_MODIFIED,
+  FILE_EXISTS,
   FILE_MISSING,
   READ_ONLY_FILE,
   FS_PATH_NOT_FOUND,
@@ -8,6 +9,7 @@ import {
   FS_PERMISSION_DENIED,
   IGNORES_UNREADABLE,
   classifySaveError,
+  isFileExistsError,
   isFileMissingError,
   isPathError,
   isPermissionError,
@@ -69,6 +71,19 @@ describe('classifySaveError', () => {
     expect(isFileMissingError(`${EXTERNALLY_MODIFIED}: /c/${FILE_MISSING}: cave.stalx was changed`)).toBe(false);
     expect(isFileMissingError(`${FS_PATH_NOT_FOUND}: ${FILE_MISSING}: x`)).toBe(false);
     expect(isFileMissingError(null)).toBe(false);
+  });
+
+  // Pre-PR delta review finding 5: a first save that found a file at its path
+  // is the guard's refusal too, marked so the prompt offers no reopen of it.
+  it('tells a file that appeared where a first save goes from a changed or missing one', () => {
+    const exists = `${EXTERNALLY_MODIFIED}: ${FILE_EXISTS}: /c/cave.stalx already exists`;
+    expect(classifySaveError(exists)).toBe('externally-modified');
+    expect(isFileExistsError(exists)).toBe(true);
+    expect(isFileMissingError(exists)).toBe(false);
+    expect(isFileExistsError(`${EXTERNALLY_MODIFIED}: ${FILE_MISSING}: /c/cave.stalx was moved`)).toBe(false);
+    expect(isFileExistsError(`${EXTERNALLY_MODIFIED}: /c/${FILE_EXISTS}: cave.stalx was changed`)).toBe(false);
+    expect(isFileExistsError(`${FS_PATH_NOT_FOUND}: ${FILE_EXISTS}: x`)).toBe(false);
+    expect(isFileExistsError(null)).toBe(false);
   });
 
   // [#517] The marker exists to keep this refusal out of the Review & Repair
