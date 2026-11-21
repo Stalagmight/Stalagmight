@@ -34,6 +34,7 @@ import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue, openEditorIn } from './gridActivate';
 import { measureColumnWidth, fillExtent } from './gridAutoFit';
 import { planClear } from './gridClear';
+import { oneLineCellText } from './gridCellText';
 import {
   arrowTarget,
   clamp,
@@ -2195,7 +2196,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                               col.render(row, rowIdx)
                             ) : (
                               <span className="sg-cell-text" title={cellText || undefined}>
-                                {cellText}
+                                {col.multiline && cellText ? oneLineCellText(cellText) : cellText}
                               </span>
                             ))}
                         </div>
