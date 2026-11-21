@@ -50,7 +50,8 @@ describe('ExitConfirmDialog', () => {
 
 describe('protectAccountTransition', () => {
   it('asks the in-app question, never the native one', async () => {
-    useProjectStore.setState({ project: null, isDirty: true });
+    // A project with unsaved edits and no file of its own (so no Save choice).
+    useProjectStore.setState({ project: { name: 'Synthetic cave', file_path: null } as never, isDirty: true });
     const answer = protectAccountTransition();
     render(<ExitConfirmDialog />);
     expect(await screen.findByTestId('exit-confirm-dialog')).toBeVisible();

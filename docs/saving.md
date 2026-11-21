@@ -505,9 +505,15 @@ autosave, and autosave would convert the 0.6.0 file the user only looked at
 (demo issue I-6). A close without a save drops it, as it drops any other view
 state. Display toggles and SpeleoDB state changes of a version 2 file are
 durable at once and set nothing. A save clears every flag. The frontend keeps
-its own `isDirty` for the indicator, autosave and the close, switch and quit
-prompts; it asks the backend after an Ignore, and never marks the project
-unsaved for a display toggle.
+its own `isDirty` for the indicator and autosave; it asks the backend after an
+Ignore, and never marks the project unsaved for a display toggle. Every way out
+of a project (quit and the window X, close, opening another project, local or
+from SpeleoDB, New Project, an account change, and the saves "Keep the lock"
+and "Quit now" make first) asks `openProjectHasUnsavedChanges`
+(`src/utils/unsavedChanges.ts`): `isDirty`, or else the backend's flag, read at
+that moment. So a 0.6.0 file's `local_pending_asks` gets the unsaved-changes
+prompt, while it still never arms autosave (that would convert a file the user
+only looked at); a failed ask counts as unsaved.
 
 ## Failure classification
 

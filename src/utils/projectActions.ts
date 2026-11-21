@@ -30,6 +30,7 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
+import { openProjectHasUnsavedChanges } from './unsavedChanges';
 import type { CommandResult } from '../types/commands';
 
 /**
@@ -49,12 +50,12 @@ import type { CommandResult } from '../types/commands';
  * walk straight past the lock. The prompt reopens the new-project dialog itself
  * once resolved, so the user's New Project is not swallowed by the prompt.
  */
-export function newProjectGuarded(): void {
+export async function newProjectGuarded(): Promise<void> {
   const { openDialog } = useUIStore.getState();
   const ps = useProjectStore.getState();
   if (ps.project && hasWorkspaceDrafts()) {
     // Unsent SpeleoDB input is asked about first; then the guards below run as usual.
-    void confirmWorkspaceDrafts().then((discarded) => { if (discarded) newProjectGuarded(); });
+    void confirmWorkspaceDrafts().then((discarded) => { if (discarded) void newProjectGuarded(); });
     return;
   }
   if (!ps.project) {
@@ -65,7 +66,9 @@ export function newProjectGuarded(): void {
     void askSpeleoExit('switch').then((closed) => {
       if (closed) useUIStore.getState().openDialog('new-project');
     });
-  } else if (ps.isDirty) {
+  } else if (await openProjectHasUnsavedChanges()) {
+    // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+    // SpeleoDB bookkeeping), asked as every exit asks.
     openDialog('unsaved-changes', { pendingNewProject: true });
   } else {
     openDialog('new-project');

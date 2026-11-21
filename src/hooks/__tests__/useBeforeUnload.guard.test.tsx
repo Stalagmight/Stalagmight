@@ -56,7 +56,7 @@ function Harness({
   onConfirm,
 }: {
   shouldBlock: boolean;
-  guard: () => boolean;
+  guard: () => boolean | Promise<boolean>;
   onConfirm?: () => Promise<void>;
 }) {
   useBeforeUnload(shouldBlock, 'discard?', onConfirm, guard);
@@ -104,6 +104,41 @@ describe('useBeforeUnload - the in-app exit guard', () => {
 
     await pressWindowX();
 
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `guardQuit` asks the backend's unsaved-changes flag before it decides
+   * (pre-PR review finding 2), so the guard is awaited: its answer still
+   * decides the close, and a second X during the ask joins this attempt
+   * instead of running the guard (and the destroy) a second time.
+   */
+  it('awaits an async guard, and a close request during its ask joins the attempt', async () => {
+    let answer: (tookOver: boolean) => void = () => {};
+    const guard = vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    const first = pressWindowX();
+    await flush();
+    expect(guard).toHaveBeenCalledTimes(1);
+    await pressWindowX();
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(destroyMock).not.toHaveBeenCalled();
+
+    answer(false);
+    await first;
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the close when an async guard took it over', async () => {
+    const guard = vi.fn(async () => true);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    await pressWindowX();
+
+    expect(guard).toHaveBeenCalledTimes(1);
     expect(destroyMock).not.toHaveBeenCalled();
   });
 

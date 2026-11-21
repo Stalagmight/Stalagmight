@@ -95,7 +95,11 @@ pub fn take_conversion_notice(
 /// Whether the open project has changes no save has written yet (the
 /// backend's dirty flag). Warning ignores mark it without an undo entry
 /// (plan 6.5), so the frontend reads it after one to keep its own dirty flag,
-/// which autosave and the exit prompt watch, in step.
+/// which autosave watches, in step. Every exit (quit, close, switch, New
+/// Project, an account change) asks it too before it leaves the project: on a
+/// 0.6.0 file it also counts the SpeleoDB bookkeeping that waits for the
+/// converting save, which the frontend's flag leaves out so autosave does not
+/// convert a file the user only looked at.
 #[tauri::command]
 pub fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
     state.has_unsaved_changes()

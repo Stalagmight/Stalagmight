@@ -4,6 +4,15 @@ import userEvent from '@testing-library/user-event';
 
 const doneMock = vi.hoisted(() => vi.fn());
 vi.mock('../../hooks/useSpeleoActions', () => ({ useSpeleoActions: () => ({ done: doneMock, busy: false }) }));
+// The backend's unsaved-changes flag, which "Keep the lock" asks before it closes.
+const backendUnsaved = vi.hoisted(() => ({ value: false }));
+vi.mock('../../utils/ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/ipc')>()),
+  invokeIpc: vi.fn(async (command: string) => {
+    if (command === 'has_unsaved_changes') return backendUnsaved.value;
+    throw new Error(`unexpected IPC ${command}`);
+  }),
+}));
 
 import SpeleoExitDialog from './SpeleoExitDialog';
 import { useProjectStore } from '../../store/projectStore';
@@ -24,6 +33,7 @@ let showToast: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetSpeleoExitPromptForTests();
+  backendUnsaved.value = false;
   doneMock.mockReset().mockImplementation(async () => {
     useSpeleoStore.setState({ link: link({ editState: 'read-only', hasUnpushedEdits: false }) });
     useProjectStore.setState({ isDirty: false });
@@ -183,6 +193,22 @@ describe('SpeleoExitDialog', () => {
     expect(closeProject).toHaveBeenCalledWith({ releaseLock: false });
     expect(saveProject.mock.invocationCallOrder[0]).toBeLessThan(closeProject.mock.invocationCallOrder[0]!);
     expect(doneMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pre-PR review finding 2: a 0.6.0 copy's SpeleoDB bookkeeping waits for the
+   * converting save, so only the backend knows it is unsaved (`isDirty` false).
+   * "Keep the lock" read `isDirty` alone and closed without saving it.
+   * Injection: reading `isDirty` alone again skips the save here.
+   */
+  it('Keep the lock saves changes only the backend tracks first', async () => {
+    backendUnsaved.value = true;
+    const answer = raise();
+    await userEvent.click(screen.getByTestId('speleodb-exit-keep'));
+    expect(await answer).toBe(true);
+    expect(saveProject).toHaveBeenCalledTimes(1);
+    expect(closeProject).toHaveBeenCalledWith({ releaseLock: false });
+    expect(saveProject.mock.invocationCallOrder[0]).toBeLessThan(closeProject.mock.invocationCallOrder[0]!);
   });
 
   it('Keep the lock with nothing unsaved goes straight to the keeping close', async () => {

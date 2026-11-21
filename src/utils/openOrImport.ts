@@ -44,6 +44,7 @@ import { clearProjectActionSource } from './telemetry';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { confirmWorkspaceDrafts } from './workspaceDrafts';
 import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
+import { openProjectHasUnsavedChanges } from './unsavedChanges';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -371,7 +372,9 @@ export async function routeOpenedFile(
         if (await confirmWorkspaceDrafts() && await askSpeleoExit('switch')) {
           await useProjectStore.getState().loadProject(path, { accessConfirmed: true });
         }
-      } else if (store.project && store.isDirty) {
+      } else if (store.project && await openProjectHasUnsavedChanges()) {
+        // Unsaved changes, the frontend's or the backend's own (a 0.6.0 file's
+        // SpeleoDB bookkeeping): asked as every exit asks.
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;
       } else if (store.project && !opts?.swapConfirmed) {

@@ -17,6 +17,9 @@
  *
  * Every exit routes through `needsSpeleoExitPrompt` and the awaited
  * `askSpeleoExit`, and the matrix below keeps them from drifting apart again.
+ * The unsaved-changes question is one rule too: `openProjectHasUnsavedChanges`,
+ * the frontend's `isDirty` OR the backend's `has_unsaved_changes` (changes
+ * only the backend tracks, such as a 0.6.0 file's SpeleoDB bookkeeping).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
@@ -34,6 +37,7 @@ vi.mock('../../utils/ipc', () => ({
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
 }));
 
+import { invokeIpc } from '../../utils/ipc';
 import { useProject } from '../useProject';
 import { guardQuit, resetQuitConfirmationForTests } from '../../utils/quit';
 import { routeOpenedFile } from '../../utils/openOrImport';
@@ -68,6 +72,7 @@ let closeProject: ReturnType<typeof vi.fn>;
 let loadProject: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  vi.mocked(invokeIpc).mockReset();
   openDialog = vi.fn();
   closeProject = vi.fn(async () => ({ success: true, warnings: [], error: null, line_ids: [] }));
   loadProject = vi.fn(async () => ({ success: true }));
@@ -227,8 +232,48 @@ describe('the disk-dirty guard still covers projects with no SpeleoDB lock', () 
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingOpenPath: OTHER });
 
     openDialog.mockClear();
-    newProjectGuarded();
+    await newProjectGuarded();
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingNewProject: true });
+  });
+});
+
+/**
+ * Pre-PR review finding 2: a project opened from a 0.6.0 file can hold changes
+ * only the backend tracks (its SpeleoDB bookkeeping waits for the converting
+ * save), so `isDirty` is false while `has_unsaved_changes` is true. Every exit
+ * read `isDirty` alone and dropped them with no question. They all ask the
+ * backend now, and all four get the same unsaved-changes prompt. Injection:
+ * reading `isDirty` alone in any one exit fails its column here.
+ */
+describe('changes only the backend tracks are asked about on every exit', () => {
+  beforeEach(() => {
+    vi.mocked(invokeIpc).mockImplementation((async (command: string) => command === 'has_unsaved_changes') as never);
+  });
+
+  it.each([
+    { name: 'a local project', link: null },
+    { name: 'a SpeleoDB copy we hold no lock over', link: { editState: 'read-only' as const, hasUnpushedEdits: false } },
+  ])('$name: quit, close, open and new all ask', async ({ link: l }) => {
+    useSpeleoStore.setState({ link: l ? link(l) : null });
+    expect(await allExits()).toEqual(NONE);
+    const unsaved = openDialog.mock.calls.filter((c) => c[0] === 'unsaved-changes');
+    expect(unsaved).toEqual([
+      ['unsaved-changes', { pendingQuit: true }],
+      ['unsaved-changes'],
+      ['unsaved-changes', { pendingOpenPath: OTHER }],
+      ['unsaved-changes', { pendingNewProject: true }],
+    ]);
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(openDialog).not.toHaveBeenCalledWith('new-project');
+  });
+
+  it('a clean backend leaves every exit as it was', async () => {
+    vi.mocked(invokeIpc).mockImplementation((async () => false) as never);
+    useSpeleoStore.setState({ link: null });
+    expect(await allExits()).toEqual(NONE);
+    expect(openDialog.mock.calls.filter((c) => c[0] === 'unsaved-changes')).toEqual([]);
+    expect(closeProject).toHaveBeenCalled();
   });
 });
 
