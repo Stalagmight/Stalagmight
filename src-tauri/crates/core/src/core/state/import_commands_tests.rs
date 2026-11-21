@@ -671,6 +671,52 @@ fn test_execute_import_lines_rejects_non_finite_shot_update() {
     assert_eq!(canonical(&project(&state)), canonical(&before));
 }
 
+/// An overlap update past the measurement bound is refused in words before
+/// any change, as an UpdateShot is: left to the import's final validation it
+/// was "would corrupt the survey structure".
+#[test]
+fn test_execute_import_lines_refuses_a_shot_update_past_the_bound() {
+    let (state, line_id) = state_with_existing(vec![test_shot_data(5.0)]);
+    let before = project(&state);
+    let shot_id = before.lines()[0].shots[0].id;
+
+    let result = state.execute_import_lines(
+        vec![config(
+            0,
+            "Incoming",
+            vec![test_shot_data(3.0)],
+            ImportPlacement::Origin,
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![ExistingShotUpdate {
+            line_id,
+            shot_id,
+            updates: ShotUpdates {
+                length: Some(3_000_000.0),
+                ..Default::default()
+            },
+        }],
+        VirtualShotMode::Auto,
+    );
+    assert!(
+        !result.success,
+        "an absurd shot update must fail the import"
+    );
+    assert_eq!(
+        result.error.as_deref(),
+        Some(
+            format!(
+                "Import shot update for line {line_id} shot {shot_id}: A shot's length of \
+                 3000000 m is beyond the 1000000 m a survey measurement may be"
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(canonical(&project(&state)), canonical(&before));
+}
+
 #[test]
 fn test_execute_import_lines_from_importing_placement() {
     let state = new_state();
