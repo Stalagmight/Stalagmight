@@ -1731,6 +1731,7 @@
     },
     "export": {
       "failed": "Export failed - try a different folder or file name",
+      "succeeded": "Exported to {{file}}",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some lines have no declination - Ariane will re-correct all",

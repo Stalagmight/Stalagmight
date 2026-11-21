@@ -20,6 +20,7 @@ import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
 import { lineDisplayName } from '../../utils/stationIdentity';
+import { extractFilename } from '../../utils/path';
 import { ExportColorScaleControls } from './ExportColorScaleControls';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
@@ -115,6 +116,18 @@ export default function ExportControls({
     [onExportingChange],
   );
 
+  // The export finished: say where it went (demo finding I-13). A success
+  // toast per docs/notifications.md - the file is written somewhere the user
+  // is not looking, and the dialog just closes. Only the file name: the folder
+  // was the user's own pick a moment ago.
+  const announceExported = (path: string) => {
+    showToast(
+      t('dialogs.export.succeeded', { file: extractFilename(path) }),
+      TOAST_KEYS.EXPORT_SUCCEEDED,
+      'success',
+    );
+  };
+
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     // Only a chosen path counts as a completed export; a cancelled OS save
     // picker must leave the dialog open with options intact and must NOT
@@ -200,6 +213,7 @@ export default function ExportControls({
             } else {
               await exportTml(finalPath);
             }
+            announceExported(finalPath);
           } finally {
             if (isMountedRef.current) {
               setExporting(false);
@@ -246,6 +260,7 @@ export default function ExportControls({
 
           try {
             await exportImage(finalPath, imageOptions);
+            announceExported(finalPath);
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();

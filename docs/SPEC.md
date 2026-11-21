@@ -1783,6 +1783,12 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+When the file is written the dialog closes and a success toast names it
+("Exported to demo-cave.tml"); a failed export shows an error toast and keeps
+the dialog open; a cancelled save picker shows nothing (demo finding I-13).
+In a read-only file the TML notice about lines without a zero datum does not
+suggest setting one, since that edit is turned off there (I-10).
+
 ---
 
 ## 7. Workflows
