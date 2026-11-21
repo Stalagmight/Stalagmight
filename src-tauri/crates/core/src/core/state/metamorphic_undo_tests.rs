@@ -2749,9 +2749,10 @@ fn metamorphic_gate() {
 /// and 168 a piece whose placement station stayed while the sweep moved its
 /// still point onto it. Injections: a zero `propagation` bound fails 3023,
 /// no promotion undo fails 3063, the placement station alone fails 3019, the
-/// still point alone fails 168 (and, since the absorbed kind replaced the
-/// promotion undo, giving the singles' junction no atomic identity fails
-/// 3063). Farm seeds 17514597 and 17515360 (the
+/// still point alone fails 168. (The promotion undo 3063 needed is gone:
+/// the junction there now goes back to the partner's identity by U1-3, and
+/// the absorbed kind that replaced the undo is pinned below.) Farm seeds
+/// 17514597 and 17515360 (the
 /// sweep's 4 repeats, with closures) pin the promotion both routes make in
 /// opposite directions: the old promotion filter panics on the first (the v2
 /// encoder refuses the renamed junction), the range's own promotion moves
@@ -2831,7 +2832,9 @@ fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
 /// placement names another station. Injections: halving the dragged shift
 /// fails 17505500, 17510181 and 17510437; holding the head still on every
 /// dragged piece fails 17510437; joining the comments retired first fails
-/// 17507685; any other extra id than the edited line's end fails 17505500.
+/// 17507685; any other extra id than the edited line's end fails 17505500;
+/// giving the singles' junction no atomic identity fails 17503128,
+/// 17505500, 17515357 and 17517958.
 #[test]
 fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
     let _config = crate::test_helpers::isolated_config();
