@@ -2830,16 +2830,38 @@ function useNetworkStatus() {
 4. Cancel
 
 #### Restore from Backup
-The dialog (`list_project_backups`, `core/state/project_restore.rs`) offers the
-files beside the project named after it plus a suffix that contains `.backup`
-or ends in `.tmp` (`cave.stalx.backup`, `cave.stalx.backup.1`,
-`cave.stalx.tmp`, the temp a version 2 save writes through), and the SQLite
-original a project's first version 2 save kept in the app-data `backups/`
-folder (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`). It offers only files that are a
-SQLite project or a complete version 2 file: never a version 2 file a save
-tore before it finished, the project itself (nor, on Unix, a hard link to it),
-its `.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty
-file (#720).
+The same list serves the damaged-file dialog's Restore from Backup and Recent
+Projects' "Restore an earlier copy" (right-click a project). It
+(`list_project_backups`, `core/state/project_restore.rs`) offers, each with its
+kind (`BackupInfo.kind`):
+
+- the files beside the project named after it plus a suffix that contains
+  `.backup` ("Backup": `cave.stalx.backup`, `cave.stalx.backup.1`, the copy
+  Attempt Repair keeps) or ends in `.tmp` ("Copy from a save that was
+  interrupted": `cave.stalx.tmp`, the temp a version 2 save writes through);
+- the copy the last restore kept, `<project>.stalx.pre-restore` ("The file as
+  it was before the last restore"), so a restore can be undone;
+- the SQLite original a project's first version 2 save kept in the app-data
+  `backups/` folder (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, "Original
+  before the upgrade to the new format").
+
+It offers only files that are a SQLite project or a complete version 2 file:
+never a version 2 file a save tore before it finished, the project itself
+(nor, on Unix, a hard link to it), SQLite's `-journal`/`-wal`/`-shm` files, or
+an empty file (#720).
+
+The dialog lists them newest first, each in words with its local date and
+size; the file name is only in the row's tooltip. A click on a row selects
+it and writes nothing. The sentence under the list says what Restore does:
+"Replace `<file>` with this copy? The current file is kept as
+`<file>.pre-restore` and is listed here, so you can switch back." (for the
+damaged file: "Replace the damaged ...? The damaged file is kept as ..."),
+"It takes the place of the copy the last restore kept (`<date>`)." when there
+is one, and for that copy itself "Put `<file>` back as it was before the last
+restore? The two files swap places: ...". Restore is disabled until a copy
+is chosen; the footer is Cancel (Recent Projects) or Back (damaged file),
+then Restore. The result names a pre-upgrade original in words, never by its
+app-data path, and can be closed without opening the project.
 
 A restore never writes into a file in place, and a restore that is refused or
 fails changes nothing:
@@ -2860,8 +2882,10 @@ fails changes nothing:
   replaces it, and the backup copy replaces the project, each by rename. If the
   last step fails, the previous `.pre-restore` copy goes back. On Unix the
   restored file keeps the project's permission bits.
-- The dialog never offers the `.pre-restore` copy. Restoring it directly (over
-  IPC) swaps the two files back.
+- Restoring the `.pre-restore` copy swaps the two files back.
+- A restored pre-upgrade original that is saved again is not kept a second
+  time: the upgrade keeps no copy when one with the same bytes is already kept
+  for the project ([saving.md](saving.md#upgrading-a-legacy-file)).
 
 #### Attempt Repair and Export Salvageable Data
 Attempt Repair (`AppState::repair_project_file`, `core/state/project_salvage.rs`)

@@ -337,7 +337,10 @@ alone opens as another survey). The upgrade runs in this order:
    anything the file does not now.
 4. Keep the original: write its bytes to `<app data>/backups/` under a hidden
    name, sync it, rename it to `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, sync the
-   folder. The kept copy is one self-contained SQLite file, never a pair.
+   folder. The kept copy is one self-contained SQLite file, never a pair. When
+   a copy of this project with the same bytes is already kept (the original
+   restored from Recovery, then saved again), nothing is written: Recovery
+   would only list the same original twice.
 5. Write version 2 (`write_atomic`, above), guarded by what the original holds
    now.
 
@@ -351,8 +354,8 @@ project needs no sidecar.
 If a step fails, the original stays whole (settled, or as it was). When the
 settle already rewrote it, the session's guard follows the new bytes, so the
 next save works. A failed write removes the copy step 4 kept while the original
-still holds the same bytes, so an autosave retried on a read-only folder does
-not fill the backups folder. The next upgrade of the same file removes what a
+still holds the same bytes (never a copy an earlier upgrade kept), so an
+autosave retried on a read-only folder does not fill the backups folder. The next upgrade of the same file removes what a
 killed one left behind (the hidden settled copy, a partial backup). An original
 whose unfinished changes SQLite cannot fold in (a damaged pair) is never
 replaced, not even by Keep my version: there would be no whole copy of it. The
@@ -369,7 +372,10 @@ the original. On write-protected media the upgrade is refused with
 `PERMISSION_DENIED` and changes nothing.
 
 The Recovery dialog lists the kept originals with the project's own backups
-(`list_project_backups`), and Restore puts one back. The save itself is
+(`list_project_backups`, as "Original before the upgrade to the new format"),
+and Restore puts one back after the user confirms; the file it replaces is
+kept as `<project>.stalx.pre-restore`, which the dialog lists too, so the
+restore can be undone ([SPEC 14.4](SPEC.md#restore-from-backup)). The save itself is
 silent; the conversion notice (above) was shown at open when the conversion
 moved anything. Until that first save nothing is written to a legacy file
 (but the hot-journal rollback of [What an open writes](#what-an-open-writes)):
