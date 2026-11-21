@@ -85,7 +85,14 @@ verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Unuploaded changes are decided by content: a copy holding exactly the
 survey of the revision it is based on has none, whatever its mark says (an edit lost
 in a crash or closed with Don't save, or taken back and saved), and opens, updates
-and closes as a clean copy. Autosave and autosave retry remain local-only. Save and Close continues
+and closes as a clean copy. Every upload (Save Changes, Done and the close, quit and
+sign-out uploads) first checks that SpeleoDB's latest revision is still the copy's
+base, or moved only by this session's own upload whose answer was lost; any other
+revision there - including one from another session of the same account, which
+holds the same per-account lock - uploads nothing and raises the divergence prompt.
+An upload that landed on top of a revision pushed between that check and the upload
+names it on a banner (it stays in the Revision History), and the exit or sign-out
+that ran the upload stops so the banner is read. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never

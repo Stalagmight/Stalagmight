@@ -129,9 +129,11 @@ function SignOutPrompt({ kind, initial, settle }: {
       return;
     }
     setDoing(null);
-    if (result === 'diverged') {
+    if (result === 'diverged' || result === 'replaced') {
       // SpeleoDB moved on: the divergence dialog is the way through, so the
-      // sign-out stops here and the user resolves it first.
+      // sign-out stops here and the user resolves it first. An upload that
+      // landed on top of revisions another session pushed meanwhile (R3) stops
+      // it too: the project's banner names them, and is read before signing out.
       settle(false);
     } else if (result === 'newer') {
       setError(t('speleoExitPrompt.errors.newerChanges'));

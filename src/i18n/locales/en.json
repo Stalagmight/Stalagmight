@@ -3931,6 +3931,11 @@
       "startEditingToRetry": "Start editing to upload",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
+    "replaced": {
+      "named": "\"{{message}}\" ({{sha}})",
+      "notice_one": "Your upload replaced {{name}}, uploaded by {{author}} while yours was on its way. Its changes are not in yours. It is still in the SpeleoDB tab's Revision History, where you can view or restore it.",
+      "notice_other": "Your upload replaced {{count}} revisions uploaded by {{author}} while yours was on its way, the latest {{name}}. Their changes are not in yours. They are still in the SpeleoDB tab's Revision History, where you can view or restore them."
+    },
     "heldLocks": {
       "title": "You hold SpeleoDB write locks",
       "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",

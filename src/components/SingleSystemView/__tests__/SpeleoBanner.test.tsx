@@ -68,6 +68,60 @@ describe('SpeleoBanner no_anchor notice', () => {
   });
 });
 
+describe('SpeleoBanner replaced revision (R3)', () => {
+  const revision = (id: string, message: string | null) => ({
+    id,
+    parent_ids: [],
+    author_email: 'diver@example.com',
+    authored_date: '2026-11-21T10:00:00.000Z',
+    message,
+  });
+
+  it('names the revision the upload replaced, who uploaded it, and where it still is', async () => {
+    seedLink({ hasUnpushedEdits: false });
+    useSpeleoStore.getState().applyPush({
+      kind: 'pushed',
+      replaced_revisions: [revision('0123456789abcdef0123456789abcdef01234567', 'Surveyed the sump')],
+    });
+    render(<SpeleoBanner />);
+    const banner = screen.getByTestId('speleo-banner');
+    expect(banner).toHaveAttribute('data-kind', 'replaced_revision');
+    expect(banner).toHaveTextContent(
+      'Your upload replaced "Surveyed the sump" (01234567), uploaded by diver@example.com while yours was on its way. ' +
+        'Its changes are not in yours. It is still in the SpeleoDB tab\'s Revision History, where you can view or restore it.',
+    );
+    // Persistent until dismissed: nothing else reports the lost race.
+    expect(screen.queryByTestId('speleo-banner-retry-push')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('speleo-banner-dismiss'));
+    expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+
+  it('counts several, names the latest, and falls back to the short id without a description', () => {
+    seedLink({ hasUnpushedEdits: false });
+    useSpeleoStore.setState({
+      banner: {
+        kind: 'replaced_revision',
+        revisions: [revision('abcdef0123456789', null), revision('9876543210fedcba', 'First')],
+      },
+    });
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveTextContent(
+      'Your upload replaced 2 revisions uploaded by diver@example.com while yours was on its way, the latest abcdef01. ' +
+        'Their changes are not in yours. They are still in the SpeleoDB tab\'s Revision History, where you can view or restore them.',
+    );
+  });
+
+  it('a later no-anchor notice does not cover it', () => {
+    seedLink({ hasUnpushedEdits: false });
+    useSpeleoStore.getState().applyDone({
+      kind: 'released',
+      replaced_revisions: [revision('0123456789abcdef', 'Surveyed the sump')],
+    });
+    useSpeleoStore.getState().raiseNoAnchorBanner();
+    expect(useSpeleoStore.getState().banner?.kind).toBe('replaced_revision');
+  });
+});
+
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
     seedLink({ });

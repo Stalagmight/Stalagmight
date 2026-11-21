@@ -251,6 +251,45 @@ nothing. Edit and save, then Undo and save: the un-uploaded indicator goes
 away and Close asks nothing. Edit, save and close: the next open still offers
 the local copy.
 
+### Two sessions of one account (R3)
+
+SpeleoDB's lock belongs to the account, so the same account signed in twice (two
+computers, two windows) holds it twice, and its revisions carry the same author
+email. The verified API offers no conditional upload: the upload view takes no
+parent or base, and the revisions list (`GET projects/{id}/revisions/`, each
+commit with its `id`, `parent_ids`, `author_email` and stored `message`) is the
+only way to see what HEAD is and what a landed revision sits on. The 200 upload
+envelope names the new revision (`hexsha`) but not its parent.
+
+So the client checks before every upload that HEAD is still the copy's BASE, and
+the only thing it lets stand between them is this session's own upload whose
+answer was lost (#193), recognised by `sync::OwnUploads` (the revisions its
+uploads were answered with; the one unanswered upload's BASE and description, as
+the server stores it), never by the email. After a 200 it reads the history once
+more and `sync::replaced_by_upload` names what landed between the upload's BASE
+and the new revision's parent: the race between the check and the upload, which
+only a server-side conditional upload could close.
+
+`core/state/speleodb_same_account_tests.rs` pins it against a loopback server that
+keeps a real history (every accepted upload lands as a new revision on the tip,
+authored by the account, with its description) and two `AppState`s of one account,
+each on its own thread, cache root and config:
+`a_second_session_of_the_same_account_is_refused_and_uploads_nothing` (Save
+Changes and Done: `divergence_needed`, one upload on the server, B still dirty and
+locked at BASE), `an_unanswered_upload_is_no_licence_to_adopt_another_sessions_revision`,
+`our_own_unanswered_upload_is_adopted_on_the_retry`,
+`a_push_whose_base_is_still_head_uploads`,
+`a_revision_landed_between_the_check_and_the_upload_is_named_with_the_push`,
+`done_names_the_replaced_revision_too` and
+`the_status_shows_the_conflict_that_save_changes_will_report`. The pure rules are
+unit-tested in `speleodb/sync.rs` (`ancestry_*`, `plan_push_*`, `status_verdict_*`,
+`replaced_by_upload_*`), the frontend routing in vitest (`useSpeleoActions`,
+`speleoStore`, `SpeleoBanner`, the exit and sign-out dialogs) and
+`e2e-playwright/speleodb-same-account.spec.ts`. To try it by hand, sign in with one
+test account in two app instances (two machines, or two config and cache roots),
+open the same project in both, upload from one, then upload from the other: the
+second shows the conflict prompt and SpeleoDB's history gains nothing.
+
 ### The live test
 
 The live test generates synthetic project files in temporary directories (the

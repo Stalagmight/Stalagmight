@@ -12,6 +12,15 @@
 //! land. [`PushOutcome`] is the shared answer type; `Unconfirmed` is why the dirty
 //! bit and the lock outlive a failed attempt.
 //!
+//! "Is our BASE still the tip" is asked of every upload, and only this session's
+//! own landed upload may stand between them (R3): SpeleoDB's lock is the
+//! account's, so another session of the same account holds it too and its
+//! revisions carry our email. What this session uploaded is recorded in
+//! `speleodb_own_uploads`; a HEAD that moved past BASE by anything else is the
+//! divergence prompt, and nothing is uploaded. A race lost between that check
+//! and the upload is found in the history right after it and reported with the
+//! push's result (`replaced_revisions`).
+//!
 //! Every state change a landed push makes (BASE, the dirty bit, the cut history,
 //! the cleared Unwind chain) is durable at once through the local-only save
 //! (plan 6.5 mode 4, R2 B3), so a close right after Done never reopens to a stale
@@ -359,6 +368,7 @@ impl AppState {
                 self.speleodb_forget_lock_acquired_for(&link.project_id);
                 Ok(DoneResult::Released {
                     undo_history_omitted: undo_history_omitted.then_some(true),
+                    replaced_revisions: self.speleodb_take_replaced(&link.project_id),
                 })
             }
             // Stay locked + dirty so the user can reconcile / a retry can recover.
@@ -403,8 +413,11 @@ impl AppState {
         }
         self.speleodb_guard_older_version_push(&link, accept_older_version)?;
         if !link.has_unpushed_edits {
+            // Nothing to upload, but an earlier landing may have a replacement
+            // left to report (R3; see the late-edit arm below).
             return Ok(PushResult::Pushed {
                 undo_history_omitted: None,
+                replaced_revisions: self.speleodb_take_replaced(&link.project_id),
             });
         }
 
@@ -424,10 +437,13 @@ impl AppState {
                     .map_err(local_dto)?
                     .has_unpushed_edits;
                 if still_dirty {
+                    // A revision this landing replaced (R3) stays recorded: the
+                    // result that reports the late edit's upload names it.
                     Ok(PushResult::PushUnconfirmed)
                 } else {
                     Ok(PushResult::Pushed {
                         undo_history_omitted: undo_history_omitted.then_some(true),
+                        replaced_revisions: self.speleodb_take_replaced(&link.project_id),
                     })
                 }
             }
@@ -738,6 +754,11 @@ impl AppState {
             String::new()
         });
 
+        // R3: only what THIS session uploaded may be adopted as "our own landed
+        // push". The account's email is not enough - another session of the same
+        // account holds the same per-account lock and signs with it.
+        let own = self.speleodb_own_uploads(project_id);
+
         // push-start is not persisted, so the ancestry timing stays conservative
         // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
         // re-push on top of any landed commit - a no-op 304 if nothing changed.
@@ -746,6 +767,7 @@ impl AppState {
             tip.as_deref(),
             &commits,
             &my_email,
+            &own,
             link.last_edit_at.as_deref(),
             None,
         ) {
@@ -754,6 +776,8 @@ impl AppState {
             // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
+                // The unanswered upload is answered now: it made the tip.
+                self.speleodb_note_upload_answered(generation, project_id, tip.as_deref());
                 let project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link_held(project.as_ref(), |l| {
                     l.base_commit_sha = tip.clone();
@@ -771,6 +795,7 @@ impl AppState {
                 let landed = PushOutcome::Confirmed {
                     undo_history_omitted: false,
                 };
+                self.speleodb_note_upload_answered(generation, project_id, tip.as_deref());
                 let project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_record_landing(project.as_ref(), None, |l| {
                     l.base_commit_sha = tip.clone();
@@ -779,10 +804,22 @@ impl AppState {
                 })?;
                 return Ok(landed);
             }
-            // A stranger's commit, OR a server inconsistency (non-linear / multi-root
-            // / a recorded BASE with no tip): never overwrite or guess - surface the
-            // divergence prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
-            PushPlan::Diverged => return Ok(PushOutcome::Diverged),
+            // HEAD moved past BASE by a commit this session did not upload - a
+            // stranger's, or another session's of our own account (R3) - OR a server
+            // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
+            // never overwrite or guess - surface the divergence prompt (#193 b2 + b5),
+            // uploading nothing. Stays locked + dirty in speleodb_done.
+            PushPlan::Diverged => {
+                tracing::info!(
+                    project_id,
+                    base = ?link.base_commit_sha,
+                    head = ?tip,
+                    purpose = "never upload over a revision this session did not make (R3)",
+                    "speleodb push: SpeleoDB's latest revision is not this copy's BASE \
+                     and not an upload of ours; uploading nothing, asking the user to reconcile"
+                );
+                return Ok(PushOutcome::Diverged);
+            }
         }
 
         // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
@@ -936,9 +973,20 @@ impl AppState {
         let undo_cutoff = snapshot_newest.map_or(push_floor, |newest| newest.max(push_floor));
         let staged = write_push_snapshot(dir, &snapshot.bytes).map_err(local_dto)?;
 
-        {
+        // R3: the BASE this upload sits on is the open link's NOW (an ancestry
+        // adoption just before it moved it), and until the answer says what the
+        // upload made it is this session's one unanswered upload - the only thing
+        // the next push may adopt as its own if the answer is lost.
+        let upload_base = {
             let _project = self.speleodb_push_project_guard(generation)?;
-        }
+            self.speleo_link().and_then(|l| l.base_commit_sha)
+        };
+        self.speleodb_note_upload_sent(
+            generation,
+            project_id,
+            upload_base.clone(),
+            &commit_message,
+        );
         let result = self.speleodb_handle_auth(
             Endpoint::UploadStalx,
             client::upload_stalx(
@@ -970,6 +1018,14 @@ impl AppState {
                 let landed = PushOutcome::Confirmed {
                     undo_history_omitted,
                 };
+                let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
+                // R3: the answer names the revision this upload made, which is ours
+                // from now on (a status refresh that read BASE before this landing
+                // meets it). A 200 that names nothing leaves the upload unanswered,
+                // so the next push still recovers it by ancestry.
+                if let Some(head) = new_base.as_deref() {
+                    self.speleodb_note_upload_answered(generation, project_id, Some(head));
+                }
                 self.speleodb_heal_managed_type(
                     endpoint,
                     token,
@@ -977,9 +1033,9 @@ impl AppState {
                     project_id,
                     server_kind.as_deref(),
                 );
-                let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 // What went up is the new BASE only when the landing names it.
                 let landed_bytes = new_base.is_some().then_some(snapshot.bytes.as_slice());
+                let head = new_base.clone();
                 let project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_record_landing(project.as_ref(), landed_bytes, |l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
@@ -1020,6 +1076,20 @@ impl AppState {
                     }
                 })?;
                 self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
+                drop(project);
+                // R3, the lost race: SpeleoDB has no conditional upload, so another
+                // session of the account may have landed a revision between the
+                // HEAD check and this upload, and ours went on top of it. Only the
+                // history says so; what it finds rides the push's result.
+                if let Some(head) = head.as_deref() {
+                    self.speleodb_check_replaced_by_upload(
+                        (endpoint, token, insecure_http),
+                        generation,
+                        project_id,
+                        upload_base.as_deref(),
+                        head,
+                    );
+                }
                 Ok(landed)
             }
             Err(e) => {
@@ -1035,6 +1105,8 @@ impl AppState {
                     let landed = PushOutcome::Confirmed {
                         undo_history_omitted: false,
                     };
+                    // Nothing new landed from this upload.
+                    self.speleodb_note_upload_answered(generation, project_id, None);
                     self.speleodb_heal_managed_type(
                         endpoint,
                         token,
@@ -1075,6 +1147,7 @@ impl AppState {
                         *status,
                         message,
                     ) {
+                        self.speleodb_note_upload_answered(generation, project_id, None);
                         tracing::warn!(
                             status,
                             detail = %message,
@@ -1110,7 +1183,17 @@ impl AppState {
                     );
                     return Ok(PushOutcome::Unconfirmed);
                 }
-                // A hard rejection (403 fence, 4xx, parse): surface it.
+                // A hard rejection (403 fence, 4xx, parse): surface it. A status the
+                // server answered with (or a file refused before sending) landed
+                // nothing; anything else - a 200 whose body could not be read - may
+                // have, so the upload stays the unanswered one the next push may
+                // recover (R3).
+                if matches!(
+                    e,
+                    SpeleoDbError::Status { .. } | SpeleoDbError::UploadTooLarge { .. }
+                ) {
+                    self.speleodb_note_upload_answered(generation, project_id, None);
+                }
                 Err(dto_for_error(Endpoint::UploadStalx, &e))
             }
         }

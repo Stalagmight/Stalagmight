@@ -254,6 +254,11 @@ pub struct AppState {
     /// See `AppState::speleodb_verify_lock_if_expired`. Held only briefly, never
     /// across I/O.
     pub(super) speleodb_reverify: Mutex<Option<super::speleodb::PendingReverify>>,
+    /// What this session uploaded of the open project, and what a landed upload
+    /// replaced (R3): the push's licence to adopt a revision as its own landed
+    /// upload, and the report of a lost race. See `core::state::speleodb_own_uploads`.
+    /// Held only briefly, never across I/O.
+    pub(super) speleodb_own_uploads: Mutex<Option<super::speleodb_own_uploads::OwnUploadsRecord>>,
 }
 
 impl AppState {
@@ -317,6 +322,7 @@ impl AppState {
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
             speleodb_reverify: Mutex::new(None),
+            speleodb_own_uploads: Mutex::new(None),
         })
     }
 

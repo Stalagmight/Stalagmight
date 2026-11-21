@@ -9,10 +9,16 @@
 //!
 //! - [`fence`] - the base-SHA divergence fence (#192): BASE vs server tip.
 //! - [`classify_ancestry`] - guardrail-7 ancestry recovery (#193): after a push
-//!   whose confirmation was lost, did my edit actually land on the server?
+//!   whose confirmation was lost, did my edit actually land on the server? Only
+//!   a revision this session can show it uploaded ([`OwnUploads`]) counts as
+//!   ours, never one that merely carries our email (R3).
+//! - [`replaced_by_upload`] - after a landed upload, the revisions it took HEAD
+//!   from: another session's, pushed between the push's HEAD check and the
+//!   upload (R3, the lost race).
 
 use std::collections::{HashMap, HashSet};
 
+use super::commit_message::normalize_like_server;
 use super::models::{RemoteState, RevisionCommit};
 
 /// Verdict of the base-SHA fence: our recorded BASE commit compared against the
@@ -94,6 +100,65 @@ pub(crate) enum AncestryOutcome {
     FailClosed,
 }
 
+/// What THIS session knows it uploaded of the open project (R3): the revisions
+/// its uploads' answers named, and the one upload whose answer never came.
+///
+/// The revision history names each revision's author by email, but SpeleoDB
+/// locks are per ACCOUNT: a second session of the same account (another
+/// machine, another window) holds the lock too, and its revisions carry our
+/// email. So the email says nothing about which session pushed a revision, and
+/// adopting one as "our own landed push" uploads this copy over that
+/// session's work (the fuzzer's same-account-overwrite: its revision is then
+/// only in the history). This record is what does say it. It is process-local
+/// and never persisted: a restart opens through Start editing, whose reconcile
+/// has no authorship recovery at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnUploads {
+    /// The revisions this session's uploads made, as the server's 200 answers
+    /// named them (the envelope's `hexsha`).
+    pub landed: Vec<String>,
+    /// The upload whose answer was lost (a dropped connection, a 5xx retried to
+    /// exhaustion, a 200 that named no revision): it made at most one revision,
+    /// directly on [`UnansweredUpload::base`], with its description.
+    pub unanswered: Option<UnansweredUpload>,
+}
+
+/// An upload this session sent whose answer did not say what it made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnansweredUpload {
+    /// The BASE the upload sat on (`None` = the empty-repo BASE).
+    pub base: Option<String>,
+    /// The description it carried, as sent.
+    pub message: String,
+}
+
+impl UnansweredUpload {
+    /// Could `commit` be the revision this upload made? It must sit directly on
+    /// the upload's BASE (an upload is one revision on the tip it was sent to;
+    /// uploads are never retried by the client), be authored by our account,
+    /// and carry the upload's description as the server stores it
+    /// ([`normalize_like_server`]). A history without descriptions (an older
+    /// server) is matched on the first two alone.
+    ///
+    /// The description is what tells our own landed upload from another
+    /// session's revision in the one place they can both be: on our BASE,
+    /// authored by our account. It cannot tell two sessions that wrote the same
+    /// words, which is the residue.
+    fn made(&self, commit: &RevisionCommit, my_email: &str) -> bool {
+        let on_base = match (&self.base, commit.parent_ids.as_slice()) {
+            (None, []) => true,
+            (Some(base), [parent]) => parent.eq_ignore_ascii_case(base),
+            _ => false,
+        };
+        let ours =
+            !my_email.trim().is_empty() && commit.author_email.eq_ignore_ascii_case(my_email);
+        let described = commit.message.as_deref().is_none_or(|stored| {
+            normalize_like_server(stored) == normalize_like_server(&self.message)
+        });
+        on_base && ours && described
+    }
+}
+
 /// Guardrail-7 ancestry recovery (#193).
 ///
 /// Invoked when a push's confirmation was lost (an ambiguous result): the dirty
@@ -102,15 +167,20 @@ pub(crate) enum AncestryOutcome {
 /// edit landed, so we never re-push over our own landed commit nor clobber a
 /// stranger's.
 ///
-/// **Assumption (documented):** a project is edited from a single account in a
-/// single session at a time (the single-writer lock enforces this). "My" commits
-/// are identified purely by `author_email == my_email`; a second device editing
-/// the same project under the same account concurrently is out of scope.
+/// "My" commits are the ones `own` can account for: a revision one of this
+/// session's uploads was answered with, or the one revision its unanswered
+/// upload may have made ([`UnansweredUpload::made`]). The author email alone is
+/// NOT enough: the lock is the account's, so a second session of the same
+/// account (another machine) holds it too and its revisions carry our email
+/// (R3, the fuzzer's same-account-overwrite). A gap commit nothing in `own`
+/// accounts for is someone else's push, whoever it names: the divergence
+/// prompt, never an adopt and an upload over it.
 ///
 /// - `base` - our recorded BASE (`None` = empty-repo BASE).
 /// - `tip` - the server's current tip (`None` = server reports none).
 /// - `commits` - the project's linear revision history.
 /// - `my_email` - the authenticated user's email.
+/// - `own` - what this session knows it uploaded.
 /// - `last_edit_at` / `push_start_at` - RFC-3339 UTC timestamps gating whether
 ///   the landed push captured all our edits (see [`AncestryOutcome::Landed`]).
 pub(crate) fn classify_ancestry(
@@ -118,6 +188,7 @@ pub(crate) fn classify_ancestry(
     tip: Option<&str>,
     commits: &[RevisionCommit],
     my_email: &str,
+    own: &OwnUploads,
     last_edit_at: Option<&str>,
     push_start_at: Option<&str>,
 ) -> AncestryOutcome {
@@ -183,13 +254,20 @@ pub(crate) fn classify_ancestry(
     if my_email.trim().is_empty() {
         return AncestryOutcome::Diverged;
     }
-    // Any commit not authored by us means someone else pushed. Compare case-
-    // INSENSITIVELY: the server may normalise email case.
-    if new_commits
-        .iter()
-        .any(|c| !c.author_email.eq_ignore_ascii_case(my_email))
-    {
-        return AncestryOutcome::Diverged;
+    // Every new commit must be one this session can account for (R3): a revision
+    // an upload's answer named, or the one revision the unanswered upload may have
+    // made. Anything else is somebody else's push - a stranger's, or another
+    // session of our own account, which holds the same per-account lock and
+    // signs with our email.
+    let mut unanswered = own.unanswered.as_ref();
+    for c in &new_commits {
+        if own.landed.iter().any(|id| id.eq_ignore_ascii_case(&c.id)) {
+            continue;
+        }
+        match unanswered {
+            Some(upload) if upload.made(c, my_email) => unanswered = None,
+            _ => return AncestryOutcome::Diverged,
+        }
     }
     // All new commits are ours and linear back to BASE/root → our push landed.
     AncestryOutcome::Landed {
@@ -310,6 +388,63 @@ pub fn upload_not_landed(
     }
 }
 
+/// After an upload landed as the revision `landed` on the BASE `upload_base`:
+/// the revisions that landed between that BASE and it, newest first (R3, the
+/// lost race).
+///
+/// The push checks that the server's HEAD is still its BASE before it uploads,
+/// but SpeleoDB has no conditional upload: another session of the same account
+/// (which holds the same per-account lock) can land a revision between that
+/// check and the upload, and the server then puts ours on top of it. Ours does
+/// not contain that session's work, so those revisions are no longer HEAD; the
+/// history still has them, where they can be viewed or restored.
+///
+/// Empty in the ordinary case (`landed` sits directly on `upload_base`) and when
+/// the history cannot tell (`landed` is not in it). SpeleoDB's own creation
+/// commit is never reported. A chain that never reaches `upload_base` (a
+/// history rewritten on the server) reports only the revision directly under
+/// ours, the one ours took HEAD from, rather than everything down to the root.
+///
+/// Pure over a history fetched after the upload, like [`plan_push`].
+#[must_use]
+pub fn replaced_by_upload(
+    upload_base: Option<&str>,
+    landed: &str,
+    commits: &[RevisionCommit],
+) -> Vec<RevisionCommit> {
+    let by_id: HashMap<String, &RevisionCommit> = commits
+        .iter()
+        .map(|c| (c.id.to_ascii_lowercase(), c))
+        .collect();
+    let Some(top) = by_id.get(&landed.to_ascii_lowercase()) else {
+        return Vec::new();
+    };
+    let is_base = |id: &str| upload_base.is_some_and(|base| base.eq_ignore_ascii_case(id));
+    let mut replaced = Vec::new();
+    let mut cursor = top.parent_ids.first();
+    let mut reached_base = upload_base.is_none();
+    while let Some(id) = cursor {
+        if is_base(id) {
+            reached_base = true;
+            break;
+        }
+        // A commit outside the fetched history, or a runaway chain: stop here.
+        let Some(commit) = by_id.get(&id.to_ascii_lowercase()) else {
+            break;
+        };
+        if replaced.len() >= commits.len() {
+            break;
+        }
+        replaced.push((*commit).clone());
+        cursor = commit.parent_ids.first();
+    }
+    if !reached_base {
+        replaced.truncate(1);
+    }
+    replaced.retain(|c| !is_project_creation_commit(c));
+    replaced
+}
+
 /// Whether a confirmed-landed push captured all our local edits - i.e. no edit
 /// happened after the push began. Biased to **false** (keep the dirty bit) on any
 /// uncertainty: a wrongly-kept dirty bit costs only a redundant no-op re-push,
@@ -397,22 +532,34 @@ pub enum PushPlan {
 }
 
 /// Pure Done-push decision (#192/#193): fence BASE against the tip, and on a moved
-/// tip (we hold the lock, so it is almost always our own ambiguous push) classify
-/// the gap by authorship. Every fail-closed branch routes to the divergence prompt
-/// rather than a hard error or a blind re-push.
+/// tip classify the gap by what this session uploaded (`own`). The upload goes
+/// ahead only on a HEAD that is still BASE, or one that moved by nothing but this
+/// session's own landed upload. A HEAD moved by anybody else - including another
+/// session of our own account, which holds the same per-account lock (R3) - is
+/// the divergence prompt. Every fail-closed branch routes there too, rather than
+/// to a hard error or a blind re-push.
 #[must_use]
 pub fn plan_push(
     base: Option<&str>,
     tip: Option<&str>,
     commits: &[RevisionCommit],
     my_email: &str,
+    own: &OwnUploads,
     last_edit_at: Option<&str>,
     push_start_at: Option<&str>,
 ) -> PushPlan {
     match fence(base, tip, true) {
         FenceOutcome::UpToDate => PushPlan::Upload,
         FenceOutcome::Diverged => {
-            match classify_ancestry(base, tip, commits, my_email, last_edit_at, push_start_at) {
+            match classify_ancestry(
+                base,
+                tip,
+                commits,
+                my_email,
+                own,
+                last_edit_at,
+                push_start_at,
+            ) {
                 AncestryOutcome::Landed { clear_dirty: true } => PushPlan::AdoptConfirmed,
                 AncestryOutcome::Landed { clear_dirty: false } => PushPlan::AdoptThenUpload,
                 // Stranger commit, a non-linear/multi-root inconsistency, or (not
@@ -450,15 +597,18 @@ pub fn plan_push(
 /// nobody else was involved in. Classifying the gap by authorship keeps the
 /// passive button honest about what Done would actually do on click.
 ///
-/// `we_hold_the_lock` is what makes that authorship test SAFE, and it is not
-/// optional. `author_email == my_email` is a proxy for "this session pushed it",
-/// and a second session signed in as the SAME account breaks the proxy exactly:
-/// its commit reads as ours, so the gap classifies as `Landed` and the mark keeps
-/// its resting state over a genuine conflict, ending in Done
-/// superseding the other session's revision with no prompt at any point. Our own
-/// landed-but-unrecorded push can only have been made while we held the
-/// single-writer lock, so requiring it costs the recovery nothing and denies the
-/// same-account session the shortcut.
+/// The authorship test is `own` (what this session uploaded, see
+/// [`classify_ancestry`]), NOT `author_email == my_email`: a second session
+/// signed in as the SAME account breaks that proxy exactly. Its commit reads as
+/// ours, so the gap would classify as `Landed` and the mark keep its resting
+/// state over a genuine conflict, ending in Done superseding the other
+/// session's revision with no prompt at any point. Holding the lock does not
+/// tell the two apart either (R3): SpeleoDB's lock is the account's, so both
+/// sessions hold it.
+///
+/// `we_hold_the_lock` stays as a second gate: our own landed-but-unrecorded
+/// push can only have been made while we held the single-writer lock, so
+/// requiring it costs the recovery nothing.
 ///
 /// It also keeps this verdict AGREEING with [`reconcile_verdict`], which has no
 /// authorship recovery. That function drives Start editing - reachable only while
@@ -478,6 +628,7 @@ pub fn status_verdict(
     dirty: bool,
     commits: &[RevisionCommit],
     my_email: &str,
+    own: &OwnUploads,
     we_hold_the_lock: bool,
 ) -> RemoteState {
     match fence(base, tip, dirty) {
@@ -499,7 +650,7 @@ pub fn status_verdict(
         // also exactly what `reconcile_verdict` will say when the mark is clicked.
         FenceOutcome::Diverged if !we_hold_the_lock => RemoteState::Conflict,
         FenceOutcome::Diverged => match classify_ancestry(
-            base, tip, commits, my_email,
+            base, tip, commits, my_email, own,
             // Both timing inputs are `None` on purpose: only the AUTHORSHIP half of
             // the answer is read below (`clear_dirty` is destructured away), so
             // threading a `last_edit_at` that cannot change the verdict would be a
@@ -735,8 +886,9 @@ pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, display_history, edits_captured_by_push, fence,
-        plan_push, reconcile_verdict, rewind_target, status_verdict, tip_of, unwind_target,
-        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
+        plan_push, reconcile_verdict, replaced_by_upload, rewind_target, status_verdict, tip_of,
+        unwind_target, AncestryOutcome, FenceOutcome, OwnUploads, PushPlan, ReconcileVerdict,
+        RemoteState, RevisionCommit, UnansweredUpload,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -929,36 +1081,101 @@ mod tests {
 
     // --- #193 ancestry recovery ---
 
+    /// Nothing uploaded by this session.
+    fn nothing() -> OwnUploads {
+        OwnUploads::default()
+    }
+
+    /// The upload this session sent on `base` whose answer never came.
+    fn unanswered(base: Option<&str>, message: &str) -> OwnUploads {
+        OwnUploads {
+            landed: Vec::new(),
+            unanswered: Some(UnansweredUpload {
+                base: base.map(str::to_owned),
+                message: message.to_owned(),
+            }),
+        }
+    }
+
+    /// The revisions this session's uploads were answered with.
+    fn landed(ids: &[&str]) -> OwnUploads {
+        OwnUploads {
+            landed: ids.iter().map(|id| (*id).to_owned()).collect(),
+            unanswered: None,
+        }
+    }
+
+    /// [`commit`] carrying a description, as SpeleoDB stores it.
+    fn described(id: &str, parents: &[&str], email: &str, message: &str) -> RevisionCommit {
+        RevisionCommit {
+            message: Some(message.to_owned()),
+            ..commit(id, parents, email)
+        }
+    }
+
     #[test]
     fn ancestry_not_landed_when_tip_unchanged() {
         // Tip still at BASE (and the empty-repo None == None): nothing landed.
         assert_eq!(
-            classify_ancestry(Some("b"), Some("b"), &[], ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("b"),
+                &[],
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::NotLanded
         );
         assert_eq!(
-            classify_ancestry(None, None, &[], ME, None, None),
+            classify_ancestry(None, None, &[], ME, &nothing(), None, None),
             AncestryOutcome::NotLanded
         );
     }
 
     #[test]
     fn ancestry_landed_when_my_linear_commit_on_top() {
-        // c (mine) sits directly on BASE b. Edited before the push began → clear.
+        // c (mine) sits directly on BASE b, where my unanswered upload went.
+        // Edited before the push began → clear.
         let commits = [commit("c", &["b"], ME)];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(Some("b"), "m"),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::Landed { clear_dirty: true }
         );
     }
 
     #[test]
     fn ancestry_landed_walks_multi_commit_chain() {
-        // c -> b -> a(BASE): both new commits are mine.
+        // c -> b -> a(BASE): b is a revision one of my uploads was answered with,
+        // c the one my unanswered upload made on top of it.
         let commits = [commit("c", &["b"], ME), commit("b", &["a"], ME)];
+        let mut own = unanswered(Some("b"), "m");
+        own.landed.push("b".to_owned());
         assert_eq!(
-            classify_ancestry(Some("a"), Some("c"), &commits, ME, Some(T1), Some(T1)),
+            classify_ancestry(Some("a"), Some("c"), &commits, ME, &own, Some(T1), Some(T1)),
             AncestryOutcome::Landed { clear_dirty: true }
+        );
+        // One unanswered upload makes one revision, not two.
+        assert_eq!(
+            classify_ancestry(
+                Some("a"),
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(Some("a"), "m"),
+                Some(T1),
+                Some(T1)
+            ),
+            AncestryOutcome::Diverged
         );
     }
 
@@ -967,7 +1184,15 @@ mod tests {
         // Empty-repo BASE (None): the chain ends at the root commit.
         let commits = [commit("c", &[], ME)];
         assert_eq!(
-            classify_ancestry(None, Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                None,
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(None, "m"),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::Landed { clear_dirty: true }
         );
     }
@@ -978,8 +1203,9 @@ mod tests {
         // The landed commit predates the second edit, so the dirty bit must stay
         // set (post-push edits survive). last_edit_at (T3) > push_start_at (T2).
         let commits = [commit("c", &["b"], ME)];
+        let own = unanswered(Some("b"), "m");
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T3), Some(T2)),
+            classify_ancestry(Some("b"), Some("c"), &commits, ME, &own, Some(T3), Some(T2)),
             AncestryOutcome::Landed { clear_dirty: false }
         );
     }
@@ -988,12 +1214,13 @@ mod tests {
     fn ancestry_landed_keeps_dirty_on_unknown_timing() {
         // Legacy dirty bit (no last_edit_at) or missing push_start → conservative.
         let commits = [commit("c", &["b"], ME)];
+        let own = unanswered(Some("b"), "m");
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, None, Some(T2)),
+            classify_ancestry(Some("b"), Some("c"), &commits, ME, &own, None, Some(T2)),
             AncestryOutcome::Landed { clear_dirty: false }
         );
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), None),
+            classify_ancestry(Some("b"), Some("c"), &commits, ME, &own, Some(T1), None),
             AncestryOutcome::Landed { clear_dirty: false }
         );
     }
@@ -1002,8 +1229,119 @@ mod tests {
     fn ancestry_diverged_on_stranger_commit() {
         let commits = [commit("c", &["b"], OTHER)];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(Some("b"), "m"),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::Diverged
+        );
+    }
+
+    #[test]
+    fn ancestry_diverged_on_the_accounts_own_email_without_an_upload_of_ours() {
+        // R3, the fuzzer's same-account-overwrite: another session of OUR account
+        // pushed c on our BASE. It carries our email, but this session uploaded
+        // nothing that can be it - so it is somebody else's push, never adopted.
+        // Injection: test authorship by `author_email` alone and this is Landed.
+        let commits = [commit("c", &["b"], ME)];
+        assert_eq!(
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
+            AncestryOutcome::Diverged
+        );
+        // A revision of ours elsewhere in the history is no licence either.
+        assert_eq!(
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &landed(&["b", "z"]),
+                Some(T1),
+                Some(T2)
+            ),
+            AncestryOutcome::Diverged
+        );
+    }
+
+    #[test]
+    fn ancestry_landed_for_a_revision_an_upload_of_ours_was_answered_with() {
+        // The status race: the link was read before our push's answer advanced
+        // BASE, the tip after it. The answer named the revision, whatever case
+        // the SHA comes back in.
+        let commits = [commit("c1", &["b"], ME)];
+        assert_eq!(
+            classify_ancestry(
+                Some("b"),
+                Some("c1"),
+                &commits,
+                ME,
+                &landed(&["C1"]),
+                None,
+                None
+            ),
+            AncestryOutcome::Landed { clear_dirty: false }
+        );
+    }
+
+    #[test]
+    fn ancestry_an_unanswered_upload_matches_only_the_revision_it_could_have_made() {
+        // Our upload went to BASE b with a description; its answer was lost. The
+        // one revision on b, by our account, with that description is ours.
+        let own = unanswered(Some("b"), "Surveyed the sump\n\nand the side passage");
+        let ours = [described(
+            "c",
+            &["b"],
+            ME,
+            // As SpeleoDB stores it: line breaks folded into ". ".
+            "Surveyed the sump. and the side passage",
+        )];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &ours, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Landed { clear_dirty: true }
+        );
+        // Another session's revision in the same place: its description is its
+        // own. Injection: drop the description test and this is Landed.
+        let theirs = [described("c", &["b"], ME, "Fixed the entrance")];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &theirs, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Diverged
+        );
+        // Not on the upload's BASE: not what that upload made.
+        let elsewhere = [
+            described("c", &["x"], ME, "Surveyed the sump. and the side passage"),
+            commit("x", &["b"], ME),
+        ];
+        assert_eq!(
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &elsewhere,
+                ME,
+                &own,
+                Some(T1),
+                Some(T2)
+            ),
+            AncestryOutcome::Diverged
+        );
+        // A history without descriptions (an older server) matches on the BASE
+        // and the account alone.
+        let bare = [commit("c", &["b"], ME)];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &bare, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Landed { clear_dirty: true }
         );
     }
 
@@ -1014,15 +1352,16 @@ mod tests {
         // adopted+overwritten. With my_email empty we cannot identify our own commit,
         // so the gap is foreign → divergence prompt, never a silent adopt.
         let commits = [commit("c", &["b"], "")];
+        let own = unanswered(Some("b"), "m");
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, "", Some(T1), Some(T2)),
+            classify_ancestry(Some("b"), Some("c"), &commits, "", &own, Some(T1), Some(T2)),
             AncestryOutcome::Diverged,
             "empty my_email must fail closed, not classify a stranger's commit as ours"
         );
         // Even when our email IS known, a "" author is still a stranger.
         let anon = [commit("c", &["b"], "")];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &anon, ME, Some(T1), Some(T2)),
+            classify_ancestry(Some("b"), Some("c"), &anon, ME, &own, Some(T1), Some(T2)),
             AncestryOutcome::Diverged
         );
     }
@@ -1034,7 +1373,15 @@ mod tests {
         // stranger.
         let commits = [commit("c", &["b"], "Me@Example.COM")];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(Some("B"), "m"),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::Landed { clear_dirty: true },
             "a case-variant of our own email must not read as a stranger"
         );
@@ -1045,7 +1392,15 @@ mod tests {
         // We hold BASE z, but the tip's full history (c -> root) never contains z.
         let commits = [commit("c", &[], ME)];
         assert_eq!(
-            classify_ancestry(Some("z"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("z"),
+                Some("c"),
+                &commits,
+                ME,
+                &unanswered(Some("z"), "m"),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::Diverged
         );
     }
@@ -1055,7 +1410,15 @@ mod tests {
         // A commit with two parents is non-linear.
         let commits = [commit("c", &["b", "x"], ME)];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::FailClosed
         );
     }
@@ -1065,7 +1428,15 @@ mod tests {
         // c's parent d is absent from the fetched history (and isn't BASE).
         let commits = [commit("c", &["d"], ME)];
         assert_eq!(
-            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("c"),
+                &commits,
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::FailClosed
         );
     }
@@ -1074,7 +1445,15 @@ mod tests {
     fn ancestry_fail_closed_when_tip_absent_from_history() {
         // Tip x isn't in the commit list at all.
         assert_eq!(
-            classify_ancestry(Some("b"), Some("x"), &[], ME, Some(T1), Some(T2)),
+            classify_ancestry(
+                Some("b"),
+                Some("x"),
+                &[],
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
             AncestryOutcome::FailClosed
         );
     }
@@ -1082,7 +1461,7 @@ mod tests {
     #[test]
     fn ancestry_fail_closed_when_base_some_tip_none() {
         assert_eq!(
-            classify_ancestry(Some("b"), None, &[], ME, Some(T1), Some(T2)),
+            classify_ancestry(Some("b"), None, &[], ME, &nothing(), Some(T1), Some(T2)),
             AncestryOutcome::FailClosed
         );
     }
@@ -1169,6 +1548,7 @@ mod tests {
                 Some("b"),
                 &linear_history(),
                 ME,
+                &nothing(),
                 Some(T1),
                 Some(T2)
             ),
@@ -1178,14 +1558,15 @@ mod tests {
 
     #[test]
     fn plan_push_adopts_and_confirms_when_my_push_landed_clean() {
-        // My commit b landed on top of BASE a, no edit after push-start -> adopt +
-        // confirm without a redundant re-push.
+        // My commit b landed on top of BASE a (my unanswered upload went there),
+        // no edit after push-start -> adopt + confirm without a redundant re-push.
         assert_eq!(
             plan_push(
                 Some("a"),
                 Some("b"),
                 &linear_history(),
                 ME,
+                &unanswered(Some("a"), "m"),
                 Some(T1),
                 Some(T2)
             ),
@@ -1203,10 +1584,45 @@ mod tests {
                 Some("b"),
                 &linear_history(),
                 ME,
+                &unanswered(Some("a"), "m"),
                 Some(T3),
                 Some(T2)
             ),
             PushPlan::AdoptThenUpload
+        );
+    }
+
+    #[test]
+    fn plan_push_diverges_on_a_same_account_revision_it_did_not_upload() {
+        // R3: b sits on our BASE a, authored by our account, but this session
+        // uploaded nothing that can be it (another machine of ours pushed it, under
+        // the same per-account lock). Never adopt it and upload over it.
+        // Injection: test authorship by `author_email` alone and this is
+        // AdoptThenUpload, the overwrite.
+        assert_eq!(
+            plan_push(
+                Some("a"),
+                Some("b"),
+                &linear_history(),
+                ME,
+                &nothing(),
+                Some(T3),
+                Some(T2)
+            ),
+            PushPlan::Diverged
+        );
+        // An unanswered upload of ours on another BASE does not make it ours.
+        assert_eq!(
+            plan_push(
+                Some("a"),
+                Some("b"),
+                &linear_history(),
+                ME,
+                &unanswered(Some("root"), "m"),
+                Some(T3),
+                Some(T2)
+            ),
+            PushPlan::Diverged
         );
     }
 
@@ -1218,7 +1634,15 @@ mod tests {
             commit("b", &["a"], OTHER), // a stranger pushed into the gap (lock theft)
         ];
         assert_eq!(
-            plan_push(Some("a"), Some("b"), &stolen, ME, Some(T1), Some(T2)),
+            plan_push(
+                Some("a"),
+                Some("b"),
+                &stolen,
+                ME,
+                &unanswered(Some("a"), "m"),
+                Some(T1),
+                Some(T2)
+            ),
             PushPlan::Diverged
         );
     }
@@ -1233,7 +1657,15 @@ mod tests {
             commit("m", &["a", "root"], ME),
         ];
         assert_eq!(
-            plan_push(Some("a"), Some("m"), &merge, ME, Some(T1), Some(T2)),
+            plan_push(
+                Some("a"),
+                Some("m"),
+                &merge,
+                ME,
+                &nothing(),
+                Some(T1),
+                Some(T2)
+            ),
             PushPlan::Diverged
         );
     }
@@ -1241,7 +1673,7 @@ mod tests {
     #[test]
     fn plan_push_diverges_when_base_some_but_tip_none() {
         assert_eq!(
-            plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2)),
+            plan_push(Some("a"), None, &[], ME, &nothing(), Some(T1), Some(T2)),
             PushPlan::Diverged
         );
     }
@@ -1254,11 +1686,27 @@ mod tests {
         // resolved the tip after it, so it fences a BASE one commit behind - and
         // that commit is OUR OWN. A bare fence calls this Diverged; reporting it as
         // a conflict paints the button red against the user's own work and sends
-        // their next click to the divergence dialog.
+        // their next click to the divergence dialog. Ours: the push's answer named
+        // it, or (its answer not in yet) it is what the upload in flight made.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        for own in [landed(&["c1"]), unanswered(Some("c0"), "m")] {
+            assert_eq!(
+                status_verdict(Some("c0"), Some("c1"), true, &commits, ME, &own, true),
+                RemoteState::UpToDate
+            );
+        }
+    }
+
+    #[test]
+    fn status_verdict_reports_a_same_account_revision_as_a_conflict_under_our_lock() {
+        // R3: both sessions of the account hold the lock (it is the account's), so
+        // holding it does not make the other session's revision ours. This
+        // session uploaded nothing that can be c1: the mark shows the conflict
+        // that Save Changes will report, instead of the resting state over it.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
-            RemoteState::UpToDate
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, &nothing(), true),
+            RemoteState::Conflict
         );
     }
 
@@ -1276,7 +1724,15 @@ mod tests {
         // revision with no prompt at any point.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            status_verdict(
+                Some("c0"),
+                Some("c1"),
+                true,
+                &commits,
+                ME,
+                &landed(&["c1"]),
+                false
+            ),
             RemoteState::Conflict
         );
     }
@@ -1290,7 +1746,15 @@ mod tests {
         // agreement: with the lock not ours, both say the same thing.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            status_verdict(
+                Some("c0"),
+                Some("c1"),
+                true,
+                &commits,
+                ME,
+                &nothing(),
+                false
+            ),
             RemoteState::Conflict
         );
         assert_eq!(
@@ -1306,8 +1770,9 @@ mod tests {
         // The recovery above must not swallow a real divergence: someone else's
         // commit sits between BASE and the tip.
         let commits = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
+        let own = unanswered(Some("c0"), "m");
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, &own, true),
             RemoteState::Conflict
         );
     }
@@ -1318,7 +1783,15 @@ mod tests {
         // fails closed. The passive button says the same thing Done would.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), true, &commits, "", true),
+            status_verdict(
+                Some("c0"),
+                Some("c1"),
+                true,
+                &commits,
+                "",
+                &unanswered(Some("c0"), "m"),
+                true
+            ),
             RemoteState::Conflict
         );
     }
@@ -1328,26 +1801,110 @@ mod tests {
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         // base == tip: nothing to reconcile.
         assert_eq!(
-            status_verdict(Some("c1"), Some("c1"), true, &commits, ME, true),
+            status_verdict(Some("c1"), Some("c1"), true, &commits, ME, &nothing(), true),
             RemoteState::UpToDate
         );
         // Clean copy, tip genuinely descends from BASE: a real pull is available.
         assert_eq!(
-            status_verdict(Some("c0"), Some("c1"), false, &commits, ME, false),
+            status_verdict(
+                Some("c0"),
+                Some("c1"),
+                false,
+                &commits,
+                ME,
+                &nothing(),
+                false
+            ),
             RemoteState::RemoteAhead
         );
         // Clean copy but BASE is NOT an ancestor (a server-side history rewrite):
         // never advertise a pull the Update verb would immediately fail closed on.
         let forked = vec![commit("x1", &["x0"], ME), commit("x0", &[], ME)];
         assert_eq!(
-            status_verdict(Some("c0"), Some("x1"), false, &forked, ME, false),
+            status_verdict(
+                Some("c0"),
+                Some("x1"),
+                false,
+                &forked,
+                ME,
+                &nothing(),
+                false
+            ),
             RemoteState::Conflict
         );
         // A recorded BASE with no server tip is a transient empty response, not a
         // conflict - nothing local is at risk of being clobbered.
         assert_eq!(
-            status_verdict(Some("c0"), None, true, &[], ME, true),
+            status_verdict(Some("c0"), None, true, &[], ME, &nothing(), true),
             RemoteState::Unknown
+        );
+    }
+
+    // ---- replaced_by_upload: what a landed upload took HEAD from (R3) ----
+
+    fn ids(commits: &[RevisionCommit]) -> Vec<&str> {
+        commits.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn replaced_by_upload_is_empty_when_ours_sits_on_its_base() {
+        let history = [commit("ours", &["b0"], ME), commit("b0", &[], ME)];
+        assert!(replaced_by_upload(Some("b0"), "ours", &history).is_empty());
+        // Whatever case the SHAs come back in.
+        assert!(replaced_by_upload(Some("B0"), "OURS", &history).is_empty());
+    }
+
+    #[test]
+    fn replaced_by_upload_names_what_landed_between_the_check_and_the_upload() {
+        // Another session of the account landed m1 then m2 on our BASE b0 while
+        // our upload was on its way; the server put ours on top of m2.
+        // Injection: answer only the direct parent and m1 is missing.
+        let history = [
+            commit("ours", &["m2"], ME),
+            described("m2", &["m1"], ME, "Second from the other machine"),
+            described("m1", &["b0"], ME, "First from the other machine"),
+            commit("b0", &[], ME),
+        ];
+        let replaced = replaced_by_upload(Some("b0"), "ours", &history);
+        assert_eq!(ids(&replaced), ["m2", "m1"], "newest first");
+        assert_eq!(
+            replaced[0].message.as_deref(),
+            Some("Second from the other machine")
+        );
+    }
+
+    #[test]
+    fn replaced_by_upload_cannot_tell_without_our_revision_in_the_history() {
+        let history = [commit("m1", &["b0"], ME), commit("b0", &[], ME)];
+        assert!(replaced_by_upload(Some("b0"), "ours", &history).is_empty());
+    }
+
+    #[test]
+    fn replaced_by_upload_from_an_empty_base_never_names_the_creation_commit() {
+        // A just-created project: BASE None, the server's own creation commit at
+        // the root. Only a real revision under ours is reported.
+        let alone = [commit("ours", &["root"], ME), creation_commit("root")];
+        assert!(replaced_by_upload(None, "ours", &alone).is_empty());
+        let raced = [
+            commit("ours", &["m1"], ME),
+            commit("m1", &["root"], ME),
+            creation_commit("root"),
+        ];
+        assert_eq!(ids(&replaced_by_upload(None, "ours", &raced)), ["m1"]);
+    }
+
+    #[test]
+    fn replaced_by_upload_off_the_bases_chain_names_only_the_revision_under_ours() {
+        // Our BASE b0 is not below ours at all (a history rewritten on the
+        // server): name the one ours took HEAD from, not everything to the root.
+        let history = [
+            commit("ours", &["x2"], ME),
+            commit("x2", &["x1"], OTHER),
+            commit("x1", &[], OTHER),
+        ];
+        assert_eq!(
+            ids(&replaced_by_upload(Some("b0"), "ours", &history)),
+            ["x2"]
         );
     }
 

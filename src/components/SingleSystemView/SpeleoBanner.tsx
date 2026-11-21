@@ -10,6 +10,7 @@ import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { getSetAsideUploadMessage, getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
 import { useSpeleoExitPrompt } from '../../utils/speleoExit';
 import { useSpeleoSignOut } from '../../utils/speleoSignOut';
+import { replacedRevisionsNotice } from '../../utils/speleoReplacedRevisions';
 
 export function SpeleoBanner() {
   const { t } = useTranslation();
@@ -50,6 +51,9 @@ export function SpeleoBanner() {
     no_anchor: () => t('speleodb.banner.noAnchor'),
     push_failed: () =>
       t('speleodb.banner.pushFailed', { message: pushFailed?.message ?? '' }),
+    // R3: the upload landed on top of revisions another session pushed meanwhile.
+    replaced_revision: () =>
+      banner.kind === 'replaced_revision' ? replacedRevisionsNotice(t, banner.revisions) : '',
   };
   const text = TEXT[banner.kind]();
 

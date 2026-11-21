@@ -50,6 +50,7 @@ mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
 mod speleodb_logout;
+mod speleodb_own_uploads;
 mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_push;
@@ -487,6 +488,13 @@ mod speleodb_push_v2_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_restore_refusal_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_same_account_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

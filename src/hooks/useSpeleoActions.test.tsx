@@ -965,3 +965,83 @@ describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => 
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
   });
 });
+
+/**
+ * R3 (same-account overwrite): SpeleoDB's lock is the account's, so another
+ * session of the same account holds it too. The backend refuses an upload when
+ * SpeleoDB's latest revision is not the copy's base and not an upload of this
+ * session (`divergence_needed`, nothing uploaded); the frontend must route that
+ * to the divergence prompt - never a success. A race lost after that check is
+ * reported by the landed result (`replaced_revisions`), on the banner alone.
+ */
+describe('useSpeleoActions - same-account sessions (R3)', () => {
+  const REPLACED = {
+    id: '0123456789abcdef0123456789abcdef01234567',
+    parent_ids: [],
+    author_email: 'diver@example.com',
+    authored_date: null,
+    message: 'Surveyed the sump',
+  };
+
+  beforeEach(() => {
+    // The REAL apply reducers: what the prompt and the banner read is the point.
+    const real = useSpeleoStore.getInitialState();
+    useSpeleoStore.setState({
+      applyDone: real.applyDone,
+      applyPush: real.applyPush,
+      banner: null,
+      divergence: null,
+      link: {
+        permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: 'diver@example.com', lockedByOther: false,
+        hasUnpushedEdits: true, unwound: false, undoMode: 'full', remoteState: 'up_to_date', noAccess: false,
+        serverError: null,
+      },
+    });
+  });
+
+  it.each([
+    ['Save Changes', 'push', 'speleodb_push'],
+    ['Done (the close, quit and sign-out uploads)', 'done', 'speleodb_done'],
+  ] as const)('%s refused over another session\'s revision opens the divergence prompt', async (_label, verb, command) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current[verb]('From B');
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(command, expect.objectContaining({ message: 'From B' }));
+    expect(outcome).toEqual({ kind: 'divergence_needed' });
+    const s = useSpeleoStore.getState();
+    // The App-level effect opens `speleodb-divergence` on exactly this.
+    expect(s.divergence).toBe(verb);
+    // The work is still marked un-uploaded and the lock still held: nothing landed.
+    expect(s.link?.hasUnpushedEdits).toBe(true);
+    expect(s.link?.editState).toBe('editing');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'success');
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['push', { kind: 'pushed', replaced_revisions: [REPLACED] }],
+    ['done', { kind: 'released', replaced_revisions: [REPLACED] }],
+  ] as const)('a %s that replaced a revision pushed meanwhile says so on the banner only', async (verb, reply) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue(reply);
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+
+    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+    // One event, one surface: no "Changes uploaded" toast beside it.
+    expect(showToast).not.toHaveBeenCalled();
+    // The upload landed, so the disk is flushed as after any landed upload.
+    expect(saveProjectMock).toHaveBeenCalledWith(undefined, true);
+  });
+});

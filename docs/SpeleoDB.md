@@ -586,6 +586,28 @@ Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 
+Every upload checks, right before it is sent, that SpeleoDB's latest revision is
+still the copy's base (fuzzer finding R3, same-account overwrite). The lock is the
+account's, so the same account signed in on another computer or in another window
+holds it too, and its revisions carry the same email: neither the lock nor the
+author says which session uploaded a revision. The one revision the check lets
+stand between the base and the latest is this session's own upload whose answer
+was lost (the #193 recovery), recognised by what this session recorded when it
+sent it (`core/state/speleodb_own_uploads.rs`: the revisions its uploads were
+answered with, and the one unanswered upload's base and description), never by
+the email. Anything else there uploads nothing: Save Changes, Finish editing and
+the exit and sign-out uploads get `divergence_needed`, the divergence prompt
+opens, and the work, the lock and the base stay as they were. The status
+refresh uses the same rule, so the SpeleoDB tab shows the conflict before Save
+Changes is pressed. SpeleoDB has no conditional upload, so a revision landing
+between that check and the upload still goes under ours; the history read right
+after the upload finds it, and the landed result names it (`replaced_revisions`):
+a banner says which revision the upload replaced and that it is still in the
+Revision History (view or restore it there), and an exit or sign-out prompt that
+ran the upload stops so the banner is read. Publish's first upload goes through
+the same post-upload check; a project created a moment earlier cannot have been
+raced, so there it would only be logged.
+
 The upload dialog (Save Changes, and Finish editing when it has changes to
 upload) does not upload a survey with errors (validation issues of error
 severity; warnings do not count) without a decision. It shows the number of

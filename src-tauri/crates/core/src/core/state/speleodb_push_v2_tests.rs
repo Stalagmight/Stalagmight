@@ -250,7 +250,8 @@ fn a_confirmed_push_uploads_v2_json_and_is_durable_at_once() {
             matches!(
                 pushed,
                 PushResult::Pushed {
-                    undo_history_omitted: None
+                    undo_history_omitted: None,
+                    replaced_revisions: None
                 }
             ),
             "{pushed:?}"

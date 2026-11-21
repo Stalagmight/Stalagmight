@@ -348,12 +348,17 @@ export function useSpeleoActions(): SpeleoActions {
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
-          // sdk#3: the upload left its undo history out to fit the server's size
-          // limit. Same event, one surface: the success toast becomes a caveat.
-          if (result.kind === 'pushed' && result.undo_history_omitted) {
-            showToast(t('speleodb.editBar.toasts.pushedWithoutHistory'), TOAST_KEYS.SPELEODB_PUSHED, 'warning');
-          } else {
-            showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
+          // R3: an upload that replaced revisions pushed meanwhile is reported by
+          // the banner `applyPush` raised - this event's one surface, no toast.
+          const replaced = result.kind === 'pushed' && !!result.replaced_revisions?.length;
+          if (!replaced) {
+            if (result.kind === 'pushed' && result.undo_history_omitted) {
+              // sdk#3: the upload left its undo history out to fit the server's size
+              // limit. Same event, one surface: the success toast becomes a caveat.
+              showToast(t('speleodb.editBar.toasts.pushedWithoutHistory'), TOAST_KEYS.SPELEODB_PUSHED, 'warning');
+            } else {
+              showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
+            }
           }
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
@@ -480,17 +485,20 @@ export function useSpeleoActions(): SpeleoActions {
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
-            // sdk#3: see `push` - an upload that left its undo history out says so.
-            if (result.kind === 'released' && result.undo_history_omitted) {
-              showToast(t('speleodb.editBar.toasts.releasedWithoutHistory'), TOAST_KEYS.SPELEODB_RELEASED, 'warning');
-            } else {
-              showToast(
-                hadUnpushedEdits
-                  ? t('speleodb.editBar.toasts.released')
-                  : t('speleodb.editBar.toasts.releasedNothingToUpload'),
-                TOAST_KEYS.SPELEODB_RELEASED,
-                'success',
-              );
+            // R3: see `push` - the banner naming the replaced revisions is the surface.
+            if (!(result.kind === 'released' && result.replaced_revisions?.length)) {
+              if (result.kind === 'released' && result.undo_history_omitted) {
+                // sdk#3: see `push` - an upload that left its undo history out says so.
+                showToast(t('speleodb.editBar.toasts.releasedWithoutHistory'), TOAST_KEYS.SPELEODB_RELEASED, 'warning');
+              } else {
+                showToast(
+                  hadUnpushedEdits
+                    ? t('speleodb.editBar.toasts.released')
+                    : t('speleodb.editBar.toasts.releasedNothingToUpload'),
+                  TOAST_KEYS.SPELEODB_RELEASED,
+                  'success',
+                );
+              }
             }
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
