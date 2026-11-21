@@ -53,8 +53,8 @@ so the request may have reached the server; then `Timeout`, `Dns`, `Tls` and
 `Unknown`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
 (`TransportCause::got_no_reply`) got nothing from the server, which is what lets an
 open fall back. Writes ignore the cause: after any transport failure an upload stays
-unconfirmed and dirty, an acquire asks the server who holds the lock, and no write is
-sent twice. A lost connection is worded "The connection to SpeleoDB at <server> was
+unconfirmed and dirty, an acquire asks the server who holds the lock, and no mutation
+is sent twice. A lost connection is worded "The connection to SpeleoDB at <server> was
 lost before it finished answering", never "Could not connect". Before this, a send
 failure knew only timeouts and TLS, so a refused, reset or dropped connection and the
 DNS failure of an `https://` host were all `Unknown`, and an open fell back only on a
