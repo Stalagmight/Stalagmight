@@ -3,6 +3,7 @@ import type { ProjectStore } from './projectStore';
 import type { CommandResult } from '../types/commands';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from './uiStore';
+import { useSpeleoStore } from './speleoStore';
 import i18n from '../i18n';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { autosaveFailureMessage } from '../utils/saveFeedback';
@@ -75,12 +76,19 @@ export function createSaveProjectAction(
       // the handle and flags DATABASE_NOT_REOPENED). In that case keep
       // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
       const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
+      const editedSince = get().projectTreeGeneration !== issued.projectTreeGeneration;
       set({
-        isDirty: get().projectTreeGeneration !== issued.projectTreeGeneration,
+        isDirty: editedSince,
         databaseOpen: !dbNotReopened,
         autosaveFailure: null,
         autosaveFailureKind: null,
       });
+      // The SpeleoDB copy holds its BASE revision's survey again, so the backend
+      // cleared its un-uploaded mark with this save. An edit made since then has
+      // marked it again, so that one is left as it is.
+      if (result.speleodb_unpushed_cleared && !editedSince) {
+        useSpeleoStore.getState().clearUnpushedMark();
+      }
       // The file holds GPS fixes an older version drops on its save (#741).
       noticeOlderVersionsDropFixes(result, issued.project?.created_at);
       // This save converted a project opened from a 0.6.0 file: the banner

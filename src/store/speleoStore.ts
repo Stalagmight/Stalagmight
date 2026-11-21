@@ -530,6 +530,13 @@ interface SpeleoStore {
   /** First successful mutation while editing flips the dirty indicator on. */
   markDirty: () => void;
   /**
+   * A save found that the copy holds exactly its BASE revision's survey again
+   * (an edit taken back) and cleared the backend's un-uploaded mark with it
+   * (`CommandResult.speleodb_unpushed_cleared`). Mirror that, or the exit prompt
+   * asks about work that is not there.
+   */
+  clearUnpushedMark: () => void;
+  /**
    * [#303] A FORWARD edit, as opposed to an undo/redo: dirty, AND no longer merely
    * "where the Unwind walk left it". Mirrors the backend pairing - `mark_remote_dirty()`
    * followed by `speleodb_forget_unwind_position()` at commands.rs:757-761 (and the
@@ -1344,6 +1351,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) =>
       state.link && !state.link.hasUnpushedEdits
         ? { link: { ...state.link, hasUnpushedEdits: true } }
+        : {},
+    ),
+
+  clearUnpushedMark: () =>
+    set((state) =>
+      state.link?.hasUnpushedEdits
+        ? { link: { ...state.link, hasUnpushedEdits: false } }
         : {},
     ),
 
