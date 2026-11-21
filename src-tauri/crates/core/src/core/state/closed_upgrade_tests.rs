@@ -237,14 +237,17 @@ fn save_as_over_a_plain_legacy_file_keeps_it_in_recovery() {
 
 // ----- local state of an open legacy project (D-migration-upgrade-5) ---------
 
-/// A display toggle on an open 0.6.0 project waits for the upgrading save
-/// (0.6.0 wrote it in place; this build writes a legacy file only by
-/// upgrading it), so until then the project HAS unsaved changes: the close
-/// prompt asks, the save writes it. Injection: answer `has_unsaved_changes`
-/// from `dirty` alone, as before, and the toggle is lost on a close nothing
-/// asked about.
+/// A display toggle on an open 0.6.0 project waits for the next save, which
+/// writes it with the conversion (0.6.0 wrote it in place; this build writes
+/// a legacy file only by upgrading it). It alone does not make the project
+/// unsaved (demo issue I-6): the frontend's autosave follows that flag, and
+/// would convert a file the user only looked at; a close then leaves the
+/// 0.6.0 file as it was. Local state that is not view state (a materialized
+/// undo mode, SpeleoDB bookkeeping) still asks. Injection: write the toggle
+/// with `persist_local_state` again (or answer `has_unsaved_changes` from
+/// `local_pending`) and the toggle makes the project unsaved.
 #[test]
-fn a_display_toggle_on_a_legacy_project_is_unsaved_until_the_upgrading_save() {
+fn a_display_toggle_on_a_legacy_project_waits_for_a_save_without_making_it_unsaved() {
     use super::robustness_kit::{open_fresh, write_legacy, Rng};
 
     crate::app_dirs::init_for_test();
@@ -253,14 +256,26 @@ fn a_display_toggle_on_a_legacy_project_is_unsaved_until_the_upgrading_save() {
         let stem = unique_stem("legacy-toggle");
         let path = dir.path().join(format!("{stem}.stalx"));
         write_legacy(&path, &mut Rng::new(21), "Toggle");
+        let original = std::fs::read(&path).unwrap();
         let state = open_fresh(&path).unwrap();
         assert!(!state.has_unsaved_changes());
 
         state.save_display_setting("showGrid", "true").unwrap();
         assert!(!is_v2(&path), "a toggle does not convert the file");
-        assert!(state.has_unsaved_changes(), "the close prompt must ask");
+        assert!(
+            !state.has_unsaved_changes(),
+            "a display toggle alone must not arm autosave or the close prompt"
+        );
+        assert!(state.with_file(|f| f.local_pending), "it waits for the next save");
+        // A close with nothing else pending leaves the 0.6.0 file untouched.
+        assert!(state.close_project().success);
+        assert_eq!(std::fs::read(&path).unwrap(), original, "never converted silently");
 
+        // The next save the user asks for writes it with the conversion.
+        let state = open_fresh(&path).unwrap();
+        state.save_display_setting("showGrid", "true").unwrap();
         assert!(state.save_project(None).success);
+        assert!(is_v2(&path));
         assert!(!state.has_unsaved_changes());
         assert!(state.close_project().success);
         let reopened = open_fresh(&path).unwrap();
@@ -268,6 +283,36 @@ fn a_display_toggle_on_a_legacy_project_is_unsaved_until_the_upgrading_save() {
             reopened.get_display_setting("showGrid").unwrap().as_deref(),
             Some("true")
         );
+        forget_backups(&stem);
+    });
+}
+
+/// The exemption is the display toggle's only: any other local state an open
+/// 0.6.0 project keeps for its upgrading save still makes it unsaved (review
+/// finding D-migration-upgrade-5), so the close prompt asks. Injection:
+/// answer `has_unsaved_changes` from `dirty` alone and this fails.
+#[test]
+fn other_local_state_on_a_legacy_project_is_still_unsaved() {
+    use super::robustness_kit::{open_fresh, write_legacy, Rng};
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-local");
+        let path = dir.path().join(format!("{stem}.stalx"));
+        write_legacy(&path, &mut Rng::new(22), "Local");
+        let state = open_fresh(&path).unwrap();
+        state.save_display_setting("showGrid", "true").unwrap();
+        assert!(!state.has_unsaved_changes());
+
+        state.with_file(|file| file.extras.local.speleodb.unpushed_edits = true);
+        state.persist_local_state().unwrap();
+        assert!(!is_v2(&path), "kept for the upgrading save");
+        assert!(state.has_unsaved_changes(), "the close prompt must ask");
+
+        assert!(state.save_project(None).success);
+        assert!(!state.has_unsaved_changes());
+        assert!(!state.with_file(|f| f.local_pending || f.local_pending_asks));
         forget_backups(&stem);
     });
 }

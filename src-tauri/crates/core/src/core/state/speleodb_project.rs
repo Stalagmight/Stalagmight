@@ -425,6 +425,7 @@ fn rename_on_disk(path: Option<&Path>, file: &mut FileState, name: &str) -> Resu
         (path, file.fingerprint.clone(), file.origin)
     else {
         file.local_pending = true;
+        file.local_pending_asks = true;
         return Ok(());
     };
     let original = read_unchanged(path, &expected).map_err(String::from)?;

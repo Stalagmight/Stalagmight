@@ -477,6 +477,7 @@ impl AppState {
         file.origin = FileOrigin::V2;
         file.dirty = false;
         file.local_pending = false;
+        file.local_pending_asks = false;
         file.saved_history = extras.history;
         file.history_unread = false;
         drop(file);

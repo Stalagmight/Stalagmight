@@ -373,9 +373,11 @@ The Recovery dialog lists the kept originals with the project's own backups
 silent; the conversion notice (above) was shown at open when the conversion
 moved anything. Until that first save nothing is written to a legacy file
 (but the hot-journal rollback of [What an open writes](#what-an-open-writes)):
-display toggles and SpeleoDB state changes wait in memory (`local_pending`),
-ride the upgrading save, and count as unsaved changes until then (see
-[Unsaved changes](#unsaved-changes)). One exception is written at once: a
+display toggles and SpeleoDB state changes wait in memory (`local_pending`)
+and ride the upgrading save. SpeleoDB state changes count as unsaved changes
+until then; a display toggle alone does not, so it never arms autosave, which
+would convert a file the user only looked at, and a close without a save
+drops it (see [Unsaved changes](#unsaved-changes)). One exception is written at once: a
 SpeleoDB unlink (`persist_local_state_upgrading`) upgrades the file, with the
 survey it holds on disk (migrated again; the session's unsaved edits stay
 unsaved) and the session's local state, the original kept like any other.
@@ -439,14 +441,18 @@ backend's "changes no save has written": `FileState.dirty`, set by every
 recorded edit, by undo and redo, and by an Ignore or Unignore of a warning
 (ignored warnings are survey content: they ride the next save, and "Don't
 save" discards them); and, on a legacy file not yet upgraded, the local state
-waiting for the upgrading save (`local_pending`: a display toggle, SpeleoDB
-bookkeeping), which 0.6.0 wrote in place at once and which "Don't save" now
-discards. Display toggles and SpeleoDB state changes of a version 2 file are
-durable at once and set nothing. A save clears both. The frontend keeps its
-own `isDirty` for the indicator, autosave and the close, switch and quit
-prompts, and asks the backend after an Ignore and after a display toggle
-(`localStateDirty.ts`), so a toggle on a legacy file makes the close prompt
-ask.
+waiting for the upgrading save that is not view state (`local_pending_asks`:
+SpeleoDB bookkeeping, a project name, a materialized undo mode), which 0.6.0
+wrote in place at once and which "Don't save" now discards. A display toggle
+on a legacy file waits for that save too (`local_pending`, through
+`persist_display_state`) but is not an unsaved change: counting it would arm
+autosave, and autosave would convert the 0.6.0 file the user only looked at
+(demo issue I-6). A close without a save drops it, as it drops any other view
+state. Display toggles and SpeleoDB state changes of a version 2 file are
+durable at once and set nothing. A save clears every flag. The frontend keeps
+its own `isDirty` for the indicator, autosave and the close, switch and quit
+prompts; it asks the backend after an Ignore, and never marks the project
+unsaved for a display toggle.
 
 ## Failure classification
 

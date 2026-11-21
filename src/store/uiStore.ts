@@ -29,7 +29,6 @@ import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
 import { useColorScaleStore } from './colorScaleStore';
 import { displaySettingStorageKey } from './displaySettingKeys';
-import { syncDirtyAfterLocalSave } from './localStateDirty';
 import { createSectionsViewSlice, type SectionsViewSlice } from './sectionsViewSlice';
 
 // Import tool utilities for internal use and re-export for convenience
@@ -1851,18 +1850,22 @@ export const useUIStore = create<UIStore>((set) => ({
       'save_display_setting',
       { key, value: String(spacing) },
       { purpose: 'persist display setting', fields: { key } }
-    ).then(syncDirtyAfterLocalSave, (e) => {
+    ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
   },
   saveDisplaySetting: async (key, value) => {
+    // A display toggle never makes the project unsaved: a version 2 file
+    // writes it at once, and a 0.6.0 file keeps it for the next save, which
+    // writes it with the conversion. Marking the project unsaved here would
+    // arm autosave, and autosave would convert a file the user only looked
+    // at (demo issue I-6; the backend's `has_unsaved_changes` agrees).
     try {
       const storageKey = displaySettingStorageKey(key);
       await invokeIpc('save_display_setting', { key: storageKey, value: String(value) }, {
         purpose: 'persist display setting',
         fields: { key: storageKey },
       });
-      await syncDirtyAfterLocalSave();
     } catch (e) {
       console.warn('Failed to save display setting:', e);
     }
@@ -2004,7 +2007,7 @@ export const useUIStore = create<UIStore>((set) => ({
       'save_display_setting',
       { key, value: mode },
       { purpose: 'persist display setting', fields: { key } }
-    ).then(syncDirtyAfterLocalSave, (e) => {
+    ).catch((e) => {
       console.warn('Failed to save geometry mode:', e);
     });
   },

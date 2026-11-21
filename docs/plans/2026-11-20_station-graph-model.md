@@ -47,7 +47,7 @@ Files:
 - **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Why: data never moves or changes name silently.
 - **A 0.6.0 file this build cannot convert is not called corrupt**: it opens as "This file needs converting ..., and this version cannot convert it: <reason>", and Attempt Repair never rewrites a file that opens or that only the conversion refuses, nor says it succeeded while the open still fails (UR4). Why: the recovery dialog and its repair are for damage.
 - **A Save As onto another 0.6.0 file upgrades it**: the 0.6.0 file it replaces is kept in Recovery, and no SQLite sidecar is left beside the JSON file (UR5). Why: an old build would roll a journal into the JSON file.
-- **Local state of an open 0.6.0 file counts as unsaved**: a display toggle (or SpeleoDB bookkeeping) waits for the upgrading save and the close prompt asks; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it.
+- **Local state of an open 0.6.0 file waits for the upgrading save**: SpeleoDB bookkeeping counts as unsaved and the close prompt asks; a display toggle rides the next save but alone is not an unsaved change, so it never arms autosave and a close without a save drops it; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6, amended by demo issue I-6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it, and only a save the user asked for (or the autosave of a real edit) may do that.
 - **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). Why: never rewrite what this build would lose.
 - **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
 - **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned; an ignore whose shot an undo or redo step of the saved history can bring back is kept with it (0.6.0 dropped it at the save) (12.2, 6.5, C11, N9, F-command-parity-2). Why: ignores are survey content.
@@ -1065,9 +1065,13 @@ findings D-migration-upgrade-4 to -12, J-docs-tests-truth-3, -6, -7). Labels
   guard. 0.6.0's Save As left the sidecars too; the JSON file must not.
 - **UR6. Local state of an open legacy file is never silently lost** (amends
   C2). `has_unsaved_changes` is `dirty` or, on a legacy origin,
-  `local_pending`; the frontend asks it after a display toggle
-  (`localStateDirty.ts`), so the close, switch and quit prompts ask and
-  autosave upgrades the file. A SpeleoDB unlink is written at once: the file
+  `local_pending_asks` (every pending local state but a display toggle).
+  Amended after the real-app demo (issue I-6): a display toggle used to count
+  too, and the frontend asked after each one (`localStateDirty.ts`), so a
+  look at a 0.6.0 file armed autosave, which converted the file 30 s later.
+  A display toggle now waits for the next save (`persist_display_state`) but
+  marks nothing unsaved; the frontend no longer asks after one, and a close
+  without a save drops it. A SpeleoDB unlink is written at once: the file
   is upgraded with the survey it holds on disk (migrated again; the session's
   unsaved edits and ignores stay unsaved) and the session's local state
   (`persist_local_state_upgrading`), as N11 does for a closed copy. Other

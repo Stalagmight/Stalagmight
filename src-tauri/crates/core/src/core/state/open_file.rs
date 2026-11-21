@@ -13,9 +13,11 @@
 //!   on read-only projects and unknown `requires`. It is never used on a
 //!   legacy (SQLite) file not yet upgraded, nor on a project never saved:
 //!   there the change waits in memory for the first real save
-//!   (`local_pending`), and on a legacy file it counts as unsaved
-//!   ([`AppState::has_unsaved_changes`]); only a SpeleoDB unlink upgrades a
-//!   legacy file at once ([`AppState::persist_local_state_upgrading`]).
+//!   (`local_pending`). On a legacy file it counts as unsaved
+//!   ([`AppState::has_unsaved_changes`]), except a display toggle alone
+//!   ([`AppState::persist_display_state`]: it never arms autosave, which
+//!   would convert the file); only a SpeleoDB unlink upgrades a legacy file
+//!   at once ([`AppState::persist_local_state_upgrading`]).
 //!
 //! Lock order: `project` -> `file` -> `undo_stack` (`file` takes the place
 //! `database` had). Nothing is taken while `file` is held except
@@ -282,6 +284,12 @@ pub(crate) struct FileState {
     /// Durable state changed in memory that only the next real save can
     /// write (legacy origin or never saved).
     pub(crate) local_pending: bool,
+    /// Part of that state is something the close prompt must ask about
+    /// (SpeleoDB bookkeeping, a project name, a materialized undo mode). A
+    /// display toggle alone is not (demo issue I-6): on a 0.6.0 file it would
+    /// arm autosave, and autosave would convert the file the user only looked
+    /// at. It waits for the next save, which writes it with the conversion.
+    pub(crate) local_pending_asks: bool,
     /// Shown once after a legacy open that moved stations.
     pub(crate) conversion: Option<ConversionNotice>,
     /// Record parity the legacy model kept for `.plnx` pins (dive-plan
@@ -519,7 +527,15 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
-        self.persist_local_state_guarded(false)
+        self.persist_local_state_guarded(false, true)
+    }
+
+    /// [`Self::persist_local_state`] for a display toggle (per-machine view
+    /// state): on a legacy or never-saved project the change waits for the
+    /// next save as any local state does, but it alone does not make the
+    /// project unsaved ([`Self::has_unsaved_changes`], demo issue I-6).
+    pub(crate) fn persist_display_state(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(false, false)
     }
 
     /// [`Self::persist_local_state`] for the write an OPEN makes (a
@@ -527,10 +543,16 @@ impl AppState {
     /// for byte, so an open never changes the history on disk, whatever the
     /// persisted window (review finding J-docs-tests-truth-3).
     pub(super) fn persist_local_state_keeping_history(&self) -> Result<(), LocalSaveError> {
-        self.persist_local_state_guarded(true)
+        self.persist_local_state_guarded(true, true)
     }
 
-    fn persist_local_state_guarded(&self, keep_history: bool) -> Result<(), LocalSaveError> {
+    /// `asks`: a change deferred on a legacy file makes the project unsaved
+    /// (every local state but a display toggle).
+    fn persist_local_state_guarded(
+        &self,
+        keep_history: bool,
+        asks: bool,
+    ) -> Result<(), LocalSaveError> {
         // Under the `project` guard, for the whole save: every change of the
         // survey, of the stacks and of the dirty flag happens under it (an
         // undo pops its entry before it marks the project dirty), so only
@@ -540,7 +562,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = guard.as_ref().and_then(|p| p.file_path.clone());
-        let result = self.persist_local_state_with(path, keep_history);
+        let result = self.persist_local_state_with(path, keep_history, asks);
         drop(guard);
         result
     }
@@ -553,26 +575,27 @@ impl AppState {
         &self,
         path: Option<PathBuf>,
     ) -> Result<(), LocalSaveError> {
-        self.persist_local_state_with(path, false)
+        self.persist_local_state_with(path, false, true)
     }
 
     /// [`Self::persist_local_state_at`]; `keep_history` copies the file's
-    /// `history` member verbatim (the open's write).
+    /// `history` member verbatim (the open's write); `asks` as
+    /// [`Self::persist_local_state_guarded`].
     fn persist_local_state_with(
         &self,
         path: Option<PathBuf>,
         keep_history: bool,
+        asks: bool,
     ) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (Some(path), true) = (path, file.can_save_locally()) else {
+        let (Some(path), true, Some(expected)) =
+            (path, file.can_save_locally(), file.fingerprint.clone())
+        else {
             file.local_pending = true;
-            return Ok(());
-        };
-        let Some(expected) = file.fingerprint.clone() else {
-            file.local_pending = true;
+            file.local_pending_asks |= asks;
             return Ok(());
         };
         // Read once: the bytes this state last read or wrote, when it kept
@@ -602,6 +625,7 @@ impl AppState {
         file.fingerprint = Some(fingerprint);
         file.saved_history = extras.history;
         file.local_pending = false;
+        file.local_pending_asks = false;
         Ok(())
     }
 
@@ -668,13 +692,17 @@ impl AppState {
 
     /// Whether the open project has changes no save has written yet: survey
     /// edits, ignores, and on a legacy (SQLite) file not yet upgraded the
-    /// local state that waits for the upgrading save (display toggles,
-    /// SpeleoDB bookkeeping, `local_pending`). Those were written in place at
-    /// once by 0.6.0; here only a save writes them, so "Don't save" on close
-    /// discards them and the close prompt must ask (review finding
-    /// D-migration-upgrade-5).
+    /// local state that waits for the upgrading save (SpeleoDB bookkeeping,
+    /// `local_pending_asks`). Those were written in place at once by 0.6.0;
+    /// here only a save writes them, so "Don't save" on close discards them
+    /// and the close prompt must ask (review finding D-migration-upgrade-5).
+    /// A display toggle alone does not count (demo issue I-6): it waits for
+    /// the next save too, but asking about it, or letting autosave write it,
+    /// would convert a file the user only looked at.
     pub fn has_unsaved_changes(&self) -> bool {
-        self.with_file(|file| file.dirty || file.origin == FileOrigin::Legacy && file.local_pending)
+        self.with_file(|file| {
+            file.dirty || file.origin == FileOrigin::Legacy && file.local_pending_asks
+        })
     }
 
     /// A local-only save that must be durable at once on a legacy (SQLite)
@@ -696,7 +724,7 @@ impl AppState {
         let legacy = self.with_file(|f| f.origin == FileOrigin::Legacy && f.fingerprint.is_some());
         let result = match (path, legacy) {
             (Some(path), true) => self.upgrade_legacy_on_disk(&path),
-            (path, _) => self.persist_local_state_with(path, false),
+            (path, _) => self.persist_local_state_with(path, false, true),
         };
         drop(guard);
         result
@@ -741,6 +769,7 @@ impl AppState {
                 file.saved_history = History::default();
                 file.history_unread = false;
                 file.local_pending = false;
+                file.local_pending_asks = false;
             }
             Err(failure) => {
                 if let Some(settled) = failure.settled {
