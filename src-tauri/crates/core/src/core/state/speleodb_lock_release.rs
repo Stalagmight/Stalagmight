@@ -1015,6 +1015,17 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
 
+    /// Wait (up to 10 s) until `done` holds: a release that must land runs on
+    /// its own thread, and a fixed [`settle`] raced it on a loaded host
+    /// (about one run in five at load 40). Where a release must NOT land,
+    /// [`settle`] still gives a stray one its chance.
+    fn settle_until(done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     type Release = fn(&AppState);
 
     fn every_lifecycle_release() -> [(&'static str, Release); 5] {
@@ -1174,6 +1185,10 @@ mod tests {
             let (server, seen) = recording_server();
             let (_temp, _root, _path, state) = managed_editing_session(&server);
             release(&state);
+            settle_until(|| {
+                release_requests(&seen) >= 1 && !state.speleodb_lock_acquired_here(PID)
+            });
+            // And a duplicate its chance.
             settle();
             assert_eq!(
                 release_requests(&seen),
@@ -1566,7 +1581,7 @@ mod tests {
             "and gave up on its budget ({took:?})"
         );
         // The release still lands once the span frees, if the process lives on.
-        settle();
+        settle_until(|| release_requests(&seen) >= 1);
         assert_eq!(release_requests(&seen), 1);
     }
 }
