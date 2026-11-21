@@ -890,8 +890,11 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     assert_eq!(
         notice,
         "Converted from the old file format; 1 station name changed (a merged station has \
-         one name on all its lines): Line 3 0 is now 1; the original is kept (Recent \
-         Projects: right-click, Restore an earlier copy)."
+         one name on all its lines): Line 3 0 is now 1. \
+         The new format is written the first time the project is saved, or already \
+         was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
+         original file is kept: to go back to it, right-click the project in Recent \
+         Projects and choose Restore an earlier copy."
     );
 }
 
@@ -931,7 +934,7 @@ fn a_conversion_that_joined_comments_says_so() {
     let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
-    assert!(!notice.contains("moved"), "{notice}");
+    assert!(!notice.contains("stations moved"), "{notice}");
     assert!(notice.contains("1 station name changed"), "{notice}");
     assert!(
         notice.contains("a merged station's two comments were joined"),

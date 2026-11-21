@@ -34,7 +34,7 @@ fn a_depth_change_is_reported_as_one() {
         text.contains("1 stations changed depth by up to 3.50 m"),
         "{text}"
     );
-    assert!(!text.contains("moved"), "{text}");
+    assert!(!text.contains("stations moved"), "{text}");
 }
 
 /// A snap whose derived alignment changed a depth tie is an expected
@@ -73,7 +73,7 @@ fn a_missing_slot_could_not_be_placed() {
     let text = message(&v).expect("a notice");
     assert!(text.contains("2 stations could not be placed"), "{text}");
     assert!(!text.contains("inf") && !text.contains("NaN"), "{text}");
-    assert!(!text.contains("moved"), "{text}");
+    assert!(!text.contains("stations moved"), "{text}");
 }
 
 /// Moves, depth changes and unplaced slots are each said, in that order; a
@@ -99,8 +99,11 @@ fn every_kind_of_difference_is_said() {
         message(&v).as_deref(),
         Some(
             "Converted from the old file format; 3 stations moved by up to 5.00 m; \
-             1 stations changed depth by up to 0.50 m; 1 stations could not be placed; \
-             the original is kept (Recent Projects: right-click, Restore an earlier copy)."
+             1 stations changed depth by up to 0.50 m; 1 stations could not be placed. \
+             The new format is written the first time the project is saved, or already \
+             was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
+             original file is kept: to go back to it, right-click the project in Recent \
+             Projects and choose Restore an earlier copy."
         )
     );
 }
@@ -119,4 +122,46 @@ fn nothing_visible_raises_nothing() {
         },
     );
     assert_eq!(message(&v), None);
+}
+
+/// A legacy SpeleoDB revision converted on download keeps no local original:
+/// the cache is version 2 at once. Its notice says where the original is (the
+/// server's revision), never the local backup and next save a local file's
+/// notice promises. Injection: drop `.downloaded()` from the pull's install
+/// (`prepare_download`) and the pull's notice promises a Restore that does
+/// not exist (`a_pulled_legacy_revision_that_moved_stations_raises_the_
+/// conversion_notice` covers that path end to end).
+#[test]
+fn a_downloaded_revision_points_at_the_server_not_a_local_backup() {
+    let v = Verification {
+        mismatches: vec![mismatch(1, Axis::Horizontal, 2.0)],
+        ..Verification::default()
+    };
+    let local = ConversionNotice::of(&v).expect("a notice");
+    let downloaded = local.clone().downloaded();
+    let (local, downloaded) = (local.message(), downloaded.message());
+    assert!(local.contains("Restore an earlier copy"), "{local}");
+    assert!(
+        local.contains("the first time the project is saved"),
+        "{local}"
+    );
+    assert!(
+        !downloaded.contains("Restore an earlier copy"),
+        "{downloaded}"
+    );
+    assert!(!downloaded.contains("project is saved"), "{downloaded}");
+    assert!(
+        downloaded.ends_with(
+            ". This computer's copy is already converted, and the original revision is \
+             unchanged on SpeleoDB: it stays in the project's Revision history."
+        ),
+        "{downloaded}"
+    );
+    // The differences are said the same way: only the second sentence differs.
+    let what = |m: &str| m.split(". ").next().unwrap_or_default().to_owned();
+    assert_eq!(what(&local), what(&downloaded));
+    assert_eq!(
+        what(&local),
+        "Converted from the old file format; 1 stations moved by up to 2.00 m"
+    );
 }

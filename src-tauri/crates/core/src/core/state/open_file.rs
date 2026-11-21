@@ -88,6 +88,23 @@ pub(crate) struct ConversionNotice {
     /// Merged stations whose members' different comments were joined into
     /// one (each line now shows both).
     pub(crate) comments_joined: usize,
+    /// Where the unconverted original is, which the notice tells the user.
+    pub(crate) original: ConversionOriginal,
+}
+
+/// Where the original of a converted legacy file is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConversionOriginal {
+    /// A local file: converted in memory, written as version 2 by its first
+    /// save, which moves the original into the backups folder (Recent
+    /// Projects: Restore an earlier copy).
+    #[default]
+    LocalFile,
+    /// A SpeleoDB revision downloaded into the cache: the cache copy is
+    /// already version 2 when it opens, and no local backup is made; the
+    /// original is the revision itself, unchanged on the server (Revision
+    /// history).
+    SpeleoDbRevision,
 }
 
 /// How many name changes the notice spells out before "and N more".
@@ -118,7 +135,16 @@ impl ConversionNotice {
                 unexplained: 0,
                 names_changed,
                 comments_joined,
+                original: ConversionOriginal::LocalFile,
             }),
+        }
+    }
+
+    /// The same notice for a SpeleoDB revision the cache got converted.
+    pub(crate) fn downloaded(self) -> Self {
+        Self {
+            original: ConversionOriginal::SpeleoDbRevision,
+            ..self
         }
     }
 
@@ -134,6 +160,7 @@ impl ConversionNotice {
             unexplained: verification.mismatches.len(),
             names_changed: Vec::new(),
             comments_joined: 0,
+            original: ConversionOriginal::LocalFile,
         };
         (notice.slots_moved > 0
             || notice.depth_changed > 0
@@ -172,9 +199,24 @@ impl ConversionNotice {
             // counts above; never "0 stations moved" all the same.
             what.push("some positions differ from the old version's".to_owned());
         }
+        // The second sentence says where the original is: a local file's
+        // upgrade keeps it in the backups folder (written by the first save,
+        // or already by a Recents rename or a link strip of the closed file);
+        // a downloaded revision's cache copy keeps none, the server has it.
+        let original = match self.original {
+            ConversionOriginal::LocalFile => {
+                "The new format is written the first time the project is saved, or already \
+                 was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
+                 original file is kept: to go back to it, right-click the project in Recent \
+                 Projects and choose Restore an earlier copy."
+            }
+            ConversionOriginal::SpeleoDbRevision => {
+                "This computer's copy is already converted, and the original revision is \
+                 unchanged on SpeleoDB: it stays in the project's Revision history."
+            }
+        };
         format!(
-            "Converted from the old file format; {}; the original is kept (Recent Projects: \
-             right-click, Restore an earlier copy).",
+            "Converted from the old file format; {}. {original}",
             what.join("; ")
         )
     }
