@@ -700,23 +700,38 @@ impl AppState {
         })
     }
 
-    /// Whether a claim exists for `project_id` ON `endpoint`'s deployment,
-    /// whoever holds it.
+    /// Whether the account a release is FOR holds a claim on its project: the
+    /// reclaim check's question (`speleodb_release_unless_reclaimed_locked`).
     ///
-    /// The reclaim check's question, and deliberately NOT
-    /// [`Self::speleodb_lock_acquired_here`]'s. A captured release names the
-    /// server it is for and may outlive the session - and even the sign-in -
-    /// that captured it, so "is this OUR account's?" is the wrong test: what
-    /// matters is whether some session in this process has claimed the very
-    /// mutex the release would free. Keyed on the deployment because a project
-    /// UUID is unique only on one server; a clone holding the same id must not
-    /// answer for it.
-    pub(super) fn speleodb_claim_on_deployment(&self, endpoint: &str, project_id: &str) -> bool {
+    /// The release's own account - the endpoint and email captured with its
+    /// token - and neither of the two other accounts it could ask about:
+    ///
+    /// - Not the account signed in NOW ([`Self::speleodb_lock_acquired_here`]'s
+    ///   question): a captured release may outlive the session, and even the
+    ///   sign-in, that captured it.
+    /// - Not ANY account. A later session accounts for this lock only if it is
+    ///   the same account's: the server treats that account's re-acquire as a
+    ///   no-op, so the later session holds the very mutex the release would
+    ///   free. Another account's claim is no such session. If that account held
+    ///   the mutex, this one does not, and the holder check sends nothing anyway;
+    ///   if it does not, the claim is stale - and claims of other accounts are
+    ///   kept across a sign-in by design. Counting one stood the collaborator's
+    ///   own release down for the owner's stale claim on the same project, and
+    ///   the collaborator's lock stayed held (F4 of the protocol fuzzer).
+    ///
+    /// On the release's deployment, like every claim test
+    /// ([`super::speleodb_session::LockClaim::taken_by`]): a project UUID is
+    /// unique only on one server, so a same-id claim on a clone does not answer
+    /// for it.
+    pub(super) fn speleodb_claimed_by_releasing_account(
+        &self,
+        params: &super::speleodb_lock_release::LockReleaseParams,
+    ) -> bool {
         self.speleodb_session_lock().is_ok_and(|session| {
-            session
-                .locks_acquired_here
-                .iter()
-                .any(|claim| claim.project_id == project_id && claim.on_deployment(endpoint))
+            session.locks_acquired_here.iter().any(|claim| {
+                claim.project_id == params.project_id
+                    && claim.taken_by(Some(&params.endpoint), Some(&params.email))
+            })
         })
     }
 

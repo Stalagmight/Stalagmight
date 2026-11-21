@@ -447,12 +447,15 @@ fn collaborators_release(base: &str, email: &str) -> LockReleaseParams {
 
 #[test]
 fn only_a_claim_of_the_releasing_account_stands_a_release_down() {
+    // The release is the collaborator's; the owner is signed in now. A deferred
+    // release can outlive the sign-in that captured it, so neither "any account"
+    // nor "the account signed in now" is the account the question is about.
     let server = Server::start(Some(COLLAB));
     let state = AppState::new().expect("state");
-    signed_in_as(&state, &server.base, COLLAB, COLLAB_TOKEN);
+    signed_in_as(&state, &server.base, OWNER, OWNER_TOKEN);
 
-    // Another account's claim on the same project and deployment: no successor
-    // of this lock, so the release goes out.
+    // Only the owner's claim on the same project and deployment: no successor of
+    // the collaborator's lock, so the release goes out.
     state
         .speleodb_session_lock()
         .expect("session")
@@ -464,19 +467,21 @@ fn only_a_claim_of_the_releasing_account_stands_a_release_down() {
     assert_eq!(
         server.releases_by(COLLAB),
         1,
-        "another account's claim is no reclaim"
+        "another account's claim is no reclaim, signed in or not"
     );
     assert_eq!(server.holder(), None);
 
     // A later session of the releasing account itself holds a claim (under the
     // case SpeleoDB may give the email): it inherited this very lock, so the
-    // release stands down and sends nothing.
+    // release stands down and sends nothing, whoever is signed in now.
     server.set_holder(Some(COLLAB));
-    state
-        .speleodb_session_lock()
-        .expect("session")
-        .locks_acquired_here
-        .push(claim(&server.base, "Collab@X"));
+    {
+        let mut session = state.speleodb_session_lock().expect("session");
+        session.locks_acquired_here.clear();
+        session
+            .locks_acquired_here
+            .push(claim(&server.base, "Collab@X"));
+    }
     state
         .speleodb_release_unless_reclaimed(&collaborators_release(&server.base, COLLAB))
         .expect("stood down");
@@ -529,4 +534,35 @@ fn the_stranded_claim_cleanup_hands_back_a_lock_beside_another_accounts_claim() 
         vec![true],
         "only the owner's claim is left, for the owner"
     );
+}
+
+#[test]
+fn start_editings_unwind_after_a_boundary_ignores_another_accounts_claim() {
+    // Start Editing's unwind after a session boundary is the fourth caller of the
+    // reclaim check: the abort arm hands back the lock this call took, unless a
+    // successor of the same account has claimed it meanwhile.
+    let server = Server::start(Some(COLLAB));
+    let state = AppState::new().expect("state");
+    signed_in_as(&state, &server.base, COLLAB, COLLAB_TOKEN);
+    let entry_gen = state.speleodb_session_generation();
+    state.close_project();
+    assert_ne!(
+        state.speleodb_session_generation(),
+        entry_gen,
+        "fixture: a boundary has passed"
+    );
+    state
+        .speleodb_session_lock()
+        .expect("session")
+        .locks_acquired_here
+        .push(claim(&server.base, OWNER));
+
+    state.speleodb_unwind_release(&collaborators_release(&server.base, COLLAB), entry_gen);
+
+    assert_eq!(
+        server.releases_by(COLLAB),
+        1,
+        "the unwind hands the lock back"
+    );
+    assert_eq!(server.holder(), None);
 }

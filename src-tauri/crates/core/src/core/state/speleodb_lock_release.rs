@@ -651,13 +651,15 @@ impl AppState {
     ) -> Result<(), SpeleoDbError> {
         // The capturing session's own claim was already cleared - by
         // `delete_project`, under the SAME `project` guard that snapshotted these
-        // params and decided the file's identity. So a claim naming this project
-        // when the release finally runs can only be a SUCCESSOR session's (a
-        // Start Editing that slipped into the gap and inherited the mutex via the
-        // server's same-account re-acquire no-op), and the reclaim-checked
-        // release stands down for it instead of freeing the lock out from under
-        // a live edit session (F8). Serialized under the lock-ops mutex, so the
-        // check and the POST cannot interleave with an acquire -> commit span.
+        // params and decided the file's identity. So a claim of THIS account
+        // naming this project when the release finally runs can only be a
+        // SUCCESSOR session's (a Start Editing that slipped into the gap and
+        // inherited the mutex via the server's same-account re-acquire no-op),
+        // and the reclaim-checked release stands down for it instead of freeing
+        // the lock out from under a live edit session (F8). Another account's
+        // claim on the project is no successor and is not counted (F4).
+        // Serialized under the lock-ops mutex, so the check and the POST cannot
+        // interleave with an acquire -> commit span.
         self.speleodb_release_unless_reclaimed(params)
     }
 
