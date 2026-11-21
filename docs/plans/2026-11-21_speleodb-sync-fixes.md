@@ -61,7 +61,8 @@ prompt. 0.6.0 had the same (one UPDATE of `speleo_link` per edit).
 **Ruled out.** A copy without a digest (a 0.6.0 copy, a version 2 copy
 installed before this) keeps the conservative answer, as does any survey that
 differs in a byte the digest covers (an ignore kept only for a shot the history
-can bring back, another writer's layout). Trusting a digest the file states
+can bring back, another writer's layout, a project name the server-name fold
+(#216) changed on a clean copy, until its next download or upload). Trusting a digest the file states
 for its own body was rejected: a writer that keeps unknown `local` keys
 verbatim while changing the body (an older build, a third-party tool) would
 make it lie; the body is always re-hashed.
