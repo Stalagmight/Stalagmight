@@ -1257,6 +1257,7 @@
       "warningToast": "Merge complete - {{message}}"
     },
     "mergeStations": {
+      "becomesClosure": "These stations are already connected, so merging them would make a loop. A loop closure is created instead.",
       "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "pieceMore_one": "{{name}} and 1 more line",

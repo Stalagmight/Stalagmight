@@ -1899,7 +1899,11 @@ hub of three or more lines only the chosen line leaves.
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
-3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
+3. ClosureDialog appears with closure preview data (path length, misclosure, error %),
+   and says why the merge became a closure: "These stations are already
+   connected, so merging them would make a loop. A loop closure is created
+   instead." The "Checking merge compatibility..." toast leaves as the
+   dialog opens (demo finding I-9)
    - If the two stations are the two ends of one shot (directly or through
      junctions and other closures), the dialog says why and Create is disabled:
      the closure would squeeze that shot to zero length (#737)

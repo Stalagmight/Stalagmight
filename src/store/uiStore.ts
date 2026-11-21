@@ -650,6 +650,13 @@ export interface UIStore extends SectionsViewSlice {
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
   removeToast: (id: number) => void;
   /**
+   * Begin the exit of every live toast under `key`: a notice of a wait that is
+   * over, e.g. "Checking merge compatibility..." once its dialog is up (demo
+   * finding I-9). The stack runs the exit animation and drops it, as for the
+   * per-toast dismiss button.
+   */
+  dismissToastsByKey: (key: string) => void;
+  /**
    * Drop every toast immediately - no exit animation, no eviction bookkeeping.
    *
    * A TEST-HARNESS reset, and deliberately nothing else: no production code path
@@ -2079,6 +2086,12 @@ export const useUIStore = create<UIStore>((set) => ({
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismissToastsByKey: (key) =>
+    set((s) =>
+      s.toasts.some((t) => t.key === key && !t.leaving)
+        ? { toasts: s.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)) }
+        : s,
+    ),
   clearToast: () => set({ toasts: [] }),
   toastBottomOffsets: {},
   registerToastBottomOffset: (owner, px) =>

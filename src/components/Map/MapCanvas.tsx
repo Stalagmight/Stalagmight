@@ -1343,7 +1343,10 @@ function MapCanvas() {
 
       showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
-        const result = await checkMergeConnectivity(originStation, targetStation);
+        const result = await checkMergeConnectivity(originStation, targetStation)
+          // The check is over either way: its toast must not linger behind the
+          // dialog it opens (demo finding I-9).
+          .finally(() => useUIStore.getState().dismissToastsByKey(TOAST_KEYS.MERGE_CHECK));
         const extra = moveCallbacks
           ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
           : {};
@@ -1361,6 +1364,7 @@ function MapCanvas() {
             preview: result.preview,
             reason: result.reason,
             closureRefusal: result.closure_refusal,
+            fromMerge: true,
             ...extra,
           });
         } else {
