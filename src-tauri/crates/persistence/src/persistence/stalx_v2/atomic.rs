@@ -4,6 +4,14 @@
 //! fsync. No handle on the destination is open across the rename (Windows
 //! refuses to rename over an open file).
 //!
+//! A first save ([`Guard::Absent`]) must not replace a file that appears
+//! between its check and that last step, so on Unix the last step itself
+//! refuses a taken name: the temp is hard-linked to the destination (which
+//! fails when the name exists, even as a dangling link) and then unlinked.
+//! Where the filesystem has no hard links (FAT, some network volumes), and on
+//! Windows, it is the checked rename, which leaves that window open: a file
+//! created in the instant between the check and the rename is replaced.
+//!
 //! The guard remembers the size, modification time and SHA-256 of the bytes
 //! last read or written ([`Fingerprint`]); before the rename, a destination
 //! whose content differs refuses the write so the app can ask (reload,
@@ -221,17 +229,58 @@ pub fn write_atomic(
         let _ = std::fs::remove_file(&temp);
         return Err(error);
     }
-    if let Err(error) = failpoint(Stage::Rename).and_then(|()| std::fs::rename(&temp, dest)) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(WriteError::Io {
+    #[cfg(test)]
+    after_guard(dest);
+    let placed = failpoint(Stage::Rename)
+        .map_err(|error| WriteError::Io {
             stage: Stage::Rename,
             path: dest.to_path_buf(),
             error,
-        });
+        })
+        .and_then(|()| place(&temp, dest, guard));
+    if let Err(error) = placed {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
     }
     sync_parent(dest);
     let modified = std::fs::metadata(dest).and_then(|m| m.modified()).ok();
     Ok(Fingerprint::of(bytes, modified))
+}
+
+/// Move the staged `temp` onto `dest` (module docs): a rename, except for a
+/// first save on Unix, whose hard link refuses a name another program took
+/// after the guard's check ([`WriteError::Exists`]).
+fn place(temp: &Path, dest: &Path, guard: Guard<'_>) -> Result<(), WriteError> {
+    #[cfg(unix)]
+    if matches!(guard, Guard::Absent) {
+        match std::fs::hard_link(temp, dest) {
+            Ok(()) => {
+                // The new file is in place under both names; the temp's goes
+                // (a failure leaves a `.tmp` the next save removes).
+                if let Err(error) = std::fs::remove_file(temp) {
+                    tracing::warn!(error = %error, "Saved the project, but could not remove its temporary name");
+                }
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(WriteError::Exists {
+                    path: dest.to_path_buf(),
+                });
+            }
+            // No hard links on this volume: the checked rename below.
+            Err(error) => tracing::debug!(
+                error = %error,
+                "Could not link the first save into place; renaming it after the check"
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = guard;
+    std::fs::rename(temp, dest).map_err(|error| WriteError::Io {
+        stage: Stage::Rename,
+        path: dest.to_path_buf(),
+        error,
+    })
 }
 
 fn fill(mut file: File, bytes: &[u8], temp: &Path) -> Result<(), WriteError> {
@@ -323,6 +372,21 @@ fn inherit_mode(temp: &File, dest: &Path) {
 thread_local! {
     /// The stage the next save on this thread fails at (tests only).
     pub(super) static FAIL_AT: std::cell::Cell<Option<Stage>> = const { std::cell::Cell::new(None) };
+    /// Run by the next save on this thread right after the guard passed and
+    /// before the file is moved into place (tests only): another program's
+    /// write landing in that window.
+    pub(super) static AFTER_GUARD: std::cell::RefCell<Option<AfterGuard>> = const { std::cell::RefCell::new(None) };
+}
+
+/// See [`AFTER_GUARD`].
+#[cfg(test)]
+pub(super) type AfterGuard = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
+fn after_guard(dest: &Path) {
+    if let Some(hook) = AFTER_GUARD.with(|h| h.borrow_mut().take()) {
+        hook(dest);
+    }
 }
 
 /// An injected I/O failure at `stage` (tests only; always `Ok` otherwise).

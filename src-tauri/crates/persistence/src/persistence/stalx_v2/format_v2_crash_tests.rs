@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::atomic::{Stage, FAIL_AT};
+use super::atomic::{Stage, AFTER_GUARD, FAIL_AT};
 use super::test_helpers::{generate, SMALL};
 use super::{
     check_unchanged, decode, encode, temp_path, write_atomic, DecodeOptions, Fingerprint, Guard,
@@ -94,6 +94,59 @@ fn the_guard_refuses_an_externally_modified_file() {
     let saved = write_atomic(&dest, &old, Guard::Overwrite).unwrap();
     std::fs::write(&dest, &old).unwrap();
     check_unchanged(&dest, &saved).unwrap();
+}
+
+/// Pre-PR review finding 6: a first save (`Guard::Absent`) checked that
+/// nothing was there, then renamed over whatever appeared in between. On
+/// Unix the last step itself refuses a taken name now (a hard link), so a
+/// file another program created after the check is kept and the save is
+/// refused as `Exists`, with no temp left behind. Injection: a plain rename
+/// as the last step replaces "someone else's" here.
+#[cfg(unix)]
+#[test]
+fn a_first_save_never_replaces_a_file_that_appears_after_the_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("cave.stalx");
+    let (old, _) = files(4);
+    AFTER_GUARD.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|dest: &Path| {
+            std::fs::write(dest, b"someone else's").unwrap();
+        }));
+    });
+    let result = write_atomic(&dest, &old, Guard::Absent);
+    AFTER_GUARD.with(|hook| hook.borrow_mut().take());
+    assert!(
+        matches!(result, Err(WriteError::Exists { .. })),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), b"someone else's");
+    assert_eq!(entries(dir.path()), vec!["cave.stalx".to_string()]);
+
+    // A dangling link counts as taken too, as the check says.
+    std::fs::remove_file(&dest).unwrap();
+    AFTER_GUARD.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|dest: &Path| {
+            std::os::unix::fs::symlink("nowhere.stalx", dest).unwrap();
+        }));
+    });
+    let result = write_atomic(&dest, &old, Guard::Absent);
+    AFTER_GUARD.with(|hook| hook.borrow_mut().take());
+    assert!(
+        matches!(result, Err(WriteError::Exists { .. })),
+        "{result:?}"
+    );
+    assert!(std::fs::symlink_metadata(&dest)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    // Nothing in the way: the first save lands, under its name only.
+    std::fs::remove_file(&dest).unwrap();
+    let saved = write_atomic(&dest, &old, Guard::Absent).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), old);
+    let (_, read) = Fingerprint::read(&dest, u64::MAX).unwrap();
+    assert!(saved.same_content(&read));
+    assert_eq!(entries(dir.path()), vec!["cave.stalx".to_string()]);
 }
 
 #[test]

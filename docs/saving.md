@@ -258,7 +258,12 @@ Every write of a project file, the local-only ones included, goes through
    permissions) and `sync_all` it: one data sync
 3. Check the guard (below)
 4. `rename(<file>.tmp, <file>)` - atomic on POSIX, nearly atomic on Windows; no
-   handle on the destination is open across it
+   handle on the destination is open across it. A first save (`Guard::Absent`:
+   nothing may be there) instead hard-links the temp to `<file>` and unlinks
+   the temp on Unix, so a file that appeared after the check in step 3 refuses
+   the save (`Exists`) instead of being replaced. Where the volume has no hard
+   links, and on Windows, it is the checked rename, with that brief window
+   open
 5. Sync the folder (Unix; a failure is logged, not returned: the file is
    already in place. The warning is logged once per run, later failures at
    debug level, so a network or removable volume does not repeat it on every
