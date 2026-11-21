@@ -108,24 +108,28 @@ export function StationOtherLines({ station }: { station: Station }) {
               : otherName ?? (otherId !== null ? t('detailPanel.station.otherLineId', { id: otherId }) : null);
           return (
             <li key={key} className="text-sm flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <DetailLink
-                  type="station"
-                  target={{ lineId: ref.line_id, position: ref.station_index }}
-                  displayText={line}
-                  fullText={labels.station(ref, true)}
-                  pillLabel={line}
-                  onSelect={() => {
-                    setSource('detail-panel');
-                    setSelection({ type: 'station', stationRef: { line_id: ref.line_id, station_index: ref.station_index } });
-                  }}
-                  isMissing={findStation(stations, ref.line_id, ref.station_index) === undefined}
-                  onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredStation({ line_id: ref.line_id, station_index: ref.station_index })}
-                  onHoverEnd={() => setHoveredStation(null)}
-                />
+              {/* The pill never wraps; the name and Station ID wrap under it
+                  in a narrow panel rather than being cut off. */}
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="shrink-0 whitespace-nowrap">
+                  <DetailLink
+                    type="station"
+                    target={{ lineId: ref.line_id, position: ref.station_index }}
+                    displayText={line}
+                    fullText={labels.station(ref, true)}
+                    pillLabel={line}
+                    onSelect={() => {
+                      setSource('detail-panel');
+                      setSelection({ type: 'station', stationRef: { line_id: ref.line_id, station_index: ref.station_index } });
+                    }}
+                    isMissing={findStation(stations, ref.line_id, ref.station_index) === undefined}
+                    onAnnounce={announceSelection}
+                    onHoverStart={() => setHoveredStation({ line_id: ref.line_id, station_index: ref.station_index })}
+                    onHoverEnd={() => setHoveredStation(null)}
+                  />
+                </span>
                 {said !== null && (
-                  <span className="truncate" data-testid={`station-detail-other-name-${ref.line_id}-${ref.station_index}`}>
+                  <span className="min-w-0 break-words" data-testid={`station-detail-other-name-${ref.line_id}-${ref.station_index}`}>
                     {said}
                   </span>
                 )}
