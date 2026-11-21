@@ -242,7 +242,7 @@ Shared cores (one copy each):
 | Core | Used by |
 |---|---|
 | `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming its line), the comment rule (`Join`, or Combine's pick), `external`, true clashes lettered (a line that knows the survivor by the new alias keeps its names) | Merge Stations, the sweep's promotions, Combine's join |
-| `detach_ids(station, line)` (`ops_detach.rs`): a line's slot gets a new station; `via` datums, closure ends and the hand move follow | Detach / Unmerge, Combine's torn junctions |
+| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station (with `restore`, the junction's alias naming the line gives it its id and name back); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |
 | `solve_hold(station)` (`adjust.rs`) | The Computed View's own partition; Combine's gauge rule |
@@ -266,8 +266,8 @@ Shared cores (one copy each):
 | File | Commands and queries |
 |---|---|
 | `ops.rs` | `OpError`, `OpOutcome`, `run_op`, `station_of_slot`, `station_text`. |
-| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias, comments joined, names re-uniquified on the moving lines, `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
-| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction); the `detach_ids` core. |
+| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias naming its line, comments joined, true clashes lettered on the moving lines (the line that knows the survivor by the new alias keeps its names), `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
+| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction), `detach_naming` (what the line would get, for the dialog); the `detach_ids` core. |
 | `ops_closures.rs` | `create_closure(a, a_via, b, b_via, strategy)` (reports `closure_metrics_via` of the picked slots), `create_closure_at(slot, slot, strategy)`, `remove_closure(id)`, `closure_refusal`, `closure_preview`, `closure_between`. |
 | `sweep.rs` | `sweep_orphan_closures() -> SweepReport` (plan 5.5): one pass in list order; `a == b` removed; a sole bridge promoted by a merge (end `a`'s piece moves unless it is placed and `b`'s is not), kept between two placed pieces. `sweep_orphan_closures_moving(ends)` (the deletes): the named closures first, the named end's piece moving. |
 | `ops_datums.rs` | `set_datum(station, via, gps, accuracy)` / `set_datum_at(slot, ...)` (append, accuracy-only edit, or GPS edit through the anchor algorithm), `remove_datum(index)` / `remove_datum_at(slot)` (sweeps), `set_datum_entrance`, `datum_entrance`, `datum_index_for(station, via)` (the datum a slot has), `preview_zero_datum`. |
