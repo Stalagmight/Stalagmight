@@ -1310,6 +1310,34 @@ fn the_offered_restore_copy_is_the_one_a_restore_keeps() {
     assert!(AppState::list_project_backups(&project).is_empty());
 }
 
+/// Pre-PR delta review finding 6: the first save's hard-link placement puts
+/// the file in place under both names, then unlinks the temp; a failed
+/// unlink (or a crash between the two) leaves `<project>.stalx.tmp` as a
+/// second name of the saved project. It is complete and decodes, so the list
+/// offered it as an interrupted save: "restoring" it would put the project
+/// over itself. The list skips a `.tmp` that is the project's own file, while
+/// a real leftover copy is still offered. Injection: dropping the same-file
+/// check of the `.tmp` entries lists the project's second name here.
+#[cfg(unix)]
+#[test]
+fn the_name_a_first_save_left_behind_is_not_an_interrupted_save() {
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("cave.stalx");
+    stalx_v2::write_atomic(&project, &v2_bytes("Current"), stalx_v2::Guard::Absent).unwrap();
+    let temp = stalx_v2::temp_path(&project);
+    std::fs::hard_link(&project, &temp).unwrap();
+    assert!(AppState::list_project_backups(&project).is_empty());
+
+    // A copy a save wrote but never put in place is still offered.
+    std::fs::remove_file(&temp).unwrap();
+    std::fs::write(&temp, v2_bytes("Interrupted")).unwrap();
+    let kinds: Vec<BackupKind> = AppState::list_project_backups(&project)
+        .into_iter()
+        .map(|b| b.kind)
+        .collect();
+    assert_eq!(kinds, [BackupKind::InterruptedSave]);
+}
+
 /// The kind's wire names are the ones the generated TypeScript type lists
 /// (`src/types/ipc/BackupKind.ts`), which the dialog words.
 #[test]

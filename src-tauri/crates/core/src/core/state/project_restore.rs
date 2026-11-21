@@ -218,7 +218,10 @@ impl AppState {
     ///   C3, [`BackupKind::PreUpgrade`]).
     ///
     /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, nor the
-    /// project itself under another name (a hard link), and neither is a file
+    /// project itself under another name (a hard link: among others the
+    /// `.tmp` a first save's hard-link placement leaves when its unlink
+    /// fails, which is the saved project, not an interrupted save), and
+    /// neither is a file
     /// a restore would only refuse: one that is empty, that is neither a SQLite
     /// file nor a version 2 file, or a version 2 file that does not end (a
     /// save torn before it finished).

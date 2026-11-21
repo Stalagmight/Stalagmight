@@ -265,7 +265,11 @@ Every write of a project file, the local-only ones included, goes through
    the temp on Unix, so a file that appeared after the check in step 3 refuses
    the save (`Exists`) instead of being replaced. Where the volume has no hard
    links, and on Windows, it is the checked rename, with that brief window
-   open
+   open. An unlink that fails after the link (or a crash between the two)
+   leaves `<file>.tmp` as a second NAME of the saved file, not a copy: step 1
+   of the next save unlinks that name only, and the recovery dialog never
+   offers it as an interrupted save (the backup list skips any file that is
+   the project's own, `same_file_on_disk`)
 5. Sync the folder (Unix; a failure is logged, not returned: the file is
    already in place. The warning is logged once per run, later failures at
    debug level, so a network or removable volume does not repeat it on every
