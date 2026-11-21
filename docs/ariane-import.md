@@ -75,7 +75,15 @@ a section holds once, so it is the section's **trip** for sectioning - see
 
 ### Per-shot
 - Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
-- Length
+- Length. A REAL or VIRTUAL row with no usable length (zero, negative, or
+  unreadable, which the parser reads as 0) imports as a coincident-station tie of
+  0.001 m, the same nudge the Walls importer gives a zero-length leg, because the
+  project model has no zero-length shot. Only the horizontal offset collapses:
+  the depth each end records is kept, so the two stations share a map position
+  but not necessarily a depth. The import receipt counts these rows in one line,
+  and each one also gets the usual short-shot warning in the Warnings tab. A
+  negative length is treated the same way, so its magnitude is not kept. Before
+  #812 one such row failed the whole import.
 - Depth in / depth out
 - Inclination
 - LRUD (left, right, up, down)
@@ -111,7 +119,7 @@ Each section has a checkbox; the selection travels as `selected_sections: Option
 The topology rules, in `build_selection_index` / `determine_placement`
 (`crates/parsers/src/parsers/tml/import_options.rs`):
 
-- The Ariane-id index is built over the SELECTED sections only. A parent in a deselected section therefore resolves to nothing, so no surviving section can emit a `FromImporting` onto a section that is never created - which is a hard, whole-import rollback in `execute_import_sections`, not a skip.
+- The Ariane-id index is built over the SELECTED sections only. A parent in a deselected section therefore resolves to nothing, so no surviving section can emit a `FromImporting` onto a section that is never created. (Should one reach `execute_import_sections` anyway, the section imports unconnected with a receipt line since #814; it used to roll back the whole import.)
 - The ROOT is the lowest SELECTED index (not "the first section that survived shot filtering" - promoting a successor would silently drop the disconnected-section warning that case has always produced).
 - A section that had a parent and lost it to the selection falls back to the origin with its own warning ("attached to a section you did not select"), kept distinct from the file-orphan warning ("was disconnected") so the receipt names the right cause.
 - A loop closure whose far endpoint is in a deselected section is skipped and counted separately from one whose endpoint was EXCLUDED - two different toggles, two different messages.

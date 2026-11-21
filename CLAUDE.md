@@ -82,7 +82,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check   # root package (run wit
 for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # every member (CI runs this loop, NOT --all - see docs/linting.md)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets   # deny-level lint gate
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
-cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env (CI check-job gate)
+for v in compass_data igrf; do cargo test --locked --manifest-path src-tauri/vendor/$v/Cargo.toml; done   # workspace-excluded vendored crates; no telemetry feature/env (CI check-job gates)
 ```
 
 Running full `pnpm test:ui` is not recommended as it is heavy. You must select
@@ -122,7 +122,7 @@ workspace member, via the loop above) and `cargo clippy --workspace`
 pushing. The full policy - the strict anti-AI-slop clippy config
 (`[workspace.lints]` in `src-tauri/Cargo.toml`, inherited by every member),
 the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`), the
-rustfmt scope (the vendored `compass_data` and `scripts/lib/slice-rs` crates
+rustfmt scope (the vendored crates under `src-tauri/vendor/` and `scripts/lib/slice-rs`
 are not gated), and which lints were deliberately deferred - is in
 [docs/linting.md](docs/linting.md).
 

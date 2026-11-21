@@ -83,6 +83,25 @@ impl Project {
         excluded_shot: Option<(SectionId, usize)>,
         include_closures: bool,
     ) -> bool {
+        self.are_stations_connected_with_planned(
+            station_a,
+            station_b,
+            excluded_shot,
+            include_closures,
+            &[],
+        )
+    }
+
+    /// [`Self::are_stations_connected_excluding_shot`] over the survey plus
+    /// `planned`: merges an edit has decided to record but not recorded yet.
+    fn are_stations_connected_with_planned(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
         if station_a == station_b {
             return true;
         }
@@ -92,14 +111,59 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in
-                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
+            let planned_partners = planned.iter().filter_map(|&(a, b)| {
+                if a == current {
+                    Some(b)
+                } else if b == current {
+                    Some(a)
+                } else {
+                    None
+                }
+            });
+            for neighbor in self
+                .station_neighbors_excluding_shot(current, excluded_shot, include_closures)
+                .into_iter()
+                .chain(planned_partners)
             {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
                     }
                     queue.push_back(neighbor);
+                }
+            }
+        }
+        false
+    }
+
+    /// [`Self::are_stations_merged`] once `planned` merges are recorded too:
+    /// whether `station_a` and `station_b` are then one point.
+    fn are_stations_merged_with_planned(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
+        if planned.is_empty() {
+            return self.are_stations_merged(station_a, station_b);
+        }
+        if station_a == station_b {
+            return true;
+        }
+        let mut adjacency = self.build_station_merge_adjacency();
+        for &(a, b) in planned {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
+        let mut visited = HashSet::from([station_a]);
+        let mut queue = VecDeque::from([station_a]);
+        while let Some(current) = queue.pop_front() {
+            for &next in adjacency.get(&current).into_iter().flatten() {
+                if next == station_b {
+                    return true;
+                }
+                if visited.insert(next) {
+                    queue.push_back(next);
                 }
             }
         }
@@ -722,16 +786,24 @@ impl Project {
                         closure.station_a
                     };
 
+                    // One point once the planned merges are recorded too: a
+                    // closure between them would close nothing, so it is dropped
+                    // here rather than re-anchored for the sweep to remove.
                     if replacement_station == other
-                        || self.are_stations_merged(replacement_station, other)
+                        || self.are_stations_merged_with_planned(
+                            replacement_station,
+                            other,
+                            &planned,
+                        )
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
-                    } else if self.are_stations_connected_excluding_shot(
+                    } else if self.are_stations_connected_with_planned(
                         replacement_station,
                         other,
                         Some((section_id, pos)),
                         false,
+                        &planned,
                     ) || self.would_double_anchor_after_removal(
                         replacement_station.section_id,
                         other.section_id,
@@ -742,7 +814,12 @@ impl Project {
                         // deleted station:
                         //
                         // * the two ends still reach each other through the survey
-                        //   (shots + merges), so it remains a genuine loop;
+                        //   (shots + merges), so it remains a genuine loop. The
+                        //   merges include the ones planned above, as the guard
+                        //   below does: once an earlier closure of this station
+                        //   is promoted, the next may reach its other end through
+                        //   that merge, and promoting it too would weld one
+                        //   station onto two separate points (#776);
                         // * or promoting it would weld two components that each
                         //   survive independently zero-datum-anchored. That edge
                         //   puts two GPS anchors in one rigid group -
@@ -1769,3 +1846,11 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: a failed lookup is a failed test"
+)]
+#[path = "shots_closure_promotion_tests.rs"]
+mod closure_promotion_tests;

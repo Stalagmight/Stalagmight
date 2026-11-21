@@ -332,6 +332,19 @@ describe('presentImportReceipt (#411/#420)', () => {
     });
   });
 
+  it('keeps the modal for a receipt whose only news is a lost section (#814)', () => {
+    const ui = mockUi();
+    const lost: ImportReceipt = {
+      ...receiptFixture(),
+      section_problems: ['Section "A" was not imported: Shot 2 has zero length'],
+    };
+
+    presentImportReceipt(lost, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: lost });
+  });
+
   it('keeps the modal for a zero-count receipt even with no warnings (#442)', () => {
     const ui = mockUi();
     const empty: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 0 };

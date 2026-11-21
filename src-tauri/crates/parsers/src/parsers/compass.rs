@@ -62,10 +62,10 @@ pub struct CompassFile {
     /// toggle (#437). `shot_count - excluded_shot_count` is what a default
     /// import actually lands.
     pub excluded_shot_count: u32,
-    /// How many shots the converter drops because their resolved length is
-    /// non-positive - a missing-length sentinel, an explicit zero, or a
-    /// non-finite reading (`convert_compass_to_import_configs`'s
-    /// `length_m <= 0.0` check) - broken out by exclusion status and by the
+    /// How many shots have a non-positive resolved length - a missing-length
+    /// sentinel, an explicit zero (an equate), or a non-finite reading. Since
+    /// #818 they import as 1 mm coincident ties rather than being dropped; the
+    /// preview names how many - broken out by exclusion status and by the
     /// `apply_corrections` toggle. See `InvalidShotCounts` for the exact
     /// arithmetic; it is exact in all four `(include_excluded,
     /// apply_corrections)` toggle states, unlike a single count computed
@@ -481,10 +481,10 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
         .count() as u32
 }
 
-/// Shots the converter drops because their resolved length is non-positive
-/// (`convert_compass_to_import_configs`'s `length_m <= 0.0` check, pass 1),
-/// broken out by the two live dialog toggles that change which shots reach
-/// that check and how their length resolves:
+/// Shots whose resolved length is non-positive, which import as 1 mm
+/// coincident ties (#818; they used to be dropped), broken out by the two
+/// live dialog toggles that change which shots are imported and how their
+/// length resolves:
 ///
 /// - `include_excluded` decides whether `X`-flagged shots even reach the
 ///   length check at all (excluded-and-dropped-by-exclusion never does, under
@@ -501,10 +501,11 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
 ///   one fixed corrections setting, went stale the moment the user flipped
 ///   that checkbox.
 ///
-/// `shot_count - (include_excluded ? 0 : excluded_shot_count) -
-/// non_excluded_{corrected,uncorrected} - (include_excluded ?
-/// excluded_{corrected,uncorrected} : 0)`, picking the pair matching the
-/// live `apply_corrections` toggle, is exact in all four toggle states.
+/// Since #818 these shots land, so the landed count is
+/// `shot_count - (include_excluded ? 0 : excluded_shot_count)`; the four
+/// counters, picking the pair matching the live `apply_corrections` toggle,
+/// are how many of those landed shots are ties, exact in all four toggle
+/// states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct InvalidShotCounts {
@@ -513,11 +514,11 @@ pub struct InvalidShotCounts {
     /// Non-`X`-flagged shots with non-positive length, corrections NOT
     /// applied.
     pub non_excluded_uncorrected: u32,
-    /// `X`-flagged shots that would ALSO be dropped by the length check if
-    /// `include_excluded` let them reach it, corrections applied.
+    /// `X`-flagged shots that would ALSO import as ties if
+    /// `include_excluded` imported them, corrections applied.
     pub excluded_corrected: u32,
-    /// `X`-flagged shots that would ALSO be dropped by the length check if
-    /// `include_excluded` let them reach it, corrections NOT applied.
+    /// `X`-flagged shots that would ALSO import as ties if
+    /// `include_excluded` imported them, corrections NOT applied.
     pub excluded_uncorrected: u32,
 }
 
@@ -1124,8 +1125,8 @@ fn survey_declination(
                     ),
                     Err(reason) => {
                         warnings.push(format!(
-                            "Survey '{}': auto declination failed ({reason}); using entered value",
-                            survey.name
+                            "Survey '{}' ({}): auto declination failed ({reason}); using entered value",
+                            survey.name, survey.date
                         ));
                         (
                             survey.parameters.declination,
@@ -1443,27 +1444,40 @@ pub fn convert_compass_to_import_configs(
                     corrupt.join(", ")
                 ));
             }
+            // A shot with no length (an equate such as `A B 0 0 0`, a missing
+            // tape, or a correction that takes it to zero or below) is KEPT:
+            // dropping it cut the survey in two at that point. The import
+            // gives it a negligible length and counts it in the receipt
+            // (#818; `execute_import_sections`). `shot_geometry` has already
+            // turned a non-finite length into 0, with the warning above.
             let (_, length_m, inclination) = shot_geometry(shot, &ctx);
-            if length_m <= 0.0 {
-                // Zero-length connectors can't be stored as section shots.
-                // Dropping a shot removes its connectivity, so never do it
-                // silently (#275).
+            // A station tied to itself carries no connection and would put a
+            // station twice into one chain. It used to be dropped with the
+            // other zero-length shots; it still is, and says so (#275).
+            if shot.from == shot.to && (!length_m.is_finite() || length_m <= 0.0) {
                 warnings.push(format!(
-                    "Shot {} -> {}: dropped ({} length).",
-                    shot.from,
-                    shot.to,
-                    if shot.length.is_finite() {
-                        "missing or zero"
-                    } else {
-                        "non-finite"
-                    }
+                    "Shot {} -> {}: skipped (a station tied to itself).",
+                    shot.from, shot.to
                 ));
                 continue;
+            }
+            // An explicit 0 is an equate and is meant; anything else with no
+            // usable length (a missing-tape sentinel, a negative reading, or a
+            // correction that takes it to zero or below) was a real leg, so
+            // name it: the import ties it to 1 mm and moves what follows (#275).
+            // A non-finite length already has its own warning above.
+            if length_m <= 0.0 && shot.length.is_finite() && shot.length != 0.0 {
+                warnings.push(format!(
+                    "Shot {} -> {}: no usable length, imported as a 1 mm tie.",
+                    shot.from, shot.to
+                ));
             }
             edges.push((
                 shot.from.clone(),
                 shot.to.clone(),
-                elevation_gain(length_m, inclination),
+                // No length, no vertical step: a correction that takes a
+                // length below zero must not turn the shot upside down.
+                elevation_gain(length_m.max(0.0), inclination),
             ));
             shots.push(shot);
         }
@@ -2053,7 +2067,8 @@ mod tests {
     ///
     /// - exclusion drops `X`-flagged shots when `!include_excluded`;
     /// - the length check (pass 1, unconditional on whichever shots reach
-    ///   it) drops any shot whose resolved length is non-positive, and that
+    ///   it) dropped any shot whose resolved length is non-positive (since
+    ///   #818 it imports as a 1 mm tie instead, and is only counted), and that
     ///   resolution itself depends on `apply_corrections` (`CORRECTIONS`'s
     ///   length term can push a length across zero either direction) - so a
     ///   shot can be BOTH excluded AND length-invalid, or invalid under one
@@ -2077,9 +2092,10 @@ mod tests {
     /// The landed count is asserted against the preview in all four toggle
     /// combinations.
     ///
-    /// Injection: zero any ONE of the four `InvalidShotCounts` fields (or
-    /// `excluded_shot_count`) and the toggle combination(s) that field feeds
-    /// go red - each state's assertion isolates its own counter.
+    /// Injection: zero any ONE of the four `InvalidShotCounts` fields and its
+    /// pinned value above goes red; drop `excluded_shot_count` and the
+    /// default-toggle landed count goes red. Re-dropping zero-length shots in
+    /// the converter reds every toggle state's landed count (#818).
     #[test]
     fn preview_shot_counts_match_the_landed_count_in_all_four_toggle_states() {
         let dir = tempfile::tempdir().unwrap();
@@ -2160,29 +2176,15 @@ mod tests {
         );
 
         // Exact landing arithmetic for the given toggles, mirroring what the
-        // dialog computes from these same fields.
-        let landing = |include_excluded: bool, apply_corrections: bool| -> u32 {
-            let non_excluded_invalid = if apply_corrections {
-                counts.non_excluded_corrected
-            } else {
-                counts.non_excluded_uncorrected
-            };
-            let excluded_invalid = if apply_corrections {
-                counts.excluded_corrected
-            } else {
-                counts.excluded_uncorrected
-            };
+        // dialog computes from these same fields. Since #818 a shot with no
+        // length lands (as a 1 mm tie), so only the exclusion toggle removes
+        // shots; `invalid_shot_counts` names the ties, pinned above.
+        let landing = |include_excluded: bool, _apply_corrections: bool| -> u32 {
             preview.shot_count
                 - if include_excluded {
                     0
                 } else {
                     preview.excluded_shot_count
-                }
-                - non_excluded_invalid
-                - if include_excluded {
-                    excluded_invalid
-                } else {
-                    0
                 }
         };
 
@@ -2257,14 +2259,8 @@ mod tests {
             has("Shot N6 -> N7: non-finite left, up, down, right"),
             "{warnings:?}"
         );
-        assert!(
-            has("Shot N2 -> N3: dropped (non-finite length)"),
-            "{warnings:?}"
-        );
-        assert!(
-            has("Shot N5 -> N6: dropped (non-finite length)"),
-            "{warnings:?}"
-        );
+        // #818: the rows are kept, not dropped - dropping cut the survey.
+        assert!(!has("dropped"), "{warnings:?}");
 
         let shots: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
         assert!(!shots.is_empty(), "fixture should keep at least one shot");
@@ -2315,11 +2311,13 @@ mod tests {
             (n6.left, n6.up, n6.down, n6.right)
         );
 
-        // nan/inf LENGTH rows collapse to 0 length and are dropped as
-        // zero-length connectors, not stored.
-        assert!(
-            shots.iter().all(|s| s.length > 0.0),
-            "no zero/negative-length shot may be stored"
+        // nan/inf LENGTH rows collapse to a finite 0 and are KEPT (#818): the
+        // import turns each into a 1 mm coincident tie, so the survey stays
+        // connected through them.
+        assert_eq!(
+            shots.iter().filter(|s| s.length == 0.0).count(),
+            2,
+            "the two non-finite-length rows (N2 -> N3, N5 -> N6) must be kept"
         );
     }
 
@@ -2712,6 +2710,121 @@ mod tests {
         )
     }
 
+    /// One survey record with the given shot rows and length correction.
+    fn survey_with_rows(rows: &str, length_correction: &str) -> String {
+        format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 {length_correction}\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             {rows}"
+        )
+    }
+
+    fn convert_rows(
+        rows: &str,
+        length_correction: &str,
+    ) -> (Vec<ImportSectionConfig>, Vec<String>) {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("rows.dat");
+        std::fs::write(&dat, survey_with_rows(rows, length_correction)).unwrap();
+        let parsed = parse_compass(&dat).unwrap();
+        let options = CompassImportOptions {
+            apply_corrections: true,
+            ..CompassImportOptions::default()
+        };
+        let (configs, _closures, warnings) =
+            convert_compass_to_import_configs(&parsed, &options).unwrap();
+        (configs, warnings)
+    }
+
+    /// #818: an equate (`A3 B1 0 0 0`) is kept, so the chain it joins stays one
+    /// chain. It used to be dropped, which cut the survey in two there.
+    #[test]
+    fn a_zero_length_equate_keeps_the_survey_connected() {
+        let (configs, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A3 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A3 B1 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             B1 B2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("dropped")),
+            "{warnings:?}"
+        );
+        assert_eq!(total_shots(&configs), 4, "the equate must be kept");
+        assert_eq!(configs.len(), 1, "one chain, not two: {configs:?}");
+    }
+
+    /// #818: a length correction that takes an inclined shot below zero is a
+    /// tie, so it carries no vertical step either. Before the fix the negative
+    /// length went into the elevation graph and flipped the shot's depth.
+    #[test]
+    fn a_negative_corrected_length_moves_neither_end_vertically() {
+        // 10 ft at -45 degrees, with a -15 ft length correction: -5 ft.
+        let (configs, _) =
+            convert_rows("A1 A2 10.00 90.00 -45.00 1.00 1.00 1.00 1.00\r\n", "-15.00");
+        let shot = &configs[0].shots[0];
+        assert!(
+            shot.length <= 0.0,
+            "premise: the corrected length is negative, got {}",
+            shot.length
+        );
+        assert!(
+            (shot.depth_out - shot.depth_in).abs() < 1e-9,
+            "a tie must not move its far end vertically: {} -> {}",
+            shot.depth_in,
+            shot.depth_out
+        );
+    }
+
+    /// A real leg with no usable length (here a negative reading) is named,
+    /// since tying it moves everything after it; a deliberate equate (an
+    /// explicit 0) is not.
+    #[test]
+    fn only_a_leg_with_no_usable_length_is_named() {
+        let (_, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A3 -4.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A3 A4 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "Shot A2 -> A3: no usable length, imported as a 1 mm tie."),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("Shot A3 -> A4")),
+            "{warnings:?}"
+        );
+    }
+
+    /// A shot from a station to itself connects nothing: still skipped, and
+    /// the import says so.
+    #[test]
+    fn a_station_tied_to_itself_is_skipped_with_a_warning() {
+        let (configs, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A2 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert_eq!(total_shots(&configs), 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "Shot A2 -> A2: skipped (a station tied to itself)."),
+            "{warnings:?}"
+        );
+    }
+
     /// A one-survey `.DAT`, in the smallest shape the vendored parser accepts.
     fn synthetic_dat(cave_name: &str) -> String {
         synthetic_survey_record(cave_name, "A", "7 10 1979")
@@ -2966,6 +3079,31 @@ mod tests {
              \r\n\
              A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
         )
+    }
+
+    /// #811: Auto declination for a 2025-or-later survey used to fail (the
+    /// bundled IGRF-13 stopped short of 2025), fall back to the entered value and put the model error's debug
+    /// dump in the warning. With IGRF-14 it is the model's value, recorded with
+    /// its epoch. The expected value is the BGS IGRF-14 calculator's at this
+    /// synthetic point and date (see `geo.rs`).
+    #[test]
+    fn auto_declination_serves_a_2026_survey_from_the_model() {
+        let text = synthetic_dat_with_declination(5.0)
+            .replace("SURVEY DATE: 7 10 1979", "SURVEY DATE: 6 15 2026");
+        let (surveys, _rest) = Survey::parse_dat_file_with_remainder(&text).unwrap();
+        let mut warnings = Vec::new();
+        let (declination, source) = survey_declination(
+            DeclinationMode::Auto,
+            &surveys[0],
+            Some((20.5, -87.3)),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(source, CorrectionSource::IgrfAuto { epoch_year: 2026 });
+        assert!(
+            (declination - -2.419).abs() < 0.01,
+            "got {declination}, not the model value"
+        );
     }
 
     /// #438: Compass used to fold `declination - convergence` into every shot at

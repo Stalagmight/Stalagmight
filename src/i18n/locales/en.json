@@ -1460,8 +1460,8 @@
         "shotsTooltip": "Shots that will actually be imported under the current toggles",
         "excludedSuffix_one": "{{count}} excluded",
         "excludedSuffix_other": "{{count}} excluded",
-        "invalidSuffix_one": "{{count}} invalid",
-        "invalidSuffix_other": "{{count}} invalid",
+        "invalidSuffix_one": "{{count}} shot with no length, imported as a 1 mm tie",
+        "invalidSuffix_other": "{{count}} shots with no length, imported as 1 mm ties",
         "datum": "Datum",
         "georeference": "Georeference",
         "noGeoreference": "None"
@@ -4450,7 +4450,6 @@
       "failed": "Could not publish to SpeleoDB",
       "recentCleanupFailed": "Converted to SpeleoDB, but the local shortcut could not be removed from Recent Projects. You can remove it manually; the original file is unchanged.",
       "reloadFailed": "The project was created on SpeleoDB, but a fresh server copy could not be reopened. Use Reload Project to retry.",
-      "descriptionRequired": "A description is required to publish.",
       "name": "Name",
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",

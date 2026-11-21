@@ -95,11 +95,13 @@ jobs:
         if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          # vendor/compass_data is [workspace]-excluded, so it builds into its own
-          # target dir; without this line its deps recompile cold every hosted run.
+          # vendor/compass_data and vendor/igrf are [workspace]-excluded, so each
+          # builds into its own target dir; without these lines their deps
+          # recompile cold every hosted run.
           workspaces: |
             src-tauri
             src-tauri/vendor/compass_data
+            src-tauri/vendor/igrf
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -203,6 +205,11 @@ jobs:
       # a semver-compatible crates.io release change what CI tests.
       - name: Vendored compass_data tests
         run: cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+      # Vendored igrf (IGRF-14 geomagnetic model, #811): same shape as
+      # compass_data - workspace-excluded, own committed Cargo.lock, no
+      # fmt/clippy. Its tests pin the model data the build script generates.
+      - name: Vendored igrf tests
+        run: cargo test --locked --manifest-path src-tauri/vendor/igrf/Cargo.toml
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints

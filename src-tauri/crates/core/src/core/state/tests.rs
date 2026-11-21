@@ -18801,7 +18801,7 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
 }
 
 #[test]
-fn test_execute_import_sections_rollback_on_failure() {
+fn test_execute_import_sections_keeps_a_section_whose_merge_fails() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
@@ -18811,7 +18811,8 @@ fn test_execute_import_sections_rollback_on_failure() {
         location: None,
     });
 
-    // First section succeeds, second fails (merge to nonexistent existing section)
+    // First section succeeds; the second's merge target does not exist. Since
+    // #814 that costs the second section its connection, not the import.
     let sections = vec![
         ImportSectionConfig {
             reverse: false,
@@ -18862,17 +18863,13 @@ fn test_execute_import_sections_rollback_on_failure() {
         Vec::new(),
         VirtualShotMode::Auto,
     );
-    assert!(
-        !result.success,
-        "should fail when merge target doesn't exist"
-    );
+    assert!(result.success, "{:?}", result.error);
 
-    // Project should be rolled back - no sections added
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.sections.len(),
-        0,
-        "rollback should remove all sections from failed import"
+    assert_eq!(project.sections.len(), 2, "both sections import");
+    assert!(
+        project.station_merges.is_empty(),
+        "the failed merge is not made"
     );
 }
 

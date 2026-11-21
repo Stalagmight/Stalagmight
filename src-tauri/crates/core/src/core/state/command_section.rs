@@ -54,16 +54,15 @@ impl AppState {
         let mut warnings = Vec::new();
         for (i, shot) in data.shots.iter().enumerate() {
             if shot.length == 0.0 {
-                return CommandResult::failure(format!(
-                    "Shot {}:{} has zero length",
-                    section_id_for_validation,
-                    i + 1
-                ));
+                // The shot's position only: this section is refused, so the id
+                // it would have had is never assigned (and goes to the next
+                // section that lands), which made "Shot 3:2" point at the
+                // wrong section in an import receipt (#814).
+                return CommandResult::failure(format!("Shot {} has zero length", i + 1));
             }
             if shot.length < 0.0 {
                 return CommandResult::failure(format!(
-                    "Shot {}:{} has negative length: {:.1}m",
-                    section_id_for_validation,
+                    "Shot {} has negative length: {:.1}m",
                     i + 1,
                     shot.length
                 ));

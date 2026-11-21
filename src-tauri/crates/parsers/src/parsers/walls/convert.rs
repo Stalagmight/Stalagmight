@@ -440,7 +440,7 @@ pub fn convert_walls_to_import_configs(
     // The model has no zero-length shot (it can't place two stations at one
     // point as a leg), so a Walls zero-length coincident-station tie is nudged to
     // a negligible length and counted here for a single aggregated warning.
-    const COINCIDENT_TIE_EPSILON_M: f64 = 0.001;
+    use crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
     let mut coincident_ties = 0usize;
     let mut chains: Vec<PendingChain> = Vec::new();
     for survey in &kept {
@@ -735,15 +735,14 @@ pub(crate) fn resolve_declination(
                         epoch_year: date.year(),
                     },
                 ),
-                // The bundled IGRF model only spans 1900-2025; a survey dated
-                // outside that range (e.g. a current-year dive) would otherwise
-                // import with a silent 0° correction. Surface it instead.
-                // Identical per-shot lines collapse via the dedup at the end of
-                // conversion.
-                Err(_) => {
+                // The bundled IGRF model only spans `IGRF_MODEL_SPAN`; a survey
+                // dated outside it would otherwise import with a silent 0°
+                // correction. Surface it instead. Identical per-shot lines
+                // collapse via the dedup at the end of conversion.
+                Err(reason) => {
                     warnings.push(format!(
                         "Could not derive magnetic declination for {date} at {:.3}, {:.3} \
-                         (date/location outside the IGRF model range 1900-2025); using 0°.",
+                         ({reason}); using 0°.",
                         r.latitude, r.longitude
                     ));
                     (0.0, CorrectionSource::Unknown)
