@@ -229,6 +229,10 @@ fn signed_in(endpoint: &str) -> AppState {
 }
 
 /// The pull the SpeleoDB browser's Open runs.
+#[expect(
+    clippy::result_large_err,
+    reason = "the pull's own error type, returned as the pull returns it"
+)]
 fn pull(
     state: &AppState,
     dest: &Path,
@@ -630,7 +634,7 @@ fn a_copy_without_a_digest_keeps_its_mark() {
             assert!(listed_unpushed(&state), "legacy: {legacy}");
             let refused = pull(&state, &dest).expect_err("protected");
             assert_eq!(refused.action, SpeleoDbAction::UnpushedLocalEdits);
-            assert!(state.open_project(dest.clone()).success);
+            assert!(state.open_project(dest).success);
             assert!(open_link(&state).has_unpushed_edits, "legacy: {legacy}");
         });
     }
