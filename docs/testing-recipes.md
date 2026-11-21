@@ -966,14 +966,16 @@ as well as the names:
   mock case under the camelCase key, and every mock station literal carries the
   required `Station` fields with `id` and `merged_with` taken from the junction.
 - **File status hooks**: `__MOCK_SET_EXTERNALLY_MODIFIED__(true)` makes the next
-  saves refuse with `EXTERNALLY_MODIFIED`, `__MOCK_SET_READ_ONLY_REASON__(text)`
+  saves refuse with `EXTERNALLY_MODIFIED` (`'missing'`: with `FILE_MISSING`, the
+  file moved or deleted, and `project_file_reload_refusal` refuses), `__MOCK_SET_READ_ONLY_REASON__(text)`
   opens the file read-only, `__MOCK_SET_CONVERSION_NOTICE__(view)` queues a
   conversion notice (a `ConversionNoticeView`), `__MOCK_SET_LEGACY_ORIGIN__(true)`
   makes the next successful save report `legacy_converted` (the converting
   save of a 0.6.0 file), `__MOCK_GET_SAVE_CALLS__()` returns the save calls. The
   mock answers `save_project_overwriting`, `take_conversion_notice`,
-  `has_unsaved_changes`, `project_read_only_reason`, `resolve_warning` and
-  `unresolve_warning`.
+  `has_unsaved_changes` (cleared by a save, a close and an open),
+  `project_read_only_reason`, `project_file_reload_refusal`, `resolve_warning`
+  and `unresolve_warning`.
 - The binary load envelope is version 9 (no `line_offsets`).
 
 ### Common mock scenarios
