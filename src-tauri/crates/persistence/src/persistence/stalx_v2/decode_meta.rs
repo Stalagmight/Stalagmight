@@ -354,11 +354,11 @@ pub(super) fn read_local(raw: &RawValue, limits: &CountLimits) -> (LocalState, V
             "display" => match members(value.get(), limits.display_settings) {
                 Ok(settings) => {
                     for (k, v) in settings {
-                        match serde_json::from_str::<String>(v.get()) {
-                            Ok(text) => {
+                        match display_text(v) {
+                            Some(text) => {
                                 local.display.insert(k.into_owned(), text);
                             }
-                            Err(_) => drop(format!("display setting {k:?}")),
+                            None => drop(format!("display setting {k:?}")),
                         }
                     }
                 }
@@ -372,6 +372,19 @@ pub(super) fn read_local(raw: &RawValue, limits: &CountLimits) -> (LocalState, V
         }
     }
     (local, notes)
+}
+
+/// A display setting as the text the app stores: a string as it is, a
+/// boolean (how a toggle is written, demo finding I-16) as `"true"` or
+/// `"false"`; anything else is unreadable.
+fn display_text(value: &RawValue) -> Option<String> {
+    serde_json::from_str::<String>(value.get())
+        .ok()
+        .or_else(|| {
+            serde_json::from_str::<bool>(value.get())
+                .ok()
+                .map(|b| b.to_string())
+        })
 }
 
 /// The budget of unknown `local` keys kept verbatim.

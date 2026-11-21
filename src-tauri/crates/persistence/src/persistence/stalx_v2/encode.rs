@@ -286,7 +286,14 @@ pub(super) fn write_local(out: &mut Vec<u8>, local: &LocalState) {
     if !local.display.is_empty() {
         let mut d = Obj::open(o.key("display"));
         for (key, value) in &local.display {
-            string(d.key(key), value);
+            // A toggle is a JSON boolean (demo finding I-16); any other
+            // setting (a spacing, a mode, a list) is its stored text. The
+            // decoder reads either back as the same text.
+            match value.as_str() {
+                "true" => boolean(d.key(key), true),
+                "false" => boolean(d.key(key), false),
+                _ => string(d.key(key), value),
+            }
         }
         d.close();
     }
