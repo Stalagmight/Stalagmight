@@ -1470,7 +1470,9 @@ themselves. Labels `JP1`...
   back to the ulp for every pair on a decimal grid down to 0.001 degree (and
   bit for bit for a degenerate pair); a crafted pair within a few ulps of
   opposite can come back with its two readings exchanged, its bearing the
-  original one. Non-finite readings reciprocate as before. The frozen crate
+  original one. Non-finite readings reciprocate as before. The import
+  preview's mirror (`reverseTargetShot` in `src/utils/overlapHelpers.ts`)
+  takes the same rule, so preview and commit agree. The frozen crate
   keeps 0.6.0's test (it only reads files). The compact undo history replays
   the same transform for its flipped runs; an entry an earlier build of this
   branch recorded across such a shot no longer hashes to its recorded side
