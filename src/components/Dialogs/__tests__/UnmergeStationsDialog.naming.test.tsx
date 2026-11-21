@@ -7,6 +7,14 @@
  * from the backend's `preview_detach_line` for the chosen line. On two lines
  * where either choice gives the same result there is no choice to word: one
  * sentence names the line that comes off (N-2).
+ *
+ * Demo finding V-1: on a hub the dialog said "Far Room and Upstream get back
+ * the station they had here before the merge: 0 (Station ID 19)", but they
+ * come off together on ONE station, so Upstream ended on 19 with its own 22
+ * as an alias only. The dialog now lists what every line ends up with, from
+ * the preview's per-line results, and says when a line keeps its own Station
+ * ID only as an alias. Injection: word the hub from the chosen line's single
+ * `name` / `station_id` again and the per-line test fails.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -31,8 +39,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
     args.lineId === SIDE
-      ? { name: '0', station_id: 7, restored: true, kept: false }
-      : { name: '0', station_id: 7, restored: true, kept: true },
+      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [] }
+      : { name: '0', station_id: 7, restored: true, kept: true, lines: [] },
   );
   useProjectStore.setState({
     project: {
@@ -72,10 +80,10 @@ function hub() {
   } as never);
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
     args.lineId === SIDE
-      ? { name: '0', station_id: 7, restored: true, kept: false }
+      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [] }
       : args.lineId === BRANCH
-        ? { name: '0b', station_id: 12, restored: true, kept: false }
-        : { name: '0', station_id: 7, restored: true, kept: true },
+        ? { name: '0b', station_id: 12, restored: true, kept: false, lines: [] }
+        : { name: '0', station_id: 7, restored: true, kept: true, lines: [] },
   );
 }
 
@@ -83,7 +91,7 @@ describe('Detach dialog naming', () => {
   it('names the line that comes off when either choice gives the same result', async () => {
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
-    expect(naming).toHaveTextContent('Side comes off: it gets back 0 (Station ID 7); Main keeps 3a.');
+    expect(naming).toHaveTextContent('Side comes off: it gets back 0 (Station ID 7); Main keeps station 3a.');
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'Side keeps its shots, and a datum or loop closure set on it goes with it.',
     );
@@ -98,7 +106,7 @@ describe('Detach dialog naming', () => {
     hub();
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
-    expect(naming).toHaveTextContent('Side gets back the station it had here before the merge: 0 (Station ID 7).');
+    expect(naming).toHaveTextContent('Side comes off and gets back the station it had here before the merge.');
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'The line you detach keeps its shots and gets its own station here, with no comment.',
     );
@@ -111,22 +119,67 @@ describe('Detach dialog naming', () => {
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() =>
       expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
-        'Main keeps this station. Side and Branch get back the station they had here before the merge: 0 (Station ID 7).',
+        'Main keeps this station, and Side and Branch come off together: they stay joined.',
       ),
     );
     // What stays and what goes is said the same way round.
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
-      'The line you detach keeps its shots and this station, with its comment.',
+      'Side and Branch keep their shots and come off together on one station of their own here',
     );
+    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent('Main keeps this station and its comment.');
   });
 
   it('says a line gets a new station named as it showed the junction when another line keeps it', async () => {
-    invokeIpc.mockImplementation(async () => ({ name: '3a', station_id: 19, restored: false, kept: false }));
+    invokeIpc.mockImplementation(async () => ({ name: '3a', station_id: 19, restored: false, kept: false, lines: [] }));
     render(<UnmergeStationsDialog />);
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent('Main gets a new station here named 3a.'),
+      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent('Main comes off with a new station of its own here.'),
+    );
+  });
+
+  it('lists what every line of a hub ends up with, and an ID kept only as an alias (V-1)', async () => {
+    // The demo: Main 3a (Station ID 3) with Side (its 0 was Station ID 7) and
+    // Branch (its 0b was Station ID 12) merged onto it.
+    hub();
+    const results = {
+      [MAIN]: [
+        { line_id: MAIN, name: '3a', station_id: 3, comes_off: false, joined_with: [] },
+        { line_id: SIDE, name: '0', station_id: 7, comes_off: true, joined_with: [BRANCH] },
+        { line_id: BRANCH, name: '0b', station_id: 7, comes_off: true, alias_id: 12, joined_with: [SIDE] },
+      ],
+      [BRANCH]: [
+        { line_id: MAIN, name: '3a', station_id: 3, comes_off: false, joined_with: [SIDE] },
+        { line_id: SIDE, name: '0', station_id: 3, comes_off: false, alias_id: 7, joined_with: [MAIN] },
+        { line_id: BRANCH, name: '0b', station_id: 12, comes_off: true, joined_with: [] },
+      ],
+    };
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN
+        ? { name: '0', station_id: 7, restored: true, kept: true, lines: results[MAIN] }
+        : args.lineId === BRANCH
+          ? { name: '0b', station_id: 12, restored: true, kept: false, lines: results[BRANCH] }
+          : { name: '0', station_id: 7, restored: true, kept: false, lines: [] },
+    );
+    render(<UnmergeStationsDialog />);
+    await screen.findByTestId('unmerge-stations-naming');
+    fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
+    await waitFor(() => expect(screen.getByTestId('unmerge-stations-results')).toBeInTheDocument());
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent);
+    expect(items).toEqual([
+      'Side: 0, Station ID 7 (comes off with Branch)',
+      'Branch: 0b, Station ID 7 (comes off with Side, sharing its station; its own Station ID 12 stays only as an alias, and detaching Branch afterwards gives it back)',
+      'Main: 3a, Station ID 3 (stays)',
+    ]);
+    // Branch alone: it gets its own station back, the others stay.
+    fireEvent.click(screen.getByTestId(`unmerge-station-option-${BRANCH}-0`));
+    await waitFor(() =>
+      expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+        'Branch: 0b, Station ID 12 (comes off)',
+        'Main: 3a, Station ID 3 (stays)',
+        'Side: 0, Station ID 3 (stays)',
+      ]),
     );
   });
 

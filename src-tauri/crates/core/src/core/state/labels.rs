@@ -146,6 +146,35 @@ impl<'p> NameBook<'p> {
         off
     }
 
+    /// A slot of a line that stays on the station at `slot` when the lines
+    /// of `off` come off it ([`Self::detached_slots`]): `clicked` when its
+    /// line stays, else the first slot of a line that shows the station by
+    /// its own name, else the first slot of any line that stays.
+    fn staying_slot(
+        &self,
+        slot: StationRef,
+        off: &[StationRef],
+        clicked: Option<StationRef>,
+    ) -> Option<StationRef> {
+        let topology = self.project.topology();
+        let station = topology.station_at(slot)?;
+        let stays = |s: &StationRef| off.iter().all(|o| o.line_id != s.line_id);
+        if let Some(c) = clicked.filter(|c| stays(c) && topology.station_at(*c) == Some(station)) {
+            return Some(c);
+        }
+        let staying: Vec<StationRef> = topology
+            .slots_of(station)
+            .iter()
+            .copied()
+            .filter(stays)
+            .collect();
+        staying
+            .iter()
+            .find(|s| !self.project.known_by_alias_on(station, s.line_id))
+            .or_else(|| staying.first())
+            .copied()
+    }
+
     /// `Line name / station name` of `station` on its `via` line, else its
     /// first slot (a closure end, a datum).
     pub(crate) fn station_via(&self, station: StationId, via: Option<LineId>) -> Option<String> {
@@ -200,21 +229,26 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
     }
 }
 
-/// `Detach line "Side" from station 3a`: the line that comes off the station
-/// at `slot`, and the station once, by the name that line shows it by. That
-/// is the slot's line, unless the slot's line keeps the station (it shows the
-/// station by its own name and every other line there knows it by an alias,
-/// I-1): then the other lines come off, each getting back the station it
-/// had, and the label names them (`Detach lines "B" and "C" from station 0`,
-/// by the first one's name for it), never the line that keeps the station
-/// (demo finding N-2).
-fn detach(names: &NameBook<'_>, slot: StationRef) -> String {
+/// `Detach line "Side" from Main / 3`: the line that comes off the station
+/// at `slot`, and the station once, as `Line name / station name` on a line
+/// that stays on it (demo finding V-6: a bare `station 0` was the detached
+/// line's name for it, which another line may also show for another
+/// station). That is the slot's line, unless the slot's line keeps the
+/// station (it shows the station by its own name and every other line there
+/// knows it by an alias, I-1): then the other lines come off, each getting
+/// back the station it had, and the label names them (`Detach lines "B" and
+/// "C" from Main / 4`), never the line that keeps the station (demo finding
+/// N-2). The station reads on `clicked` (the pair form's first slot, where
+/// the user opened the dialog) when its line stays.
+fn detach(names: &NameBook<'_>, slot: StationRef, clicked: Option<StationRef>) -> String {
     let off = names.detached_slots(slot);
     let lines: Option<Vec<String>> = off.iter().map(|s| quoted_line(names, s.line_id)).collect();
-    let station = off.first().and_then(|&first| names.station_name(first));
+    let station = names
+        .staying_slot(slot, &off, clicked)
+        .and_then(|stays| names.station(stays));
     match (lines, station) {
         (Some(lines), Some(station)) if !lines.is_empty() => format!(
-            "Detach {} {} from station {station}",
+            "Detach {} {} from {station}",
             if lines.len() == 1 { "line" } else { "lines" },
             listed(&lines)
         ),
@@ -280,8 +314,11 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
         // A junction is one station: the menu's "Detach Line from Station"
         // detaches one line from it (plan 5.2; the pair form detaches
         // `station_b`'s line), and the row says so in the same words.
-        Command::UnmergeStations { station_ref } => detach(names, *station_ref),
-        Command::UnmergeStationPair { station_b, .. } => detach(names, *station_b),
+        Command::UnmergeStations { station_ref } => detach(names, *station_ref, None),
+        Command::UnmergeStationPair {
+            station_a,
+            station_b,
+        } => detach(names, *station_b, Some(*station_a)),
         Command::CreateLoopClosure {
             station_a,
             station_b,

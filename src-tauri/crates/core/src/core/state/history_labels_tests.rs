@@ -535,8 +535,9 @@ fn unmerges_name_the_stations_they_detach() {
     });
     let item = assert_survives(&o);
     // The menu's words (Detach Line from Station): the pair form detaches
-    // the second slot's line, naming the station as that line shows it.
-    assert_eq!(item.description, "Detach line \"Branch\" from station 2");
+    // the second slot's line, naming the station on the first slot's line,
+    // which stays on it (V-6).
+    assert_eq!(item.description, "Detach line \"Branch\" from Main / 2");
     assert_eq!(
         rows(&item),
         vec![
@@ -555,7 +556,7 @@ fn unmerges_name_the_stations_they_detach() {
             .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Detach line \"Branch\" from station 2");
+    assert_eq!(item.description, "Detach line \"Branch\" from Main / 2");
     assert_eq!(rows(&item), vec![r("Station", "", "Branch / 2")]);
 }
 
@@ -564,8 +565,11 @@ fn unmerges_name_the_stations_they_detach() {
 /// off is the other one, and the history names it, never the line that keeps
 /// the station ("Detach line "Main Line"" read as if Main Line had left).
 /// Both forms: the station form on the keeper's slot, and the pair form whose
-/// partner is the keeper. Injection: naming the addressed slot's line again
-/// (the old `detach`) gives `Detach line "Main" from station 4`.
+/// partner is the keeper. The station reads `Main / 4`, on the line that
+/// keeps it (demo finding V-6): `station 0` was Side's name for it, and Main
+/// has its own station 0. Injection: naming the addressed slot's line again
+/// (the old `detach`) gives `Detach line "Main" ...`; naming the station by
+/// the detached line's name gives `... from station 0`.
 #[test]
 fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
     let o = open();
@@ -589,7 +593,7 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
         },
     );
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Detach line \"Side\" from station 0");
+    assert_eq!(item.description, "Detach line \"Side\" from Main / 4");
     // The station form on the line that comes off reads the same.
     assert!(o.state.undo().success);
     exec(
@@ -600,7 +604,7 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
     );
     assert_eq!(
         top(&o.state).description,
-        "Detach line \"Side\" from station 0"
+        "Detach line \"Side\" from Main / 4"
     );
     // The pair form whose partner (the line it detaches) keeps the station.
     assert!(o.state.undo().success);
@@ -613,13 +617,13 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
     );
     assert_eq!(
         top(&o.state).description,
-        "Detach line \"Side\" from station 0"
+        "Detach line \"Side\" from Main / 4"
     );
 }
 
 /// N-2 on a hub: when the addressed line keeps the station, every other line
 /// comes off with the identity the first of them had, and the label lists
-/// them by name, the station by the first one's name for it.
+/// them by name, the station on the line that keeps it (V-6).
 #[test]
 fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
     let mut p = survey();
@@ -646,7 +650,7 @@ fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
     );
     assert_eq!(
         top(&o.state).description,
-        "Detach lines \"Side\" and \"Far\" from station 0"
+        "Detach lines \"Side\" and \"Far\" from Main / 4"
     );
 }
 

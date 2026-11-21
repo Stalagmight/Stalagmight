@@ -50,6 +50,28 @@ pub struct DetachLinePreview {
     pub station_id: u32,
     pub restored: bool,
     pub kept: bool,
+    /// What every line through the station ends up with there, in slot
+    /// order (demo finding V-1).
+    #[serde(default)]
+    pub lines: Vec<DetachLineResult>,
+}
+
+/// One line's result in a [`DetachLinePreview`]: the name it shows its
+/// station by after the detach, that station's Station ID, whether the line
+/// comes off the junction or stays on it, and the other lines on that station.
+/// `alias_id` is the Station ID the line had there before a merge when it
+/// keeps it only as an alias: lines that come off together stay joined on one
+/// station, which has one Station ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct DetachLineResult {
+    pub line_id: LineId,
+    pub name: String,
+    pub station_id: u32,
+    pub comes_off: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub alias_id: Option<u32>,
+    pub joined_with: Vec<LineId>,
 }
 
 /// What deleting one shot does to station relationships
@@ -238,10 +260,16 @@ pub struct MergePreview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub depths: Option<MergeDepths>,
+    /// Each picked station that is already a junction, by its picked slot,
+    /// with the lines that meet there (the picked slot's line first): the
+    /// dialog says the merge joins more than the two lines picked (demo
+    /// finding V-2). A first, then B.
+    #[serde(default)]
+    pub junctions: Vec<MergeJunction>,
 }
 
 /// The depths [`MergePreview`] reports, metres (+down).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "bindings/MergeDepths.ts")]
 pub struct MergeDepths {
     /// Station A's depth before the merge.
@@ -250,6 +278,30 @@ pub struct MergeDepths {
     pub b_m: f64,
     /// The joined station's depth.
     pub joined_m: f64,
+    /// Every depth reading the joined station's mean takes, each with the
+    /// line it is read on: A's line first, then the other lines at A, then
+    /// B's line and the other lines at B (demo finding V-2: at a junction
+    /// the two station depths alone did not add up to the mean).
+    #[serde(default)]
+    pub readings: Vec<MergeDepthReading>,
+}
+
+/// One depth reading in [`MergeDepths::readings`], metres (+down).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/MergeDepthReading.ts")]
+pub struct MergeDepthReading {
+    pub line_id: LineId,
+    pub depth_m: f64,
+}
+
+/// A picked station that is already a junction ([`MergePreview::junctions`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/MergeJunction.ts")]
+pub struct MergeJunction {
+    /// The picked slot.
+    pub station: StationRef,
+    /// Every line through the station, the slot's line first.
+    pub line_ids: Vec<LineId>,
 }
 
 #[cfg(test)]

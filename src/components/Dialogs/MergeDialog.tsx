@@ -140,9 +140,12 @@ export default function MergeDialog() {
 }
 
 /** What the merge does before the user confirms it (demo issue I-4): which
- *  piece moves, how far and onto which station, and, when the two stations'
- *  depths differ by more than the backend's threshold, the depth the joined
- *  station takes (the mean of its readings, as 0.6.0 computed it). */
+ *  piece moves, how far and onto which station, that a picked station is
+ *  already a junction and of which lines, and, when the two stations' depths
+ *  differ by more than the backend's threshold, every depth reading the joined
+ *  station's mean takes, by line, and that mean (as 0.6.0 computed it). At a
+ *  junction the two stations' depths alone did not add up to it (demo finding
+ *  V-2: "4.0 m and 12.5 m become 9.7 m" counted 12.5 m twice). */
 function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMove: boolean }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
@@ -150,9 +153,21 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
   const depth = (v: number) => `${formatFixed(v, undefined, precision.depth)} ${t('common.units.meters')}`;
   const piece = listNames(preview.moving_line_ids.map(labels.lineName), t);
   const moves = sayMove && preview.shift_m >= MOVE_SAID_FROM_M && preview.moving_line_ids.length > 0;
-  if (!moves && !preview.depths) return null;
+  if (!moves && !preview.depths && preview.junctions.length === 0) return null;
   return (
     <div className="space-y-2 text-sm">
+      {preview.junctions.map((junction) => (
+        <p
+          key={`${junction.station.line_id}:${junction.station.station_index}`}
+          className="p-2 rounded bg-accent-10 text-text-primary"
+          data-testid="merge-preview-junction"
+        >
+          {t('dialogs.mergeStations.alreadyJoined', {
+            station: labels.station(junction.station, true),
+            lines: listNames(junction.line_ids.map(labels.lineName), t),
+          })}
+        </p>
+      ))}
       {moves && (
         <p className="p-2 rounded bg-accent-10 text-text-primary" data-testid="merge-preview-move">
           {t('dialogs.mergeStations.moves', {
@@ -168,8 +183,11 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
       {preview.depths && (
         <p className="p-2 rounded bg-warning-10 text-warning-text" data-testid="merge-preview-depths">
           {t('dialogs.mergeStations.depths', {
-            a: depth(preview.depths.a_m),
-            b: depth(preview.depths.b_m),
+            // Every reading, by line, none counted away: a list that stopped
+            // at three would hide what the mean takes.
+            readings: preview.depths.readings
+              .map((r) => t('dialogs.mergeStations.depthReading', { depth: depth(r.depth_m), line: labels.lineName(r.line_id) }))
+              .join(', '),
             joined: depth(preview.depths.joined_m),
           })}
         </p>

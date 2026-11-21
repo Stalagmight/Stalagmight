@@ -6,6 +6,13 @@
  * the merge check. Before, the dialog said nothing: a free piece jumped 24 m
  * and depths 15.0 m and 4.0 m silently became 9.5 m. Injection: drop
  * `MergePreviewNotice` from the dialog and every test here fails.
+ *
+ * Demo finding V-2: onto a station that is already a junction, "Depths 4.0 m
+ * and 12.5 m become 9.7 m" did not add up (12.5 m was read twice, on Main Line
+ * and on Far Room). Every reading is listed by its line, and the dialog says
+ * the station is already where its lines meet. Injection: list the two
+ * station depths again, or drop the junction sentence, and the junction test
+ * fails.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -58,7 +65,18 @@ const preview = (extra: Partial<MergePreview> = {}): MergePreview => ({
   moving_line_ids: [1],
   shift_m: 24.31,
   joins: B,
+  junctions: [],
   ...extra,
+});
+/** Two stations' depths and the readings their mean takes, A's line first. */
+const depths = (a_m: number, b_m: number, joined_m: number) => ({
+  a_m,
+  b_m,
+  joined_m,
+  readings: [
+    { line_id: A.line_id, depth_m: a_m },
+    { line_id: B.line_id, depth_m: b_m },
+  ],
 });
 
 describe('MergeDialog says what the merge does (I-4)', () => {
@@ -71,13 +89,42 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream moves 24 m to join Second entrance / B4.');
     expect(screen.queryByTestId('merge-preview-depths')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('merge-preview-junction')).not.toBeInTheDocument();
+  });
+
+  it('lists every reading by line onto a junction, and says it is one (V-2)', () => {
+    // Upstream / 17 (4.0 m) onto Second entrance / B4, where Far room is
+    // already merged: three readings, 12.5 m on each of B's lines.
+    dialogData = {
+      ...dialogData,
+      mergePreview: preview({
+        junctions: [{ station: B, line_ids: [2, 6] }],
+        depths: {
+          a_m: 4,
+          b_m: 12.5,
+          joined_m: 29 / 3,
+          readings: [
+            { line_id: 1, depth_m: 4 },
+            { line_id: 2, depth_m: 12.5 },
+            { line_id: 6, depth_m: 12.5 },
+          ],
+        },
+      }),
+    };
+    render(<MergeDialog />);
+    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
+      'Depths 4.0 m (Upstream), 12.5 m (Second entrance), 12.5 m (Far room) become 9.7 m: the joined station takes the mean of its depth readings.'
+    );
+    expect(screen.getByTestId('merge-preview-junction')).toHaveTextContent(
+      'Second entrance / B4 is already where Second entrance and Far room meet.'
+    );
   });
 
   it('says the depths when the two stations disagree', () => {
-    dialogData = { ...dialogData, mergePreview: preview({ depths: { a_m: 15, b_m: 4, joined_m: 9.5 } }) };
+    dialogData = { ...dialogData, mergePreview: preview({ depths: depths(15, 4, 9.5) }) };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
-      'Depths 15.0 m and 4.0 m become 9.5 m: the joined station takes the mean of its depth readings.'
+      'Depths 15.0 m (Upstream), 4.0 m (Second entrance) become 9.5 m: the joined station takes the mean of its depth readings.'
     );
   });
 
@@ -121,16 +168,16 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     dialogData = {
       ...dialogData,
       datumShift,
-      mergePreview: preview({ moving_line_ids: [2], joins: A, depths: { a_m: 3, b_m: 5, joined_m: 4 } }),
+      mergePreview: preview({ moving_line_ids: [2], joins: A, depths: depths(3, 5, 4) }),
     };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toBeInTheDocument();
     expect(screen.queryByTestId('merge-preview-move')).not.toBeInTheDocument();
-    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent('Depths 3.0 m and 5.0 m become 4.0 m');
+    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent('Depths 3.0 m (Upstream), 5.0 m (Second entrance) become 4.0 m');
   });
 
   it('gives no distance after a snap-to-merge drag, which moved the piece first', () => {
-    dialogData = { ...dialogData, mergePreview: preview({ depths: { a_m: 15, b_m: 4, joined_m: 9.5 } }), preCommands: [] };
+    dialogData = { ...dialogData, mergePreview: preview({ depths: depths(15, 4, 9.5) }), preCommands: [] };
     render(<MergeDialog />);
     expect(screen.queryByTestId('merge-preview-move')).not.toBeInTheDocument();
     expect(screen.getByTestId('merge-preview-depths')).toBeInTheDocument();

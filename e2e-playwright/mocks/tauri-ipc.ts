@@ -4375,11 +4375,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!members || !slot) return { success: false, error: 'Stations are not directly merged' };
             const kept = slot === members[0];
             const back = kept ? members[1]! : slot;
+            // What every line ends up with (V-1): the lines that come off
+            // (the slot's, or with `kept` every other one, together on the
+            // first one's station, the rest keeping their own ID as an
+            // alias) and the lines that stay on the representative's.
+            const rep = members[0]!;
+            const offLines = kept ? members.slice(1) : [slot];
+            const stayLines = members.filter((m) => !offLines.includes(m));
+            const result = (m: MockStationRef, comesOff: boolean) => {
+              const group = comesOff ? offLines : stayLines;
+              const on = comesOff ? back : rep;
+              const onId = mockStationId(on.line_id, on.station_index);
+              const ownId = mockStationId(m.line_id, m.station_index);
+              return {
+                line_id: m.line_id,
+                name: mockStationName(m.line_id, m.station_index),
+                station_id: onId,
+                comes_off: comesOff,
+                ...(ownId !== onId && m !== rep ? { alias_id: ownId } : {}),
+                joined_with: group.filter((o) => o !== m).map((o) => o.line_id),
+              };
+            };
             return {
               name: mockStationName(back.line_id, back.station_index),
               station_id: mockStationId(back.line_id, back.station_index),
               restored: true,
               kept,
+              lines: members.map((m) => result(m, offLines.includes(m))),
             };
           }
 

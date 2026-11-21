@@ -24,7 +24,7 @@
 //! join (`edit/combine/apply.rs`, with the dialog's comment pick). Each caller
 //! decides the direction and settles anchors itself.
 
-use crate::{ClosurePreview, CombinePick, LineId, StationId, MAX_STATION_ID};
+use crate::{ClosurePreview, CombinePick, LineId, StationId, StationRef, MAX_STATION_ID};
 
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::topology::find;
@@ -85,6 +85,10 @@ pub struct MergeMove {
     /// The joined station's depth: the mean of every depth reading at it,
     /// as 0.6.0 computed a merged station's.
     pub joined_depth_m: f64,
+    /// Every depth reading that mean takes, with the slot it is read at
+    /// (after the merge, so a station that already joined several lines
+    /// gives one per line; demo finding V-2), in the order it sums them.
+    pub readings: Vec<(StationRef, f64)>,
 }
 
 /// The Merge tool's check of a picked pair (today's
@@ -253,6 +257,7 @@ impl Project {
             shift_m,
             depths_m,
             joined_depth_m: after.z(stationary)?,
+            readings: copy.depth_readings_of(&after, stationary),
         })
     }
 

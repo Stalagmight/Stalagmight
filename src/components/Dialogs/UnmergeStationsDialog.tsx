@@ -4,7 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import type { DetachLinePreview } from '../../types/ipc.generated';
+import type { DetachLinePreview, DetachLineResult } from '../../types/ipc.generated';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { listNames } from '../../utils/listNames';
 import { EntityBlob } from '../common/EntityBlob';
@@ -20,24 +20,39 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
   return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
+/** Whether detaching `ref`'s line gives it back the station it had before a
+ *  merge, while the other lines keep the junction: a line that is NOT the
+ *  junction's owner (the owner shows it by its own name, so detaching it
+ *  either mints a new Station ID or, `kept`, keeps the station on it). */
+function comesOffAlone(ref: StationRef, previews: ReadonlyMap<number, DetachLinePreview>): boolean {
+  const preview = previews.get(ref.line_id);
+  return preview?.restored === true && !preview.kept;
+}
+
 /**
- * The slot to preselect (demo finding I-7): the clicked one (`slots[0]`),
- * unless its line would NOT get its own station back (it is the junction's
- * owner and would get a new Station ID: a line that shows the junction by its
- * own name stays on it, so the owner does not keep it, I-1) and another line
- * would: then the first such line. A clicked owner that keeps the junction
- * (`kept`, `restored` true; on a hub, where the other lines then come off
- * together) stays selected. While the previews are still out, or when none
- * says, the clicked one. A two-line junction whose result does not depend on
- * the choice offers none ({@link sameDetachResult}).
+ * The slot to preselect (demo findings I-7, V-1): the likely intent is a line
+ * that is NOT the junction's owner, which comes off alone with its own station
+ * back ({@link comesOffAlone}). So the clicked one (`slots[0]`) when it is such
+ * a line, else the first other line that is, else the clicked one. A clicked
+ * owner that keeps the junction (`kept`: every other line comes off with it,
+ * on a hub together) is no longer preselected when another line can come off
+ * alone. While the previews are still out, or when none says, the clicked one.
+ * A two-line junction whose result does not depend on the choice offers none
+ * ({@link sameDetachResult}).
  */
 export function defaultDetachSlot(
   slots: StationRef[],
   previews: ReadonlyMap<number, DetachLinePreview>,
 ): StationRef | undefined {
   const [clicked, ...others] = slots;
-  if (!clicked || previews.get(clicked.line_id)?.restored !== false) return clicked;
-  return others.find((ref) => previews.get(ref.line_id)?.restored === true) ?? clicked;
+  if (!clicked || !previews.has(clicked.line_id) || comesOffAlone(clicked, previews)) return clicked;
+  return others.find((ref) => comesOffAlone(ref, previews)) ?? clicked;
+}
+
+/** The preview's per-line results in the order the dialog lists them: the
+ *  lines that come off first, then those that stay, each in slot order. */
+export function orderedResults(preview: DetachLinePreview): DetachLineResult[] {
+  return [...preview.lines.filter((r) => r.comes_off), ...preview.lines.filter((r) => !r.comes_off)];
 }
 
 /** What a detach does when it does not depend on the line chosen. */
@@ -78,7 +93,14 @@ export function sameDetachResult(
 
 /**
  * Detach a line from a station several lines share (plan 5.2; the dialog kept
- * its `unmerge-stations` name for telemetry).
+ * its `unmerge-stations` name for telemetry). Demo finding V-1: the choice is
+ * worded as what comes off (the row of a line that keeps the junction reads
+ * "Far Room and Upstream, together (Main Line keeps this station)", so the
+ * history, which names the lines that come off, names what the user picked),
+ * and under it the dialog lists what every line ends up with, name and
+ * Station ID, from the backend's per-line preview: lines that come off
+ * together stay joined on ONE station, so a line among them that had its own
+ * Station ID keeps it only as an alias, and the list says so.
  *
  * On the station graph a merge is ONE station that two or more lines pass. The
  * user picks which line leaves it: that line gets its own station at the same
@@ -90,11 +112,11 @@ export function sameDetachResult(
  * others get back the station they had (I-1). The dialog says which, from the
  * backend's `preview_detach_line` (review finding UX-4), asked for every line
  * when the dialog opens. The clicked slot's line is listed first. It is
- * preselected unless detaching it would give it a NEW Station ID and take the
- * station's comment away from it (the junction's owner, while a line that
- * shows the junction by its own name stays on it) and another line would get
- * its own station back: that line is then the likely intent and preselected
- * (demo finding I-7). When the chosen line gets its station back and the
+ * preselected unless it is the junction's owner (detaching it would give it a
+ * NEW Station ID, or keep the junction on it while the others come off) and
+ * another line would come off alone with its own station back: that line is
+ * then the likely intent and preselected (demo findings I-7, V-1). When the
+ * chosen line gets its station back and the
  * others keep the junction, the comment stays with them; the dialog says so,
  * since a merge (or the 0.6.0 upgrade) may have joined that line's own
  * comment into it and the alias does not keep it. Its own line detaches with
@@ -186,6 +208,19 @@ export default function UnmergeStationsDialog() {
   const otherLines = selected
     ? slots.filter((ref) => ref.line_id !== selected.line_id).map((ref) => labels.lineName(ref.line_id))
     : [];
+  /** A row's label: the line, or for a line that keeps the junction the
+   *  lines that then come off together (V-1). */
+  const rowLabel = (ref: StationRef, clicked: boolean): string => {
+    const line = labels.lineName(ref.line_id);
+    if (previews.get(ref.line_id)?.kept) {
+      const others = listNames(
+        slots.filter((o) => o.line_id !== ref.line_id).map((o) => labels.lineName(o.line_id)),
+        t,
+      );
+      return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', { line, others });
+    }
+    return clicked ? t('dialogs.detachLine.thisLine', { line }) : line;
+  };
 
   const handleConfirm = async () => {
     if (!stationRef || !target) return;
@@ -246,7 +281,6 @@ export default function UnmergeStationsDialog() {
               <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
                 {slots.map((ref, i) => {
                   const key = stationRefKey(ref);
-                  const line = labels.lineName(ref.line_id);
                   return (
                     <label key={key} className="flex items-center gap-2 text-sm p-1 rounded hover:bg-background-50">
                       <input
@@ -260,7 +294,7 @@ export default function UnmergeStationsDialog() {
                         }}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
-                      <EntityBlob entity="line">{i === 0 ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>
+                      <EntityBlob entity="line">{rowLabel(ref, i === 0)}</EntityBlob>
                     </label>
                   );
                 })}
@@ -274,18 +308,14 @@ export default function UnmergeStationsDialog() {
                       line: labels.lineName(selected.line_id),
                       others: listNames(otherLines, t),
                       count: otherLines.length,
-                      name: naming.name,
-                      id: naming.station_id,
                     })
-                  : naming.restored
-                    ? t('dialogs.detachLine.restores', {
-                        line: labels.lineName(selected.line_id),
-                        name: naming.name,
-                        id: naming.station_id,
-                      })
-                    : t('dialogs.detachLine.copies', { line: labels.lineName(selected.line_id), name: naming.name })}
+                  : t(naming.restored ? 'dialogs.detachLine.restores' : 'dialogs.detachLine.copies', {
+                      line: labels.lineName(selected.line_id),
+                    })}
               </p>
             )}
+
+            {naming && naming.lines.length > 0 && <DetachResults preview={naming} />}
 
             {naming?.restored && !naming.kept && selected && stationComment.trim() !== '' && (
               <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comment">
@@ -295,7 +325,12 @@ export default function UnmergeStationsDialog() {
 
             {!waiting && (
               <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">
-                {t(naming?.kept ? 'dialogs.detachLine.explainKeeps' : 'dialogs.detachLine.explain')}
+                {naming?.kept && selected
+                  ? t('dialogs.detachLine.explainKeeps', {
+                      line: labels.lineName(selected.line_id),
+                      others: listNames(otherLines, t),
+                    })
+                  : t('dialogs.detachLine.explain')}
               </p>
             )}
           </>
@@ -316,6 +351,45 @@ export default function UnmergeStationsDialog() {
         </div>
       </div>
     </DialogWrapper>
+  );
+}
+
+/** What every line ends up with after the chosen detach (V-1): its name and
+ *  Station ID there, whether it comes off (with which lines) or stays, and,
+ *  for a line that comes off together with others and had its own Station ID,
+ *  that it keeps that ID only as an alias. */
+function DetachResults({ preview }: { preview: DetachLinePreview }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  return (
+    <div className="text-sm text-text-primary" data-testid="unmerge-stations-results">
+      <p className="text-text-secondary">{t('dialogs.detachLine.results')}</p>
+      <ul className="mt-1 space-y-1 list-disc pl-5">
+        {orderedResults(preview).map((r) => {
+          const params = {
+            line: labels.lineName(r.line_id),
+            name: r.name,
+            id: r.station_id,
+            joined: listNames(r.joined_with.map(labels.lineName), t),
+            alias: r.alias_id,
+          };
+          const key = !r.comes_off
+            ? 'dialogs.detachLine.resultStays'
+            : r.alias_id !== undefined
+              ? 'dialogs.detachLine.resultOffShared'
+              : r.joined_with.length > 0
+                ? 'dialogs.detachLine.resultOffWith'
+                : preview.restored
+                  ? 'dialogs.detachLine.resultOff'
+                  : 'dialogs.detachLine.resultOffNew';
+          return (
+            <li key={r.line_id} data-testid={`unmerge-stations-result-${r.line_id}`}>
+              {t(key, params)}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

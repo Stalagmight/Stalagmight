@@ -330,3 +330,73 @@ fn a_junction_whose_readings_disagree_is_a_warning() {
     assert!(of_code(&state, JUNCTION_DEPTH_SPREAD_START).is_empty());
     assert!(of_code(&state, JUNCTION_DEPTH_SPREAD).is_empty());
 }
+
+/// Demo finding V-2: merging onto a station that is already a junction. Main
+/// ends at Main:2 reading 12.5 m, Far (12.5 m at Far:0) is already merged
+/// there, and Up:0 reads 4.0 m. The joined station takes the mean of THREE
+/// readings (9.667 m), so the preview lists every one by its line, Up's first
+/// (station A), then Main's (station B) and Far's, and says Main:2 is already
+/// where Main and Far meet. Injection: list only the two picked stations'
+/// depths (4.0 m and 12.5 m, whose mean is 8.25 m) and the readings do not
+/// add up to the joined depth.
+#[test]
+fn a_merge_onto_a_junction_lists_every_reading_and_says_it_is_one() {
+    crate::app_dirs::init_for_test();
+    let mut p = Project::new("Junction depths", None);
+    let add = |p: &mut Project, shots: Vec<ShotData>, xy: [f64; 2]| {
+        let line = p
+            .add_line(LineMeta::default(), StartAt::New, shots)
+            .expect("line");
+        let start = p.line(line).expect("line").start;
+        p.set_placement(start, xy[0], xy[1]).expect("placement");
+        line
+    };
+    let main = add(
+        &mut p,
+        vec![shot(0.0, 10.0, 2.0, 8.0), shot(0.0, 10.0, 8.0, 12.5)],
+        [0.0, 0.0],
+    );
+    let far = add(&mut p, vec![shot(90.0, 10.0, 12.5, 14.0)], [100.0, 0.0]);
+    let up = add(&mut p, vec![shot(270.0, 10.0, 4.0, 3.0)], [-100.0, 0.0]);
+    let dir = TempDir::new().expect("dir");
+    let state = open_v2(dir.path(), &p);
+    let (main2, far0, up0) = (
+        StationRef::new(main, 2),
+        StationRef::new(far, 0),
+        StationRef::new(up, 0),
+    );
+    merge(&state, far0, main2);
+
+    let preview = state
+        .check_merge_connectivity(up0, main2)
+        .expect("a check")
+        .merge_preview
+        .expect("a merge preview");
+    let depths = preview.depths.expect("4.0 m and 12.5 m differ");
+    let readings: Vec<(LineId, f64)> = depths
+        .readings
+        .iter()
+        .map(|r| (r.line_id, r.depth_m))
+        .collect();
+    assert_eq!(readings, vec![(up, 4.0), (main, 12.5), (far, 12.5)]);
+    let mean = readings.iter().map(|(_, d)| d).sum::<f64>() / readings.len() as f64;
+    assert!((depths.joined_m - mean).abs() < TOL, "{depths:?}");
+    assert!((depths.joined_m - 29.0 / 3.0).abs() < TOL, "{depths:?}");
+    assert_eq!(
+        preview.junctions,
+        vec![crate::models::MergeJunction {
+            station: main2,
+            line_ids: vec![main, far],
+        }]
+    );
+
+    merge(&state, up0, main2);
+    assert!((depth_at(&state, main2) - depths.joined_m).abs() < TOL);
+
+    // Two plain stations: no junction to mention.
+    let preview = state
+        .check_merge_connectivity(StationRef::new(main, 0), StationRef::new(far, 1))
+        .ok()
+        .and_then(|c| c.merge_preview);
+    assert!(preview.is_none_or(|m| m.junctions.is_empty()));
+}
