@@ -324,7 +324,10 @@ version stored, so the backend refuses every destination. The menu's Save,
 Save As, Save and Close, Import and Import from MNemo are off; Save and Close
 and Close Project close without saving or asking, since nothing of the user's
 can be unsaved. A disabled menu row, these and the station menu's edit rows,
-says why in the app's tooltip, and a click on it shows the notice (N-12). The
+says why in the app's tooltip, and a click on it shows the notice (N-12);
+Save and Close's reason points to the row that does what the user wants:
+"Nothing to save: use Close Project." (V-4). The toolbar's Import, Undo and
+Redo say why the same way (V-5). The
 status bar reads "Read-only" (N-7). The
 local-only durable saves still work on it and copy the survey members byte for
 byte; the keys of `local` a newer build wrote and this one does not know are
