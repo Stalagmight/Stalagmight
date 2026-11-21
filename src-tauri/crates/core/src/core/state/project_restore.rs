@@ -70,7 +70,9 @@ use super::speleodb_sidecars::{sidecar_path, SetAsideSidecars};
 use super::AppState;
 use crate::models::NewerSchema;
 use crate::persistence::migrate::{LegacyError, MigrateError};
-use crate::persistence::stalx_v2::{self, DecodeError, DecodeOptions, Format};
+use crate::persistence::stalx_v2::{
+    self, DecodeError, DecodeOptions, Fingerprint, Format, MAX_PROJECT_FILE_BYTES,
+};
 use crate::persistence::{same_file_on_disk, BackupInfo, BackupKind};
 
 /// Where a restore keeps a copy of the file it replaces.
@@ -156,8 +158,10 @@ impl AppState {
     /// invariants), or, for a legacy file, the frozen 0.6.0 open and the
     /// conversion. A backup a newer Stalagmight saved would put a file this
     /// build cannot open in the project's place (#649).
-    fn check_opens(&self, staged: &Path, backup: &Path) -> Result<(), String> {
-        let bytes = std::fs::read(staged).map_err(|e| {
+    pub(super) fn check_opens(&self, staged: &Path, backup: &Path) -> Result<(), String> {
+        // Bounded as an open is: the staging already refused a larger backup,
+        // and nothing larger is read into memory here either.
+        let (bytes, _) = Fingerprint::read(staged, MAX_PROJECT_FILE_BYTES).map_err(|e| {
             format!(
                 "Not restored: could not read {} ({e}). Nothing was changed.",
                 name(backup)
@@ -865,11 +869,37 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
         )
     };
     let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
-    let permissions = reader
-        .metadata()
-        .map_err(|e| failed("read", &e))?
-        .permissions();
-    stage_from(&mut reader, permissions, source, dir, project)
+    let metadata = reader.metadata().map_err(|e| failed("read", &e))?;
+    // A backup the restore could never open is refused before a byte of it
+    // is copied (the user picks the file: it may be anything).
+    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+        return Err(too_large(source));
+    }
+    let staged = stage_from(
+        &mut std::io::Read::take(&mut reader, MAX_PROJECT_FILE_BYTES.saturating_add(1)),
+        metadata.permissions(),
+        source,
+        dir,
+        project,
+    )?;
+    // It grew while it was copied: the copy stopped one byte past the cap.
+    if std::fs::metadata(&staged)
+        .map_err(|e| failed("copy", &e))?
+        .len()
+        > MAX_PROJECT_FILE_BYTES
+    {
+        return Err(too_large(source));
+    }
+    Ok(staged)
+}
+
+/// The refusal of a backup larger than any project Stalagmight reads.
+fn too_large(source: &Path) -> String {
+    format!(
+        "Not restored: {} is larger than {} MiB, the most Stalagmight reads. Nothing was changed.",
+        name(source),
+        MAX_PROJECT_FILE_BYTES / (1024 * 1024)
+    )
 }
 
 /// [`stage_copy`] of a SQLite `backup` (`named` as the caller named it) with
@@ -880,8 +910,8 @@ fn stage_settled(
     dir: &Path,
     project: &Path,
 ) -> Result<tempfile::TempPath, String> {
-    let read = std::fs::read(backup)
-        .and_then(|bytes| std::fs::metadata(backup).map(|meta| (bytes, meta.permissions())));
+    let read = Fingerprint::read(backup, MAX_PROJECT_FILE_BYTES)
+        .and_then(|(bytes, _)| std::fs::metadata(backup).map(|meta| (bytes, meta.permissions())));
     let (bytes, permissions) = read.map_err(|e| {
         format!(
             "Not restored: could not read {} ({e}). Nothing was changed.",

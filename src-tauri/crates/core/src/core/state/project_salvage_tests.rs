@@ -466,3 +466,23 @@ fn salvage_of_a_torn_file_reports_what_the_header_says() {
         salvaged.errors
     );
 }
+
+/// Pre-PR review finding 4: Export Salvageable Data read the whole file
+/// before any size check (Attempt Repair already refused a file over the
+/// cap). A sparse file one byte over it is refused before it is read.
+/// Injection: `std::fs::read` again reads it whole and then refuses it as
+/// "not a Stalagmight project file", a different message.
+#[test]
+fn salvage_refuses_a_file_over_the_size_cap_without_reading_it() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("huge.stalx");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(stalx_v2::MAX_PROJECT_FILE_BYTES + 1)
+        .unwrap();
+    let err = AppState::salvage_project_file(&path).unwrap_err();
+    assert!(
+        err.starts_with("Salvage failed:") && err.contains("larger than"),
+        "{err}"
+    );
+}

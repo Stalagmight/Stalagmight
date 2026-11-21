@@ -77,7 +77,10 @@ impl AppState {
     /// The recovery dialog's "Export Salvageable Data" for the file at `path`:
     /// whatever can be read, never written back.
     pub fn salvage_project_file(path: &Path) -> Result<SalvagedData, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("Salvage failed: {e}"))?;
+        // Bounded like every other read of a project: a larger file is refused
+        // before it is read into memory.
+        let (bytes, _) = Fingerprint::read(path, MAX_PROJECT_FILE_BYTES)
+            .map_err(|e| format!("Salvage failed: {e}"))?;
         match stalx_v2::sniff(&bytes) {
             Format::V2 => Ok(salvage_v2(&bytes)),
             Format::Legacy => {
