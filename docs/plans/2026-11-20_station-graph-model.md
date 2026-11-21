@@ -23,7 +23,7 @@ Editing:
 
 - **A junction is one station**, with one Station ID and comment, and each line shows it by the name that line knows it by: a merge records the retired station's id and name as an alias naming each line that showed it, which keeps showing that name, and joins distinct comments (survivor first); a rename through a slot renames that line's name, checked on every line that shows it (12.2, 5.1, 5.3, G3, U1). Why: a merge makes one station, so merged stations can never drift apart or disagree, while a surveyor reading a line still sees the names it was surveyed with.
 - **Split Line Here makes a junction**: the halves share the split station, so an edit to one half can move the other, Move Segment on the second half is refused when the first holds a datum, merging the far ends goes to the closure dialog, and the dialog has no comment or datum side (a datum "on both halves" is no longer refused) (12.2, 5.4, S9, N3). Why: no duplicated co-located station.
-- **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (the name it showed the junction by, no comment; a line merged there its own id and name back); when every other line knew the junction by an alias, the chosen line keeps it and the others get their own station back; datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach (12.2, 5.2, E6, N13, U1). Why: there is no pairwise merge left to remove.
+- **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (the name it showed the junction by, no comment; a line merged there its own id and name back); when every other line knew the junction by an alias, the chosen line keeps it and the others get their own station back; datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach; when the choice does not change the result the dialog offers none and says which line comes off, and the history always names the line that comes off (12.2, 5.2, E6, N13, U1, JP1, JP2). Why: there is no pairwise merge left to remove.
 - **A delete leaves a junction on its other lines** with its comment and datums, whatever line they were set from; nothing is re-anchored and no replacement merge is made; when the lines left all knew it by an alias, it takes back the id and name the first of them knew it by; the delete preview also lists the sweep's promotions beyond the removed member's (M1, S13, W6, U1). Why: the junction is still a station of those lines, under the identity they know it by.
 - **Set Zero Datum on a junction slot edits the station's datum** when it has one; two datums on one station come only from merging two placed pieces or from a migration (E1). Why: a datum belongs to the station, not to one line's member.
 - **A loop closure from a junction to a station a closure already ties it to is refused** as a duplicate (Q5). Why: 0.6.0's merged twin is the junction itself.
@@ -1272,3 +1272,67 @@ untrue. Labels `DM1`...
   tune yet; `warn_depth_change_per_shot_max` measures something else (one
   shot's depth change).
 
+
+## Deviations (real-app demo fixes, package V2: junction presentation)
+
+The second real-app demo of sg/core (issues N-2, N-3, N-9, N-13 and two
+I-9 leftovers) found a junction presented in ways that misled or repeated
+themselves. Labels `JP1`...
+
+- **JP1. A detach whose result does not depend on the choice offers none**
+  (amends U1-3's dialog wording and U1-7's kept default; N-2). On a junction
+  of two lines where one keeps the station when detached (`kept`) and the
+  other gets back exactly the identity the keeper's preview names, both
+  choices leave the same two stations (`sameDetachResult`). The dialog asked
+  "Choose the line to detach", preselected "Main Line (the line you
+  clicked)" and said "Main Line keeps this station", so the user read it as
+  detaching Main Line. It now waits for both previews (Detach disabled
+  meanwhile, so the list never flashes), says in one sentence what happens
+  ("North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps
+  3."), adds the comment notice when the station has one ("The station's
+  comment stays with Main Line ..."), and Detach detaches the line that
+  comes off, whichever slot the dialog was opened on. Hubs, and two lines
+  whose previews differ, keep the list; the kept owner's default (U1-7)
+  now matters only there. The hub sentence's verb agrees with its lines
+  ("North Passage and Main Line B get back the station they had").
+- **JP2. The history names the line that comes off** (amends W11's label
+  rule; N-2). A detach addressed to the line that keeps the station (the
+  station form on its slot, or the pair form whose partner it is) takes the
+  other lines off; the label named the addressed line ("Detach line "Main
+  Line" from station 3"). `Project::detach_keeps` (the one test
+  `detach_ids` and the label share) picks the lines that come off, and the
+  label names them by the first one's name for the station: `Detach line
+  "North Passage" from station 0`, `Detach lines "B" and "C" from station
+  0`.
+- **JP3. Station details say each fact once** (amends U1-4 and W11; N-3).
+  The Junction row is gone. "Merged with" became "Also on" (`StationOtherLines`):
+  one row per other line with the line link, the name that line shows the
+  station by when it is not the Name row's, and the Station ID it had there
+  before a merge when the alias naming it has one (`North Passage 0 (Station
+  ID 9)`), and the detach button. "Also known as" keeps only the aliases no
+  row shows; the slot's own line's alias reads `Station ID 9 on North
+  Passage` (its name is on the Name row). Picked over dropping "Also known
+  as": the line rows carry the detach action and the per-line names the
+  table shows, and the aliases no line knows still need a place.
+- **JP4. One wording for every junction** (I-9 leftover). A Split Line Here
+  junction said "Merged with" although nothing was merged. The details, the
+  Data table's Conn picker and Edit Station say "Also on"; the combine menu
+  says "Joined here"; Adjust Position says "Joined to N other lines".
+- **JP5. Delete Shot's Split colours the second half** (I-9 leftover).
+  `delete_shot_and_split` and `delete_shot_range_split` take an optional
+  `color_b` (JS `colorB`), set on the new line inside the same recorded
+  edit (one undo step); the store sends the colour Split Line Here gives
+  its half B (`splitSecondHalfColor`: the next palette colour no line uses,
+  the split line's own included). Without it the backend keeps 0.6.0's copy
+  of the line's colour (the core's 4-argument `execute_*` methods, which
+  the tests and fuzzers call, are that path).
+- **JP6. A multi-line value in a one-line cell** (N-9). A merge joins two
+  comments with a blank line; the grid cell collapsed it to a space. A
+  `multiline` grid column now shows the value's lines joined by " / "
+  (`oneLineCellText`); the tooltip, the editor, the clipboard and the
+  Station details keep the line breaks.
+- **JP7. The merge names its lines** (amends DM3's wording; N-13). The
+  preview and the datum notice list the moving piece's lines by name, up to
+  three, then a count ("Upstream and Upstream Side move 24 m", "A, B, C and
+  2 more move"; `listNames`, the frontend twin of the history's `listed`),
+  instead of "Upstream and 1 more line"; the datum notice's verb agrees.
