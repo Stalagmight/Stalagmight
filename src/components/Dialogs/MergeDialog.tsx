@@ -160,7 +160,7 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
         <p
           key={`${junction.station.line_id}:${junction.station.station_index}`}
           className="p-2 rounded bg-accent-10 text-text-primary"
-          data-testid="merge-preview-junction"
+          data-testid={`merge-preview-junction-${junction.station.line_id}-${junction.station.station_index}`}
         >
           {t('dialogs.mergeStations.alreadyJoined', {
             station: labels.station(junction.station, true),

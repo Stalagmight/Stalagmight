@@ -89,7 +89,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream moves 24 m to join Second entrance / B4.');
     expect(screen.queryByTestId('merge-preview-depths')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('merge-preview-junction')).not.toBeInTheDocument();
+    expect(screen.queryByTestId(/^merge-preview-junction/)).not.toBeInTheDocument();
   });
 
   it('lists every reading by line onto a junction, and says it is one (V-2)', () => {
@@ -115,7 +115,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
       'Depths 4.0 m (Upstream), 12.5 m (Second entrance), 12.5 m (Far room) become 9.7 m: the joined station takes the mean of its depth readings.'
     );
-    expect(screen.getByTestId('merge-preview-junction')).toHaveTextContent(
+    expect(screen.getByTestId('merge-preview-junction-2-5')).toHaveTextContent(
       'Second entrance / B4 is already where Second entrance and Far room meet.'
     );
   });
