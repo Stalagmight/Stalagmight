@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-21
+
 ### Changed
 
 - **A SpeleoDB project can be published without a description** - the publish dialog no longer requires one. Stalagmight also moves to the newer SpeleoDB API client this needs, with no other change to how it works with SpeleoDB ([#807](https://github.com/Stalagmight/Stalagmight/pull/807), [#800](https://github.com/Stalagmight/Stalagmight/pull/800))
