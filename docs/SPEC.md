@@ -78,7 +78,10 @@ Explicit Save, its shortcut and Save Changes share a dispatcher: local Save for
 local projects, upload confirmation for linked ones, and a blocked explanation
 without the lock. Upload needs a description, local save and fresh server ownership
 verification; ordinary upload keeps the lock. Clean projects do not upload empty
-revisions. Autosave and autosave retry remain local-only. Save and Close continues
+revisions. Unuploaded changes are decided by content: a copy holding exactly the
+survey of the revision it is based on has none, whatever its mark says (an edit lost
+in a crash or closed with Don't save, or taken back and saved), and opens, updates
+and closes as a clean copy. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never

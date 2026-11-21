@@ -297,7 +297,7 @@ not know (another build's per-machine or sync state, at `local` or inside
 | Key | Type | Meaning |
 |---|---|---|
 | `display` | object of booleans and strings, opt | View settings by key: a toggle is a boolean (`"showGrid":true`), any other setting its stored text (`"gridSpacing":"10"`, `"geometryMode":"measured"`). A reader reads `"true"` and `"false"` strings, which earlier version 2 writers wrote, as the booleans. |
-| `speleodb` | object, opt | Sync state: `base` (string, the server revision this copy is based on), `unpushed` (`true` when there are edits not yet uploaded), `last_edit` and `last_verify` (times), `unwound_from` (string, the revision an Unwind started from), `inherited_through` (time: undo entries at or before it came with a downloaded revision). Every key optional. |
+| `speleodb` | object, opt | Sync state: `base` (string, the server revision this copy is based on), `base_survey` (string, `sha256:` and 64 hex digits: the digest of that revision's survey, [section 12](#12-how-stalagmight-saves)), `unpushed` (`true` when there are edits not yet uploaded), `last_edit` and `last_verify` (times), `unwound_from` (string, the revision an Unwind started from), `inherited_through` (time: undo entries at or before it came with a downloaded revision). Every key optional. |
 
 ### 5.7 `sections`
 
@@ -775,6 +775,22 @@ For context; nothing here changes the format. The app's side is
   unknown). It is sent as `application/json`, named `project.stalx`.
 - **"Save a Copy" of a SpeleoDB project** writes no `speleodb`, no
   `local.speleodb` and no undo entries inherited from the server.
+- **The BASE survey digest.** `local.speleodb.unpushed` is written the moment
+  an edit is made, the edit itself only with the next save, so a file can be
+  marked over exactly the survey of its `base` revision (the edit was lost).
+  Stalagmight records `local.speleodb.base_survey` when it installs a
+  downloaded revision and after an upload lands, and counts a marked file
+  whose survey has that digest as holding nothing to upload. The digest is
+  SHA-256, written as `sha256:` and lowercase hex, over: the bytes of
+  `stalagmight survey digest 1` and a newline; the `base` revision id; then,
+  sorted by key, every top-level member except `format`, `version`,
+  `solver`, `generator`, `summary`, `local`, `history` and `end`, as its key
+  and its value's text as written, `project` without its `modified` key and
+  `speleodb` without `endpoint` and `name` (each re-joined in file order, no
+  whitespace). Every field is preceded by its length in bytes as an unsigned
+  64-bit little-endian integer. A writer that does not compute it leaves it as
+  it is: it describes the `base` revision, not the file, and it is bound to
+  that revision id.
 - **Local-only rewrites.** Changes to the link, the sync state, display
   settings and the history alone rewrite those members and copy every other
   member byte for byte, even when the file is open read-only. When the
