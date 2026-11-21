@@ -61,7 +61,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 
 ## Data and ids
 
-- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`; `StationAlias { id, name, line }`, where `line` is the line that knew the station by that alias (a 0.6.0 merge member's line, a merge's moving line), checked like a `via` hint, re-pointed by Split, range splits and Combine, remapped by Add, cleared when stale. Detach gives that line the alias's id and name back; on that line the station's own name is exempt from invariant 8 (`known_by_alias_on`).
+- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`; `StationAlias { id, name, line }`, where `line` is the line that knew the station by that alias (a 0.6.0 merge member's line, a merge's moving line, a line an import joined onto it, the second half of a split), checked like a `via` hint, re-pointed by Split, range splits and Combine, remapped by Add, cleared when stale. That line shows the station by the alias's name (`name_on`, I-3: the per-line name invariant 8 holds unique); every other line shows the station's own name. Detach gives that line the alias's id and name back, and a delete or detach that leaves the station only on lines whose aliases name it gives it the first such alias's identity (`restore_alias_identities`, I-1).
 - `Project.lines` is private: read it with `lines()`, `line(id)`, `line_position(id)`;
   change it with `lines_mut()` / `line_mut(id)`, which drop the cached
   topology and shot-uuid index. Every other field is public and feeds no cache.
@@ -132,8 +132,9 @@ line, empty, overlong or repeated shot uuids), references (line starts,
 shot targets, datum / placement / closure stations, `via` hints, hand-move
 keys, Sections), simple chains, orphan stations, the forest (the shot that
 closes a cycle), one anchor per component, closures (`a != b`; across pieces
-only between two datum-held pieces), station names on every line, Section
-names in the project, counters
+only between two datum-held pieces), the names each line shows (`name_on`:
+no line shows two stations by one name), Section names in the project,
+counters
 above every id in use (aliases included), the station and Section
 counters at most 2^31 and closure ids and the closure counter within
 `MAX_CLOSURE_ID` (2^53 - 1, the file's integers), finite numbers (shots, quality,
@@ -250,8 +251,9 @@ Shared cores (one copy each):
 
 | Core | Used by |
 |---|---|
-| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming its line), the comment rule (`Join`, or Combine's pick), `external`, true clashes lettered (a line that knows the survivor by the new alias keeps its names) | Merge Stations, the sweep's promotions, Combine's join |
-| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station (with `restore`, the junction's alias naming the line gives it its id and name back); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
+| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming each line that showed it by its own name: the retired id for the first, a fresh id for the others, so every line keeps its names and nothing is renamed), the comment rule (`Join`, or Combine's pick), `external` | Merge Stations, the sweep's promotions, Combine's join |
+| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station named as the line showed the junction (with `restore`, the junction's alias naming the line gives it its id and name back; and when every other line knows the junction by an alias, the line keeps it and those lines get the first alias's identity back, `detach_others`, `DetachReport::kept`); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
+| `restore_alias_identities(before)` (`ops_detach.rs`): a station the edit took a line off and left only on lines whose aliases name it takes the first such alias's id and name; slots, hand moves, datums, closure ends and the placement follow, and the anchor algorithm is told (`EditContext::reidentified`) | The epilogue of every edit and command (`finish_edit`, `run_op`), not Combine (I-1) |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |
 | `solve_hold(station)` (`adjust.rs`) | The Computed View's own partition; Combine's gauge rule |
@@ -495,8 +497,11 @@ one the user sees.
 
 - Per slot `(L, i)` with station `S` (`stations_wire`): `S`'s coordinates
   (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `S`'s
-  `id`, `name` and `comment` (shared by a junction's slots), `aliases` = the
-  ids and names merged into `S` (`StationAliasWire`, TS `StationAlias`;
+  `id` and `comment` (shared by a junction's slots), `name` = the name `L`
+  shows `S` by (`name_on`: a junction's slots differ where an alias names a
+  line, I-3), `aliases` = the
+  ids and names merged into `S`, each with the line that shows it
+  (`StationAliasWire`, TS `StationAlias`;
   absent when `S` has none, so most stations pay nothing; every slot of a
   junction carries them, for the station details' "Also known as"), `merged_with` =
   `S`'s other slots (so a junction's slots list each other, transitively,
@@ -657,11 +662,11 @@ the model:
 | `command_line.rs` | CreateLine, DeleteLine, UpdateLineMetadata, ReverseLine | `create_line`, `delete_line`, `update_line_meta`, `reverse_line` |
 | `command_shot.rs` | CreateShot, UpdateShot, DeleteShot, SetShotKind | `create_shot`, `update_shot`, `delete_shot`, `set_shot_kind` |
 | `command_station.rs` | MergeStations, UnmergeStations, UnmergeStationPair, CreateLoopClosure, RemoveLoopClosure, SetZeroDatum, RemoveZeroDatum | `merge_stations`, `unmerge_station`, `unmerge_station_pair`, `create_closure_at`, `remove_closure`, `set_datum_at` (+ `set_datum_entrance`), `remove_datum_at` |
-| `command_station_name.rs`, `command_comment.rs` | SetStationName, SetStationComment, MoveComment | the station's one name and comment (`conflicts_with_name`) |
+| `command_station_name.rs`, `command_comment.rs` | SetStationName, SetStationComment, MoveComment | the name the slot's line shows (`set_name_on`, `conflicts_with_name_on`) and the station's one comment |
 | `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
 | `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
 | `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
-| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction; a different name the file gives it becomes an alias on the new line under a minted retired id, so the line's own stations keep the file's names (invariant 8's alias exemption); without such an alias a new station whose file name is the junction's is suffixed and reported in the receipt), `append_project` |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction; a different name the file gives it becomes an alias on the new line under a minted retired id, which the line shows the junction by, so the line's own stations are named around it and keep the file's names; without such an alias a new station whose file name is the junction's is suffixed and reported in the receipt), `append_project` |
 
 Subsystems ported onto the model and the v2 file:
 
@@ -695,12 +700,23 @@ The deviations each package made from the plan are in the plan's "Deviations
 
 ## Naming and identity (`naming.rs`)
 
-- `name_conflicts(station)`, `conflicts_with_name(station, name)` (a rename
-  check), `names_around(station)`: every line the station is on.
-- `uniquify_station_name(station)`: the letter-suffix rule
-  (`crate::station_naming::name_with_free_letter`), free on all its lines.
-- `uniquify_line_names(line)`: first holder keeps a name, later ones get a
-  suffix free on all their lines.
+- `name_on(station, line)` (and `slot_name(slot)`): the name a line shows a
+  station by, the name of the (latest) alias naming the line when it has
+  one, else the station's own (I-3). `line_alias`, `known_by_alias_on`.
+- `set_name_on(station, line, name)`: a rename through a slot, of that
+  line's alias when it has one (that line only), else of the station's own
+  name (every line in `lines_sharing_name_on`).
+- `lines_showing_name(station)`, `lines_sharing_name_on(station, line)`.
+- `name_conflicts(station)`, `conflicts_with_name(station, name)` (the
+  station's own name), `conflicts_with_name_on(station, line, name)` (a
+  rename through a slot), `names_around(station)`,
+  `names_around_on(station, line)`: the names the lines sharing the name
+  show their other stations by.
+- `uniquify_station_name(station)`, `uniquify_name_on(station, line)`: the
+  letter-suffix rule (`crate::station_naming::name_with_free_letter`), free
+  on every line that shows the name.
+- `uniquify_line_names(line)`: first holder of a name the line shows keeps
+  it, later ones get a suffix free on every line showing it.
 - `is_shot_uuid_taken`, `shot_by_uuid`, `duplicate_shot_uuids`, `mint_shot_uuid`.
 
 ## Tests
@@ -725,4 +741,5 @@ The deviations each package made from the plan are in the plan's "Deviations
 | `edit/edit_fuzz_tests.rs` | 32 seeds x 80 random operations: valid after every step, refusals change nothing, previews equal results, seeds replay bit for bit. |
 | `wire/ts_tests.rs`, `wire/wire_tests.rs` | The wire types generate today's TS files (less `line_offsets`); JSON keys as today's payloads; junction identity, derived merge pairs, closure references and chains, datum flags, `Tie` as aligned `Batch`, slot resolution, delete impact at a junction, line relationships, the envelope input; an ignored timing run on 78k slots. |
 | `ops_merge_tests.rs`, `ops_detach_tests.rs`, `ops_closures_tests.rs`, `ops_datums_tests.rs`, `ops_move_tests.rs`, `append_tests.rs` | Each M2 command, with ports of the legacy datum, entrance and placement tests. |
+| `alias_identity_tests.rs` | Per-line names (I-3: each line shows a junction by its own name) and the alias identity (I-1: a delete of a shot, a range or a line, or a detach, that leaves a station only on lines knowing it by an alias gives it that identity back, nothing moving, the datum following, Undo exact through the changeset). |
 | `ops_scenario_tests.rs`, `ops_property_tests.rs` | The model review's scenarios; 48 seeds x 70 random commands (valid after every step, refusals change nothing, no-move commands move nothing, a merge moves exactly the moving piece, a seed replays bit for bit). |

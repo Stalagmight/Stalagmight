@@ -285,7 +285,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. An entity with a project-unique Station ID; a shot runs from one station to the next. |
 | **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots (a chain: its start station, then the station each shot ends at). Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: an old SQLite `.stalx` stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names)). |
-| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one name, one comment, one position, shown once per line it is on. |
+| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, each line showing it by the name that line knows it by (a line merged onto it keeps its own name for it). |
 | **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project::sections`, serialized as `cave_section_id` on the wire and in the `sections` member of the version 2 file. |
 | **Placement** | Where a piece of the survey that holds no zero datum sits: one of its stations at a local (x, y) position. |
 | **Sections panel** | The left-dock tab that lists the project's lines, grouped under their Sections (ungrouped lines listed separately). It keeps its name. |
@@ -324,9 +324,9 @@ Project (Cave System)
 │   └── modified_at: DateTime
 ├── Stations{}   (by StationId, ascending)
 │   ├── id: StationId (u32, project-unique, never reused: the Station ID, shown)
-│   ├── name: String (unique among the stations of every line it is on, except a line that knows it by an alias; shown)
+│   ├── name: String (shown by every line it is on that no alias names; a line shows each of its stations by a name unique on it)
 │   ├── comment: Option<String>
-│   ├── aliases: [{ id, name, line }] (the stations merged into this one; line = the line that knew it by that alias)
+│   ├── aliases: [{ id, name, line }] (the stations merged into this one; line = the line that knew it by that alias and still shows it by that name)
 │   └── external: Option<String> (an imported identity, attribute only)
 ├── Lines[]   (display order = list order)
 │   ├── id: u32 (internal, immutable, never shown)
@@ -459,29 +459,41 @@ line_id:station_index`) are internal and are never shown.
 A station IS its Station ID: the id is the entity's key, so it stays with the
 physical station through every insert, delete, reverse, split and combine with
 no bookkeeping. A **junction** (a station on two or more lines, what a merge
-made) has ONE id, ONE name and ONE comment on all its lines; a merge keeps the
-surviving station's id and name and records the retired station's as an alias
-(5.1 of the plan). Shot UUIDs are unique across the whole project: an import,
+made) has ONE id and ONE comment on all its lines, and each line shows it by
+the name that line knows it by: a merge keeps the surviving station's id and
+records the retired station's id and name as an alias naming the line it was
+on (5.1 of the plan), and that line keeps showing the retired name. Shot UUIDs are unique across the whole project: an import,
 merge or Add that brings an id the project already holds renames the
 newcomer's copy to a derived id (see
 [ariane-export.md](ariane-export.md#shot-uuids)).
 
 **Uniqueness and normalization.** Every line has a non-empty name, unique in the
-project; every station has a Station ID and a name unique among the stations
-of every line it is on (invariant 8), except a line that knows the station by
-one of its aliases: a merge records, with the retired station's id and name,
-the line it was on, and on that line the junction keeps its own name even when
-a station of that line has it too, as 0.6.0 kept each line's own name for its
-merge member (so neither a merge nor the conversion of a 0.6.0 file renames a
-station for it). Only a true clash, a name two stations hold as their own on
-one line, is lettered: imports, merges and the migration make such names
-unique with the letter-suffix rule below, the junction keeping its name and the
-other station taking the letter. A rename you type is checked against every
-name on every line of the station. Detaching a line that an alias names gives
-the line its own station back, with the alias's Station ID and name (the name
-when no other station of the line has it; else the junction's, made unique).
-The conversion notice lists every slot whose name the conversion changed, for
-example "Side 0 is now 3" for a line that now shows its junction's one name; an unnamed line is seeded
+project; every station has a Station ID, and a line shows each of its stations
+by a name no other station of that line shows (invariant 8). The name a line
+shows a station by is the name of the alias naming that line, when one does,
+else the station's own name. So no edit changes a name a line shows unless
+asked to, as 0.6.0 kept each line's own name for its merge member: a merge
+gives every line that showed the retired station by its own name an alias with
+it (a fresh Station ID for all but the first such line), Split Line Here gives
+the second half a copy of the alias the line knew the split station by,
+Combine Lines plans its prefixes on the names each line shows, and the
+conversion of a 0.6.0 file keeps the name 0.6.0 showed on every slot (each
+merge member an alias naming its line). A rename addresses a slot: through a
+line that knows the station by an alias it renames that alias (that line
+only), else the station's own name (every line without an alias of its own),
+and it is refused when one of those lines shows another station by the new
+name. Imports and the edits that create stations keep names unique with the
+letter-suffix rule below. Detaching a line that an alias names gives the line
+its own station back, with the alias's Station ID and name; detaching the line
+that shows the junction by its own name, when every other line knows it by an
+alias, keeps the junction (id, name, comment) on that line and gives the other
+lines their own station back. Likewise a delete (shot, range or line) that
+leaves a station only on lines that know it by aliases gives it back the
+Station ID and name the first of those aliases records, its comment, datums,
+closure ends, placement and hand moves following (Undo restores it exactly).
+The conversion notice lists a slot whose name the conversion changed, which
+only happens to a name a 0.6.0 line showed twice (the later one is lettered);
+an unnamed line is seeded
 `Line 1`, `Line 2`, ... (smallest free number, in line order); a repeated line
 name gets ` (2)`, ` (3)`, ... on the later line. Station IDs come from
 `next_station_id` and are never reused within a timeline (an undo leaves the
@@ -589,8 +601,9 @@ exclusive. A junction is one station, so it draws exactly ONE label (the
 labels group slots by Station ID), on its representative slot: one that is not
 its line's first station if there is one, then one that is not its line's
 last, ties broken by the line's order in the project and then by station
-index. A branch that starts on the middle of the main line therefore shows the
-junction's one name there (`Junction`). The image export also counts the two
+index; with names on, the label is the name that slot's line shows. A branch
+that starts on the middle of the main line therefore shows the main line's
+name for the junction there (`Junction`). The image export also counts the two
 ends of an aligned loop closure as one point. The label keeps the
 first-in-line rule (it always shows when any slot starts its line) and hides
 with the shots only when every slot's marker would.
@@ -718,22 +731,26 @@ Declared behaviour changes of the switch from the 0.6.0 model (plan 12.2 and
 its Deviations sections), visible to users. The complete list, each change
 with its reason, is the plan's "Status (final)" section:
 
-- **Junctions share one Station ID, name and comment.** Merging two stations
-  makes one: the surviving station keeps its id and name; the retired one's
-  become aliases, and distinct comments are joined. A migrated file's merged
-  stations are joined the same way (the migration keeps the others as
-  aliases). Renaming a junction checks every line through it.
+- **Junctions share one Station ID and comment; each line keeps its own
+  name.** Merging two stations makes one: the surviving station keeps its id;
+  the retired one's id and name become an alias naming its line, which keeps
+  showing that name, and distinct comments are joined. A migrated file's merged
+  stations are joined the same way, so every line still shows the names 0.6.0
+  showed. Renaming a junction through one line renames the name that line
+  shows, checked on every line that shows it.
 - **Split Line Here makes a junction.** The halves share the split station, so
   an edit to one half moves the other, Move Segment on the second half is
   refused when the first holds a datum, and merging the halves' far ends goes to
   the closure dialog. There is no comment or datum side to choose.
 - **Unmerge detaches one line.** "Detach Line from Station" gives the chosen
-  line a new station (same name, uniquified; no comment) where the junction
-  was; on a hub of three or more lines it detaches that line only (0.6.0
+  line a new station (the name it showed the junction by; no comment) where
+  the junction was, or its own station back when it was merged there; on a hub of three or more lines it detaches that line only (0.6.0
   removed every direct merge pair of the member). Datums and closure ends that
   came from that line (`via`) go with it.
 - **A delete leaves a junction on its other lines** with its comment and
-  datums; nothing is re-anchored and no replacement merge is invented.
+  datums; nothing is re-anchored and no replacement merge is invented. When
+  the lines left all knew it by another name, it takes back the Station ID and
+  name the first of them knew it by.
 - **Set Zero Datum on a junction slot** edits the station's datum when it has
   one; a station can hold two datums only after merging two placed pieces or
   from a migration.
@@ -1059,15 +1076,19 @@ the test ids) but are never shown:
 └────────────────────────────────────────────────────┘
 ```
 
-**A junction** (a station on several lines) is one station: its Station ID,
-name and comment are the same from every slot. "Merged with" lists the other
+**A junction** (a station on several lines) is one station: its Station ID
+and comment are the same from every slot, and each slot shows the name its
+line knows it by. When its lines show it by different names, Name says which
+line this one is on (`0 (on North Passage)`); a Junction row lists the names
+the other lines show it by (`3 on Main Line`). "Merged with" lists the other
 lines through it by line name (never the station's own name again), each
 with a button that detaches that line (tooltip "Detach <line> from this
 station"; the history row reads `Detach line "<line>" from station <name>`).
 "Also known as" lists the Station IDs and names merged into the station (its
 aliases: a merge's retired station, or a 0.6.0 merge group's other members),
-`<name> (Station ID <id>)`, so a surveyor can still find a former name from
-the field notes; hidden when it has none.
+`<name> on <line> (Station ID <id>)` while that line still shows it by that
+name, else `<name> (Station ID <id>)`, so a surveyor can still find a former
+name and Station ID from the field notes; hidden when it has none.
 "Connected" also lists every shot that meets the station on the other lines
 (`StationOtherLineShots.tsx`), so a junction of three lines shows three or
 more shots, not just a previous and a next. A junction's zero datum is found
@@ -1872,15 +1893,20 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 4. Confirm → the two stations become ONE station, a junction of their lines:
    the piece that moves (the free one onto the placed one; between two free
    pieces the first pick's) lands on the other. The surviving station keeps
-   its Station ID and name, the other's become its aliases, distinct comments
-   are joined, and the names on the moved lines are made unique again
+   its Station ID; the other's id and name become its alias, and every moved
+   line keeps showing the names it showed (nothing is renamed); distinct
+   comments are joined
 5. Picking another slot of the same station clears the pick, as clicking the
    same slot does: they are already one station
 
 **Detaching a line** (the inverse; "Detach Line from Station..." in the station
 menu, or a line's button in Station details): the chosen line gets a new
-station where the junction was (same name, made unique; no comment, no
-aliases), so nothing moves. The datums and closure ends that came from that
+station where the junction was (the name it showed the junction by; no
+comment, no aliases), so nothing moves; a line that was merged there gets its
+own Station ID and name back. When every other line knew the junction by
+another name (each was merged there), the chosen line keeps the junction (its
+Station ID, name and comment) and the other lines get their own station back
+instead; the dialog says which. The datums and closure ends that came from that
 line (their `via`) move to the new station with it; the orphan-closure sweep
 then promotes a closure left as the only connection of the detached piece. On a
 hub of three or more lines only the chosen line leaves.
@@ -1964,8 +1990,11 @@ hub of three or more lines only the chosen line leaves.
    delete. One Undo restores the shots and the closure (#737)
 5. A delete removes one station from the line (station 0 for the first shot,
    else the shot's end station). If that station is a junction it stays for the
-   other lines, with its name, comment and datums, and the line simply leaves
-   it; a station on no other line is deleted with its comment, datums and hand
+   other lines, with its comment and datums, and the line simply leaves it;
+   if the lines left all knew it by another name (each was merged there), it
+   goes back to the Station ID and name the first of them knew it by, its
+   comment, datums, closures and placement following, as Detach gives a line
+   its own station back (the demo's I-1); a station on no other line is deleted with its comment, datums and hand
    moves, and its closures are dropped. Then the orphan-closure sweep runs: a
    closure left as the only connection of two pieces becomes a junction
    ([closures.md](closures.md#when-a-closure-becomes-a-merge-promotion))
@@ -2085,8 +2114,8 @@ Nothing is deleted. The first half keeps the line id and ends on the split
 station; the second half starts on **the same station**, which becomes a
 junction of the two halves, and copies the line's direction, quality and north
 reference (every shot keeps its own surveyors, explorers and date). The split
-station keeps its one name, Station ID, comment and zero datum, so there is no
-side to choose for them; a legacy hand move there is copied to the second
+station keeps its Station ID, comment and zero datum, and both halves show it
+by the name the line did, so there is no side to choose for them; a legacy hand move there is copied to the second
 half, so it does not shift. Names default to `<name> A` / `<name> B` made
 unique (` (2)`, ...; line names are required and project-unique, 4.1), each
 half has a colour picker: A keeps the line's colour, B defaults to the colour
@@ -2133,7 +2162,8 @@ and position; the other line is reversed first when the two meet end to end
 or start to start. Every per-shot field travels, and every station reference
 follows its station; the joined station keeps the kept line's name and
 Station ID, the other join station's become its aliases, and it keeps one
-comment (the dialog asks when they differ).
+comment (the dialog asks when they differ). Every other station keeps the name
+its line showed it by.
 
 Whatever stands in the way changes instead of blocking, and the dialog lists
 it, for the line it shows as kept, before the user confirms:

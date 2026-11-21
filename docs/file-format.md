@@ -316,7 +316,7 @@ One row per station, in ascending id order:
 | Position | Type | Meaning |
 |---|---|---|
 | 0 | integer | Station id: the "Station ID" users see. Unique, never reused. |
-| 1 | string | Station name: unique among the stations of every line the station is on, except a line one of its aliases names (rule 8 of section 6). |
+| 1 | string | Station name: the name every line the station is on shows it by, except a line one of its aliases names, which shows the alias's name (rule 8 of section 6). |
 | 2 | object, opt | Extras, written only when one is set. |
 
 Extras keys: `comment` (string), `aliases` (ids merged into this station,
@@ -327,10 +327,14 @@ name or an Ariane station ID; an attribute only).
 An alias is `[id]`, `[id, "name"]`, or `[id, "name", line]` / `[id, null,
 line]` when the line that knew the station by that alias is known (the line
 the merged station was on; a `null` name only before a line). That line must
-pass through the station (rule 2 of section 6). On it, the station's own name
-need not be unique (rule 8): the line knows the station by the alias, as a
-0.6.0 merge kept each line's own name for its member. Detaching that line
-from the station gives it its own station back with the alias's id and name.
+pass through the station (rule 2 of section 6). That line shows the station by
+the alias's name, not the station's own (the latest alias naming the line
+wins; a `null` name shows the station's own), as a 0.6.0 merge kept each
+line's own name for its member, and that name is held unique on the line
+(rule 8). Detaching that line from the station gives it its own station back
+with the alias's id and name. A reader that knows nothing of aliases still
+reads every station's own name; it then shows a merged line's junction by the
+survivor's name.
 
 ### 5.9 `lines`
 
@@ -511,11 +515,11 @@ The rules:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. Station names are unique among the stations of each line, leaving out a
-   station that one of its aliases says the line knows by that alias: there
-   the station keeps its own name even when a station of that line has it
-   too (a converted 0.6.0 merge, or a merge, renames nothing for it). Section
-   names are unique in the project (compared exactly).
+8. No line shows two stations by one name. A line shows a station by the
+   name of the (latest) alias that names the line, when one does, else by
+   the station's own name (a converted 0.6.0 merge, or a merge, keeps every
+   line's own name this way and renames nothing). Section names are unique
+   in the project (compared exactly).
 9. Counters are above every id in use; the station and Section counters
    are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
    the ids are used up, and Stalagmight refuses an edit that needs another).
