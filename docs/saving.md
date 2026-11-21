@@ -562,6 +562,13 @@ So whether a copy has un-uploaded work is decided by the survey it holds
   arm when it names the new revision, the 304 arm). A change of BASE or of
   project drops it (`FileState::set_speleo_link`). A Restore marks the copy
   over a BASE it does not hold and records none.
+- **Dropped at every upload.** The digest holds only while SpeleoDB holds
+  nothing of this copy past BASE. An upload whose answer is lost may have
+  landed (#193), and a survey taken back to BASE's is then a change to upload,
+  not a clean copy, so the push drops the digest in the save it starts with
+  (`speleodb_upload`): a crash during the upload cannot bring it back, and only
+  a confirmed landing records one again. A refused upload leaves the copy
+  without one until its next confirmed upload or download.
 - **Read.** A marked copy whose survey on disk has that digest holds nothing
   to upload. The shared link probe (`probe_link`, `read_cache_file`) reads
   such a file whole and reports it clean, writing nothing: the listing behind
@@ -572,8 +579,9 @@ So whether a copy has un-uploaded work is decided by the survey it holds
   by hand or by Undo) clears it in the file it writes and tells the frontend
   (`CommandResult.speleodb_unpushed_cleared`). Only the mark is cleared:
   `last_edit_at` stays, and a landing sets the mark for an edit after the
-  push started instead of leaving it as it was, so a save that clears a stale
-  mark while an upload runs cannot leave the copy clean over the new BASE.
+  push started instead of leaving it as it was. A save while an upload runs
+  has no digest to clear the mark with (above), so the copy cannot end clean
+  over the new BASE.
 - **Unknown stays marked.** A copy without a digest (a 0.6.0 copy, a version
   2 copy installed before the digest existed) keeps today's behaviour, as
   does a survey that differs from BASE's in any byte the digest covers (an

@@ -564,7 +564,9 @@ saved). Such a copy opens and updates like a clean one, the listing, the
 close, quit and sign-out prompts and the replace guard all say it has no
 un-uploaded changes, and its open clears the flag. A copy whose base
 revision's survey is not known (one downloaded by an earlier version, or a
-restored revision) keeps its flag at its word. The mechanism is in
+restored revision) keeps its flag at its word, and so does a copy since an
+upload whose answer was lost: that upload may be SpeleoDB's latest revision, so
+an edit taken back after it is still uploaded. The mechanism is in
 [saving.md](saving.md#the-un-uploaded-mark-and-the-base-survey-digest).
 
 Uploading requires a nonblank change description, saves locally first, and verifies

@@ -290,6 +290,27 @@ test account in two app instances (two machines, or two config and cache roots),
 open the same project in both, upload from one, then upload from the other: the
 second shows the conflict prompt and SpeleoDB's history gains nothing.
 
+### Where the sync fixes meet
+
+The F1, F2, F4 and R3 fixes above each have their suite;
+`core/state/speleodb_fix_interactions_tests.rs` pins the paths where two of them
+decide the same outcome
+([the plan](plans/2026-11-21_speleodb-sync-fixes.md#how-the-fixes-meet)),
+against one loopback server that keeps a real history and lock holder and can
+lose its replies: an offline open of a copy whose mark is stale opens it clean,
+a saved edit still marked (`an_offline_open_decides_un_uploaded_work_by_content`);
+an edit taken back after an upload whose answer was lost is still uploaded, on
+top of our own revision, because every upload drops the BASE digest
+(`an_edit_taken_back_after_an_unconfirmed_upload_is_still_uploaded`); a stale
+mark is no conflict when another session of the account pushed
+(`a_stale_mark_is_no_conflict_when_another_session_of_the_account_pushed`); an
+exit upload refused for another session's revision keeps the lock through the
+quit's release and the sign-out, and one that replaced a revision hands the lock
+back once (`an_exit_upload_refused_for_another_sessions_revision_keeps_the_lock`,
+`an_exit_upload_that_replaced_a_revision_hands_the_lock_back_once`). Run them
+with
+`cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib speleodb_fix_interactions`.
+
 ### The live test
 
 The live test generates synthetic project files in temporary directories (the

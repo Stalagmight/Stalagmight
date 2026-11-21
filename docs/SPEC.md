@@ -85,7 +85,8 @@ verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Unuploaded changes are decided by content: a copy holding exactly the
 survey of the revision it is based on has none, whatever its mark says (an edit lost
 in a crash or closed with Don't save, or taken back and saved), and opens, updates
-and closes as a clean copy. Every upload (Save Changes, Done and the close, quit and
+and closes as a clean copy; after an upload whose answer was lost (it may have
+landed) the mark stands until an upload is confirmed. Every upload (Save Changes, Done and the close, quit and
 sign-out uploads) first checks that SpeleoDB's latest revision is still the copy's
 base, or moved only by this session's own upload whose answer was lost; any other
 revision there - including one from another session of the same account, which
