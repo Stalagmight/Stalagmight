@@ -2157,7 +2157,6 @@
       "alsoOnHint": "The other lines through this station. They share it, its Station ID and its comment, and each shows it by its own name. A Station ID beside a line is the one that line had here before a merge; Detach gives it back.",
       "otherLineName": "{{name}} (Station ID {{id}})",
       "otherLineId": "Station ID {{id}}",
-      "nameOnLine": "{{name}} (on {{line}})",
       "alsoKnownAs": "Also known as",
       "alsoKnownAsHint": "Stations merged into this one. They keep their old name and Station ID here, so you can find them from your notes.",
       "alias": "{{name}} (Station ID {{id}})",

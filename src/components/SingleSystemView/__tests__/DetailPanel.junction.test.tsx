@@ -101,10 +101,11 @@ describe('a junction each line shows by its own name', () => {
     useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(project!.lines, list) });
   });
 
-  it("names the slot by its line's name, with the line, and each other line by its own name", () => {
+  it("names the slot by its line's name, and each other line by its own name", () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 0) });
     render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:0 (on Side)');
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:0$/);
+    expect(screen.getByTestId('station-detail-line')).toHaveTextContent(/^Line:Side$/);
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
     // Main shows the junction by its own name and Station ID: nothing more to say.
     expect(screen.getByTestId(`station-detail-other-name-${MAIN}-1`)).toHaveTextContent(/^3a$/);
@@ -114,7 +115,7 @@ describe('a junction each line shows by its own name', () => {
 
   it('names each other line with its own name and Station ID (N-3)', () => {
     render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:3a (on Main)');
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
     const block = screen.getByTestId('station-detail-merged-with');
     expect(block).toHaveTextContent(/^Also on:/);
     expect(screen.getByTestId(`station-${SIDE}-0-link`)).toHaveTextContent('Side');
@@ -130,6 +131,21 @@ describe('a junction each line shows by its own name', () => {
     // Side's alias is on its "Also on" row, so "Also known as" has nothing left.
     expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
     expect(panel.textContent?.match(/Station ID 20/g)).toHaveLength(1);
+  });
+
+  // Demo finding V-8: the line was named three times, "3 (on Main Line)",
+  // "Line: Main Line" and a Connected "Line: Main Line" link. It is named
+  // once, by the Line row, which is the link. Injection: put "(on line)"
+  // back on the Name row, or the Line row back under Connected, and this
+  // fails.
+  it('names the station\'s line once, in the Line row, which links to it (V-8)', () => {
+    render(<DetailPanel />);
+    const panel = screen.getByTestId('station-detail');
+    expect(panel.textContent?.match(/Main(?! Line)/g)).toHaveLength(1);
+    const line = screen.getByTestId('station-detail-line');
+    expect(line).toHaveTextContent(/^Line:Main$/);
+    expect(line.querySelector(`[data-testid="line-${MAIN}-link"]`)).not.toBeNull();
+    expect(screen.getAllByTestId(`line-${MAIN}-link`)).toHaveLength(1);
   });
 
   it('shows no "(on line)" when every line shows the junction by one name', () => {

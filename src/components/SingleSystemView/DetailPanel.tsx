@@ -721,7 +721,23 @@ function StationDetail({ station }: { station: Station }) {
           {stationId !== null && (
             <DetailRow label={t('identity.stationId')} value={String(stationId)} testId="station-detail-id" />
           )}
-          <DetailRow label={t('detailPanel.labels.section')} value={lineName} testId="station-detail-line" />
+          {/* The station's line, named once (demo finding V-8): this row is
+              its link, so neither the Name row nor Connected repeats it. */}
+          <DetailRow
+            label={t('detailPanel.labels.section')}
+            value={
+              <DetailLink
+                type="line"
+                target={{ lineId }}
+                displayText={lineName}
+                onSelect={handleSelectLine}
+                onAnnounce={announceSelection}
+                onHoverStart={() => setHoveredLineId(lineId)}
+                onHoverEnd={() => setHoveredLineId(null)}
+              />
+            }
+            testId="station-detail-line"
+          />
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
@@ -813,18 +829,6 @@ function StationDetail({ station }: { station: Station }) {
                   />
                 </div>
               )}
-              <div className="flex justify-between">
-                <span className="text-text-secondary">{t('detailPanel.labels.section')}:</span>
-                <DetailLink
-                  type="line"
-                  target={{ lineId }}
-                  displayText={lineName}
-                  onSelect={handleSelectLine}
-                  onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredLineId(lineId)}
-                  onHoverEnd={() => setHoveredLineId(null)}
-                />
-              </div>
               <StationOtherLineShots mergedWith={station.merged_with} />
             </div>
           </div>
