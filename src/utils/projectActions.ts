@@ -20,6 +20,7 @@ import { useSpeleoStore } from '../store/speleoStore';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { confirmWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
 import { surfaceSaveFailure } from './saveFeedback';
+import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
 import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
 import {
@@ -80,11 +81,18 @@ export function newProjectGuarded(): void {
  * opens the save prompt; permission denials already surfaced their own guidance
  * dialog). The guard is `!success`, NOT "has an error string", so a failure
  * that carries no message is never mistaken for a clean save.
+ *
+ * A file made with a newer Stalagmight gets no save dialog: this version
+ * cannot write it anywhere without dropping what it does not understand (the
+ * backend refuses every destination, `READ_ONLY_FILE`), so the worded
+ * read-only notice says so before a path is picked for nothing (demo issue
+ * N-1).
  */
 export async function saveProjectAs(opts?: {
   closeAfterSave?: boolean;
 }): Promise<CommandResult | null> {
   const { openDialog } = useUIStore.getState();
+  if (useProjectStore.getState().project && notifyIfFileReadOnly()) return null;
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return null;

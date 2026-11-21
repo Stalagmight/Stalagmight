@@ -12,6 +12,8 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { selectFileReadOnly } from '../../hooks/useEditingBlocked';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import {
@@ -56,10 +58,25 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
 
   const speleoLink = useSpeleoStore((s) => s.link);
+  // A file made with a newer Stalagmight (demo issue N-1): this version saves
+  // it nowhere and adds nothing to it, so the rows that would try are off and
+  // say why (on hover, and a click shows the read-only notice). Open, Export
+  // and Close Project stay.
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
   return useMemo(() => {
     const sz = 18;
+    const readOnlyOff: Partial<AppMenuItem> = fileReadOnly
+      ? { disabled: true, disabledReason: t('editGate.readOnlyFileNotice') }
+      : {};
 
     const saveAndClose = async () => {
+      // Nothing of the user's can be unsaved in a read-only file: just close
+      // (its row is off, but a close must never route through a save that can
+      // only be refused).
+      if (useProjectStore.getState().fileReadOnlyReason !== null) {
+        await handleCloseProject();
+        return;
+      }
       // Pass the close intent so a deferred Save-As (the overwrite-confirm dialog)
       // still closes the project after it saves. A direct save returns the result
       // and we close here; a save routed to the overwrite dialog returns null and
@@ -97,6 +114,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         // Tag the save with the toolbar/menu entry point (the old toolbar Save
         // button did this; the menu must too, or save_project loses its source).
         onClick: () => { setSource('toolbar'); void onSave(); },
+        ...readOnlyOff,
       },
       {
         id: 'project-menu-save-as',
@@ -109,6 +127,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.save,
         action: 'save_as',
         onClick: () => { void handleSaveProjectAs(); },
+        // Off too: a copy is written by this version's encoder, which would
+        // drop what the newer version stored (the backend refuses it).
+        ...readOnlyOff,
       },
       {
         id: 'project-menu-save-and-close',
@@ -116,6 +137,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         icon: <SaveIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.save,
         onClick: () => { void saveAndClose(); },
+        ...readOnlyOff,
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
       // Import means "add MNemo data to THIS project" (#508), so it offers a
@@ -123,9 +145,13 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       // Switching projects stays on the Open row above, which keeps the full
       // unified picker and its replacement guards. No editingBlocked disable:
       // the router rejects exactly the additive DMP case, with a tailored
-      // message naming the read-only cause.
-      importMenuItem(t),
-      ...mnemoImportMenuItem(t, { onOpen: () => openDialog('mnemo-import') }),
+      // message naming the read-only cause. A read-only FILE is the exception:
+      // nothing can be added to it whatever is picked, and no switch fixes it.
+      { ...importMenuItem(t), ...readOnlyOff },
+      ...mnemoImportMenuItem(t, { onOpen: () => openDialog('mnemo-import') }).map((item) => ({
+        ...item,
+        ...readOnlyOff,
+      })),
       {
         id: 'toolbar-export-button',
         label: t('common.actions.export'),
@@ -196,5 +222,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
+  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, fileReadOnly]);
 }

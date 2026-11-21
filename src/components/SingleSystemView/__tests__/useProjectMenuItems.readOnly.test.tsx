@@ -8,6 +8,11 @@
  * a greyed-out row can say (pinned in openOrImport.test.ts). Narrowing the row
  * to `.dmp` (#508) does not revive the gate: the guard still owns that call.
  * These pins keep a picker-side disable from quietly coming back.
+ *
+ * The one exception is a FILE made with a newer Stalagmight (demo issue N-1):
+ * no switch or lock fixes it, so the row is off there and says why
+ * (`useProjectMenuItems.readOnlyFile.test.tsx`). None of the states below is
+ * that case.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';

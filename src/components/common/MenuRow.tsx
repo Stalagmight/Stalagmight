@@ -11,6 +11,7 @@
  * button attributes in.
  */
 import { forwardRef, useId, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
+import { Tooltip } from './Tooltip';
 
 /** The button base classes shared by every menu row. */
 export const MENU_ROW_BASE_CLASS =
@@ -29,6 +30,11 @@ export const MENU_ROW_HINT_WRAP_CLASS = 'text-xs leading-4 line-clamp-3 whitespa
  *  extra a hint adds (`h-4`). */
 export const MENU_ROW_HEIGHT_PX = 36;
 export const MENU_ROW_HINT_HEIGHT_PX = 16;
+
+/** How long the pointer rests on a disabled row before its reason shows: the
+ *  pointer crosses several rows on its way down a menu, and a bubble that
+ *  opened on each would flicker. */
+export const MENU_ROW_REASON_DELAY_MS = 300;
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   'data-testid'?: string;
@@ -53,6 +59,15 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Let the hint wrap to its own height (up to three lines) instead of the
    *  fixed single line: only for rows that never re-render with a new hint. */
   hintWraps?: boolean;
+  /**
+   * Why a read-only state turned this `disabled` row off (demo finding N-12),
+   * shown in the app's tooltip on hover. Such a row is `aria-disabled`, not
+   * `disabled`: a `disabled` button gets no click (so the menu could not say
+   * why on one), and WebKitGTK never draws its native `title` tooltip. The
+   * menu must therefore turn a click on it into the notice, never the action.
+   * Ignored on an enabled row.
+   */
+  reason?: string | undefined;
 }
 
 /**
@@ -61,7 +76,7 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * onClick, disabled, data-testid, aria-*, onMouseEnter, …) pass straight through.
  */
 export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function MenuRow(
-  { label, icon, showIcons, iconStyle, className, children, hint, hintWraps, 'data-testid': testId, ...buttonProps },
+  { label, icon, showIcons, iconStyle, className, children, hint, hintWraps, reason, 'data-testid': testId, ...buttonProps },
   ref,
 ) {
   const hintId = useId();
@@ -73,11 +88,14 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
   // With a hint, the accessible name stays the label and the hint describes it.
   const hintProps =
     hint === undefined ? {} : { 'aria-label': buttonProps['aria-label'] ?? label, 'aria-describedby': hintId };
-  return (
+  const explained = buttonProps.disabled === true && reason !== undefined;
+  const button = (
     <button
       {...buttonProps}
       {...hintProps}
       ref={ref}
+      disabled={explained ? undefined : buttonProps.disabled}
+      aria-disabled={explained ? true : buttonProps['aria-disabled']}
       data-testid={testId}
       className={`${MENU_ROW_BASE_CLASS}${className ? ` ${className}` : ''}`}
     >
@@ -106,6 +124,18 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
       )}
       {children}
     </button>
+  );
+  if (!explained) return button;
+  return (
+    <Tooltip
+      content={reason}
+      openDelayMs={MENU_ROW_REASON_DELAY_MS}
+      role="none"
+      className="!flex w-full"
+      {...(testId ? { tooltipTestId: `${testId}-reason` } : {})}
+    >
+      {button}
+    </Tooltip>
   );
 });
 

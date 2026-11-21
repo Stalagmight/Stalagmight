@@ -23,6 +23,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { formatShortcut, isMac } from '../../utils/shortcuts';
+import { showBlockedNotice } from '../../utils/blockedNotice';
 import { IconButton } from './Button';
 import { MenuRow, MenuSeparator } from './MenuRow';
 import { MenuIcon, ChevronRightIcon, CheckIcon } from './icons';
@@ -41,6 +42,11 @@ export interface AppMenuItem {
   action?: string;
   onClick?: () => void;
   disabled?: boolean;
+  /** Why the row is disabled, for a row a read-only state turned off: shown in
+   *  the app's tooltip on hover, and a click shows it as the blocked-edit
+   *  notice (`showBlockedNotice`) instead of doing nothing (demo finding N-12).
+   *  Ignored while the row is enabled. */
+  disabledReason?: string;
   separator?: boolean;
   /** When set, renders an on/off check on the right (a toggle item). */
   checked?: boolean;
@@ -436,7 +442,10 @@ export function AppMenu({
         aria-expanded={hasSubmenu ? openSubmenuId === item.id : undefined}
         aria-disabled={item.disabled || undefined}
         onClick={() => {
-          if (item.disabled) return;
+          if (item.disabled) {
+            if (item.disabledReason !== undefined) showBlockedNotice(item.disabledReason);
+            return;
+          }
           if (hasSubmenu) {
             if (openSubmenuId === item.id) closeSubmenu();
             else openSubmenu(item);
@@ -462,6 +471,7 @@ export function AppMenu({
         icon={item.icon}
         showIcons={showIcons}
         iconStyle={item.iconColor ? { color: item.iconColor } : undefined}
+        reason={item.disabled ? item.disabledReason : undefined}
         className={variantClass}
       >
         {hasSubmenu ? (

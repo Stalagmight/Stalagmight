@@ -6,6 +6,7 @@ import { saveProjectAs } from './projectActions';
 import { saveOpenProjectLocally } from './saveOpenProjectLocally';
 import { canResumeSpeleoEditing } from './speleoPermission';
 import { TOAST_KEYS } from './toastKeys';
+import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
 import i18n from '../i18n';
 
 /** The open linked project can be uploaded right now: we hold the lock, signed in, with write access. */
@@ -36,12 +37,18 @@ function notUploadedReason(link: SpeleoLinkState): string {
  * - otherwise the user is told the work is on this computer and why it was not
  *   uploaded, and the local save's result is returned (so Save and Close goes on
  *   to close).
+ *
+ * A file made with a newer Stalagmight is never saved here (the backend would
+ * refuse it, `READ_ONLY_FILE`): the worded read-only notice says why, as it
+ * does for a typed key, and nothing is returned (demo issue N-1). Save and
+ * Close of such a file closes without saving before it gets here.
  */
 export async function dispatchProjectSave(opts?: { closeAfterSave?: boolean }) {
   const state = useProjectStore.getState();
   const ui = useUIStore.getState();
   const link = useSpeleoStore.getState().link;
   if (!state.project) return null;
+  if (notifyIfFileReadOnly()) return null;
   if (link) {
     const pending = getUploadContinuation(state.project.file_path);
     const closeAfterSave = opts?.closeAfterSave === true || pending?.closeAfterSave === true;
