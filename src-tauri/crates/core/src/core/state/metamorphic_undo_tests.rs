@@ -2195,7 +2195,64 @@ fn pair_combine_end_to_end_is_reverse_then_combine(
     Some(found)
 }
 
+/// How far a placement coordinate `start` may end from itself after
+/// `fl(fl(start + d) - d)`, the round trip `MoveLine(+d)` then `MoveLine(-d)`
+/// makes of it (`ops_move.rs` adds the offset to every placement of the rigid
+/// group). Each IEEE sum is correctly rounded, so the result is within
+/// `(ulp(sum) + ulp(result)) / 2` of `start`; an ulp of `v` is at most
+/// `EPSILON * |v|`, and both values are at most `|start| + |d|` (to first
+/// order), so twice `EPSILON * (|start| + |d|)` bounds it with room to spare.
+/// The smallest normal is the floor for a subnormal ulp.
+fn round_trip_bound(start: f64, offset: f64) -> f64 {
+    2.0 * f64::EPSILON * (start.abs() + offset.abs()) + f64::MIN_POSITIVE
+}
+
+/// Every placement of `now` that is not `start`'s own back from a round trip
+/// by `offset` (same stations in the same order, each coordinate within
+/// [`round_trip_bound`]).
+fn placements_not_back(start: &Project, now: &Project, offset: Coordinates) -> Vec<String> {
+    if start.placements.len() != now.placements.len()
+        || start
+            .placements
+            .iter()
+            .zip(&now.placements)
+            .any(|(was, is)| was.station != is.station)
+    {
+        return vec![format!(
+            "the placements are not the ones it started with: {:?} vs {:?}",
+            start.placements, now.placements
+        )];
+    }
+    let mut out = Vec::new();
+    for (was, is) in start.placements.iter().zip(&now.placements) {
+        for (axis, from, to, d) in [("x", was.x, is.x, offset.x), ("y", was.y, is.y, offset.y)] {
+            if (to - from).abs() > round_trip_bound(from, d) {
+                out.push(format!(
+                    "placement of station {} came back {:e} m off on {axis} ({from} vs {to}), \
+                     past the round trip's rounding {:e} m",
+                    was.station,
+                    to - from,
+                    round_trip_bound(from, d)
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// `MoveLine(+d)` then `MoveLine(-d)` against doing nothing.
+///
+/// The promise holds to the rounding of the translation and no better: a
+/// placement `p` comes back as `fl(fl(p + d) - d)`, which IEEE arithmetic
+/// does not make `p` ([`round_trip_bound`]). Twelve significant digits hide
+/// that rounding only while `p` is not small against `d`: on farm seeds
+/// 17017904 (no closures) and 17505032, 17506797, 17516558 (closures) a
+/// placement straddled the twelfth digit, `0.001` back as
+/// `0.000999999999999` after a move of about 15 m. So the placements are
+/// asserted against that bound, each against its own start, and everything
+/// else is compared strictly as before: the rest of the stored survey, the
+/// integrity verdict, the Computed View (within 1e-6 m) and the allocators.
+/// Undone, the twin is its start to the bit (the unwind below).
 fn pair_move_out_and_back_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
     let targets = read_targets(&twins.left);
     let &(line_id, _) = pick(rng, &targets.lines)?;
@@ -2217,7 +2274,23 @@ fn pair_move_out_and_back_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Co
             back.error
         )));
     }
-    let mut found = twins.compare(Mask::Strict);
+    let start = observe(&twins.left, Mask::Strict);
+    let mut now = observe(&twins.right, Mask::Strict);
+    let not_back = placements_not_back(&start.project, &now.project, offset);
+    if not_back.is_empty() {
+        // Back within the round trip's rounding: the rest strictly.
+        if let (Some(was), Some(is)) = (
+            start.stored.get("placements"),
+            now.stored.get_mut("placements"),
+        ) {
+            *is = was.clone();
+        }
+    }
+    let mut found = Comparison {
+        problems: not_back,
+        shapes: BTreeMap::new(),
+    };
+    found.absorb(differences(&start, &now, None, Allocators::Equal));
     found.absorb(
         twins
             .unwind_and_compare(Mask::Strict)
@@ -2582,6 +2655,102 @@ fn the_metamorphic_engine_is_deterministic() {
             "seed {seed} did not replay identically"
         );
     }
+}
+
+/// Every problem `pair` reports on the given farm seeds (each run as the
+/// sweep runs it, four repeats), with how many instances it built.
+fn pinned_seed_problems(pair: &str, seeds: &[(u32, bool)]) -> (usize, Vec<String>) {
+    let mut built = 0;
+    let mut problems = Vec::new();
+    for &(seed, closures) in seeds {
+        let outcomes = run_pairs(seed, 4, closures, GATE_PRELUDE);
+        let outcome = &outcomes[pair];
+        built += outcome.built;
+        problems.extend(outcome.problems.iter().cloned());
+    }
+    (built, problems)
+}
+
+/// Farm seeds of reverse-twice-is-identity (sg-metamorphic 17003130 and
+/// 17003411; with closures 17500744 and 17519186): a shot whose two readings
+/// are typed exactly opposite but one ulp short of it in f64 (`158.1` /
+/// `338.1`). The reverse took it for an ordinary pair, so its bearing did not
+/// turn, and the second reverse turned it the other way: the line came back
+/// metres off with that shot's readings exchanged (module docs of
+/// `models::shot_reverse`; declared fix, plan Deviations T4-R1). Injection:
+/// the old bit-exact antipodal test fails all four.
+#[test]
+fn a_shot_typed_exactly_opposite_reverses_twice_to_itself() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) = pinned_seed_problems(
+        "reverse-twice-is-identity",
+        &[
+            (17_003_130, false),
+            (17_003_411, false),
+            (17_500_744, true),
+            (17_519_186, true),
+        ],
+    );
+    assert!(
+        built >= 4,
+        "the pinned seeds built only {built} reverse pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// Farm seeds of move-out-and-back-is-identity (sg-metamorphic 17017904;
+/// with closures 17505032, 17506797 and 17516558): a placement came back
+/// from `MoveLine(+d)` then `MoveLine(-d)` within the rounding of the
+/// translation, and twelve significant digits straddled it (the pair's
+/// docs). Injection: comparing the placements strictly fails all four.
+#[test]
+fn a_move_out_and_back_lands_within_its_rounding() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) = pinned_seed_problems(
+        "move-out-and-back-is-identity",
+        &[
+            (17_017_904, false),
+            (17_505_032, true),
+            (17_506_797, true),
+            (17_516_558, true),
+        ],
+    );
+    assert!(
+        built >= 4,
+        "the pinned seeds built only {built} move pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// The bound is not vacuous: a placement one micrometre off after the round
+/// trip is reported, one rounding error off is not.
+#[test]
+fn a_placement_off_by_more_than_the_rounding_is_reported() {
+    let _config = crate::test_helpers::isolated_config();
+    let twins = Twins::build(17_017_904, false, GATE_PRELUDE).expect("twins");
+    let start = twins.left.get_project_state().expect("a project");
+    assert!(!start.placements.is_empty(), "the seed has a placement");
+    let offset = Coordinates::new(15.123, -7.5, 0.0);
+    let mut now = start.clone();
+    let p = &mut now.placements[0];
+    p.x = (p.x + offset.x) - offset.x;
+    p.y = (p.y + offset.y) - offset.y;
+    assert!(
+        placements_not_back(&start, &now, offset).is_empty(),
+        "one round trip's rounding"
+    );
+    now.placements[0].x += 1e-6;
+    assert_eq!(placements_not_back(&start, &now, offset).len(), 1);
 }
 
 /// The SWEEP: the same pairs at a scale a gate cannot afford, and the tool
