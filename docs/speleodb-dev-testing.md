@@ -136,21 +136,36 @@ minimum-client gate for projects whose HEAD is version 2). Until then a push
 fails with one dedicated error: the project stays dirty, BASE is unchanged and
 the editing lock is held, as after any failed push.
 
-What such a server answers is not recorded here (the SDK's OpenAPI declares
-400, 403, 404, 406, 415 and 500 for the upload), so the push reads the status,
-never the server's text (`contract::upload_refusal`): a 400, 406, 415 or 422
-to a version 2 body, or a 5xx other than 503 and 504 after which the history
-(read right after it) shows nothing landed, is `UploadFormatRefused`. Every
-push surface shows its one line, "This SpeleoDB server does not accept
-projects saved by this version yet"; a 5xx after a commit landed, a 503 and a
-504 stay the ambiguous "could not be confirmed". Publish to such a server
-creates the project, reports `upload_format_refused` (the server project is
-empty, the local copy unchanged) and never creates a second one.
+SpeleoDB's upload view answers a refused file with a 400 whose `error` is
+"An error occurred processing the file: [...]" around the file processor's
+reason. A server without version 2 refuses the JSON part's type ("Invalid
+file type received: `application/json`, expected one of:
+['application/octet-stream', 'application/vnd.sqlite3']") or, for a body
+sent as another type, its content ("Invalid STALAGMIGHT file: expected a
+valid SQLite database."); a server that reads version 2 refuses a file it
+finds invalid with its own reason ("Invalid STALAGMIGHT version 2 file:
+..."). A status alone cannot tell the two apart, so the push reads the
+status and that reason (`contract::upload_refusal`, review finding O3): a
+400, 406 or 422 to a version 2 body whose reason names the file type, the
+media type or SQLite, any 415, or a 5xx other than 503 and 504 whose reason
+names them and after which the history (read right after it) shows nothing
+landed, is `UploadFormatRefused`. Every push surface shows its one line,
+"This SpeleoDB server does not accept projects saved by this version yet".
+A refusal with any other reason shows the server's reason, framed like any
+failed upload; a 5xx with another reason, a 5xx after a commit landed, a 503
+and a 504 stay the ambiguous "could not be confirmed". An instance running
+with Django's DEBUG on answers refusals with a 500 debug page, which names
+no reason the client can read, so a manual test there sees "could not be
+confirmed". Publish to a server without version 2 creates the project,
+reports `upload_format_refused` (the server project is empty, the local copy
+unchanged) and never creates a second one.
 `core/state/speleodb_push_v2_tests.rs` pins this against a loopback server
+that answers with SpeleoDB's bodies
 (`a_confirmed_push_uploads_v2_json_and_is_durable_at_once`,
 `every_refusal_of_the_content_is_the_one_format_error_on_every_push`,
 `a_server_error_that_landed_nothing_is_the_same_refusal`,
 `a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed`,
+`a_refusal_with_the_servers_own_reason_shows_that_reason`,
 `a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked`,
 `publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice`,
 `clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk`). A manual test

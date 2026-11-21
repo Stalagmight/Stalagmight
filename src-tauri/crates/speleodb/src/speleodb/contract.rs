@@ -12,7 +12,10 @@
 //! `map_status` reads the parsed message string. The `SpeleoDbError::Status`
 //! variant stays `{status, message}` with no action field; the action is derived
 //! here, at the IPC boundary, where the endpoint context is known, so the error
-//! enum is not coupled to call-site context.
+//! enum is not coupled to call-site context. The one reader of the message is
+//! [`upload_refusal`], which tells a server that does not take version 2 from
+//! a refusal with the server's own reason (review finding O3); it picks the
+//! error, not the action.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -212,26 +215,45 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 
 /// What a refused upload of a version 2 file says about the format (plan 12.1).
 ///
-/// A server that does not take version 2 yet refuses this build's every push.
-/// What it answers is not recorded anywhere this repository can check: the
-/// SDK's OpenAPI (speleodb-api 0.9.0) declares 400, 403, 404, 406, 415 and 500
-/// for the upload, and a malformed artifact was verified live to be a 400. So
-/// the push reads the status, never the server's text (D-186), and only for a
-/// body it knows is a version 2 file:
+/// A server that does not take version 2 yet refuses this build's every push,
+/// and once servers take it, a refusal is the server's verdict on this file.
+/// The two read the same from the status alone (both are a 400 from SpeleoDB),
+/// so the push reads the status AND the server's reason (`message`, the
+/// `error` / `detail` text of the reply), and only for a body it knows is a
+/// version 2 file. SpeleoDB's upload view answers a refused file with a 400
+/// whose `error` is "An error occurred processing the file: [...]" around
+/// the file processor's reason (`speleodb/api/v2/views/file.py`):
 ///
-/// - [`UploadRefusal::Content`]: 400, 406, 415 and 422 refuse the request as
-///   sent. Every other cause of those this app can produce is checked before a
-///   byte is sent (the size limit, the commit message), so for a version 2 body
-///   the content is what was refused. Nothing landed.
-/// - [`UploadRefusal::IfNotLanded`]: a server error (5xx), except 503 and 504.
-///   It refuses the file only when nothing landed, which the push checks in the
-///   server's history before it says so; a 5xx after a commit stays the
-///   ambiguous "could not be confirmed".
-/// - [`UploadRefusal::Other`]: everything else keeps its own meaning: 401
-///   sign-in, 403 fence, 404 gone, 304 up to date, 413 or 429 from a proxy, and
-///   503 (try later) and 504 (still working: it may yet land).
+/// - a server without version 2 refuses the JSON part's type ("Invalid file
+///   type received: `application/json`, expected one of: [...]", the list
+///   naming the SQLite types), or, for a body sent as another type, its
+///   content ("Invalid STALAGMIGHT file:
+///   expected a valid SQLite database."; SQLite itself says "file is not a
+///   database");
+/// - a server that reads version 2 refuses a file it finds invalid with its
+///   own reason ("Invalid STALAGMIGHT version 2 file: `conventions` must be
+///   exactly the version 2 conventions."), which the user is shown as it is.
 ///
-/// Pure, like [`map_status`]; the action of the error is unchanged by it.
+/// Hence:
+///
+/// - [`UploadRefusal::Content`]: a 400, 406 or 422 whose reason names the file
+///   type or SQLite ([`names_the_file_format`]), and any 415 (the media type
+///   refused, by definition). Every other cause of those this app can produce
+///   is checked before a byte is sent (the size limit, the commit message), so
+///   for a version 2 body the format is what was refused. Nothing landed.
+/// - [`UploadRefusal::IfNotLanded`]: a server error (5xx, except 503 and 504)
+///   whose reason names the format. It refuses the file only when nothing
+///   landed, which the push checks in the server's history before it says so;
+///   a 5xx after a commit stays the ambiguous "could not be confirmed".
+/// - [`UploadRefusal::Other`]: everything else keeps its own meaning: a
+///   refusal with another reason shows that reason, a 5xx without one stays
+///   unconfirmed, 401 is sign-in, 403 the fence, 404 gone, 304 up to date, 413
+///   or 429 a proxy's limit, and 503 (try later) and 504 (still working: it
+///   may yet land).
+///
+/// Pure, like [`map_status`]: it chooses between two errors, and the action of
+/// each is unchanged by it (the format refusal is Fatal; the server's own
+/// reason keeps the action `map_status` gives its status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadRefusal {
     Content,
@@ -239,15 +261,30 @@ pub enum UploadRefusal {
     Other,
 }
 
-/// See [`UploadRefusal`].
+/// See [`UploadRefusal`]. `message` is the server's reason as the client
+/// parsed it (`SpeleoDbError::Status::message`; "HTTP <status>" when the
+/// reply had none).
 #[must_use]
-pub fn upload_refusal(status: u16) -> UploadRefusal {
+pub fn upload_refusal(status: u16, message: &str) -> UploadRefusal {
     match status {
-        400 | 406 | 415 | 422 => UploadRefusal::Content,
+        415 => UploadRefusal::Content,
+        _ if !names_the_file_format(message) => UploadRefusal::Other,
+        400 | 406 | 422 => UploadRefusal::Content,
         503 | 504 => UploadRefusal::Other,
         500..=599 => UploadRefusal::IfNotLanded,
         _ => UploadRefusal::Other,
     }
+}
+
+/// Whether a refusal's reason says the server does not take the file's format:
+/// it names the file (or media) type it refused, or the SQLite database it
+/// expected (see [`UploadRefusal`]). Case-insensitive. A server that reads
+/// version 2 names neither for a version 2 body.
+#[must_use]
+pub fn names_the_file_format(message: &str) -> bool {
+    const SIGNS: [&str; 4] = ["file type", "media type", "sqlite", "not a database"];
+    let message = message.to_lowercase();
+    SIGNS.iter().any(|sign| message.contains(sign))
 }
 
 /// Convert a [`SpeleoDbError`] into the IPC [`SpeleoErrorDto`], deriving the
@@ -575,23 +612,79 @@ mod tests {
         );
     }
 
+    /// What SpeleoDB answers (see `UploadRefusal`): a server without version
+    /// 2 names the type it refused or the SQLite it expected; one that reads
+    /// version 2 gives its own reason.
+    const NO_V2_TYPE: &str = "An error occurred processing the file: [\"Invalid file type \
+        received: `application/json`, expected one of: ['application/octet-stream', \
+        'application/vnd.sqlite3']\"]";
+    const NO_V2_SQLITE: &str = "An error occurred processing the file: ['Invalid STALAGMIGHT \
+        file: expected a valid SQLite database.']";
+    const NO_V2_SERVER_ERROR: &str =
+        "There has been a problem committing the files: file is not a database";
+    const V2_REASON: &str = "An error occurred processing the file: ['Invalid STALAGMIGHT \
+        version 2 file: `conventions` must be exactly the version 2 conventions.']";
+
+    /// Review finding O3 (package U5): a refusal is the format refusal only
+    /// when the server's reason says so; any other reason is the server's
+    /// own, with any status, so a real validation error never reads as a
+    /// version problem. Injection: answer `Content` for a 400 whatever the
+    /// reason (the status-only rule) and the `V2_REASON` rows fail.
     #[test]
-    fn upload_refusal_reads_the_status_only() {
-        use super::{upload_refusal, UploadRefusal};
-        for status in [400, 406, 415, 422] {
-            assert_eq!(upload_refusal(status), UploadRefusal::Content, "{status}");
+    fn upload_refusal_reads_the_status_and_the_servers_reason() {
+        use super::{names_the_file_format, upload_refusal, UploadRefusal};
+        for reason in [NO_V2_TYPE, NO_V2_SQLITE, NO_V2_SERVER_ERROR] {
+            assert!(names_the_file_format(reason), "{reason}");
         }
+        for status in [400, 406, 415, 422] {
+            for reason in [NO_V2_TYPE, NO_V2_SQLITE] {
+                assert_eq!(
+                    upload_refusal(status, reason),
+                    UploadRefusal::Content,
+                    "{status} {reason}"
+                );
+            }
+        }
+        // The server's own reason, or none at all, is not a format refusal...
+        for status in [400, 406, 422] {
+            for reason in [
+                V2_REASON,
+                "HTTP 400",
+                "Synthetic refusal of the uploaded file.",
+            ] {
+                assert_eq!(
+                    upload_refusal(status, reason),
+                    UploadRefusal::Other,
+                    "{status} {reason}"
+                );
+            }
+        }
+        // ...except a 415, which refuses the media type by definition.
+        assert_eq!(upload_refusal(415, V2_REASON), UploadRefusal::Content);
+        assert_eq!(upload_refusal(415, "HTTP 415"), UploadRefusal::Content);
         for status in [500, 501, 502, 505, 599] {
             assert_eq!(
-                upload_refusal(status),
+                upload_refusal(status, NO_V2_SERVER_ERROR),
                 UploadRefusal::IfNotLanded,
                 "{status}"
             );
+            for reason in [V2_REASON, "HTTP 500"] {
+                assert_eq!(
+                    upload_refusal(status, reason),
+                    UploadRefusal::Other,
+                    "{status} {reason}"
+                );
+            }
         }
-        // Their own meanings: sign-in, fence, gone, up to date, a proxy's size or
-        // rate limit, try later, and a gateway timeout that may still land.
+        // Their own meanings whatever the reason: sign-in, fence, gone, up to
+        // date, a proxy's size or rate limit, try later, and a gateway timeout
+        // that may still land.
         for status in [304, 401, 403, 404, 409, 413, 429, 503, 504] {
-            assert_eq!(upload_refusal(status), UploadRefusal::Other, "{status}");
+            assert_eq!(
+                upload_refusal(status, NO_V2_TYPE),
+                UploadRefusal::Other,
+                "{status}"
+            );
         }
     }
 

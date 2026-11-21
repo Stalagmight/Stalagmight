@@ -20,12 +20,14 @@
 //! the next save writes it (`speleodb_record_landing`).
 //!
 //! Rollout (plan 12.1): a SpeleoDB server that still refuses non-SQLite uploads
-//! answers the version 2 upload with a refusal of the content (or a server error
-//! after which nothing landed). The upload recognises it by status
+//! answers the version 2 upload with a refusal that names the file type or the
+//! SQLite it expected (or a server error saying so, after which nothing
+//! landed). The upload recognises it by status and reason
 //! (`contract::upload_refusal`) and fails with one error wherever the push ran,
 //! `SpeleoDbError::UploadFormatRefused` ("This SpeleoDB server does not accept
-//! projects saved by this version yet"); the project stays dirty and the lock
-//! stays held, as after any failed push.
+//! projects saved by this version yet"); any other refusal shows the server's
+//! own reason (review finding O3). Either way the project stays dirty and the
+//! lock stays held, as after any failed push.
 //!
 //! Also here: the two escape hatches a push offers when the copy is NOT something
 //! the user wants to publish - `speleodb_discard_changes` and the unwound-copy
@@ -1056,6 +1058,7 @@ impl AppState {
                         insecure_http,
                         project_id,
                         *status,
+                        message,
                     ) {
                         tracing::warn!(
                             status,
@@ -1203,12 +1206,14 @@ impl AppState {
         }
     }
 
-    /// Plan 12.1: does the refused upload of a version 2 file (`status`) mean the
-    /// server does not take that format? A refusal of the content does
-    /// ([`contract::UploadRefusal::Content`]). A server error does only when the
-    /// upload certainly did not land ([`sync::upload_not_landed`] over the history
-    /// read right after it): a 5xx after a commit is the ambiguous case the next
-    /// push recovers by ancestry, so it stays "could not be confirmed".
+    /// Plan 12.1: does the refused upload of a version 2 file (`status`, the
+    /// server's reason `message`) mean the server does not take that format? A
+    /// refusal that names the format does ([`contract::UploadRefusal::Content`]);
+    /// one with another reason is that reason, shown as the server gave it. A
+    /// server error naming the format does only when the upload certainly did
+    /// not land ([`sync::upload_not_landed`] over the history read right after
+    /// it): a 5xx after a commit is the ambiguous case the next push recovers by
+    /// ancestry, so it stays "could not be confirmed".
     ///
     /// The history read is a direct GET, NOT through the auth handler, like the
     /// pre-push name fold: a spurious 401 on this follow-up must not drop the
@@ -1220,8 +1225,9 @@ impl AppState {
         insecure_http: bool,
         project_id: &str,
         status: u16,
+        message: &str,
     ) -> bool {
-        match contract::upload_refusal(status) {
+        match contract::upload_refusal(status, message) {
             contract::UploadRefusal::Content => true,
             contract::UploadRefusal::Other => false,
             contract::UploadRefusal::IfNotLanded => {
