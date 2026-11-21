@@ -97,6 +97,34 @@ export function tabTarget(
 }
 
 /**
+ * {@link tabTarget}, but also skipping cells `accept` refuses (a column that does
+ * not apply to that row, a group-header row). Keeps stepping in Tab order until
+ * an accepted cell; null when there is none before the grid edge (Tab then stays
+ * put rather than landing on a cell it should have skipped). `maxSteps` bounds a
+ * pathological run of refused cells.
+ */
+export function tabTargetWhere(
+  row: number,
+  colIdx: number,
+  dir: 1 | -1,
+  writableCols: number[],
+  rowCount: number,
+  accept: (row: number, colIdx: number) => boolean,
+  maxSteps = 200_000,
+): { row: number; colIdx: number } | null {
+  let cur = { row, colIdx };
+  for (let i = 0; i < maxSteps; i++) {
+    const t = tabTarget(cur.row, cur.colIdx, dir, writableCols, rowCount);
+    if (!t) return null;
+    if (accept(t.row, t.colIdx)) return t;
+    // Clamped at the grid's first/last writable cell: nowhere left to go.
+    if (t.row === cur.row && t.colIdx === cur.colIdx) return null;
+    cur = t;
+  }
+  return null;
+}
+
+/**
  * Cycle the active cell WITHIN a fixed selection rectangle (Google-Sheets
  * Tab/Enter-in-selection). `horizontal` = Tab order (row-major, left→right then
  * wrap to next row); `!horizontal` = Enter order (column-major, top→bottom then
@@ -139,6 +167,16 @@ export interface PasteTarget {
  *    auto-growing past the selection.
  *  - Cells past the last row / last visible column are clipped (counted, never
  *    create new rows/columns).
+ *
+ * `rowTakes(row, c0, c1)` (optional): false for a row where NONE of the
+ * visible columns c0..c1 applies (a station row under a shot-only column, a
+ * group band). Such a row is passed over: it consumes no clipboard line and
+ * yields no target, so an external column of values lands on the rows that can
+ * hold them instead of dropping every other value into a gap. The tiling test
+ * counts only the rows that take a column. A row where SOME columns apply
+ * still consumes a line (positional within the row). Rows past the end (a
+ * growing paste) always take. The grid passes it for an EXTERNAL paste only:
+ * its own copy stash already carries the gaps (`NOT_APPLICABLE`) and maps 1:1.
  */
 export function placePaste(
   clip: string[][],
@@ -149,34 +187,56 @@ export function placePaste(
    *  grows its row set to fit a paste (provisional/draft rows). Columns are
    *  clipped either way - the column set is fixed. */
   growRows = false,
+  rowTakes?: (row: number, c0: number, c1: number) => boolean,
 ): { targets: PasteTarget[]; clipped: number } {
   const ch = clip.length;
   const cw = clip.reduce((m, r) => Math.max(m, r.length), 0);
   if (ch === 0 || cw === 0) return { targets: [], clipped: 0 };
 
-  const selH = rect.r1 - rect.r0 + 1;
+  const takes = (r: number, c1: number): boolean =>
+    !rowTakes || r >= rowCount || rowTakes(r, rect.c0, Math.min(c1, colCount - 1));
+  // The selection's rows that take one of its columns (all of them when every
+  // row takes): what a fill or a tile covers.
+  const selRows: number[] = [];
+  for (let r = rect.r0; r <= rect.r1; r++) if (takes(r, rect.c1)) selRows.push(r);
+  const selH = selRows.length;
   const selW = rect.c1 - rect.c0 + 1;
   const single = ch === 1 && cw === 1;
   const tiles =
     !single &&
+    selH > 0 &&
     selH % ch === 0 &&
     selW % cw === 0 &&
     (selH > ch || selW > cw);
-
-  const destRows = single || tiles ? selH : ch;
   const destCols = single || tiles ? selW : cw;
 
-  const targets: PasteTarget[] = [];
+  // Grid row -> clipboard line, in paste order.
+  const lines: { r: number; i: number }[] = [];
   let clipped = 0;
-  for (let i = 0; i < destRows; i++) {
+  if (single || tiles) {
+    selRows.forEach((r, k) => lines.push({ r, i: k % ch }));
+  } else {
+    let r = rect.r0;
+    for (let i = 0; i < ch; r++) {
+      if (r >= rowCount && !growRows) {
+        clipped += (ch - i) * destCols; // past the last row: the rest clips
+        break;
+      }
+      if (!takes(r, rect.c0 + destCols - 1)) continue; // a gap row: no line
+      lines.push({ r, i });
+      i++;
+    }
+  }
+
+  const targets: PasteTarget[] = [];
+  for (const { r, i } of lines) {
     for (let j = 0; j < destCols; j++) {
-      const r = rect.r0 + i;
       const c = rect.c0 + j;
-      const raw = single ? (clip[0]?.[0] ?? '') : (clip[i % ch]?.[j % cw] ?? '');
-      if ((r >= rowCount && !growRows) || c >= colCount) {
+      if (c >= colCount) {
         clipped++;
         continue;
       }
+      const raw = single ? (clip[0]?.[0] ?? '') : (clip[i]?.[j % cw] ?? '');
       targets.push({ row: r, colIdx: c, raw });
     }
   }

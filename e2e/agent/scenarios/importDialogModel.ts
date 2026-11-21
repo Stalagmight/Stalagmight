@@ -39,13 +39,127 @@ export type { ScreenId };
 /**
  * Screens that are NOT part of an import flow, though they are not `idle`.
  *
- * Only the export modal, which a Ctrl+E interjection can open from `idle`.
  * A flow is measured from the moment the walk leaves `idle` to the moment it
- * comes back, and opening an unrelated modal would otherwise start a "flow"
- * with no file in it - which the residue and accounting oracles would then
- * measure as an import that imported nothing.
+ * comes back, and an unrelated modal opening from `idle` would otherwise start
+ * a "flow" with no file in it - which the residue and accounting oracles would
+ * then measure as an import that imported nothing.
+ *
+ * EMPTY today. Its one member was the export modal a Ctrl+E interjection
+ * opened; the modal is retired and Ctrl+E now toggles the Export WORKSPACE,
+ * which is an app mode rather than a screen and is classified `idle` (see
+ * `ScreenId`). The set stays because the rule does: the next modal reachable
+ * from `idle` that is not an import goes here.
  */
-export const NON_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>(['export-modal']);
+export const NON_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([]);
+
+/**
+ * What one pressed Ctrl+E saw and did.
+ *
+ * The gate fields are the values `useKeyboardShortcuts` reads inside its
+ * keydown handler, taken by the bridge on the DISPATCH tick - not the pre-move
+ * digest, which is a round trip older (an import completing in that gap closes
+ * its dialog, and the chord then lands at idle and is entitled to act).
+ */
+export interface ExportChordStep {
+  /** `activeDialog` at dispatch, or null. */
+  dialog: string | null;
+  /** `placementMode !== null` at dispatch. */
+  placement: boolean;
+  /** `dataTableFullScreen` at dispatch. */
+  fullscreen: boolean;
+  /** `screenOccupants > 0` at dispatch - an independent overlay is up. */
+  occupants: boolean;
+  /** A project was open at dispatch. */
+  project: boolean;
+  /** `appMode` at dispatch; null on a build that has none. */
+  appModeBefore: string | null;
+  /** `appMode` once the chord settled (the post-move digest). */
+  appModeAfter: string | null;
+  /** Was the Export panel (`export-panel`) visible once the chord settled? */
+  exportPanelAfter: boolean;
+  /**
+   * Did the open project change between the pre- and post-move digests?
+   *
+   * A project load forces `appMode` back to survey (`applyDisplaySettings`),
+   * so an in-flight create/open that lands inside the chord's settle window
+   * moves the mode without the chord having done anything.
+   */
+  projectSwitched: boolean;
+}
+
+/** The gates that were up at dispatch, spelled for a message. Empty = ungated. */
+export function exportChordGates(step: ExportChordStep): string[] {
+  const gates: string[] = [];
+  if (step.dialog !== null) gates.push(`activeDialog="${step.dialog}"`);
+  if (step.occupants) gates.push('screenOccupants > 0');
+  if (step.placement) gates.push('placementMode active');
+  if (step.fullscreen) gates.push('dataTableFullScreen');
+  if (!step.project) gates.push('no project open');
+  return gates;
+}
+
+export type ExportChordVerdict =
+  /** No gate was up, so the chord was free to toggle; `effect` is what it did. */
+  | { kind: 'ungated'; effect: 'entered' | 'left' | 'none' | 'other' }
+  /** A gate was up and the chord changed nothing: the contract held. */
+  | { kind: 'inert' }
+  /** A gate was up and the mode moved, but for a reason that is not the chord. */
+  | { kind: 'excused'; why: string }
+  | { kind: 'breach'; headline: string; detail: string };
+
+/**
+ * EXPORT CHORD: behind any gate, Ctrl+E is INERT.
+ *
+ * Ctrl+E toggles the Export workspace at idle (enter, and leave back to the
+ * recorded mode). Behind an open dialog, an independent overlay, a map
+ * placement or the fullscreen data table - and with no project open - it must
+ * do nothing at all, because any of those owns the state under it: an Export
+ * workspace entered behind an import dialog sits under a flow that is still
+ * running.
+ *
+ * So the claim is that `appMode` did not move across the chord, and that no
+ * Export panel appeared where there was none. One mode change is excused: the
+ * project switched inside the settle window (see `projectSwitched`), which
+ * forces Survey on its own. That exemption is narrow on purpose - a mode change
+ * with the same project open has no other author than the chord.
+ *
+ * The handler's two remaining early returns - `defaultPrevented`, and focus in
+ * an input or contenteditable - are deliberately NOT gates here. Both swallow
+ * MORE chords, never fewer, so neither can make a gated chord legal; they are
+ * why an UNGATED chord is only counted (`effect: 'none'`), never asserted.
+ */
+export function exportChordVerdict(step: ExportChordStep): ExportChordVerdict {
+  const before = step.appModeBefore;
+  const after = step.appModeAfter;
+  const gates = exportChordGates(step);
+  if (gates.length === 0) {
+    if (before === null || after === null || before === after) return { kind: 'ungated', effect: 'none' };
+    if (before !== 'export' && after === 'export') return { kind: 'ungated', effect: 'entered' };
+    if (before === 'export' && after !== 'export') return { kind: 'ungated', effect: 'left' };
+    return { kind: 'ungated', effect: 'other' };
+  }
+  const behind = gates.join(' + ');
+  if (before !== null && after !== null && before !== after) {
+    if (step.projectSwitched) {
+      return { kind: 'excused', why: `appMode ${before} -> ${after} with a project switch in the settle window` };
+    }
+    return {
+      kind: 'breach',
+      headline: `EXPORT CHORD: Ctrl+E switched the app mode behind ${behind}`,
+      detail:
+        `  appMode ${before} -> ${after}, same project open; that gate was up when the keydown was ` +
+        'dispatched, so the shortcut dispatcher must swallow the chord',
+    };
+  }
+  if (before !== 'export' && step.exportPanelAfter) {
+    return {
+      kind: 'breach',
+      headline: `EXPORT CHORD: the Export panel appeared behind ${behind}`,
+      detail: `  appMode ${before ?? '(none)'} -> ${after ?? '(none)'}, yet export-panel is visible over a gated screen`,
+    };
+  }
+  return { kind: 'inert' };
+}
 
 /**
  * Screens `routeOpenedFile`'s `importFlowOwnsScreen` guard REFUSES a second
@@ -125,7 +239,7 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
  * `WallsImportDialog.tsx`, `GpxSelectionDialog.tsx`, `GpxPlacementDialog.tsx`,
  * `NewProjectForImportDialog.tsx`, `ImportReceiptDialog.tsx`,
  * `ImportBlockedDialog.tsx`, `ImportAsNewProjectDialog.tsx`,
- * `OrphanPlacementDialog.tsx`, `ErrorDialog.tsx`, `ExportDialog.tsx`,
+ * `OrphanPlacementDialog.tsx`, `ErrorDialog.tsx`, `ExportPanel.tsx`,
  * `SectionMetadataForm.tsx`, `ShotTableEditor.tsx` + `SpreadsheetGrid/`,
  * `ModeCarousel.tsx` and `Toolbar.tsx`/`GlobalView.tsx`.
  * A testid that is not in a component is a control the fuzzer silently never
@@ -225,13 +339,23 @@ export const TESTID_INVENTORY: readonly string[] = [
   // Cancelling abandons whatever raised the prompt, which is all the walk needs.
   'unsaved-changes-dialog',
   'unsaved-changes-cancel',
-  // --- export modal (Ctrl+E; contents are not fuzzed this wave) --------------
-  'export-dialog',
-  'export-dialog-close',
+  // --- Export workspace (Ctrl+E toggles it) ---------------------------------
+  //
+  // The panel root is observed, never clicked: EXPORT CHORD reads it to tell
+  // whether a gated chord let the workspace appear. Its form belongs to
+  // export-roundtrip-fuzz. The toolbar's close button is the one control the
+  // walk presses here, to leave the workspace at idle.
+  'export-panel',
+  'export-close-button',
   // --- app mode carousel ----------------------------------------------------
+  //
+  // No `mode-export`: Export left the carousel for the hamburger menu and
+  // Ctrl+E. `mode-data` is listed so the walk reaches the Data workspace on a
+  // build whose carousel renders it; on one that does not, it reads absent and
+  // is simply never drawn.
   'mode-survey',
+  'mode-data',
   'mode-plan',
-  'mode-export',
   // --- zero-datum-select ----------------------------------------------------
   'zero-datum-selection-dialog',
   'zero-datum-selection-cancel',
@@ -500,7 +624,6 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   'as-new-project': ['import-as-new-project-cancel'],
   'unsaved-changes': ['unsaved-changes-cancel'],
   'orphan-placement': ['orphan-close'],
-  'export-modal': ['export-dialog-close'],
   error: ['error-dialog-close'],
   'first-run': ['telemetry-opt-in-no'],
 };
@@ -529,7 +652,6 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   walls: ['walls-import-cancel', 'key:Escape'],
   'gpx-select': ['gpx-selection-cancel', 'key:Escape'],
   'gpx-place': ['gpx-placement-cancel', 'key:Escape'],
-  'export-modal': ['export-dialog-close', 'key:Escape'],
   'zero-datum-select': ['zero-datum-selection-cancel', 'key:Escape'],
   // `ZeroDatumConfigDialog` is `isDirty` whenever GPS text, a metadata field or
   // a shot was touched, so Cancel/Escape may raise the discard overlay first -

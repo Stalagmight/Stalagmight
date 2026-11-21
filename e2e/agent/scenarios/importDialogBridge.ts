@@ -133,14 +133,16 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   // unsaved-changes prompt. CANCEL ONLY - `unsaved-changes-discard` quits the
   // app on the quit path and is on the forbidden list.
   'unsaved-changes-cancel',
-  // export modal (opened by Ctrl+E; its contents are not fuzzed)
-  'export-dialog-close',
+  // The Export workspace's toolbar close (rendered only in Export). Same rule
+  // as the carousel below: only ever clicked at `idle`.
+  'export-close-button',
   // app mode carousel. Only ever clicked at `idle`: everywhere else a modal
   // covers the toolbar, so a synthetic click on it would reach a control no
   // user can reach - see the note on `mode:*` in importDialogGenerators.ts.
+  // No `mode-export`: Export is entered by Ctrl+E (or the hamburger row) now.
   'mode-survey',
+  'mode-data',
   'mode-plan',
-  'mode-export',
   // zero-datum-select
   'zero-datum-selection-cancel',
   'zero-datum-selection-back',
@@ -352,23 +354,38 @@ export interface StepOutcome {
    */
   dialogAtDispatch: string | null;
   /**
-   * The OTHER two gates the same keydown handler consults, read on the same
-   * tick; null for every move kind that is not a `key:` chord.
+   * The OTHER gates the same keydown handler consults, read on the same tick;
+   * null for every move kind that is not a `key:` chord.
    *
    * `activeDialog` is not the whole gate and treating it as such left a hole.
-   * `useKeyboardShortcuts` returns early for a non-Escape key while a dialog is
-   * open, and then - for a configurable action like `export` - returns again on
-   * `placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)` and
-   * on `dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)`.
-   * `export` is in neither allowlist, so all three gates swallow Ctrl+E, and an
-   * oracle that only knew about the first would score a regression on the other
-   * two as a legal chord at idle.
+   * `useKeyboardShortcuts` returns early for every key while an independent
+   * overlay is up (`screenOccupants > 0`), for a non-Escape key while a dialog
+   * is open, and then - for a configurable action like `export` - returns again
+   * on `placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)`
+   * and on `dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)`;
+   * the `export` action itself does nothing with no project open. `export` is
+   * in neither allowlist, so every one of those swallows Ctrl+E, and an oracle
+   * that only knew about the dialog would score a regression on the others as a
+   * legal chord at idle.
    *
    * Map placement is the live case: the dialog is CLOSED and placement is on,
    * which is exactly the state the import flow spends its map clicks in.
    */
   placementAtDispatch: boolean | null;
   fullscreenAtDispatch: boolean | null;
+  /** `screenOccupants > 0` on the dispatch tick. `key:` chords only. */
+  occupantsAtDispatch: boolean | null;
+  /** `projectStore.project !== null` on the dispatch tick. `key:` chords only. */
+  projectAtDispatch: boolean | null;
+  /**
+   * `uiStore.appMode` on the dispatch tick. `key:` chords only.
+   *
+   * What EXPORT CHORD compares the post-move digest's `appMode` against: Ctrl+E
+   * toggles the Export WORKSPACE, so the chord's effect is a mode change, and
+   * the mode before it has to be read where the gates are, not one round trip
+   * earlier.
+   */
+  appModeAtDispatch: string | null;
   /** Value read back after a `type`/`select` (what the control actually took). */
   valueAfter: string | null;
   digest: ImportScreenDigest;
@@ -468,6 +485,10 @@ const HELPERS = `
     return [
       ui.activeDialog === null || ui.activeDialog === undefined ? '-' : ui.activeDialog,
       ui.placementMode ? 'P' : '-',
+      // A Ctrl+E that toggles the Export workspace changes nothing else this
+      // marker watches, so without the mode the settle could read "stable"
+      // across the switch itself.
+      ui.appMode === undefined || ui.appMode === null ? '-' : ui.appMode,
       document.querySelectorAll('[data-testid^="shot-editor-row-"]').length,
       document.querySelectorAll('[data-testid^="section-checkbox-"]').length,
       busy() ? 'B' : '-',
@@ -554,6 +575,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     let dialogAtDispatch = null;
     let placementAtDispatch = null;
     let fullscreenAtDispatch = null;
+    let occupantsAtDispatch = null;
+    let projectAtDispatch = null;
+    let appModeAtDispatch = null;
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
@@ -580,6 +604,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       // the app's gate actually saw.
       placementAtDispatch = !!(ui && ui.placementMode);
       fullscreenAtDispatch = !!(ui && ui.dataTableFullScreen);
+      occupantsAtDispatch = !!(ui && typeof ui.screenOccupants === 'number' && ui.screenOccupants > 0);
+      const projects = window.__E2E_TEST__ && window.__E2E_TEST__.projectStore;
+      projectAtDispatch = !!(projects && projects.getState().project);
+      appModeAtDispatch = ui && typeof ui.appMode === 'string' ? ui.appMode : null;
       target.dispatchEvent(new KeyboardEvent('keydown', init));
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       performed = true;
@@ -696,6 +724,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       dialogAtDispatch: dialogAtDispatch,
       placementAtDispatch: placementAtDispatch,
       fullscreenAtDispatch: fullscreenAtDispatch,
+      occupantsAtDispatch: occupantsAtDispatch,
+      projectAtDispatch: projectAtDispatch,
+      appModeAtDispatch: appModeAtDispatch,
       digest: digest,
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };

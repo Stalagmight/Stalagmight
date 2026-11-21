@@ -149,6 +149,55 @@ describe('placePaste', () => {
     ]);
     expect(narrow.clipped).toBe(2);
   });
+
+  describe('rowTakes: rows no target column applies to (an external paste)', () => {
+    // Shots on the odd rows, stations on the even ones; column 0 is shot-only,
+    // column 1 applies to both kinds.
+    const takes = (r: number, c0: number, c1: number) => r % 2 === 1 || (c0 <= 1 && c1 >= 1);
+
+    it('passes over a gap row: each line lands on the next row that takes it', () => {
+      const { targets, clipped } = placePaste([['3'], ['4'], ['5']], rectAt(1, 0), 10, 2, false, takes);
+      expect(targets).toEqual([
+        { row: 1, colIdx: 0, raw: '3' },
+        { row: 3, colIdx: 0, raw: '4' },
+        { row: 5, colIdx: 0, raw: '5' },
+      ]);
+      expect(clipped).toBe(0);
+    });
+
+    it('keeps a row where SOME target column applies (positional within the row)', () => {
+      const both = placePaste([['a', 'x'], ['b', 'y']], rectAt(1, 0), 10, 2, false, takes);
+      expect(both.targets.map((t) => [t.row, t.colIdx, t.raw])).toEqual([
+        [1, 0, 'a'], [1, 1, 'x'], [2, 0, 'b'], [2, 1, 'y'],
+      ]);
+      // A column every row takes stays one line per row.
+      const comment = placePaste([['a'], ['b'], ['c']], rectAt(1, 1), 10, 2, false, takes);
+      expect(comment.targets.map((t) => t.row)).toEqual([1, 2, 3]);
+    });
+
+    it('clips the lines left over at the bottom, gap rows not counted', () => {
+      const { targets, clipped } = placePaste([['3'], ['4'], ['5']], rectAt(5, 0), 8, 2, false, takes);
+      expect(targets.map((t) => t.row)).toEqual([5, 7]);
+      expect(clipped).toBe(1);
+    });
+
+    it('fills and tiles over the selection rows that take a column', () => {
+      const fill = placePaste([['9']], rectAt(0, 0, 4, 0), 10, 2, false, takes);
+      expect(fill.targets.map((t) => t.row)).toEqual([1, 3]);
+      // 4 shot rows in 0..8 hold the 2-line clipboard twice; the 9-row
+      // selection alone is no multiple of 2.
+      const tile = placePaste([['1'], ['2']], rectAt(0, 0, 8, 0), 10, 2, false, takes);
+      expect(tile.targets.map((t) => [t.row, t.raw])).toEqual([[1, '1'], [3, '2'], [5, '1'], [7, '2']]);
+    });
+
+    it('never asks about rows past the end of a growing paste', () => {
+      const asked: number[] = [];
+      const spy = (r: number) => (asked.push(r), r % 2 === 1);
+      const { targets } = placePaste([['a'], ['b'], ['c']], rectAt(1, 0), 3, 1, true, spy);
+      expect(targets.map((t) => t.row)).toEqual([1, 3, 4]);
+      expect(Math.max(...asked)).toBeLessThan(3);
+    });
+  });
 });
 
 describe('fillTargets', () => {

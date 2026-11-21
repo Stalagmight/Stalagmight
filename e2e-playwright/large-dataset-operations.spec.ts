@@ -127,9 +127,10 @@ test.describe('Large Dataset Operations', () => {
     await page.keyboard.press('f');
     await waitForMapIdle(page);
 
+    // Ctrl+E enters the Export workspace on its image export and live preview.
     await page.keyboard.press('Control+e');
-    await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
-    await page.getByTestId('export-type-image').click();
+    await expect(page.getByTestId('export-panel')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('export-type-image')).toBeChecked();
     await expect(page.getByTestId('export-preview')).toBeVisible({ timeout: 10000 });
   });
 });

@@ -44,6 +44,16 @@
 
 /** Screens an import flow can be on. `importDialogModel.ts` re-exports it. */
 export type ScreenId =
+  /**
+   * No dialog, no placement, nothing covering the window.
+   *
+   * The Export WORKSPACE is `idle` too, and deliberately: it is an app mode
+   * (`appMode === 'export'`, reported separately as `appMode`), not a screen
+   * that owns the window. The flow starters still run there - the toolbar's
+   * Import button is not rendered in Export, and the router turns an additive
+   * import away down the read-only / ImportBlocked path - so a walk that
+   * Ctrl+E'd into Export keeps exercising exactly that.
+   */
   | 'idle'
   | 'dmp-select'
   /** The Ariane options screen (`activeDialog: 'tml-import'`). */
@@ -61,15 +71,6 @@ export type ScreenId =
   | 'walls'
   | 'gpx-select'
   | 'gpx-place'
-  /**
-   * The export modal, which Ctrl+E opens.
-   *
-   * Not an import screen and deliberately in the table anyway: the fuzzer
-   * presses Ctrl+E as an interjection, and a modal this table did not name
-   * would read as `unknown` and fail the run for a dialog the app is entitled
-   * to open. Its CONTENTS are not fuzzed here.
-   */
-  | 'export-modal'
   /**
    * The unsaved-changes prompt, which a non-DMP import raises on its way in.
    *
@@ -141,6 +142,15 @@ export interface ImportScreenDigest {
   dialog: string | null;
   /** `uiStore.placementMode !== null`. */
   placement: boolean;
+  /**
+   * `uiStore.appMode` verbatim (`survey` / `data` / `plan` / `export`), or null
+   * on a build that has none.
+   *
+   * Load-bearing for EXPORT CHORD: Ctrl+E no longer opens a dialog, it toggles
+   * the Export workspace, so "the chord did something" is now a change of app
+   * mode rather than a new screen.
+   */
+  appMode: string | null;
   /** `uiStore.importContext`. */
   ctx: 'new-project' | 'existing-project' | null;
   /** `uiStore.dmpImportWizardPhase` (only ever suggesting/manual_placing/null). */
@@ -336,7 +346,6 @@ export async function computeImportScreenDigest(
   else if (shown('import-blocked-dialog')) screen = 'blocked';
   else if (shown('import-as-new-project-dialog')) screen = 'as-new-project';
   else if (shown('unsaved-changes-dialog')) screen = 'unsaved-changes';
-  else if (shown('export-dialog')) screen = 'export-modal';
   else if (shown('error-dialog')) screen = 'error';
   else if (placement) screen = 'map-placement';
   else if (dialog === null) screen = 'idle';
@@ -454,7 +463,6 @@ export async function computeImportScreenDigest(
       'new-project-for-import-dialog',
       'import-receipt-dialog',
       'orphan-placement-dialog',
-      'export-dialog',
       'unsaved-changes-dialog',
       'error-dialog',
       'wizard-importing-zero-datum',
@@ -559,6 +567,7 @@ export async function computeImportScreenDigest(
     screen: screen as ScreenId,
     dialog,
     placement,
+    appMode: typeof ui.appMode === 'string' ? (ui.appMode as string) : null,
     ctx: (ui.importContext as 'new-project' | 'existing-project' | null) ?? null,
     phase: (ui.dmpImportWizardPhase as string | null) ?? null,
     hasProject,

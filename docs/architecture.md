@@ -84,8 +84,11 @@ a sibling `<stem>.plnx` file.
 
 Most have their own page. What follows is the seam and where the code lives, nothing more.
 
-**Workspace modes.** `uiStore.appMode` (`survey` | `plan` | `export`) switches the whole
-workspace from the `ModeCarousel`; Plan and Export are read-only. Ask whether editing is
+**Workspace modes.** `uiStore.appMode` (`survey` | `data` | `plan` | `export`) switches the
+whole workspace: the `ModeCarousel` picks Survey, Data or Plan, and Export opens from the
+project menu / Ctrl+E. Survey and Data are editable (`isEditableMode`); Plan and Export are
+read-only. `SingleSystemView` lays Data's table out beside the map through `DataModeLayout`,
+which keeps `MapCanvas` mounted at one tree position in every mode. Ask whether editing is
 blocked through `useEditingBlocked()` / `isEditingBlockedNow()`
 (`src/hooks/useEditingBlocked.ts`) and nothing else - `pnpm lint:readonly-gates` bans the
 raw composition, because writing it inline as `useA() || useB()` short-circuits the second

@@ -63,6 +63,7 @@ describe('useProjectMenuItems SpeleoDB row', () => {
   it.each([
     ['a local project in Survey', null, 'survey'],
     ['a remote read-only project in Survey', LINK, 'survey'],
+    ['a remote project in Data', LINK, 'data'],
     ['a remote project in Plan', LINK, 'plan'],
     ['a remote project in Export', LINK, 'export'],
   ] as const)('has no row that opens the SpeleoDB tab: %s', (_label, link, appMode) => {

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::config::{
     normalize_column_widths, Config, GasConfig, MapPaletteConfig, DATA_TABLE_ANGLE_MODES,
+    DATA_WORKSPACE_TINT_MODES,
 };
 use crate::core::AppState;
 use crate::models::Person;
@@ -251,6 +252,92 @@ pub(crate) fn update_import_shots_view_impl(
             if let Some(mut widths) = column_widths {
                 normalize_column_widths(&mut widths);
                 config.panels.import_shots_column_widths = widths;
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Update the Data workspace's persisted view (column order, visibility and
+/// widths, row tint, map pane open + width, section header rows) in
+/// configuration (efficient partial update). Only the provided fields are
+/// written.
+///
+/// Its own command for the same reason the grid-view commands are: a disjoint
+/// `panels` field set (`data_workspace_*`), so a partial write here can never
+/// carry another view's keys.
+#[tauri::command]
+#[expect(clippy::too_many_arguments)]
+pub fn update_data_workspace_view(
+    state: State<AppState>,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+    tint_mode: Option<String>,
+    map_pane_open: Option<bool>,
+    map_pane_width: Option<u32>,
+    section_headers: Option<bool>,
+) -> Result<(), String> {
+    update_data_workspace_view_impl(
+        state.inner(),
+        column_order,
+        hidden_columns,
+        column_widths,
+        tint_mode,
+        map_pane_open,
+        map_pane_width,
+        section_headers,
+    )
+}
+
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn update_data_workspace_view_impl(
+    state: &AppState,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+    tint_mode: Option<String>,
+    map_pane_open: Option<bool>,
+    map_pane_width: Option<u32>,
+    section_headers: Option<bool>,
+) -> Result<(), String> {
+    // Read-modify-write inside ONE critical section, same reason as
+    // `update_data_table_view_impl`. `modify_config` ends in the whole-config
+    // normalizer, which prunes the key lists, clamps the widths and the pane
+    // width - the same repair the load path applies.
+    state
+        .modify_config(|config| {
+            // Validated BEFORE anything is written, so a rejected call leaves the
+            // stored view exactly as it was. This door rejects an unknown tint
+            // while `PanelsConfig::normalize` repairs one; both read the one list.
+            if let Some(mode) = &tint_mode {
+                if !DATA_WORKSPACE_TINT_MODES.contains(&mode.as_str()) {
+                    return Err(anyhow!("Invalid Data workspace tint mode '{mode}'"));
+                }
+            }
+            let panels = &mut config.panels;
+            if let Some(order) = column_order {
+                panels.data_workspace_column_order = order;
+            }
+            if let Some(hidden) = hidden_columns {
+                panels.data_workspace_hidden_columns = hidden;
+            }
+            if let Some(mut widths) = column_widths {
+                normalize_column_widths(&mut widths);
+                panels.data_workspace_column_widths = widths;
+            }
+            if let Some(mode) = tint_mode {
+                panels.data_workspace_tint_mode = mode;
+            }
+            if let Some(open) = map_pane_open {
+                panels.data_workspace_map_pane_open = open;
+            }
+            if let Some(width) = map_pane_width {
+                panels.data_workspace_map_pane_width = width;
+            }
+            if let Some(on) = section_headers {
+                panels.data_workspace_section_headers = on;
             }
             Ok(())
         })

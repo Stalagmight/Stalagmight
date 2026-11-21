@@ -25,6 +25,9 @@ import ExportPreview from '../Dialogs/ExportPreview';
 import { useExportStore } from '../../store/exportStore';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
+import { DataModeLayout } from './DataModeLayout';
+import { BackToDataChip } from '../DataWorkspace/BackToDataChip';
+import { useDataWorkspaceViewPersistence } from '../DataWorkspace/useDataWorkspaceViewPersistence';
 import {
   PANEL_SIZE_BOUNDS,
   DETAIL_REVEAL_AUTOCLOSE_MS,
@@ -75,6 +78,11 @@ export default function SingleSystemView() {
   // The linked SpeleoDB project's collaborators, fetched in the background for
   // the surveyor / explorer suggestions.
   useCollaboratorsSync();
+  // The Data workspace's persisted view (map pane open + width, columns, tint)
+  // is loaded here, for as long as a project view is open - not by the
+  // workspace, which mounts only in Data: there the first frame would lay out
+  // the map pane (and the toolbar decide on its tools) from the defaults.
+  useDataWorkspaceViewPersistence();
 
   const {
     project,
@@ -96,10 +104,11 @@ export default function SingleSystemView() {
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
   // Top-level workspace mode (#38, the workspace-mode reframe). Survey shows the editable data
-  // table + detail panel; Plan swaps the right Dock for the gas setup sidebar and the
-  // bottom Dock for the tabbed plan tables; Export swaps the right Dock for the export
-  // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
-  // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
+  // table + detail panel; Data puts its full-project table over (or beside) the map and shows
+  // neither dock; Plan swaps the right Dock for the gas setup sidebar and the bottom Dock for
+  // the tabbed plan tables; Export swaps the right Dock for the export panel and hides the
+  // bottom table. The carousel owns Survey/Data/Plan; setView()/setColorMode leave a read-only
+  // mode. The left Sections Dock is Survey-only (the other modes show SpeleoDB on request).
   const appMode = useUIStore((s) => s.appMode);
   const workspace = useUIStore((s) => s.leftWorkspace);
   const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
@@ -235,8 +244,8 @@ export default function SingleSystemView() {
   // and there is no circular dependency between "am I collapsed" and "am I open".
   const sectionsPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
   const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
-  // Sections is survey-only; Plan/Export don't render it at all, so it costs
-  // nothing there (not even an opener bar).
+  // Sections is Survey-only; Data, Plan and Export don't render it at all (unless
+  // SpeleoDB was asked for), so it costs nothing there (not even an opener bar).
   const sectionsPresent = appMode === 'survey' || outsideSurvey;
   const squeezeSections = useMemo(
     () => ({
@@ -247,14 +256,16 @@ export default function SingleSystemView() {
     }),
     [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen, workspaceMin],
   );
+  // Data renders no right dock, so it claims no width there either.
+  const detailPresent = appMode !== 'data';
   const squeezeDetail = useMemo(
     () => ({
       width: detailPanelWidth,
       min: PANEL_SIZE_BOUNDS.detail.min,
-      present: true,
+      present: detailPresent,
       pinnedOpen: detailPinnedOpen,
     }),
-    [detailPanelWidth, detailPinnedOpen],
+    [detailPanelWidth, detailPinnedOpen, detailPresent],
   );
   const squeeze = useSidePanelSqueeze(mainEl, {
     mapMinWidth: MAP_MIN_WIDTH,
@@ -773,8 +784,8 @@ export default function SingleSystemView() {
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
-        {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
-            with no section-editing affordances. */}
+        {/* Sections (left) - Survey only. Data, Plan and Export show the left dock
+            only for SpeleoDB on request (speleoOutsideSurvey), never the Sections tab. */}
         <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
         <Dock
           reveal={sectionsReveal}
@@ -808,12 +819,19 @@ export default function SingleSystemView() {
         {/* Map + data table. `min-w-0` lets this column shrink when both side
             panels dock (otherwise flex refuses and push behavior breaks). */}
         <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
-          <div ref={mapAreaRef} className="flex-1 relative">
+          {/* The map area. DataModeLayout keeps the map (everything below) at one
+              stable tree position in every mode - MapCanvas is never remounted by a
+              mode or Data map-pane change - and, in Data, lays the Data workspace out
+              to its left. The children keep their indentation so diffs stay small. */}
+          <div ref={mapAreaRef} className="flex-1 relative min-h-0">
+          <DataModeLayout>
             <ErrorBoundary panelName="Map">
               <MapCanvas />
             </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
             <OfflineIndicator className="absolute top-2 right-14 z-10" />
+            {/* After "Open in Survey" from Data: the way back to the same table row. */}
+            {appMode === 'survey' && <BackToDataChip />}
             {/* Esri requires the imagery's source names to stay visible for as
                 long as the imagery is drawn, so this tracks the satellite layer
                 rather than the map. Mounted here rather than inside MapCanvas,
@@ -828,7 +846,8 @@ export default function SingleSystemView() {
             <MapAttribution
               visible={showSatellite}
               className="absolute bottom-0 z-10"
-              style={{ right: attributionRight }}
+              // Data has no bottom dock tab to stay clear of.
+              style={{ right: appMode === 'data' ? 0 : attributionRight }}
             />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -
@@ -843,6 +862,7 @@ export default function SingleSystemView() {
                 </ErrorBoundary>
               </div>
             )}
+          </DataModeLayout>
           </div>
 
           {/* Data (bottom) - inside the center column so docked side panels push
@@ -851,7 +871,7 @@ export default function SingleSystemView() {
               (map only), and Plan hides it too until an origin is chosen - the
               staged entry screen is the question card plus the map, nothing else
               (#395). */}
-          {appMode !== 'export' && !(appMode === 'plan' && !gasOriginChosen) && (
+          {appMode !== 'export' && appMode !== 'data' && !(appMode === 'plan' && !gasOriginChosen) && (
           <Dock
             reveal={dataReveal}
             edge="bottom"
@@ -884,7 +904,8 @@ export default function SingleSystemView() {
           )}
         </div>
 
-        {/* Details (right) */}
+        {/* Details (right) - not in Data, whose table replaces both docks. */}
+        {detailPresent && (
         <Dock
           reveal={detailReveal}
           edge="right"
@@ -906,6 +927,7 @@ export default function SingleSystemView() {
         >
           {detailContent}
         </Dock>
+        )}
       </div>
 
       {/* Status bar. It sits just below the Data panel, so treat it as part of

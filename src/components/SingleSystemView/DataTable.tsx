@@ -30,6 +30,7 @@ import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import { useDataTableViewPersistence } from './useDataTableViewPersistence';
+import { OpenInDataButton } from '../DataWorkspace/OpenInDataButton';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { canSplitShot } from '../../utils/shotSplit';
 import { nextShotKind } from '../../utils/shotKind';
@@ -1746,6 +1747,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 }
               : { rowsOverride: stationMenuRows })}
           />
+          <OpenInDataButton sectionId={selectedSectionId} />
           {!dataTableFullScreen && (
             <button
               onClick={enterDataTableFullScreen}

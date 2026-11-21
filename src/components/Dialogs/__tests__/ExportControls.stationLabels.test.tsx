@@ -37,7 +37,6 @@ function Harness({ initial }: { initial: ExportImageOptions }) {
   latest = options;
   return (
     <ExportControls
-      variant="panel"
       exportType="image"
       onExportTypeChange={() => undefined}
       dataFormat="csv"

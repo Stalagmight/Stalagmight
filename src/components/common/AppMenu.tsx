@@ -41,6 +41,8 @@ export interface AppMenuItem {
   action?: string;
   onClick?: () => void;
   disabled?: boolean;
+  /** Native tooltip on the row (e.g. why it is disabled). */
+  title?: string;
   separator?: boolean;
   /** When set, renders an on/off check on the right (a toggle item). */
   checked?: boolean;
@@ -432,6 +434,7 @@ export function AppMenu({
         tabIndex={isActive ? 0 : -1}
         data-testid={item.id}
         disabled={item.disabled}
+        title={item.title}
         aria-haspopup={hasSubmenu ? 'menu' : undefined}
         aria-expanded={hasSubmenu ? openSubmenuId === item.id : undefined}
         aria-disabled={item.disabled || undefined}

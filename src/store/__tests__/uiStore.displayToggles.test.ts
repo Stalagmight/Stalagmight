@@ -1110,6 +1110,55 @@ describe('Plan/Export display isolation', () => {
   });
 });
 
+describe('Data mode shares the Survey display', () => {
+  beforeEach(() => {
+    useUIStore.setState({ ...getCleanTestState(), appMode: 'survey' });
+    vi.clearAllMocks();
+  });
+
+  it('Survey <-> Data keeps every display flag, the geometry and the colour mode', () => {
+    useUIStore.setState({ showGrid: true, showDepthGradient: true, geometryMode: 'closureAdjusted' });
+    useUIStore.getState().setAppMode('data');
+    let s = useUIStore.getState();
+    expect(s.appMode).toBe('data');
+    expect(s.showGrid).toBe(true);
+    expect(s.showDepthGradient).toBe(true);
+    // Not forced, not cleared: Data is not a read-only mode.
+    expect(s.geometryMode).toBe('closureAdjusted');
+    useUIStore.getState().toggleDisplay('showStations');
+    useUIStore.getState().setAppMode('survey');
+    s = useUIStore.getState();
+    // A Data change is a Survey change (one shared view), not snapshotted away.
+    expect(s.showStations).toBe(!getCleanTestState().showStations);
+    expect(s.showGrid).toBe(true);
+    expect(s.geometryMode).toBe('closureAdjusted');
+  });
+
+  it('Display changes in Data persist like Survey ones', async () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().toggleDisplay('showGrid');
+    useUIStore.getState().setGridSpacing(25);
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_display_setting', { key: 'showGrid', value: 'true' });
+      expect(invoke).toHaveBeenCalledWith('save_display_setting', { key: 'gridSpacing', value: '25' });
+    });
+  });
+
+  it('Data -> Plan -> Data restores the Data view exactly as Survey would', () => {
+    useUIStore.setState({ showDepthGradient: true, showGrid: false, geometryMode: 'measured' });
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().toggleDisplay('showGrid');
+    expect(useUIStore.getState().showDepthGradient).toBe(false);
+    useUIStore.getState().setAppMode('data');
+    const s = useUIStore.getState();
+    expect(s.appMode).toBe('data');
+    expect(s.geometryMode).toBe('measured');
+    expect(s.showDepthGradient).toBe(true);
+    expect(s.showGrid).toBe(false);
+  });
+});
+
 describe('Placement mode forces stations visible (#518)', () => {
   const sectionData = { name: 'S', surveyor: null, date: null, color: '#fff', direction: 'in', quality: 1, shots: [] };
 
@@ -1142,6 +1191,14 @@ describe('Placement mode forces stations visible (#518)', () => {
       ([cmd, args]) => cmd === 'save_display_setting' && (args as { key?: string })?.key === 'showStations',
     );
     expect(wrote).toBe(false);
+  });
+
+  it('moves a placement started in Data to Survey, where the map is', () => {
+    useUIStore.setState({ appMode: 'data' });
+    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    expect(useUIStore.getState().appMode).toBe('survey');
+    expect(useUIStore.getState().placementMode).not.toBeNull();
+    useUIStore.getState().cancelPlacementMode();
   });
 
   it('leaves stations on when the placement ends, like every other mode exit', () => {

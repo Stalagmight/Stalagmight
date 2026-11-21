@@ -518,7 +518,7 @@ back to back on one session.
 | `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
 | `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
 | `import-dialog-fuzz` | Generates DMP/Ariane/Compass/Walls/GPX files and walks the real import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
-| `export-roundtrip-fuzz` | Exports every format through the modal, the Export-mode panel and the raw store action at hostile destination paths; file/result agreement, refusal parity, a svg/png/pdf differential, byte identity, round-trip convergence and shot survival (see below). |
+| `export-roundtrip-fuzz` | Exports every format through the Export workspace panel and the raw store action at hostile destination paths; file/result agreement, refusal parity, a svg/png/pdf differential, byte identity, round-trip convergence, shot survival, and every way out of the workspace returning to the mode it was entered from (see below). |
 | `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
 
 ### undo-redo-fuzz
@@ -973,6 +973,22 @@ picker). They are separate PRNG streams so that adding the second left the
 first's draws bit-identical, which bounds how far the existing repro lines
 moved - the convention `mulberry32`'s header states.
 
+Ctrl+E no longer opens a modal: at idle it toggles the Export workspace, which
+the screen model classifies as `idle` (it is an app mode, not a screen), so the
+flow starters keep running inside it and exercise the read-only / ImportBlocked
+path. The app-mode interjection clicks `mode-survey` / `mode-plan` (and
+`mode-data` where the carousel renders it), and inside Export may leave through
+the toolbar's `export-close-button`; it never clicks `mode-export`. The EXPORT
+CHORD oracle asserts that a Ctrl+E pressed behind any gate the keydown handler
+consults - an open dialog, an independent overlay (`screenOccupants`), a map
+placement, the fullscreen data table, or no project open - is INERT: `appMode`
+does not move and no Export panel appears. The gates and the mode are read by
+the bridge on the dispatch tick, not from the older pre-move digest; the one
+excuse is a project switch landing inside the settle window, which forces
+Survey on its own. Ungated chords are counted by effect (entered / left /
+none), never asserted. The judgement is the pure `exportChordVerdict` in
+`importDialogModel.ts`, unit-tested in `importDialogActions.test.ts`.
+
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.
 
@@ -983,13 +999,30 @@ and then back in. Each iteration draws a `{format, route, path shape, options}`
 and exports through the real surface, then asserts that the app's report, the
 filesystem and what the user was told all agree.
 
-Three routes, because they are not interchangeable. The modal Export dialog and
-the Export-mode panel are ONE component (`ExportControls`) over two option sets
-- the dialog's local `useState`, the panel's `exportStore` - and both push the
-answered path through `ensureExtension`, so a destination the user typed is
-REWRITTEN before the command sees it. The raw store action hands the path over
-verbatim, which is the only way the backend's own guards are reached. Each route
-is asserted against its own contract rather than forced to agree move for move.
+Two routes, because they are not interchangeable. The Export workspace panel
+(`ExportControls` inside `ExportPanel`, over `exportStore`) pushes the answered
+path through `ensureExtension`, so a destination the user typed is REWRITTEN
+before the command sees it. The raw store action hands the path over verbatim,
+which is the only way the backend's own guards are reached. Each route is
+asserted against its own contract rather than forced to agree move for move.
+There is no modal route: the Export dialog is retired, and a recorded trace
+whose `export` step names the `modal` route is refused on replay with a message
+saying so (re-record it).
+
+Every panel move is a round trip through the workspace. It draws the mode it
+starts in (`survey`, `data` or `plan`), how it enters (the hamburger row
+`toolbar-export-button` behind `app-menu-trigger`, Ctrl+E, or `enterExport`)
+and how it leaves (the toolbar's `export-close-button`, the panel header's
+`export-panel-close`, the same menu row (labelled "Close export" there),
+Ctrl+E, or Escape, which may spend up to three presses clearing transient
+state first). The path is recorded in the trace step and replayed as-is; a
+panel step recorded before this carries none and replays as `enterExport` /
+`closeExport` from Survey. A drawn control that is absent falls back to the
+store action and is counted, never asserted. After the exit, X10 ("Close
+export returns to the recorded mode", `checkExportCloseReturn`) asserts that
+`appMode` is back to the mode before entry and that `exportReturnMode` is
+null. X8 (modal vs panel option independence) retired with the modal; X8b, the
+option reset on a project switch, remains.
 
 Ten destination-path shapes, each aimed at a rule somewhere in the stack:
 `NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (the
@@ -1016,7 +1049,7 @@ pnpm agent:fuzz-matrix --scenario export-roundtrip-fuzz \
   --axis STALAGMIGHT_FUZZ_EXPORT_FORMATS=csv,json,tml,png,svg,pdf --seeds 1..2
 ```
 
-The nine oracles, the two probe results it recorded rather than asserted (the
+The oracles (X1-X10, X8 retired), the two probe results it recorded rather than asserted (the
 `.plnx` x image guard asymmetry, and the inert `ExportSettings` config
 defaults), and the findings it produced are all written up in the scenario
 file's header, each with the `reproduce:` line that still runs.

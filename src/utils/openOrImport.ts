@@ -34,7 +34,8 @@
  * from a raw keydown handler).
  */
 import { useProjectStore } from '../store/projectStore';
-import { useUIStore } from '../store/uiStore';
+import { isEditableMode, useUIStore } from '../store/uiStore';
+import { useExportStore } from '../store/exportStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
@@ -242,6 +243,13 @@ export async function routeOpenedFile(
       return;
     }
 
+    // An export being written owns the app until it settles (the Export
+    // workspace cannot be left, see uiStore `exportRunning`): opening a project
+    // or importing into this one would replace or change what it is writing.
+    // The menu rows and shortcuts are disabled meanwhile; a drop is not, so
+    // the router refuses, with the same toast shape as the import gate above.
+    if (refuseWhileExporting()) return;
+
     // Any OTHER dialog also owns the screen and must not be silently replaced -
     // a dropped (or OS-launched, or recents-opened) file used to call
     // loadProject/openDialog straight over settings, an error dialog, or a
@@ -284,11 +292,14 @@ export async function routeOpenedFile(
       // Tailor the fix-it advice to the active read-only cause(s) - read the
       // individual flags separately (isEditingBlockedNow() reports only the
       // combined boolean, and isMapReadOnly folds the closure-adjusted and
-      // Plan/Export causes into one) so a compound state (e.g. a
+      // read-only-mode causes into one) so a compound state (e.g. a
       // locked remote project also viewed in Plan mode) mentions BOTH causes
       // instead of silently dropping the SpeleoDB lock from the message.
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
-      const nonSurveyMode = ui.appMode !== 'survey';
+      // Plan or Export only: Data edits like Survey, so a closure-adjusted Data
+      // user is told to switch the VIEW (which fixes it), not "Switch to Survey"
+      // (which would not).
+      const readOnlyMode = !isEditableMode(ui.appMode);
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
       if (!speleoReadOnly) {
         // Every non-SpeleoDB cause is one safe click from fixed, so it's a
@@ -298,7 +309,7 @@ export async function routeOpenedFile(
         // apply because its switch also drops the view. The dialog owns the
         // pending telemetry source from here (complete-on-switch /
         // cancel-on-stay).
-        ui.openDialog('import-blocked', { path, cause: nonSurveyMode ? 'mode' : 'view' });
+        ui.openDialog('import-blocked', { path, cause: readOnlyMode ? 'mode' : 'view' });
         handedOff = true;
         return;
       }
@@ -306,7 +317,7 @@ export async function routeOpenedFile(
       // fix, so it keeps the plain error dialog (compound states included -
       // switching mode/view alone would still leave the import blocked).
       let message: string;
-      if (nonSurveyMode) {
+      if (readOnlyMode) {
         message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
       } else if (closureAdjusted) {
         message = 'Switch to the Raw Data View and acquire the SpeleoDB write lock to import.';
@@ -526,6 +537,11 @@ export async function pickAndRoute(
   errorTitle = 'Open Failed',
   opts?: { importDoor?: boolean },
 ): Promise<void> {
+  // Before the picker, not only in the router: no file chosen mid-export.
+  if (refuseWhileExporting()) {
+    clearProjectActionSource();
+    return;
+  }
   let selected: string | string[] | null;
   try {
     selected = await openDialog({ multiple: false, filters });
@@ -554,6 +570,13 @@ export async function pickAndRoute(
   } else {
     clearProjectActionSource();
   }
+}
+
+/** True (after saying so) while an export is being written. */
+function refuseWhileExporting(): boolean {
+  if (!useExportStore.getState().exporting) return false;
+  useUIStore.getState().showToast(i18n.t('importGate.exportInProgress'), TOAST_KEYS.EXPORT_IN_PROGRESS, 'warning');
+  return true;
 }
 
 /**

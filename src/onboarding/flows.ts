@@ -131,9 +131,10 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
-      // Survey-only controls (DisplayMenu gates the Geometry group on
-      // `appMode === 'survey'`). Outside Survey this step has no anchor and
-      // falls back to a centered card rather than blocking.
+      // Editable-mode controls (DisplayMenu gates the Geometry group on
+      // `isEditableMode(appMode)`, i.e. Survey, or Data with its map pane open).
+      // Elsewhere this step has no anchor and falls back to a centered card
+      // rather than blocking.
       id: 'geometry',
       titleKey: 'onboarding.flows.workspace.steps.geometry.title',
       descriptionKey: 'onboarding.flows.workspace.steps.geometry.description',
@@ -161,8 +162,9 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
-      // The Merge tool is Survey-only; outside Survey this falls back to a
-      // centered card, like `geometry`.
+      // The Merge tool shows in the editable modes with a map (Survey, or Data
+      // with its map pane open); elsewhere this falls back to a centered card,
+      // like `geometry`.
       id: 'edit-shape',
       titleKey: 'onboarding.flows.workspace.steps.editShape.title',
       descriptionKey: 'onboarding.flows.workspace.steps.editShape.description',

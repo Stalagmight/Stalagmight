@@ -62,6 +62,8 @@ describe('isWarningsVisitActive', () => {
     expect(active()).toBe(true);
     for (const off of [
       { detailPanelOpen: false },
+      // Data renders no Details panel, so no Warnings tab is visible there.
+      { appMode: 'data' as const },
       { appMode: 'plan' as const },
       { appMode: 'export' as const },
       { view: 'global' as const },
@@ -184,6 +186,7 @@ describe('the Warnings-tab visit', () => {
   it('every way out ends the visit: closing the panel, Plan, the Global view, the setting', () => {
     for (const out of [
       { detailPanelOpen: false },
+      { appMode: 'data' as const },
       { appMode: 'plan' as const },
       { view: 'global' as const },
       { warningsAutoDisplay: false },
