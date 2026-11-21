@@ -138,6 +138,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.save,
         onClick: () => { void saveAndClose(); },
         ...readOnlyOff,
+        // Off too, but what the user wants here is to close: the reason
+        // points to the row that does (demo finding V-4).
+        ...(fileReadOnly ? { disabledReason: t('singleView.menu.saveAndCloseReadOnly') } : {}),
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
       // Import means "add MNemo data to THIS project" (#508), so it offers a

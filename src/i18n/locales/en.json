@@ -3084,6 +3084,7 @@
       "saveAs": "Save As",
       "saveACopy": "Save a Copy",
       "saveAndClose": "Save and Close",
+      "saveAndCloseReadOnly": "Nothing to save: use Close Project.",
       "closeProject": "Close Project",
       "projectSettings": "Local settings",
       "projectDetails": "Project Details",

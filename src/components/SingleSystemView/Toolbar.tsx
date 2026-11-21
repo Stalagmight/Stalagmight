@@ -14,7 +14,9 @@ import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { DisabledReason } from '../common/DisabledReason';
+import { showBlockedNotice } from '../../utils/blockedNotice';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
@@ -224,6 +226,17 @@ export function toolbarCondenseLayout(condense: number): ToolbarCondenseLayout {
   };
 }
 
+/** The toolbar Import button's read-only reason ({@link DisabledReason},
+ *  below the button), or the button alone. */
+function ImportReason({ reason, children }: { reason: string | undefined; children: ReactNode }) {
+  if (reason === undefined) return <>{children}</>;
+  return (
+    <DisabledReason reason={reason} placement="below" testId="toolbar-import-button-reason">
+      {children}
+    </DisabledReason>
+  );
+}
+
 export default function Toolbar({
   menuItems,
   saveFailed = false,
@@ -253,6 +266,10 @@ export default function Toolbar({
   const editingBlocked = useEditingBlocked();
   // A file made with a newer Stalagmight refuses undo and redo too (plan 6.4).
   const fileReadOnly = useProjectStore(selectFileReadOnly);
+  // Why Import, Undo and Redo are off in such a file, shown on hover as the
+  // menu rows show theirs, and as the notice a click gives (demo finding V-5).
+  // Placement mode, which disables them too, says nothing here.
+  const readOnlyReason = fileReadOnly && !placementModeActive ? t('editGate.readOnlyFileNotice') : undefined;
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   // On top of that, the navigate group (Pan/Zoom) is hidden unless the user opted
   // in (#409) - the map pans on a plain drag and zooms on the wheel under every
@@ -452,12 +469,22 @@ export default function Toolbar({
                 {t('dataTable.fullScreen.exit')}
               </Button>
             ) : (
+              <ImportReason reason={readOnlyReason}>
               <Button
-                onClick={() => onImport()}
-                disabled={placementModeActive || editingBlocked}
+                onClick={() => {
+                  if (readOnlyReason !== undefined) {
+                    showBlockedNotice(readOnlyReason);
+                    return;
+                  }
+                  onImport();
+                }}
+                disabled={readOnlyReason === undefined && (placementModeActive || editingBlocked)}
+                aria-disabled={readOnlyReason !== undefined ? true : undefined}
                 size="sm"
-                // Tighten the padding + drop the left margin at the final stage.
-                className={tight ? '!px-1' : 'ml-1'}
+                // Tighten the padding + drop the left margin at the final stage;
+                // an explained (`aria-disabled`) button reads as off as a
+                // `disabled` one does.
+                className={`${tight ? '!px-1' : 'ml-1'}${readOnlyReason !== undefined ? ' opacity-50 cursor-not-allowed' : ''}`}
                 // The yellow import icon shows at the toolbar syntactic level, and is
                 // forced on when condensed (icon-only) so the button is never empty.
                 icon={showToolbarIcons || importCondensed ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
@@ -467,6 +494,7 @@ export default function Toolbar({
               >
                 {importCondensed ? null : t('common.actions.import')}
               </Button>
+              </ImportReason>
             )}
             <div className={`w-px h-6 bg-border ${tight ? 'mx-1' : 'mx-2'}`} />
             <UndoHistoryDropdown
@@ -478,6 +506,7 @@ export default function Toolbar({
               // nothing); only HOVER opens the panel. Placement mode is excluded - that
               // reason for `disabled` must still suppress the panel entirely.
               onSingleAction={onUndo}
+              reason={readOnlyReason}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}
               compact={tight}
@@ -510,6 +539,7 @@ export default function Toolbar({
               // SpeleoDB version"), and hover is the only way to reach it while the button
               // itself stays correctly disabled.
               onSingleAction={onRedo}
+              reason={readOnlyReason}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}
               compact={tight}
