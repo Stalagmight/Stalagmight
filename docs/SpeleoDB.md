@@ -30,19 +30,35 @@ closes the editing gate.
 The home screen uses the same card or table row for downloaded and undownloaded
 SpeleoDB projects. Selecting one never exposes local Project Details, local open,
 or local deletion actions. Opening while signed in always attempts a fresh download.
-Only a DNS, connection-unavailable or timeout failure allows opening an existing
-cache, whose stored project ID and endpoint must match. The UI announces that
-offline fallback and preserves the cached unsynced-edit state. Authentication,
+Only a download that got no reply at all allows opening an existing cache, whose
+stored project ID and endpoint must match: the connection could not be made
+(refused, or the network or host unreachable), the name did not resolve, the time
+ran out, or the connection was closed or reset before the whole reply arrived (no
+reply, a reply head cut short, or a body shorter than its length). The UI announces
+that offline fallback and preserves the cached unsynced-edit state. Authentication,
 permission, missing remote project, TLS and invalid-download errors do not fall
-back to the cache (but see the no-session rules below). An `http://` endpoint the
-transport policy allows (see Authentication and transport) falls back exactly as an
-`https://` endpoint does; one it refuses is refused before any request, without
-DNS. Known gap (F1, #669): a DNS, refused or reset failure of the request itself
-(the SDK's send) is currently classified as an unknown transport error, which does
-not fall back, so today only a timeout - or an `http://` host that the transport
-policy finds does not resolve - opens the cached copy. If a successful download would
+back to the cache (but see the no-session rules below), and neither does a reply
+the app cannot read as HTTP or any other unclassified transport failure. An
+`http://` endpoint the transport policy allows (see Authentication and transport)
+falls back exactly as an `https://` endpoint does; one it refuses is refused before
+any request, without DNS. If a successful download would
 overwrite unsynced edits, the user can cancel or explicitly confirm replacing
 them; the prompt offers no online local-copy shortcut.
+
+How a failure is classified (F1, #669; `TransportCause`, from the typed error, never
+its text): one classifier (`client::transport_cause`) reads both the SDK's send
+failures and its body reads. `Refused` means the connection could not be made, so
+nothing was sent; `Dropped` means it was made and then lost before the whole reply,
+so the request may have reached the server; then `Timeout`, `Dns`, `Tls` and
+`Unknown`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
+(`TransportCause::got_no_reply`) got nothing from the server, which is what lets an
+open fall back. Writes ignore the cause: after any transport failure an upload stays
+unconfirmed and dirty, an acquire asks the server who holds the lock, and no mutation
+is sent twice. A lost connection is worded "The connection to SpeleoDB at <server> was
+lost before it finished answering", never "Could not connect". Before this, a send
+failure knew only timeouts and TLS, so a refused, reset or dropped connection and the
+DNS failure of an `https://` host were all `Unknown`, and an open fell back only on a
+timeout.
 
 Without a usable session the cached copy opens read-only, with no network call:
 

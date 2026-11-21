@@ -457,6 +457,13 @@ mod speleodb_nonblocking_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_offline_open_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_push_v2_tests;

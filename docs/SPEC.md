@@ -70,7 +70,11 @@ upload-failure and unuploaded-work indicators remain visible outside the tab.
 
 Remote opening automatically attempts lock acquisition and reconciliation. No
 explicit editing-without-a-lock feature exists. Offline opening stays read-only;
-transient disconnection after acquisition permits local editing. Confirmed lock
+transient disconnection after acquisition permits local editing. An open opens the
+cached copy offline only when its download got no reply at all: the connection could
+not be made, the name did not resolve, the time ran out, or the connection was lost
+before the whole reply arrived. A reply from the server (a refusal, an invalid
+download, one that is not HTTP) and a TLS failure never open it (F1). Confirmed lock
 loss, permission loss or sign-out closes the editing gate. Backend direct mutation
 and upload calls enforce the same ownership requirements.
 
