@@ -102,9 +102,10 @@ test.describe('.stalx v2 file status', () => {
     // No file's version to take: only the answers that keep the edits.
     await expect(page.getByTestId('save-conflict-reload')).toHaveCount(0);
     await expect(page.getByTestId('save-conflict-save-as')).toBeVisible();
+    await expect(page.getByTestId('save-conflict-overwrite')).toHaveText('Save it where it was');
     expect(await isDirty(page)).toBe(true);
 
-    // Keep my version puts it back where it was.
+    // Save it where it was puts it back.
     await page.getByTestId('save-conflict-overwrite').click();
     await expect(dialog).not.toBeVisible();
     await expect.poll(() => isDirty(page)).toBe(false);

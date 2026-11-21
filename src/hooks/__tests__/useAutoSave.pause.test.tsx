@@ -92,3 +92,52 @@ describe('useAutoSave pause', () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('useAutoSave behind the save prompt', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useProjectStore.setState({
+      project: { file_path: '/cave.stalx' } as never,
+      config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
+      isDirty: false,
+      autosaveFailure: null,
+      autosaveFailureKind: null,
+    } as never);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    const { useUIStore } = await import('../../store/uiStore');
+    useUIStore.setState({ activeDialog: null } as never);
+    useProjectStore.setState({ project: null, isDirty: false, autosaveFailureKind: null } as never);
+  });
+
+  it('runs no countdown and no save while the save-conflict prompt is open', async () => {
+    const { useUIStore } = await import('../../store/uiStore');
+    const save = vi.fn(async (): Promise<CommandResult> => SAVED);
+    useProjectStore.setState({ saveProject: save } as never);
+    renderHook(() => useAutoSave());
+    // An edit arms the countdown; the prompt opens before it fires.
+    act(() => {
+      useProjectStore.setState({ isDirty: true });
+    });
+    act(() => {
+      useUIStore.setState({ activeDialog: 'save-conflict' } as never);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(save).not.toHaveBeenCalled();
+    // A further edit while it is open arms nothing either.
+    act(() => {
+      useProjectStore.setState({ isDirty: false });
+    });
+    act(() => {
+      useProjectStore.setState({ isDirty: true });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+});

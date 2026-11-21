@@ -142,7 +142,7 @@ describe('SaveConflictDialog', () => {
     expect(screen.getByTestId('save-conflict-lead')).not.toHaveTextContent('Another program changed');
     expect(screen.getByText('The project file was moved or deleted')).toBeInTheDocument();
     expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
-    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Save it where it was');
     expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('save-conflict-cancel'));
     expect(closeProject).not.toHaveBeenCalled();

@@ -308,7 +308,8 @@ way.
 
 The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
 
-- **Keep my version**: `save_project_overwriting` writes over the changed file
+- **Keep my version** ("Save it where it was" when the file is gone):
+  `save_project_overwriting` writes over the changed file
   (`AppState::save_project_overwriting`, the guard skipped);
 - **Save as a new file**: the Save As flow, which leaves the changed file alone
   and moves the session to the new one;
@@ -328,6 +329,10 @@ The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
   sync client writing the file between those reads, or a load the frontend
   turned away after the close, lost the edits);
 - **Decide later**: keep editing.
+
+While the prompt is open no autosave countdown runs (`useAutoSave` skips
+arming and firing while `activeDialog` is `save-conflict`), so a background
+save cannot fail behind the user's answer.
 
 A SpeleoDB-managed copy gets only Keep my version: its reload belongs to the
 sync. An autosave refused this way raises no modal: the autosave banner says

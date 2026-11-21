@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
+import { useUIStore } from '../store/uiStore';
 import { classifySaveError, type SaveErrorKind } from '../utils/saveErrors';
 
 export type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
@@ -129,6 +130,9 @@ export function useAutoSave(): AutoSaveState {
         // will just fail again. The status stays "didn't run - not saved" until
         // the resume check above fires (issues resolved).
         if (pausedRef.current) return;
+        // The save prompt for a changed, moved or deleted file is open: the user
+        // is deciding where the changes go, so no countdown runs behind it.
+        if (saveConflictPromptOpen()) return;
 
         const seconds = intervalSeconds;
 
@@ -163,6 +167,7 @@ export function useAutoSave(): AutoSaveState {
           const store = useProjectStore.getState();
           // Re-check guards at fire time
           if (
+            saveConflictPromptOpen() ||
             !store.isDirty ||
             !store.project?.file_path ||
             !store.config?.general?.auto_save
@@ -217,4 +222,9 @@ export function useAutoSave(): AutoSaveState {
   }, [clearAllTimers, flash]);
 
   return { status, countdown, cancelPending };
+}
+
+/** Whether the save prompt for a changed, moved or deleted file is open. */
+function saveConflictPromptOpen(): boolean {
+  return useUIStore.getState().activeDialog === 'save-conflict';
 }

@@ -160,7 +160,9 @@ export default function SaveConflictDialog() {
               data-primary-action=""
               data-testid="save-conflict-overwrite"
             >
-              {busy === 'overwrite' ? t('dialogs.saveConflict.working') : t('dialogs.saveConflict.overwrite')}
+              {busy === 'overwrite'
+                ? t('dialogs.saveConflict.working')
+                : t(variant === 'missing' ? conflictKey(variant, 'overwrite') : 'dialogs.saveConflict.overwrite')}
             </Button>
           </li>
           {!linked && (

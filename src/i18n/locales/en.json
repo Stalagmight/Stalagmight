@@ -1250,6 +1250,7 @@
         "title": "The project file was moved or deleted",
         "lead": "{{fileName}} was moved or deleted by another program after Stalagmight opened it. Your changes are only in Stalagmight now.",
         "unsaved": "Your unsaved changes are still here. Choose where to save them:",
+        "overwrite": "Save it where it was",
         "overwriteDetail": "Save your version where the file was.",
         "saveAsDetail": "Save your version to a new file."
       },
