@@ -24,6 +24,13 @@ import {
 } from '../common/icons';
 
 /**
+ * The attribute that marks the chevron inside an Undo / Redo trigger: a click
+ * on it opens the history list instead of undoing (demo finding I-11). The
+ * toolbar puts it on the chevron it passes as `children`.
+ */
+export const HISTORY_TOGGLE_ATTR = 'data-history-toggle';
+
+/**
  * True when `relatedTarget` is a DOM node contained by `container`. WebKit
  * throws from `Node.contains()` when the argument is not a Node - a mouse/focus
  * leave into browser chrome or the WebGL canvas overlay hands us `window` or
@@ -786,8 +793,25 @@ export default function UndoHistoryDropdown({
   // Handle button click - when dropdown is open, perform action and stay open; when closed, delegate to parent
   // Note: when open, we call store undo/redo directly (not onSingleAction) because we need the Promise
   // to chain refresh logic. onSingleAction is fire-and-forget and used only for the closed-dropdown path.
-  const handleButtonClick = useCallback(() => {
+  const handleButtonClick = useCallback((event?: React.MouseEvent) => {
     if (disabledRef.current) return;
+    // The chevron inside the trigger (`HISTORY_TOGGLE_ATTR`) reads as "show the
+    // list": a click on it opens the history, never performs an undo (demo
+    // finding I-11). An open list stays open, so a click that lands after the
+    // hover already opened it does not close it again.
+    if (event?.target instanceof Element && event.target.closest(`[${HISTORY_TOGGLE_ATTR}]`)) {
+      if (isOpenRef.current) return;
+      hoverTokenRef.current += 1;
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+      }
+      const token = hoverTokenRef.current;
+      void fetchStack().then((stack) => {
+        if (hoverTokenRef.current === token && !disabledRef.current && stack.length > 0) setIsOpen(true);
+      });
+      return;
+    }
     setSource('toolbar');
 
     if (isOpenRef.current) {
@@ -805,7 +829,7 @@ export default function UndoHistoryDropdown({
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t, fetchStack]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {

@@ -19,7 +19,7 @@ import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
 import { useEditingBlocked, selectFileReadOnly } from '../../hooks/useEditingBlocked';
-import UndoHistoryDropdown from './UndoHistoryDropdown';
+import UndoHistoryDropdown, { HISTORY_TOGGLE_ATTR } from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
 import { isMutatingTool, navigationToolsEnabled } from '../../utils/toolUtils';
 import { setSource } from '../../utils/telemetry';
@@ -486,11 +486,17 @@ export default function Toolbar({
                 {historyCondensed ? <UndoIcon size={16} /> : t('common.actions.undo')}
                 {/* Always occupy the chevron slot so toggling canUndo/placement never
                     changes the button width (a width change would re-trigger the
-                    carousel-fit compaction). `invisible` hides paint but keeps layout. */}
+                    carousel-fit compaction). `invisible` hides paint but keeps layout.
+                    A click on it opens the history instead of undoing (I-11); the
+                    padding, cancelled by the margin, widens the target up and down
+                    and into the button's right padding without changing the width
+                    (never leftward, where the label is). */}
                 <span
-                  className={`text-[10px] opacity-60 ${canUndo && !placementModeActive ? '' : 'invisible'}`}
+                  className={`text-[10px] opacity-60 py-1 -my-1 pr-1 -mr-1 ${canUndo && !placementModeActive ? '' : 'invisible'}`}
                   aria-hidden="true"
+                  title={t('undo.history.undo')}
                   data-testid="undo-chevron"
+                  {...{ [HISTORY_TOGGLE_ATTR]: '' }}
                 >
                   <ChevronDownIcon size={10} />
                 </span>
@@ -511,11 +517,14 @@ export default function Toolbar({
               <span className="inline-flex items-center gap-0.5">
                 {historyCondensed ? <RedoIcon size={16} /> : t('common.actions.redo')}
                 {/* See the undo chevron: constant-width slot so redo availability
-                    never nudges the layout into a compaction step. */}
+                    never nudges the layout into a compaction step, and a click on
+                    it opens the history. */}
                 <span
-                  className={`text-[10px] opacity-60 ${canRedo && !placementModeActive ? '' : 'invisible'}`}
+                  className={`text-[10px] opacity-60 py-1 -my-1 pr-1 -mr-1 ${canRedo && !placementModeActive ? '' : 'invisible'}`}
                   aria-hidden="true"
+                  title={t('undo.history.redo')}
                   data-testid="redo-chevron"
+                  {...{ [HISTORY_TOGGLE_ATTR]: '' }}
                 >
                   <ChevronDownIcon size={10} />
                 </span>
