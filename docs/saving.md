@@ -345,7 +345,11 @@ per-machine or sync state.
 
 The first save of a migrated legacy file (its origin is `Legacy` in
 `FileState`) writes version 2 over it, through `legacy_upgrade::upgrade`
-(`core/state/legacy_upgrade.rs`). Until a save writes the open project (to
+(`core/state/legacy_upgrade.rs`), as does every other write over a 0.6.0 file
+of the user's (a Recents rename, a link strip, a Save As onto one). The one
+write over a legacy file that keeps no backup is a SpeleoDB download
+installed over a 0.6.0 copy in the pull cache (`install_cache_bytes`,
+`Guard::Overwrite`): that copy's data is on the server. Until a save writes the open project (to
 its own path, or a Save As elsewhere) the status bar reads "Old format:
 converted when you save" instead of "Saved": the frontend asks
 `project_file_is_legacy` with the rest of the file status, and the converting

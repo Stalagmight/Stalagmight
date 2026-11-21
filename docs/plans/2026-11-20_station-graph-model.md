@@ -930,7 +930,9 @@ as another survey, and Recovery refused the backup pair. Labels `H1`...
 - **H1. The upgrade settles the original before anything else** (replaces C3
   and the "moved into the backups folder" of 7.2.10). Every write over a legacy
   file (the first save, a Recents rename, a SpeleoDB link strip, a Save As
-  onto one, UR5) goes through `core::state::legacy_upgrade::upgrade`: check the guard; if a hot journal or
+  onto one, UR5; not a SpeleoDB download installed over a 0.6.0 pull-cache
+  copy, which keeps no backup: its data is on the server) goes through
+  `core::state::legacy_upgrade::upgrade`: check the guard; if a hot journal or
   a WAL with frames is beside the original, fold them into a private copy
   (`persistence::legacy_settle`, the frozen reader's own rule), stage it beside
   the original, sync, check the guard again and rename it over the original;

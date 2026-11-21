@@ -12,7 +12,9 @@
 //! sidecars beside it. They are moved out of SQLite's sight before the new file
 //! takes the name and deleted once it has (`speleodb_sidecars`): a stale journal
 //! beside a version 2 file is harmless to this build, but an older build that
-//! opened the file would roll it into the JSON.
+//! opened the file would roll it into the JSON. Unlike every other write over
+//! a legacy file (`legacy_upgrade`), this one keeps no backup of the 0.6.0
+//! copy: what it held is on the server.
 use std::collections::BTreeMap;
 use std::path::Path;
 
