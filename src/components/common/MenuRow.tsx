@@ -63,7 +63,7 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    * Why a read-only state turned this `disabled` row off (demo finding N-12),
    * shown in the app's tooltip on hover. Such a row is `aria-disabled`, not
    * `disabled`: a `disabled` button gets no click (so the menu could not say
-   * why on one), and WebKitGTK never draws its native `title` tooltip. The
+   * why on one), and WebKitGTK drew no native `title` tooltip for one. The
    * menu must therefore turn a click on it into the notice, never the action.
    * Ignored on an enabled row.
    */

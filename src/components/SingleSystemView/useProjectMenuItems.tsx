@@ -73,7 +73,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       // Nothing of the user's can be unsaved in a read-only file: just close
       // (its row is off, but a close must never route through a save that can
       // only be refused).
-      if (useProjectStore.getState().fileReadOnlyReason !== null) {
+      if (selectFileReadOnly(useProjectStore.getState())) {
         await handleCloseProject();
         return;
       }
