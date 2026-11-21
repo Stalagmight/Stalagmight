@@ -4117,7 +4117,7 @@ fn test_delete_shot_and_split_creates_new_line() {
     let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
     let line_state = get_line(state(&app), id).unwrap();
     let shot_id = line_state.shots[1].id;
-    let color = line_state.color.clone();
+    let color = line_state.color;
     assert_ne!(color, "#00aa55");
 
     let result = shot::delete_shot_and_split(
@@ -4151,7 +4151,7 @@ fn test_delete_shot_range_split_colours_the_new_line() {
     let id = create_line_with_shots(&app, shots);
     let line_state = get_line(state(&app), id).unwrap();
     let (first, last) = (line_state.shots[1].id, line_state.shots[2].id);
-    let color = line_state.color.clone();
+    let color = line_state.color;
 
     let result = shot::delete_shot_range_split(
         state(&app),

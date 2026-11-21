@@ -17,6 +17,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 }));
 
 import '../../../i18n';
+import { invokeIpc } from '../../../utils/ipc';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import DrawShotDialog from '../DrawShotDialog';
@@ -107,15 +108,34 @@ describe('dialog identity labels', () => {
     expectNoHandles();
   });
 
-  it('Detach names the station and each line through it', () => {
+  it('Detach names the station and each line through it', async () => {
+    // A two-line junction lists its lines once the previews have answered
+    // (here they fail, so the choice cannot be ruled out, N-2).
+    vi.mocked(invokeIpc).mockRejectedValueOnce(new Error('No project open')).mockRejectedValueOnce(new Error('No project open'));
     open({
       stationRef: { line_id: MAIN, station_index: 0 },
       mergedStations: [{ line_id: SIDE, station_index: 1 }],
     });
     render(<UnmergeStationsDialog />);
+    expect(await screen.findByText('Main Line (the line you clicked)')).toBeInTheDocument();
     expect(screen.getByTestId('unmerge-stations-lead')).toHaveTextContent('M0 is where 2 lines meet');
-    expect(screen.getByText('Main Line (the line you clicked)')).toBeInTheDocument();
     expect(screen.getByText('Side')).toBeInTheDocument();
+    expectNoHandles();
+  });
+
+  it('Detach with no choice to offer names the line that comes off and the one that keeps the station', async () => {
+    const preview = (kept: boolean) => ({ name: 'S1', station_id: 9, restored: true, kept });
+    vi.mocked(invokeIpc)
+      .mockImplementationOnce(async () => preview(true))
+      .mockImplementationOnce(async () => preview(false));
+    open({
+      stationRef: { line_id: MAIN, station_index: 0 },
+      mergedStations: [{ line_id: SIDE, station_index: 1 }],
+    });
+    render(<UnmergeStationsDialog />);
+    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'Side comes off: it gets back S1 (Station ID 9); Main Line keeps M0.',
+    );
     expectNoHandles();
   });
 
