@@ -1169,6 +1169,21 @@ alias exemption.
   stays. The e2e IPC mock shows each member slot by its own name, sends the
   alias lines, and answers `preview_detach_line` with `kept`; its contract
   checks both. The migration gates stopped requiring `names_changed` (above).
+- **U1-6. Four more readers of a slot's name (wave 3 integration).** The
+  Reverse Line warnings' shot labels (`command_line::shot_label`), the Split
+  Line Here history label (`split_label`), Combine's removed-tie warnings
+  (`command_combine_lines::station_text`) and the map image export's slot
+  names (`export::survey::image`, which picks the representative slot) still
+  read the station's own name; they read `name_on` now, each pinned by a test
+  on a line that knows the junction by an alias.
+- **U1-7. The Detach default with the kept owner (U4's I-7).** U4 preselects
+  another line when the clicked owner would get a new Station ID. With U1 a
+  clicked owner keeps the junction (`kept`) whenever every other line knows it
+  by an alias, so that default fires only while a line that shows the
+  junction by its own name stays on it; a kept owner stays selected (either
+  choice gives every line the same station), and U4's "the comment stays"
+  sentence shows only when the chosen line gets its station back and the
+  others keep the junction (`restored && !kept`).
 
 ## Deviations (usability fixes, package U2: Restore an earlier copy)
 

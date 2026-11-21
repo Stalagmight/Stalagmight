@@ -169,7 +169,11 @@ fn sketch(
             let mut wire = Station::with_coordinates(slot, Coordinates::new(x, y, z));
             wire.id = id;
             if let Some(station) = project.station(id) {
-                wire.name.clone_from(&station.name);
+                // The name this slot's line shows (I-3): the representative
+                // slot then labels a junction as the map does.
+                wire.name = project
+                    .name_on(id, line.id)
+                    .map_or_else(|| station.name.clone(), str::to_string);
                 if first_drawn(id) == Some(slot) {
                     wire.comment = station.comment.clone().filter(|c| !c.is_empty());
                 }

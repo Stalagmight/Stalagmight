@@ -57,6 +57,46 @@ fn a_junction_is_labelled_once() {
     assert_eq!(names.iter().filter(|n| *n == "Hub").count(), 1, "{names:?}");
 }
 
+/// In names mode a junction is labelled by the name its representative
+/// slot's line shows (I-3), as the map labels it: Main passes the junction
+/// mid-line (so its slot represents the point) and knows it by an alias,
+/// "M1", while the station's own name, "S0", is the one Side shows.
+/// Injection: labelling every slot by the station's own name fails it.
+#[test]
+fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
+    use crate::models::survey::StationAlias;
+    let mut p = project("Alias");
+    let main = p
+        .add_line(
+            meta("Main", "#336699"),
+            StartAt::New,
+            run(0, 3, 90.0, 10.0, 5.0, 1.0),
+        )
+        .unwrap();
+    let j = p.line(main).unwrap().station(1).unwrap();
+    p.add_line(
+        meta("Side", "#aa5500"),
+        StartAt::Station(j),
+        run(10, 2, 0.0, 8.0, 7.0, 0.5),
+    )
+    .unwrap();
+    let alias = p.mint_station_id().unwrap();
+    let station = p.stations.get_mut(&j).unwrap();
+    station.name = "S0".to_string();
+    station.aliases.push(StationAlias {
+        id: alias,
+        name: Some("M1".to_string()),
+        line: Some(main),
+    });
+    assert_eq!(p.name_on(j, main), Some("M1"));
+    let names = texts(
+        &generate_svg_string(&p, &labelled(false)).unwrap(),
+        "station-names",
+    );
+    assert!(names.contains(&"M1".to_string()), "{names:?}");
+    assert!(!names.contains(&"S0".to_string()), "{names:?}");
+}
+
 /// A station comment is drawn once, at a junction too; a datum station gets
 /// one star.
 #[test]

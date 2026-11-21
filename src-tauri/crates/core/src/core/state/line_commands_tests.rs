@@ -380,6 +380,49 @@ fn create_line_reports_validation_warnings_with_the_shots_labels() {
     );
 }
 
+/// Reverse Line's warnings name each station as the line shows it (I-3):
+/// Side's station 2 survived a merge with Main's station 1, so Main knows
+/// the junction by an alias ("1"). Injection: naming it by the station's own
+/// name fails it with "Main: 2 \u{2192} 2".
+#[test]
+fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
+    use super::topology_kit::{deep, empty, line_at, open, st};
+    let mut p = empty("Reverse");
+    let main = line_at(
+        &mut p,
+        "Main",
+        [0.0, 0.0],
+        vec![heading_shot(0.0, 5.0), deep(0.0, 2.0, 0.0, 9.0)],
+    );
+    let side = line_at(
+        &mut p,
+        "Side",
+        [40.0, 40.0],
+        vec![heading_shot(90.0, 4.0), heading_shot(90.0, 4.0)],
+    );
+    let j = st(&p, side, 2);
+    p.merge_stations(st(&p, main, 1), j).unwrap();
+    assert_eq!(p.name_on(j, main), Some("1"));
+    assert_eq!(p.name_on(j, side), Some("2"));
+    let opened = open(&p);
+    let r = opened.state.execute(Command::ReverseLine {
+        line_id: main,
+        swap_left_right: false,
+    });
+    assert!(r.success, "{:?}", r.error);
+    let messages: Vec<&str> = r
+        .warnings
+        .iter()
+        .filter(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE")
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(messages.len(), 1, "{:?}", r.warnings);
+    assert!(
+        messages[0].starts_with("Shot Main: 2 \u{2192} 1 "),
+        "{messages:?}"
+    );
+}
+
 #[test]
 fn the_shots_uuids_are_minted_by_the_app() {
     let state = new_state();

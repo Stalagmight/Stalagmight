@@ -79,10 +79,10 @@ pub struct StationAlias {
     /// station was on when it was merged (a 0.6.0 merge member's line, the
     /// moving line of a merge). Like a datum's `via` it must pass through the
     /// station (invariant 2; a stale one is cleared). Detaching that line
-    /// gives it this id and name back (review finding UX-4), and on that
-    /// line the station's own name need not be unique (invariant 8, review
-    /// findings D-migration-upgrade-8 and UX-3: the line knows it by the
-    /// alias).
+    /// gives it this id and name back (review finding UX-4), and that line
+    /// shows the station by this alias's name (`Project::name_on`), which
+    /// invariant 8 holds unique on the line like every name it shows (I-3;
+    /// review findings D-migration-upgrade-8 and UX-3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<LineId>,
 }

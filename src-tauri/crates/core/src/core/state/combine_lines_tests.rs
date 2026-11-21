@@ -856,6 +856,50 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
     assert!(!combined.topology().is_junction(x1), "O left X's end");
 }
 
+/// The same shape with O merged onto X's end instead of started there: O
+/// knows the junction by an alias ("0", its own start before the merge), so
+/// the warning names O's slot by O's name, as the Combine dialog lists it
+/// (I-3), not by the junction's own name. Injection: naming the slot by the
+/// station's own name (`station.name`) fails it with "O / <X's name>".
+#[test]
+fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
+    let mut p = empty("Passage");
+    let k = line_at(&mut p, "K", [0.0, 0.0], vec![shot(90.0, 10.0)]);
+    let k1 = st(&p, k, 1);
+    let x = line_from(&mut p, "X", k1, vec![shot(90.0, 0.4)]);
+    let x1 = st(&p, x, 1);
+    let o = line_at(&mut p, "O", [30.0, 30.0], vec![shot(90.0, 5.0)]);
+    p.merge_stations(st(&p, o, 0), x1).unwrap();
+    assert_eq!(st(&p, o, 0), x1, "X's end survives the merge");
+    assert_eq!(p.name_on(x1, o), Some("0"), "O knows it by its own start");
+    let own = p.stations.get(&x1).unwrap().name.clone();
+    assert_ne!(own, "0", "the junction's own name is X's");
+    p.push_closure(
+        k1,
+        Some(k),
+        x1,
+        Some(o),
+        ClosureStrategy::ProportionalByLength,
+    );
+    let opened = open(&p);
+    let state = &opened.state;
+
+    let warnings = combine_removing(
+        state,
+        slot(k, 1),
+        (k, LineEnd::End),
+        (o, LineEnd::Start),
+        &[(slot(o, 0), slot(x, 1), CombineRemovedKind::Merge)],
+    );
+    assert_eq!(
+        warnings,
+        vec![format!(
+            "Removed the merge of O / 0 and X / {own}: combining the lines left its two \
+             stations at the two ends of one shot."
+        )]
+    );
+}
+
 /// #746, an ordinary closure the join alone puts across one shot. K runs two
 /// shots east; O starts beside K's end (co-located, its own station) and
 /// loops back north, west and south onto K's start (a junction); a `Batch`

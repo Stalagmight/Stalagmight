@@ -21,9 +21,10 @@ use crate::models::{
 /// 0.6.0's refusal of an empty combined name (a rename's).
 const EMPTY_NAME: &str = "A line name cannot be empty";
 
-/// A station as the user reads it on its slot, `Line name / station name`,
-/// `a station of Line name` when the slot names no station, `a station` when
-/// its line is gone too. Never the positional `line:index` handle.
+/// A station as the user reads it on its slot, `Line name / station name`
+/// (the name that line shows it by, I-3), `a station of Line name` when the
+/// slot names no station, `a station` when its line is gone too. Never the
+/// positional `line:index` handle.
 fn station_text(project: &Project, at: StationRef) -> String {
     if project.line(at.line_id).is_none() {
         return "a station".to_string();
@@ -32,11 +33,11 @@ fn station_text(project: &Project, at: StationRef) -> String {
     project
         .topology()
         .station_at(at)
-        .and_then(|id| project.stations.get(&id))
+        .and_then(|id| project.name_on(id, at.line_id))
         .map_or_else(
             || format!("a station of {line}"),
-            |station| {
-                let name = station.name.trim();
+            |name| {
+                let name = name.trim();
                 if name.is_empty() {
                     format!("{line} / {}", at.station_index)
                 } else {

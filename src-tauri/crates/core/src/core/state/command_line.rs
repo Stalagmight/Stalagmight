@@ -154,14 +154,15 @@ pub(super) fn create_free_line(
     Ok((id, warnings))
 }
 
-/// A shot as the user reads it after the edit: `Line: from -> to`.
+/// A shot as the user reads it after the edit: `Line: from -> to`, each
+/// station by the name that line shows it by (I-3).
 fn shot_label(project: &Project, line: LineId, index: usize) -> String {
     let name = |i: usize| {
         project
             .line(line)
             .and_then(|l| l.station(i))
-            .and_then(|s| project.stations.get(&s))
-            .map_or_else(|| i.to_string(), |s| s.name.clone())
+            .and_then(|s| project.name_on(s, line))
+            .map_or_else(|| i.to_string(), str::to_string)
     };
     format!(
         "{}: {} \u{2192} {}",

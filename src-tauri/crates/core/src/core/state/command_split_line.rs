@@ -74,14 +74,15 @@ fn frozen_cut_refusal(
 
 /// What the history calls the split, read once it is made: `Split line
 /// "Main" at SP`, the line by the name it had before the cut (`line_name`;
-/// the halves are renamed) and the station it was cut at by its name now (a
-/// cut inside a shot names its new station only from here on), else its
-/// position on the first half.
+/// the halves are renamed) and the station it was cut at by the name the
+/// halves show it by now (I-3: the second half has a copy of the alias the
+/// line knew it by; a cut inside a shot names its new station only from here
+/// on), else its position on the first half.
 fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> String {
     let at = project
         .line(second)
-        .and_then(|l| project.stations.get(&l.start))
-        .map(|s| s.name.trim().to_string())
+        .and_then(|l| project.name_on(l.start, second))
+        .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());
     super::labels::split_line_label(line_name, &at)

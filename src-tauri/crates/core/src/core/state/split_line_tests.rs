@@ -1255,6 +1255,31 @@ fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
     }
 }
 
+/// The label names the cut station as the line shows it (I-3): Side's
+/// station 1 survived a merge with Main's station 2, so Main knows the
+/// junction by an alias ("2") and the label says 2, not the junction's own
+/// name. Injection: naming it by the station's own name fails it with "at 1".
+#[test]
+fn the_label_names_the_cut_station_as_the_line_shows_it() {
+    let (mut p, main) = main_survey();
+    let side = line_at(
+        &mut p,
+        "Side",
+        [40.0, 40.0],
+        vec![shot(90.0, 4.0), shot(90.0, 4.0)],
+    );
+    let j = st(&p, side, 1);
+    p.merge_stations(st(&p, main, 2), j).unwrap();
+    assert_eq!(st(&p, main, 2), j, "Side's station survives the merge");
+    assert_eq!(p.name_on(j, main), Some("2"));
+    assert_eq!(p.name_on(j, side), Some("1"));
+    let opened = open(&p);
+    let state = &opened.state;
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 2 }, options());
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(history(state)[0].1, "Split line \"Main\" at 2");
+}
+
 /// The label is worded at record time: the line by the name it had before
 /// the cut, though the halves are renamed, on the undo and the redo side.
 #[test]
