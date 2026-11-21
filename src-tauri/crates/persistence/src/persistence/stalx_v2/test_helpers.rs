@@ -498,8 +498,13 @@ fn extras_for(p: &Project, rng: &mut Rng, rich: bool) -> Extras {
             project_name: text(rng, "Shared cave"),
             undo_mode: *rng.pick(&[None, Some(UndoMode::Full), Some(UndoMode::Disabled)]),
         });
+        let base_commit = rng.chance(0.7).then(|| format!("{:040x}", rng.next()));
         extras.local.speleodb = LocalSync {
-            base_commit: rng.chance(0.7).then(|| format!("{:040x}", rng.next())),
+            // No draw of its own: every later draw stays where seeds expect it.
+            base_survey: base_commit
+                .as_ref()
+                .map(|base| format!("sha256:{:0>64}", &base[..8])),
+            base_commit,
             unpushed_edits: rng.chance(0.5),
             last_edit_at: rng.chance(0.5).then(|| instant(rng)),
             last_verify_at: rng.chance(0.5).then(|| instant(rng)),
