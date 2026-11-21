@@ -1894,7 +1894,14 @@ station where the junction was (same name, made unique; no comment, no
 aliases), so nothing moves. The datums and closure ends that came from that
 line (their `via`) move to the new station with it; the orphan-closure sweep
 then promotes a closure left as the only connection of the detached piece. On a
-hub of three or more lines only the chosen line leaves.
+hub of three or more lines only the chosen line leaves. The dialog preselects
+the line clicked, except when that is the junction's owner (a line no alias
+names, which would get a new Station ID) and another line was merged there:
+that line, which gets its own Station ID and name back, is preselected. The
+station's comment stays with the other lines; a merge or the 0.6.0 upgrade may
+have joined the detached line's own comment into it, which no alias keeps, so
+for a line that gets its station back the dialog says the comment stays and
+to copy that part over (demo finding I-7).
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
