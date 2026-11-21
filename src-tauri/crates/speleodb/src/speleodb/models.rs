@@ -422,6 +422,15 @@ pub enum DoneResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         undo_history_omitted: Option<bool>,
+        /// R3, the lost race: the revisions this upload took HEAD from, newest
+        /// first. Another session of the same account (which holds the same
+        /// per-account lock) landed them after the push checked that HEAD was
+        /// still BASE and before its upload did, so the server put ours on top
+        /// of them and their work is not in it. They are still in the project's
+        /// revision history. Absent in the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
     },
     /// There was no edit session to finish: the backend's edit gate was already
     /// closed, so no lock was held, nothing was pushed and nothing was released.
@@ -436,9 +445,10 @@ pub enum DoneResult {
     /// this arm and route the user back through Start editing (re-login first if
     /// the token is gone).
     NotEditing,
-    /// The server diverged (a stranger commit between our base and the tip):
-    /// nothing was pushed, the lock + dirty bit are retained for the user to
-    /// reconcile (#198).
+    /// The server diverged (a commit between our base and the tip that this
+    /// session did not upload: a stranger's, or another session's of the same
+    /// account, R3): nothing was pushed, the lock + dirty bit are retained for
+    /// the user to reconcile (#198).
     DivergenceNeeded,
     /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
     /// AND the lock are retained so a later retry recovers via ancestry (#193) -
@@ -579,6 +589,11 @@ pub enum PushResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         undo_history_omitted: Option<bool>,
+        /// As on [`DoneResult::Released`]: the revisions this upload took HEAD
+        /// from (R3, the lost race), newest first; absent in the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
     },
     /// There was no edit session to push from: the backend's edit gate was already
     /// closed, so no lock was held and nothing was uploaded. See
@@ -734,6 +749,7 @@ mod tests {
         .expect("serialize locked-by result");
         let done = serde_json::to_string(&DoneResult::Released {
             undo_history_omitted: Some(true),
+            replaced_revisions: None,
         })
         .expect("serialize done result");
         let update = serde_json::to_string(&UpdateResult::FastForwarded {
@@ -932,11 +948,13 @@ mod tests {
         let plain = |v: &serde_json::Value| v.to_string();
         let released = serde_json::to_value(DoneResult::Released {
             undo_history_omitted: None,
+            replaced_revisions: None,
         })
         .expect("serialize");
         assert_eq!(plain(&released), r#"{"kind":"released"}"#);
         let pushed = serde_json::to_value(PushResult::Pushed {
             undo_history_omitted: Some(true),
+            replaced_revisions: None,
         })
         .expect("serialize");
         assert_eq!(
@@ -957,5 +975,38 @@ mod tests {
         assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
         let refused = serde_json::to_value(publish(None, Some(true))).expect("serialize");
         assert_eq!(refused["upload_format_refused"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_landed_push_names_the_revisions_it_replaced_only_when_there_are_some() {
+        // R3, the lost race: the notice field rides the ordinary success, with
+        // what the frontend needs to name the revision; absent otherwise (above).
+        let revision = SpeleoRevision {
+            id: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            parent_ids: vec!["fedcba9876543210fedcba9876543210fedcba98".to_owned()],
+            author_email: "diver@example.com".to_owned(),
+            authored_date: Some("2026-11-21T10:00:00.000Z".to_owned()),
+            message: Some("Surveyed the sump".to_owned()),
+        };
+        let pushed = serde_json::to_value(PushResult::Pushed {
+            undo_history_omitted: None,
+            replaced_revisions: Some(vec![revision.clone()]),
+        })
+        .expect("serialize");
+        assert_eq!(pushed["kind"], "pushed");
+        assert_eq!(
+            pushed["replaced_revisions"][0]["message"],
+            "Surveyed the sump"
+        );
+        assert!(pushed.get("undo_history_omitted").is_none());
+        let released = serde_json::to_value(DoneResult::Released {
+            undo_history_omitted: None,
+            replaced_revisions: Some(vec![revision]),
+        })
+        .expect("serialize");
+        assert_eq!(
+            released["replaced_revisions"][0]["id"],
+            "0123456789abcdef0123456789abcdef01234567"
+        );
     }
 }

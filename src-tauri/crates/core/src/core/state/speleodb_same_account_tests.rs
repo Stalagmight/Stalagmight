@@ -152,7 +152,10 @@ fn server() -> (String, Shared) {
                     super::tests_support::sdk_fixture(&format!(r#"{{"email":"{ME}"}}"#)),
                 )
             } else if line.contains("/revisions/") {
-                (200, super::tests_support::sdk_fixture(&remote.commits_json()))
+                (
+                    200,
+                    super::tests_support::sdk_fixture(&remote.commits_json()),
+                )
             } else if line.contains("/upload/") {
                 remote.uploads.push(request.clone());
                 let next = std::mem::take(&mut remote.next);
@@ -174,7 +177,12 @@ fn server() -> (String, Shared) {
                 )
             } else if line.contains("/release/") {
                 remote.holder = None;
-                (200, project)
+                (
+                    200,
+                    super::tests_support::sdk_fixture(&format!(
+                        r#"{{"id":"{ID}","name":"Remote","permission":"READ_AND_WRITE"}}"#
+                    )),
+                )
             } else if line.contains("/acquire/") {
                 remote.holder = Some(ME.to_owned());
                 (200, project)
@@ -264,7 +272,9 @@ impl Session {
                 let _ = answer.send(f(state));
             }))
             .expect("session alive");
-        reply.recv().expect("the session answered (see its panic above)")
+        reply
+            .recv()
+            .expect("the session answered (see its panic above)")
     }
 
     /// The link as this session's copy holds it on disk.
@@ -382,7 +392,11 @@ fn a_second_session_of_the_same_account_is_refused_and_uploads_nothing() {
     }
     let on_disk = b.link_on_disk();
     assert!(on_disk.has_unpushed_edits, "B's work is still un-uploaded");
-    assert_eq!(on_disk.base_commit_sha.as_deref(), Some(BASE), "BASE unchanged");
+    assert_eq!(
+        on_disk.base_commit_sha.as_deref(),
+        Some(BASE),
+        "BASE unchanged"
+    );
     let (editing, can_undo) = b.run(|state| (state.edit_enabled(), state.can_undo()));
     assert!(editing && can_undo, "B keeps its lock and its history");
 }
@@ -439,7 +453,10 @@ fn an_unanswered_upload_is_no_licence_to_adopt_another_sessions_revision() {
 
     remote.lock().expect("remote").next = Next::DropUnlanded;
     let dropped = b.run(push("From B"));
-    assert!(matches!(dropped, PushResult::PushUnconfirmed), "{dropped:?}");
+    assert!(
+        matches!(dropped, PushResult::PushUnconfirmed),
+        "{dropped:?}"
+    );
     assert_eq!(remote.lock().expect("remote").tip().as_deref(), Some(BASE));
 
     let pushed = a.run(push("From A"));
@@ -460,4 +477,151 @@ fn an_unanswered_upload_is_no_licence_to_adopt_another_sessions_revision() {
     assert_eq!(remote.tip(), a_head);
     drop(remote);
     assert_eq!(b.link_on_disk().base_commit_sha.as_deref(), Some(BASE));
+}
+
+#[test]
+fn a_push_whose_base_is_still_head_uploads() {
+    // The check costs the ordinary push nothing: HEAD is still BASE (nobody
+    // pushed), so it uploads; and its own landed revision is the next push's
+    // BASE, so that one uploads too.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+
+    for message in ["First", "Second"] {
+        let pushed = a.run(push(message));
+        assert!(
+            matches!(
+                pushed,
+                PushResult::Pushed {
+                    replaced_revisions: None,
+                    ..
+                }
+            ),
+            "{message}: {pushed:?}"
+        );
+        let head = remote.lock().expect("remote").tip();
+        assert_eq!(a.link_on_disk().base_commit_sha, head, "{message}");
+    }
+    let remote = remote.lock().expect("remote");
+    assert_eq!(remote.uploads.len(), 2);
+    assert_eq!(
+        remote
+            .history
+            .iter()
+            .map(|r| r.message.as_str())
+            .collect::<Vec<_>>(),
+        ["First survey", "First", "Second"]
+    );
+}
+
+#[test]
+fn a_revision_landed_between_the_check_and_the_upload_is_named_with_the_push() {
+    // The race the HEAD check cannot close (SpeleoDB has no conditional upload):
+    // A's revision lands after B checked HEAD == BASE and before B's upload does,
+    // so the server puts B's on top of it. B's upload landed (its work is HEAD),
+    // and the result names the revision it replaced, which is still in the
+    // history. The report is made once.
+    // Injection: skip `speleodb_check_replaced_by_upload` after the 200 and
+    // `replaced_revisions` is None.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+
+    remote.lock().expect("remote").meanwhile = Some("From A, meanwhile".to_owned());
+    let pushed = b.run(push("From B"));
+    let PushResult::Pushed {
+        replaced_revisions: Some(replaced),
+        ..
+    } = pushed
+    else {
+        panic!("the landed push names what it replaced: {pushed:?}");
+    };
+    let (theirs, ours) = {
+        let remote = remote.lock().expect("remote");
+        let theirs = remote.history[1].clone();
+        let ours = remote.history[2].clone();
+        (theirs, ours)
+    };
+    assert_eq!(ours.parent.as_deref(), Some(theirs.id.as_str()));
+    assert_eq!(replaced.len(), 1, "{replaced:?}");
+    assert_eq!(replaced[0].id, theirs.id);
+    assert_eq!(replaced[0].message.as_deref(), Some("From A, meanwhile"));
+    assert_eq!(replaced[0].author_email, ME);
+    assert_eq!(
+        b.link_on_disk().base_commit_sha.as_deref(),
+        Some(ours.id.as_str()),
+        "B's BASE is its own landed revision"
+    );
+
+    let again = b.run(push("From B again"));
+    assert!(
+        matches!(
+            again,
+            PushResult::Pushed {
+                replaced_revisions: None,
+                ..
+            }
+        ),
+        "reported once: {again:?}"
+    );
+}
+
+#[test]
+fn done_names_the_replaced_revision_too() {
+    // Done is the upload the close, quit and sign-out prompts run: it reports
+    // the lost race the same way, after handing the lock back.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+
+    remote.lock().expect("remote").meanwhile = Some("From A, meanwhile".to_owned());
+    let done = b.run(|state| {
+        edit(state);
+        state
+            .speleodb_done(Some("From B".to_owned()))
+            .expect("Done answers")
+    });
+    let DoneResult::Released {
+        replaced_revisions: Some(replaced),
+        ..
+    } = done
+    else {
+        panic!("Done names what its upload replaced: {done:?}");
+    };
+    assert_eq!(replaced[0].message.as_deref(), Some("From A, meanwhile"));
+    assert!(
+        remote.lock().expect("remote").holder.is_none(),
+        "the lock was handed back"
+    );
+}
+
+#[test]
+fn the_status_shows_the_conflict_that_save_changes_will_report() {
+    // The passive mark agrees with the refusal: under the account's lock, A's
+    // revision on B's BASE is a conflict for B, not "up to date".
+    // Injection: let `status_verdict` take the account's email as ours and B's
+    // mark reads UpToDate.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, _remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    let status = b.run(|state| {
+        edit(state);
+        state.speleodb_link_status().expect("status")
+    });
+    assert_eq!(
+        status.remote_state,
+        crate::speleodb::RemoteState::Conflict,
+        "{status:?}"
+    );
+    let own = a.run(|state| state.speleodb_link_status().expect("status"));
+    assert_eq!(
+        own.remote_state,
+        crate::speleodb::RemoteState::UpToDate,
+        "A's own revision is not a conflict for A: {own:?}"
+    );
 }

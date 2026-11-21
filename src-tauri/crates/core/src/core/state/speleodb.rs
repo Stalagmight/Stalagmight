@@ -657,6 +657,8 @@ impl AppState {
                 link.has_unpushed_edits,
                 &commits,
                 &my_email,
+                // R3: what this session uploaded, the same licence the push checks.
+                &self.speleodb_own_uploads(&link.project_id),
                 we_hold_the_lock,
             ),
             Err(_) => RemoteState::Unknown,
@@ -3346,10 +3348,26 @@ mod tests {
         state.set_edit_enabled(true);
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
-            RemoteState::UpToDate,
-            "a session that really does hold the lock still gets the shortcut - our \
-             own landed push must not be painted as a conflict"
+            RemoteState::Conflict,
+            "R3: holding the lock is not enough either - it is the account's, so the \
+             other session holds it too, and this one uploaded nothing that can be def456"
         );
+
+        record_own_upload(&state, "abc123", "def456");
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::UpToDate,
+            "a session that holds the lock AND uploaded def456 still gets the shortcut - \
+             our own landed push must not be painted as a conflict"
+        );
+    }
+
+    /// Record that this process's upload on `base` was answered with `landed` (R3:
+    /// the push's own record, the licence the authorship shortcut needs).
+    fn record_own_upload(state: &AppState, base: &str, landed: &str) {
+        let generation = state.speleodb_session_generation();
+        state.speleodb_note_upload_sent(generation, REMOTE_ID, Some(base.to_owned()), "m");
+        state.speleodb_note_upload_answered(generation, REMOTE_ID, Some(landed));
     }
 
     /// [#258 review] The provenance-scoped unwind releases what THIS process took, and
@@ -3419,10 +3437,12 @@ mod tests {
             last_verify_at: None,
             undo_mode: None,
         };
+        record_own_upload(&state, "abc123", "def456");
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
             RemoteState::UpToDate,
-            "precondition: gate + record + holder together DO license the shortcut"
+            "precondition: gate + record + holder + our own upload together DO license \
+             the shortcut"
         );
 
         state.set_edit_enabled(false);
@@ -3562,15 +3582,27 @@ mod tests {
             "a second refresh must preserve the conflict and the shut edit gate"
         );
 
-        // The other side of the line: a process that really did take this lock keeps
-        // the shortcut, so its own landed push is not painted as a conflict.
+        // Taking the lock does not make the other session's commit ours either
+        // (R3): the lock is the account's, so that session holds it too.
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         let third = state.speleodb_link_status().expect("refresh 3");
         assert_eq!(
             third.remote_state,
+            RemoteState::Conflict,
+            "holding the per-account lock licenses nothing: this process uploaded \
+             nothing that can be def456"
+        );
+
+        // The other side of the line: a commit an upload of THIS process was
+        // answered with is ours, so its own landed push is not painted as a
+        // conflict (a refresh that read BASE before that landing).
+        record_own_upload(&state, "abc123", "def456");
+        let fourth = state.speleodb_link_status().expect("refresh 4");
+        assert_eq!(
+            fourth.remote_state,
             RemoteState::UpToDate,
-            "an acquire made by THIS process still licenses the authorship recovery"
+            "a revision this process uploaded still licenses the authorship recovery"
         );
     }
 

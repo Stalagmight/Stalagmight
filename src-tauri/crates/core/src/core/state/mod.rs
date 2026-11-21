@@ -49,6 +49,7 @@ mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
 mod speleodb_logout;
+mod speleodb_own_uploads;
 mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_push;
