@@ -363,7 +363,7 @@ fn a_join_keeps_the_files_name_as_an_alias_and_renames_nothing() {
         result.import_receipt.unwrap().warnings,
         Vec::<String>::new()
     );
-    let naming = project.clone().detach_naming(junction, branch).unwrap();
+    let naming = project.detach_naming(junction, branch).unwrap();
     assert_eq!(
         (naming.id, naming.name.as_str()),
         (aliases[0].id, "0"),
@@ -529,7 +529,7 @@ fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     let imported_branch = line_names(&imported, 1);
     assert_eq!(imported_branch, migrated_branch);
     // Every station but the junction keeps the name 0.6.0 showed for it.
-    for i in 1..=14 {
-        assert_eq!(imported_branch[i], i.to_string());
+    for (i, name) in imported_branch.iter().enumerate().skip(1) {
+        assert_eq!(*name, i.to_string());
     }
 }
