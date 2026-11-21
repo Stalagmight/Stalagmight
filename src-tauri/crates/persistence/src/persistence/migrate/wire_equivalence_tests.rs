@@ -436,15 +436,18 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
+        // A junction's name is per line (I-3): every slot, a junction's
+        // included, shows the name 0.6.0 showed there, so a different name is
+        // explained only by a letter the migration gave a repeat.
         for (key, class) in [
             (
                 "id",
-                "identity: a junction shares the survivor's Station ID",
+                Some("identity: a junction shares the survivor's Station ID"),
             ),
-            ("name", "identity: a junction shares the survivor's name"),
+            ("name", None),
             (
                 "comment",
-                "identity: a junction shares one (joined) comment",
+                Some("identity: a junction shares one (joined) comment"),
             ),
         ] {
             if o.get(key) != n.get(key) {
@@ -455,7 +458,7 @@ impl<'a> Case<'a> {
                     self.empty_comments.insert(slot);
                     self.tally
                         .note("identity: an empty legacy comment is no comment");
-                } else if junction {
+                } else if let Some(class) = class.filter(|_| junction) {
                     self.tally.note(class);
                 } else if key == "name" && self.migrated.report.stations_renamed > 0 {
                     self.tally.note(
