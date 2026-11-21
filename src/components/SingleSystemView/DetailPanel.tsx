@@ -33,6 +33,7 @@ import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
 import { StationAliases } from './StationAliases';
+import { StationOtherLines, aliasesShownByOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
@@ -605,7 +606,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
-  const { project, stations, unmergeStationPair } = useProjectStore();
+  const { project, stations } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredLineId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredLineId: s.setHoveredLineId }))
   );
@@ -620,7 +621,6 @@ function StationDetail({ station }: { station: Station }) {
   const activeStations = useActiveStations();
   const displayStation =
     findStation(activeStations, station.station_ref.line_id, station.station_ref.station_index) ?? station;
-  const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const line = project?.lines.find(
     (s) => s.id === station.station_ref.line_id
   );
@@ -696,24 +696,6 @@ function StationDetail({ station }: { station: Station }) {
     triggerCenterOnStation(station.station_ref);
   };
 
-  // A junction is ONE station several lines pass (plan 5.2), and any two of its
-  // slots are a pair: the pair form detaches the PARTNER's line, which is the
-  // row the user clicked.
-  const handleUnmergeFromStation = async (ref: { line_id: number; station_index: number }) => {
-    trackContextMenuAction('unmerge', 'detail-panel');
-    const targetKey = `${ref.line_id}:${ref.station_index}`;
-    setUnmergeTargetKey(targetKey);
-    try {
-      await unmergeStationPair(station.station_ref, ref);
-    } finally {
-      setUnmergeTargetKey(null);
-    }
-  };
-
-  // Validate merged station targets exist
-  const mergedStationExists = (ref: { line_id: number; station_index: number }): boolean =>
-    findStation(stations, ref.line_id, ref.station_index) !== undefined;
-  // A merge is where two lines meet, so a merged station is named with its line.
   const lineName = labels.lineName(lineId);
   const stationId = labels.stationId(station.station_ref);
 
@@ -755,7 +737,7 @@ function StationDetail({ station }: { station: Station }) {
           {station.comment && (
             <div className="pt-2 border-t border-border">
               <span className="text-sm text-text-secondary">{t('detailPanel.station.comment')}:</span>
-              <p className="mt-1 text-sm whitespace-pre-wrap">{station.comment}</p>
+              <p className="mt-1 text-sm whitespace-pre-wrap" data-testid="station-detail-comment">{station.comment}</p>
             </div>
           )}
 
@@ -767,50 +749,15 @@ function StationDetail({ station }: { station: Station }) {
             />
           )}
 
-          {station.merged_with.length > 0 && (
-            <div className="pt-2 border-t border-border" data-testid="station-detail-merged-with">
-              <span className="text-sm text-text-secondary" title={t('detailPanel.station.mergedWithHint')}>
-                {t('detailPanel.station.mergedWith')}:
-              </span>
-              <ul className="mt-1 space-y-1">
-                {station.merged_with.map((ref, i) => (
-                  <li key={i} className="text-sm flex items-center justify-between gap-2">
-                    <div>
-                      {/* A junction is ONE station: the entry is the other
-                          line through it, never its own name again. */}
-                      <DetailLink
-                        type="station"
-                        target={{ lineId: ref.line_id, position: ref.station_index }}
-                        displayText={labels.lineName(ref.line_id)}
-                        fullText={labels.station(ref, true)}
-                        pillLabel={labels.lineName(ref.line_id)}
-                        onSelect={() => handleSelectMergedStation(ref)}
-                        isMissing={!mergedStationExists(ref)}
-                        onAnnounce={announceSelection}
-                        onHoverStart={() => setHoveredStation({ line_id: ref.line_id, station_index: ref.station_index })}
-                        onHoverEnd={() => setHoveredStation(null)}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleUnmergeFromStation(ref);
-                      }}
-                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
-                      title={t('detailPanel.station.detachLine', { line: labels.lineName(ref.line_id) })}
-                      aria-label={t('detailPanel.station.detachLine', { line: labels.lineName(ref.line_id) })}
-                      data-testid={`detail-unmerge-${ref.line_id}-${ref.station_index}`}
-                      disabled={editingBlocked || unmergeTargetKey === `${ref.line_id}:${ref.station_index}`}
-                    >
-                      <LinkOffIcon size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <StationOtherLines station={station} />
 
-          <StationAliases aliases={station.aliases} lineName={labels.lineName} />
+          <StationAliases
+            aliases={station.aliases}
+            lineName={labels.lineName}
+            shown={aliasesShownByOtherLines(station)}
+            ownLine={lineId}
+            ownName={labels.stationName(station.station_ref)}
+          />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection

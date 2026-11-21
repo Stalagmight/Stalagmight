@@ -1990,7 +1990,7 @@
       "comment": "Comment"
     },
     "connMenu": {
-      "merged": "Merged with",
+      "merged": "Also on",
       "closures": "Closures with"
     },
     "stationGps": {
@@ -2142,15 +2142,16 @@
       "gpsFixGapExceeds": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey.",
       "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
-      "mergedWith": "Merged with",
-      "mergedWithHint": "This station is where these lines meet: they share it and its Station ID. Each line keeps its own name for it.",
+      "alsoOn": "Also on",
+      "alsoOnHint": "The other lines through this station. They share it, its Station ID and its comment, and each shows it by its own name. A Station ID beside a line is the one that line had here before a merge; Detach gives it back.",
+      "otherLineName": "{{name}} (Station ID {{id}})",
+      "otherLineId": "Station ID {{id}}",
       "nameOnLine": "{{name}} (on {{line}})",
-      "junction": "Junction",
-      "junctionName": "{{name}} on {{lines}}",
       "alsoKnownAs": "Also known as",
       "alsoKnownAsHint": "Stations merged into this one. They keep their old name and Station ID here, so you can find them from your notes.",
       "alias": "{{name}} (Station ID {{id}})",
       "aliasOnLine": "{{name}} on {{line}} (Station ID {{id}})",
+      "aliasIdOnLine": "Station ID {{id}} on {{line}}",
       "aliasNoName": "Station ID {{id}}",
       "detachLine": "Detach {{line}} from this station",
       "connected": "Connected",

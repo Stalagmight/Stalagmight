@@ -278,8 +278,11 @@ export default function ContextMenu() {
     const open = (c: CombineCandidate, keep: LineId) => () => {
       openDialog('combine-lines', { candidate: c, keep, preview: combinePreview(c) });
     };
+    // A shared station reads the same however it was made (a merge, Split
+    // Line Here, a line started there): "Merged here" was wrong on a split
+    // (demo finding I-9).
     const howTheyMeet = (c: CombineCandidate) =>
-      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Merged here' : 'Side by side here';
+      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Joined here' : 'Side by side here';
     if (combineKey.startsWith('lines')) {
       const { line_a: a, line_b: b } = combineCandidate;
       const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';

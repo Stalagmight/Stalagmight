@@ -572,8 +572,9 @@ test.describe('Detail Panel Links', () => {
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
-      // Verify the "Merged with" line is displayed
-      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+      // The other lines through the junction are listed under "Also on"
+      // (one heading for every junction, I-9).
+      await expect(page.getByTestId('station-detail-merged-with')).toContainText('Also on:');
 
       // Find and click the merged station link
       // The merged station is at sideLineId:0, displayed as position 0 (0-indexed)
@@ -612,8 +613,9 @@ test.describe('Detail Panel Links', () => {
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
-      // Verify the "Merged with" line is displayed
-      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+      // The other lines through the junction are listed under "Also on"
+      // (one heading for every junction, I-9).
+      await expect(page.getByTestId('station-detail-merged-with')).toContainText('Also on:');
 
       // Main line has 3 shots, so last station is at index 3 (position 3, 0-indexed)
       const mergedLink = page.getByTestId(`station-${mainLineId}-3-link`);
@@ -698,25 +700,29 @@ test.describe('Detail Panel Links', () => {
       await expect(otherShot).toBeVisible();
       await expect(otherShot).toContainText('On ');
       const id = await page.getByTestId('station-detail-id').textContent();
-      // "Merged with" names the other line, never the station itself (UX-7);
-      // the station merged into this one shows as "Also known as" with its
-      // own name and Station ID (the mock's retired slot: Side Passage 0).
+      // "Also on" names the other line, never the station itself (UX-7),
+      // with the name that line shows it by and the Station ID it had there
+      // (the mock's retired slot: Side Passage 0), each fact once (N-3): no
+      // Junction row, and no "Also known as" repeating the same alias.
       const mergedLink = page.getByTestId(`station-${sideLineId}-0-link`);
       await expect(mergedLink).toHaveText('Side Passage');
       const retiredId = sideLineId * 100_000;
-      await expect(page.getByTestId('station-detail-aliases')).toContainText('Also known as');
-      await expect(page.getByTestId(`station-detail-alias-${retiredId}`)).toHaveText(
-        `0 on Side Passage (Station ID ${retiredId})`,
+      await expect(page.getByTestId(`station-detail-other-name-${sideLineId}-0`)).toHaveText(
+        `0 (Station ID ${retiredId})`,
       );
+      await expect(page.getByTestId('station-detail-aliases')).toHaveCount(0);
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3 (on Main Tunnel)');
-      await expect(page.getByTestId('station-detail-junction')).toHaveText('Junction:0 on Side Passage');
+      await expect(page.getByTestId('station-detail-junction')).toHaveCount(0);
 
       await selectStation(page, sideLineId, 0);
       await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:0 (on Side Passage)');
-      await expect(page.getByTestId('station-detail-junction')).toHaveText('Junction:3 on Main Tunnel');
       await expect(page.getByTestId(`station-${mainLineId}-3-link`)).toHaveText('Main Tunnel');
-      await expect(page.getByTestId(`station-detail-alias-${retiredId}`)).toBeVisible();
+      await expect(page.getByTestId(`station-detail-other-name-${mainLineId}-3`)).toHaveText('3');
+      // Side Passage's own former Station ID; its name is on the Name row.
+      await expect(page.getByTestId(`station-detail-alias-${retiredId}`)).toHaveText(
+        `Station ID ${retiredId} on Side Passage`,
+      );
       await expect(page.getByTestId(`detail-unmerge-${mainLineId}-3`)).toHaveAttribute(
         'aria-label',
         /^Detach .+ from this station$/
@@ -1210,11 +1216,12 @@ test.describe('Detail Panel Links', () => {
       const partner = page.getByTestId(`station-${sideLineId}-0-link`);
       await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 0');
       await expect(partner).toHaveText('Side Passage');
-      // The name the merged station had is kept as "Also known as", with the
-      // line that still shows it.
-      await expect(page.getByTestId(`station-detail-alias-${sideLineId * 100_000}`)).toHaveText(
-        `0 on Side Passage (Station ID ${sideLineId * 100_000})`,
+      // The name and Station ID the merged station had are on Side Passage's
+      // "Also on" row (N-3), said once.
+      await expect(page.getByTestId(`station-detail-other-name-${sideLineId}-0`)).toHaveText(
+        `0 (Station ID ${sideLineId * 100_000})`,
       );
+      await expect(page.getByTestId(`station-detail-alias-${sideLineId * 100_000}`)).toHaveCount(0);
 
       // Every station has a name: one never renamed keeps the one seeded from its index.
       await selectStation(page, mainLineId, 2);
