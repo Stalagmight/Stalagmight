@@ -1185,7 +1185,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // - __MOCK_SET_LEGACY_ORIGIN__(true): the open project came from a 0.6.0
       //   file, so its next successful save converts it and says so
       //   (`legacy_converted`: `saved` to the open file, `saved_as_new_file`
-      //   elsewhere), once, as the backend does.
+      //   elsewhere), once, as the backend does; until then
+      //   `project_file_is_legacy` answers true (the status bar's old format).
       let mockExternallyModified = false;
       let mockReadOnlyReason: string | null = null;
       let mockConversionNotice: unknown = null;
@@ -5519,6 +5520,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'project_read_only_reason':
             // A peek: the condition lasts as long as the project is open.
             return mockReadOnlyReason;
+
+          case 'project_file_is_legacy':
+            // A peek: the file on disk stays the 0.6.0 file until a save
+            // converts it (the save clears `mockLegacyOrigin`).
+            return mockLegacyOrigin;
 
           case 'resolve_warning':
           case 'unresolve_warning':

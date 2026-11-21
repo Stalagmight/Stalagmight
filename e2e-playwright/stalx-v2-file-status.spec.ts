@@ -152,6 +152,20 @@ test.describe('.stalx v2 file status', () => {
     await expect(banner).toHaveCount(0);
   });
 
+  // Demo issue N-6: the status bar said "Saved" while the file on disk was
+  // still the 0.6.0 file, here one whose conversion changed nothing a line
+  // shows (so no banner either). It says so until the converting save.
+  test('an old-format file says so in the status bar until the converting save', async ({ page }) => {
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_LEGACY_ORIGIN__(true));
+    await createProject(page, 'Old Format Quiet');
+    await expect(page.getByTestId('conversion-notice-banner')).toHaveCount(0);
+    await expect(page.getByTestId('save-status')).toHaveText('Old format: converted when you save');
+
+    await page.keyboard.press('Control+s');
+    await expect(page.getByTestId('save-status')).toHaveText('Saved');
+    await expect(page.locator('[data-toast-key="legacy-converted"]')).toBeVisible();
+  });
+
   test('a long list of renamed stations sits behind Details', async ({ page }) => {
     const details = Array.from({ length: 30 }, (_, i) => `Branch ${i + 1} / 0 is now shown as ${(i + 1) * 19}`);
     await page.evaluate(
