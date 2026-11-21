@@ -10,6 +10,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { listNames } from '../../utils/listNames';
 import type { BatchCommand } from '../../types/commands';
 import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
 import type { MergePreview } from '../../types/ipc/MergePreview';
@@ -147,10 +148,8 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
   const labels = useIdentityLabels();
   const precision = useDecimalPrecision();
   const depth = (v: number) => `${formatFixed(v, undefined, precision.depth)} ${t('common.units.meters')}`;
-  const [first, ...rest] = preview.moving_line_ids;
-  const firstName = first === undefined ? '' : labels.lineName(first);
-  const piece = rest.length === 0 ? firstName : t('dialogs.mergeStations.pieceMore', { name: firstName, count: rest.length });
-  const moves = sayMove && preview.shift_m >= MOVE_SAID_FROM_M && first !== undefined;
+  const piece = listNames(preview.moving_line_ids.map(labels.lineName), t);
+  const moves = sayMove && preview.shift_m >= MOVE_SAID_FROM_M && preview.moving_line_ids.length > 0;
   if (!moves && !preview.depths) return null;
   return (
     <div className="space-y-2 text-sm">
@@ -158,7 +157,7 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
         <p className="p-2 rounded bg-accent-10 text-text-primary" data-testid="merge-preview-move">
           {t('dialogs.mergeStations.moves', {
             // The verb agrees with the piece: "Upstream moves", "Upstream and
-            // 1 more line move".
+            // Upstream Side move" (the lines named, up to three, N-13).
             count: preview.moving_line_ids.length,
             piece,
             distance: formatDatumMetres(preview.shift_m),
@@ -184,15 +183,15 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
 function DatumShiftNotice({ shift, afterMove }: { shift: MergeDatumShift; afterMove: boolean }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const [first, ...rest] = shift.moving_line_ids;
-  const firstName = first === undefined ? '' : labels.lineName(first);
-  const piece = rest.length === 0 ? firstName : t('dialogs.mergeStations.pieceMore', { name: firstName, count: rest.length });
+  const piece = listNames(shift.moving_line_ids.map(labels.lineName), t);
   const station = labels.station(shift.datum_station, true);
+  // The verb agrees with the lines named: "is placed", "are placed".
+  const count = shift.moving_line_ids.length;
   return (
     <p className="p-2 rounded bg-warning-10 text-warning-text text-sm" data-testid="merge-datum-shift">
       {afterMove
-        ? t('dialogs.mergeStations.datumShiftAfterMove', { piece, station })
-        : t('dialogs.mergeStations.datumShift', { piece, station, distance: formatDatumMetres(shift.shift_m) })}
+        ? t('dialogs.mergeStations.datumShiftAfterMove', { piece, station, count })
+        : t('dialogs.mergeStations.datumShift', { piece, station, count, distance: formatDatumMetres(shift.shift_m) })}
     </p>
   );
 }

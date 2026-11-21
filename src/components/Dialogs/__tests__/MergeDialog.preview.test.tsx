@@ -26,6 +26,9 @@ const projectState = {
       { id: 1, name: 'Upstream' },
       { id: 2, name: 'Second entrance' },
       { id: 3, name: 'Side passage' },
+      { id: 4, name: 'Sump' },
+      { id: 5, name: 'Chimney' },
+      { id: 6, name: 'Far room' },
     ],
   },
   // Names that differ from the positional indices (both stations sit at index 5).
@@ -78,10 +81,29 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     );
   });
 
-  it('counts the other lines of a moving piece', () => {
+  // N-13: "Upstream and 1 more line move 24 m" did not say which line; the
+  // lines are named, up to three, then counted. Injection: listing only the
+  // first name and a count fails both.
+  it('names the other lines of a moving piece', () => {
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream and 1 more line move 4.3 m to join');
+    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+      'Upstream and Side passage move 4.3 m to join Second entrance / B4.'
+    );
+  });
+
+  it('names three lines, then counts the rest', () => {
+    dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3, 4], shift_m: 4.26 }) };
+    const { unmount } = render(<MergeDialog />);
+    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+      'Upstream, Side passage and Sump move 4.3 m'
+    );
+    unmount();
+    dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3, 4, 5, 6], shift_m: 4.26 }) };
+    render(<MergeDialog />);
+    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+      'Upstream, Side passage, Sump and 2 more move 4.3 m'
+    );
   });
 
   it('says no move for stations already on one point', () => {
