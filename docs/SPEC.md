@@ -1004,8 +1004,8 @@ Primary view for survey work.
 
 The data table's line, its row and column selection and its scroll belong to
 the open project: opening another project starts the table on that project's
-first line, at the top (an edit, save or reload of the same project keeps
-them; demo finding I-12).
+first line, at the top, as does reopening one; an edit or a save keeps them
+(demo finding I-12).
 
 #### 6.3.1 Detail Panel Hyperlinks
 
