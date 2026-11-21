@@ -193,12 +193,16 @@ fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
     assert_eq!(after.station_count, p.stations.len());
 }
 
-/// Review finding UX-4: what a line knew its stations by follows them to the
-/// second half. Main's station 3 is a junction Main knows by an alias (it was
-/// Branch's station merged into Main's), and the split station 2 is one Main
-/// knows by an alias too, its name shared with Main's own station 4: after
-/// Split Line Here at 2 the hints name the second half, which holds both, and
-/// neither half holds two names that only the exemption allowed.
+/// Review finding UX-4 and I-3: what a line knew its stations by follows
+/// them to the half they are on, and both halves show the split station by
+/// the name the line did. Main's station 3 is a junction Main knows by an
+/// alias (it was Branch's station merged into Main's), and the split station
+/// 2 is one Main knows by an alias too, while its own name is Main's station
+/// 4's. After Split Line Here at 2 station 3's hint names the second half,
+/// the split station's stays with the first half and the second half gets
+/// its own alias with the same name under a fresh id, and nothing is
+/// renamed. Injection: drop `share_alias_with_second_half` and the second
+/// half shows the split station by its own name, next to station 4's.
 #[test]
 fn a_split_moves_the_alias_hints_with_their_stations() {
     use super::super::StationAlias;
@@ -208,10 +212,10 @@ fn a_split_moves_the_alias_hints_with_their_stations() {
     line_from(&mut p, "Branch", k, run("b", 0.0, 5.0, 1));
     let name4 = p.station(m4).unwrap().name.clone();
     p.station_mut(k).unwrap().name.clone_from(&name4);
-    for (station, id) in [(k, 50), (m3, 51)] {
+    for (station, id, name) in [(k, 50, "old k"), (m3, 51, "old 3")] {
         p.station_mut(station).unwrap().aliases.push(StationAlias {
             id,
-            name: Some("old".to_string()),
+            name: Some(name.to_string()),
             line: Some(l),
         });
     }
@@ -224,10 +228,13 @@ fn a_split_moves_the_alias_hints_with_their_stations() {
     ));
     assert_valid(&p);
     assert_eq!(p.station(m3).unwrap().aliases[0].line, Some(second));
-    assert_eq!(
-        p.station(k).unwrap().aliases[0].line,
-        Some(second),
-        "its clash went to the second half"
-    );
+    let aliases = &p.station(k).unwrap().aliases;
+    assert_eq!(aliases.len(), 2);
+    assert_eq!((aliases[0].id, aliases[0].line), (50, Some(l)));
+    assert_eq!((aliases[1].id, aliases[1].line), (52, Some(second)));
+    assert_eq!(p.name_on(k, l), Some("old k"));
+    assert_eq!(p.name_on(k, second), Some("old k"));
+    assert_eq!(p.name_on(m3, second), Some("old 3"));
     assert_eq!(p.station(k).unwrap().name, name4, "nothing renamed");
+    assert_eq!(p.station(m4).unwrap().name, name4, "nothing renamed");
 }

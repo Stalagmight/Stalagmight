@@ -10,6 +10,8 @@
 //!    now);
 //! 2. mutate the model on a working copy;
 //! 3. epilogue: [`Project::drop_stale_attachments`], then
+//!    [`Project::restore_alias_identities`] (a station left only on lines
+//!    that know it by an alias goes back to that identity, I-1), then
 //!    [`Project::settle_anchors`] with the [`super::EditContext`] the
 //!    operation declares, then (topology edits) the orphan-closure sweep
 //!    ([`Project::sweep_orphan_closures`]) and the removal of closures the
@@ -45,7 +47,7 @@
 
 use std::fmt;
 
-use crate::LineId;
+use crate::{LineId, StationId};
 
 use super::{
     AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, LoopClosure, Project,
@@ -221,6 +223,10 @@ pub struct EditReport {
     pub anchors: AnchorReport,
     /// `via` hints and hand moves cleared because their station left a line.
     pub stale: StaleAttachments,
+    /// Stations the edit left only on lines that know them by an alias,
+    /// back under that alias's identity, `(old, new)`
+    /// ([`Project::restore_alias_identities`], I-1).
+    pub reidentified: Vec<(StationId, StationId)>,
     /// What the orphan-closure sweep did (topology edits only).
     pub sweep: SweepReport,
     /// Closures removed because the edit left them across one shot (#737),
@@ -325,7 +331,9 @@ impl Project {
         epilogue: &Epilogue,
     ) -> EditReport {
         let stale = self.drop_stale_attachments();
-        let anchors = self.settle_anchors(before, &epilogue.ctx);
+        let reidentified = self.restore_alias_identities(before.topology());
+        let ctx = epilogue.ctx.clone().with_reidentified(&reidentified);
+        let anchors = self.settle_anchors(before, &ctx);
         let sweep = if epilogue.sweep {
             self.sweep_orphan_closures_moving(&epilogue.moving_ends)
         } else {
@@ -339,6 +347,7 @@ impl Project {
         EditReport {
             anchors,
             stale,
+            reidentified,
             sweep,
             removed_across_one_shot,
         }

@@ -4,8 +4,8 @@ use crate::{Section, StationRef, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::test_helpers::{add, at, flat, gps, project, three_line_junction};
 use super::{
-    ClosureEnd, ClosureStrategy, CounterKind, NumberField, Project, StartAt, Station, StationAlias,
-    Violation, ZeroDatum, MAX_SHOTS_PER_LINE,
+    ClosureEnd, ClosureStrategy, CounterKind, NameConflict, NumberField, Project, StartAt, Station,
+    StationAlias, Violation, ZeroDatum, MAX_SHOTS_PER_LINE,
 };
 
 /// The base survey validates, and `mutate` makes it report `expected` (among
@@ -687,7 +687,16 @@ fn map_based_reports(p: &Project) -> Vec<Violation> {
         };
         let mut seen: BTreeMap<&str, crate::StationId> = BTreeMap::new();
         for &station in chain {
-            let Some(name) = p.stations.get(&station).map(|s| s.name.as_str()) else {
+            // The name the line shows: the latest alias naming the line, when
+            // it has a name, else the station's own.
+            let Some(name) = p.stations.get(&station).map(|s| {
+                s.aliases
+                    .iter()
+                    .filter(|a| a.line == Some(line.id))
+                    .last()
+                    .and_then(|a| a.name.as_deref())
+                    .unwrap_or(s.name.as_str())
+            }) else {
                 continue;
             };
             match seen.get(name) {
@@ -722,7 +731,8 @@ fn is_rewritten_report(v: &Violation) -> bool {
 
 /// Random corruptions of a branching survey (repeated uuids, dangling and
 /// orphaned stations, a station twice on a chain, shots closing loops,
-/// repeated names): `validate` reports exactly what the map-based checks
+/// repeated names, an alias's name repeating a name its line shows):
+/// `validate` reports exactly what the map-based checks
 /// report, in the same order. Injection: drop a fast path's fallback (e.g.
 /// `continue` unconditionally in `check_chains`) and this fails.
 #[test]
@@ -747,7 +757,7 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
                 continue;
             }
             let index = below(shots);
-            match below(6) {
+            match below(7) {
                 0 => {
                     let other = lines[below(lines.len())];
                     let uuid = p.line(other).unwrap().shots[0].uuid.clone();
@@ -769,6 +779,21 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
                     let to = p.line(line).unwrap().shots[index].to;
                     if let Some(s) = p.stations.get_mut(&to) {
                         s.name = name;
+                    }
+                }
+                5 => {
+                    // The line knows a station by an alias named like
+                    // another station (the name it shows there, I-3).
+                    let station = stations[below(stations.len())];
+                    let name = p.stations[&station].name.clone();
+                    let to = p.line(line).unwrap().shots[index].to;
+                    let id = 700_000 + below(1_000) as u32;
+                    if let Some(s) = p.stations.get_mut(&to) {
+                        s.aliases.push(StationAlias {
+                            id,
+                            name: Some(name),
+                            line: Some(line),
+                        });
                     }
                 }
                 _ => {
@@ -899,11 +924,12 @@ fn every_derived_position_is_finite_within_the_bounds() {
 }
 
 /// An alias's line must pass through its station (invariant 2, like a
-/// `via`), and on that line the station's own name need not be unique
-/// (invariant 8): the line knows it by the alias (review findings UX-4,
-/// D-migration-upgrade-8 and UX-3).
+/// `via`), and that line shows the station by the alias's name (I-3): the
+/// station's own name does not count there, the alias's does (invariant 8).
+/// Injection: compare station names in `check_names` (the old rule) and the
+/// alias named like L1's own end validates.
 #[test]
-fn an_alias_line_must_pass_its_station_and_exempts_it_from_that_lines_names() {
+fn an_alias_line_must_pass_its_station_and_names_it_on_that_line() {
     let (mut p, [l0, l1, _]) = three_line_junction();
     let s1 = at(&p, l0, 1);
     let l1_end = at(&p, l1, 2);
@@ -914,7 +940,8 @@ fn an_alias_line_must_pass_its_station_and_exempts_it_from_that_lines_names() {
         v,
         Violation::DuplicateStationName { line, .. } if *line == l1
     )));
-    // L1 knows s1 by an alias: no clash there.
+    // L1 knows s1 by an alias: it shows it as "0", so its own end may be
+    // named like the junction.
     let alias = p.mint_station_id().unwrap();
     p.stations.get_mut(&s1).unwrap().aliases.push(StationAlias {
         id: alias,
@@ -924,8 +951,44 @@ fn an_alias_line_must_pass_its_station_and_exempts_it_from_that_lines_names() {
     assert_eq!(p.validate(), Vec::new());
     assert!(p.known_by_alias_on(s1, l1));
     assert!(!p.known_by_alias_on(s1, l0));
-    // A rename the user asks for still sees every name.
-    assert!(!p.conflicts_with_name(l1_end, &name).is_empty());
+    assert_eq!(p.name_on(s1, l1), Some("0"));
+    assert_eq!(p.name_on(s1, l0), Some(name.as_str()));
+    // L1 holds "0" for s1: its end may not take it, by hand or in a rename.
+    assert!(p.conflicts_with_name(l1_end, &name).is_empty());
+    assert_eq!(
+        p.conflicts_with_name(l1_end, "0"),
+        vec![NameConflict {
+            line: l1,
+            other: s1
+        }]
+    );
+    let mut taken = p.clone();
+    taken.stations.get_mut(&l1_end).unwrap().name = "0".to_string();
+    assert_eq!(
+        taken.validate(),
+        vec![Violation::DuplicateStationName {
+            line: l1,
+            name: "0".to_string(),
+            first: s1,
+            second: l1_end,
+        }]
+    );
+    // Renaming through L1's slot renames the alias (L1 alone); through L0's
+    // slot the station's own name (every line without an alias).
+    assert_eq!(p.lines_sharing_name_on(s1, l1), vec![l1]);
+    assert_eq!(p.lines_sharing_name_on(s1, l0), vec![l0]);
+    let mut renamed = p.clone();
+    renamed.set_name_on(s1, l1, "J".to_string());
+    assert_eq!(
+        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
+        (Some("J"), Some(name.as_str()))
+    );
+    renamed.set_name_on(s1, l0, "K".to_string());
+    assert_eq!(
+        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
+        (Some("J"), Some("K"))
+    );
+    assert_eq!(renamed.validate(), Vec::new());
 
     // A line that does not pass the station is a stale hint.
     let s0 = at(&p, l0, 0);

@@ -153,9 +153,14 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
     }
 }
 
-/// A merged station's retired ids and names (its aliases) ride every slot
-/// of it, for the station details' "Also known as"; a station without any
-/// sends none (H-frontend-wire-5).
+/// A merged station's retired ids and names (its aliases, each with the
+/// line that knew it by it) ride every slot of it, for the station details'
+/// "Also known as"; a station without any sends none (H-frontend-wire-5).
+/// Each slot carries the name its own line shows the junction by (I-3): the
+/// moving line its old name, the other line the survivor's; the Station ID
+/// is the junction's one id on both. Injection: send the station's own name
+/// on every slot (`s.name` in `stations_wire`) and the moving line's slot
+/// reads `0`.
 #[test]
 fn a_merged_stations_aliases_ride_every_slot() {
     let mut p = project();
@@ -166,9 +171,14 @@ fn a_merged_stations_aliases_ride_every_slot() {
     let merged = p.merge_stations(a2, b0).unwrap();
     assert_eq!((merged.value.survivor, merged.value.retired), (b0, a2));
     let stations = p.stations_wire(&p.raw_positions());
+    assert_eq!(station_at(&stations, slot(a, 2)).name, "2");
+    assert_eq!(station_at(&stations, slot(b, 0)).name, "0");
+    assert_eq!(station_at(&stations, slot(a, 2)).id, b0);
+    assert_eq!(station_at(&stations, slot(b, 0)).id, b0);
     let expected = Some(vec![crate::StationAliasWire {
         id: a2,
         name: Some(a2_name),
+        line: Some(a),
     }]);
     assert_eq!(station_at(&stations, slot(a, 2)).aliases, expected);
     assert_eq!(station_at(&stations, slot(b, 0)).aliases, expected);

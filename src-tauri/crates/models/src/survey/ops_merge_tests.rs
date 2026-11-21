@@ -190,17 +190,18 @@ fn the_survivor_keeps_its_name_comment_and_ids_and_joins_the_comments() {
     let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     p.station_mut(b0).unwrap().comment = Some("survivor note".to_string());
     p.station_mut(a2).unwrap().comment = Some("retired note".to_string());
-    // A:0 is named "0" like the survivor B:0. A knows the junction by the
-    // retired station's name (its alias names A), so neither is renamed: a
-    // merge renames only a true clash (review findings D-migration-upgrade-8
-    // and UX-3; 0.6.0 kept each line's own name for its member).
+    // A:0 is named "0" like the survivor B:0. A shows the junction by the
+    // retired station's name "2" (its alias names A), so nothing is renamed
+    // and no line shows one name twice (I-3; 0.6.0 kept each line's own name
+    // for its member).
     assert_eq!(p.stations[&a0].name, p.stations[&b0].name);
-    let out = ok(p.merge_stations(a2, b0));
+    ok(p.merge_stations(a2, b0));
     assert_valid(&p);
-    assert!(out.value.renamed.is_empty());
     assert_eq!(p.stations[&b0].name, "0");
     assert_eq!(p.stations[&a0].name, "0");
     assert!(p.known_by_alias_on(b0, a));
+    assert_eq!(p.name_on(b0, a), Some("2"));
+    assert_eq!(p.name_on(b0, b), Some("0"));
     assert_eq!(
         p.stations[&b0].comment.as_deref(),
         Some("survivor note\n\nretired note")
@@ -320,31 +321,48 @@ fn two_placed_pieces_joined_by_a_closure_are_connected_for_the_dialog_but_may_me
     );
 }
 
-/// A true clash is still lettered: the retired station is a junction of two
-/// lines of its own (a Split Line Here junction, so no alias names one of
-/// them), and the survivor's name is taken on one of them. The station that
-/// had the name takes the letter; the survivor keeps its own.
+/// A retired station two lines showed by its own name (a Split Line Here
+/// junction, so no alias names either half) keeps that name on both: the
+/// first half gets an alias with the retired id, the second one with a fresh
+/// id, and nothing is renamed although the survivor's name is taken on both
+/// (I-3: every path keeps a line's own name instead of lettering a station).
+/// Injection: give only the first native line an alias (the old
+/// `alias_line`) and the second half shows the survivor's `0` next to its
+/// own `0`: invariant 8 refuses the merge.
 #[test]
-fn a_merge_letters_only_a_true_clash() {
+fn a_merge_keeps_every_lines_own_name_for_a_junction_it_retires() {
     use super::SplitOptions;
     let (mut p, a, b) = two_free_pieces();
     let (a0, a1, b0) = (at(&p, a, 0), at(&p, a, 1), at(&p, b, 0));
-    p.split_line(
-        a,
-        crate::SplitAt::Station { station_index: 1 },
-        &SplitOptions {
-            name_a: "A1".to_string(),
-            name_b: "A2".to_string(),
-            color_a: "#111111".to_string(),
-            color_b: "#222222".to_string(),
-        },
-    )
-    .unwrap();
+    let a2 = p
+        .split_line(
+            a,
+            crate::SplitAt::Station { station_index: 1 },
+            &SplitOptions {
+                name_a: "A1".to_string(),
+                name_b: "A2".to_string(),
+                color_a: "#111111".to_string(),
+                color_b: "#222222".to_string(),
+            },
+        )
+        .unwrap()
+        .value;
     assert_valid(&p);
-    let out = ok(p.merge_stations(a1, b0));
+    // The second half's own stations: rename one `0` so it would clash.
+    let a2_end = at(&p, a2, 1);
+    p.station_mut(a2_end).unwrap().name = "0".to_string();
     assert_valid(&p);
-    assert_eq!(out.value.renamed, vec![a0]);
+    let counter = p.counters.next_station_id;
+    ok(p.merge_stations(a1, b0));
+    assert_valid(&p);
     assert_eq!(p.stations[&b0].name, "0");
-    assert_eq!(p.stations[&a0].name, "0a");
-    assert_eq!(p.stations[&b0].aliases.last().unwrap().line, None);
+    assert_eq!(p.stations[&a0].name, "0");
+    assert_eq!(p.stations[&a2_end].name, "0");
+    assert_eq!(p.name_on(b0, a), Some("1"));
+    assert_eq!(p.name_on(b0, a2), Some("1"));
+    assert_eq!(p.name_on(b0, b), Some("0"));
+    let aliases = &p.stations[&b0].aliases;
+    assert_eq!(aliases.len(), 2);
+    assert_eq!((aliases[0].id, aliases[0].line), (a1, Some(a)));
+    assert_eq!((aliases[1].id, aliases[1].line), (counter, Some(a2)));
 }

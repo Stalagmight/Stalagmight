@@ -134,6 +134,11 @@ pub struct EditContext {
     /// Datums (post-edit indices) whose correction the command set itself
     /// (Add .stalx): kept as is, in post-edit coordinates.
     pub corrected: Vec<usize>,
+    /// Stations that went back to an alias identity in the epilogue
+    /// (`Project::restore_alias_identities`), `(old, new)`: the same station
+    /// under another id, so its datums, its pre-edit position and its
+    /// placement are recognised across the edit.
+    pub reidentified: Vec<(StationId, StationId)>,
 }
 
 impl EditContext {
@@ -172,6 +177,31 @@ impl EditContext {
     pub fn with_renamed(mut self, old: StationId, new: StationId) -> Self {
         self.renamed.push((old, new));
         self
+    }
+
+    /// Record stations that went back to an alias identity, `(old, new)`.
+    #[must_use]
+    pub fn with_reidentified(mut self, pairs: &[(StationId, StationId)]) -> Self {
+        self.reidentified.extend_from_slice(pairs);
+        self
+    }
+
+    /// The pre-edit id of post-edit station `station` (itself unless it was
+    /// re-identified).
+    fn pre_edit_id(&self, station: StationId) -> StationId {
+        self.reidentified
+            .iter()
+            .find(|(_, new)| *new == station)
+            .map_or(station, |(old, _)| *old)
+    }
+
+    /// The post-edit id of pre-edit station `station` that was
+    /// re-identified, if it was.
+    fn post_edit_id(&self, station: StationId) -> Option<StationId> {
+        self.reidentified
+            .iter()
+            .find(|(old, _)| *old == station)
+            .map(|(_, new)| *new)
     }
 
     /// Record a GPS edit of post-edit datum `datum`, whose GPS was `previous`.
@@ -370,7 +400,8 @@ impl Project {
                 !used[i]
                     && old.same_gps_bits(&gps)
                     && (old.station == datum.station
-                        || ctx.renamed.contains(&(old.station, datum.station)))
+                        || ctx.renamed.contains(&(old.station, datum.station))
+                        || ctx.reidentified.contains(&(old.station, datum.station)))
             });
             if let Some(i) = found {
                 used[i] = true;
@@ -409,8 +440,13 @@ impl Project {
 
         // Pre-edit placements surviving in each component: (index in the old
         // list, placement), the merge's stationary one first, else list order.
+        // A re-identified station's placement survives under its new id.
         let mut surviving: Vec<Option<(usize, Placement)>> = vec![None; components.len()];
         for (index, old) in before.placements.iter().enumerate() {
+            let old = &match ctx.post_edit_id(old.station) {
+                Some(station) if !topology.contains(old.station) => Placement { station, ..*old },
+                _ => *old,
+            };
             let Some(c) = topology.component_of(old.station) else {
                 continue;
             };
@@ -434,19 +470,19 @@ impl Project {
             if placement_datums[c].is_some() {
                 continue;
             }
-            let has_position = |s: StationId| before.position(s).is_some();
+            // A re-identified station is where it was under its old id.
+            let pre = |s: StationId| before.position(ctx.pre_edit_id(s));
+            let has_position = |s: StationId| pre(s).is_some();
             let still: Option<(StationId, [f64; 2])> = explicit[c]
                 .map(|p| (p.station, [p.x, p.y]))
                 .or_else(|| {
                     ctx.geometry_line
                         .and_then(|line| before.line_starts.get(&line).copied())
                         .filter(|&s| component.contains(s) && has_position(s))
-                        .and_then(|s| before.position(s).map(|p| (s, shift(p))))
+                        .and_then(|s| pre(s).map(|p| (s, shift(p))))
                 })
                 .or_else(|| {
-                    surviving[c].and_then(|(_, p)| {
-                        before.position(p.station).map(|at| (p.station, shift(at)))
-                    })
+                    surviving[c].and_then(|(_, p)| pre(p.station).map(|at| (p.station, shift(at))))
                 })
                 .or_else(|| {
                     let line = ctx.edited_line.or(ctx.geometry_line)?;
@@ -455,7 +491,7 @@ impl Project {
                         .iter()
                         .copied()
                         .find(|&s| component.contains(s) && has_position(s))
-                        .and_then(|s| before.position(s).map(|p| (s, shift(p))))
+                        .and_then(|s| pre(s).map(|p| (s, shift(p))))
                 })
                 .or_else(|| {
                     component
@@ -463,7 +499,7 @@ impl Project {
                         .iter()
                         .copied()
                         .find(|&s| has_position(s))
-                        .and_then(|s| before.position(s).map(|p| (s, shift(p))))
+                        .and_then(|s| pre(s).map(|p| (s, shift(p))))
                 });
             let (s_star, at) = match still {
                 Some(found) => found,
@@ -481,7 +517,7 @@ impl Project {
             let order = before
                 .placements
                 .iter()
-                .position(|p| p.station == station)
+                .position(|p| p.station == ctx.pre_edit_id(station))
                 .or_else(|| {
                     self.placements
                         .iter()

@@ -8,9 +8,10 @@
 //! out from the stationary piece through the shared station), its placement
 //! is dropped, and when both pieces were placed the later placement datum is
 //! a GPS fix from then on (its correction cleared). Datums and closure ends
-//! keep their `via` hints, so a later detach can hand them back. Names on the
-//! moving piece's lines through the junction are re-uniquified (letter
-//! suffix rule). The orphan-closure sweep runs afterwards, which also removes
+//! keep their `via` hints, so a later detach can hand them back. Every line
+//! keeps the name it showed for the two stations (the retired station's
+//! lines through an alias naming each, plan 5.3 per line), so nothing is
+//! renamed. The orphan-closure sweep runs afterwards, which also removes
 //! every closure between the two stations (#738).
 //!
 //! Refused: two ends that are one station already; two stations already
@@ -23,9 +24,7 @@
 //! join (`edit/combine/apply.rs`, with the dialog's comment pick). Each caller
 //! decides the direction and settles anchors itself.
 
-use std::collections::BTreeSet;
-
-use crate::{ClosurePreview, CombinePick, LineId, StationId};
+use crate::{ClosurePreview, CombinePick, LineId, StationId, MAX_STATION_ID};
 
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::topology::find;
@@ -52,8 +51,6 @@ pub struct MergeReport {
     pub retired: StationId,
     /// The lines of the piece that moved, ascending.
     pub moving_lines: Vec<LineId>,
-    /// Stations renamed so names stay unique on the junction's lines.
-    pub renamed: Vec<StationId>,
 }
 
 /// What merging two separately placed pieces does to the later-placed one
@@ -248,8 +245,9 @@ impl Project {
     /// starts, shot ends, hand-move keys, datums, closure ends), drop a
     /// placement on `retired`, fold the retired station into the survivor
     /// (aliases, the comment by `comment`, its `external` id when the survivor
-    /// has none), re-uniquify names on the moving piece's lines through the
-    /// junction. A closure between the two stations is left with both ends on
+    /// has none). Each line that showed the retired station by its own name
+    /// keeps showing that name (an alias naming the line), so no line's names
+    /// change. A closure between the two stations is left with both ends on
     /// the survivor for the caller to remove (the sweep does, #738). No
     /// anchors, no sweep, no validation (callers run the pipeline). Refused,
     /// with nothing changed, when a line passes both stations (it would pass
@@ -277,6 +275,22 @@ impl Project {
         ) else {
             return Err(OpError::UnknownStation(retired));
         };
+        // The lines that show the retired station by its own name (none of
+        // its aliases names them), list order; ids for all but the first.
+        let native: Vec<LineId> = junction_lines
+            .iter()
+            .copied()
+            .filter(|&line| !gone.aliases.iter().any(|a| a.line == Some(line)))
+            .collect();
+        let extra = native.len().saturating_sub(1);
+        let free = MAX_STATION_ID.saturating_sub(self.counters.next_station_id);
+        if (free as usize) < extra {
+            return Err(OpError::Build(super::BuildError::StationIdsExhausted));
+        }
+        let mut minted = Vec::with_capacity(extra);
+        for _ in 0..extra {
+            minted.push(self.mint_station_id()?);
+        }
 
         for &id in &junction_lines {
             if let Some(line) = self.line_mut(id) {
@@ -308,56 +322,47 @@ impl Project {
         }
         self.placements.retain(|p| p.station != retired);
 
-        // The line that knew the retired station by its name: its one line,
-        // or the one of its lines none of its own aliases names (a junction
-        // that came from merges); `None` when that is not one line.
-        let named_by_aliases: BTreeSet<LineId> =
-            gone.aliases.iter().filter_map(|a| a.line).collect();
-        let native: Vec<LineId> = junction_lines
-            .iter()
-            .copied()
-            .filter(|l| !named_by_aliases.contains(l))
-            .collect();
-        let alias_line = match native.as_slice() {
-            [line] => Some(*line),
-            _ => None,
-        };
+        // Every line that showed the retired station by its own name keeps
+        // that name for the junction: each gets an alias with it (plan 5.3
+        // per line, I-3). The first such line (list order) gets the retired
+        // id, which a Detach gives back; another gets a fresh id, as Split
+        // Line Here gives its second half. A retired station no line showed
+        // by its own name is kept as a plain alias (no line).
+        let mut alias_ids = Vec::with_capacity(native.len());
+        for (index, &line) in native.iter().enumerate() {
+            let id = if index == 0 {
+                retired
+            } else {
+                minted[index - 1]
+            };
+            alias_ids.push(StationAlias {
+                id,
+                name: Some(gone.name.clone()),
+                line: Some(line),
+            });
+        }
+        if alias_ids.is_empty() {
+            alias_ids.push(StationAlias {
+                id: retired,
+                name: Some(gone.name.clone()),
+                line: None,
+            });
+        }
         self.stations.remove(&retired);
         if let Some(keep) = self.stations.get_mut(&survivor) {
             keep.aliases.extend(gone.aliases.iter().cloned());
-            keep.aliases.push(StationAlias {
-                id: retired,
-                name: Some(gone.name.clone()),
-                line: alias_line,
-            });
+            keep.aliases.extend(alias_ids);
             keep.comment = merged_comment(keep.comment.take(), gone.comment.clone(), comment);
             if keep.external.is_none() {
                 keep.external.clone_from(&gone.external);
             }
         }
-
-        let survivor_name = self.stations.get(&survivor).map(|s| s.name.clone());
-        let mut clashing: BTreeSet<StationId> = BTreeSet::new();
-        for &line in &junction_lines {
-            for &other in self.topology().chain(line).unwrap_or(&[]) {
-                if other != survivor
-                    && self.stations.get(&other).map(|s| &s.name) == survivor_name.as_ref()
-                {
-                    clashing.insert(other);
-                }
-            }
-        }
-        let mut renamed = Vec::new();
-        for &other in &clashing {
-            if self.uniquify_station_name(other).is_some() {
-                renamed.push(other);
-            }
-        }
+        // Every line shows what it showed before, so no name repeats on a
+        // line (invariant 8) and nothing is renamed.
         Ok(MergeReport {
             survivor,
             retired,
             moving_lines,
-            renamed,
         })
     }
 }

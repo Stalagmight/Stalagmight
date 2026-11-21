@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use crate::MIN_SPLIT_CHILD_LENGTH_M;
 use crate::{LineId, SplitAt, StationId};
 
-use super::super::{EditContext, Line, LoopClosure, Project};
+use super::super::{EditContext, Line, LoopClosure, Project, StationAlias};
 use super::{EditError, Edited, Epilogue, Promotion};
 
 /// The choices of the Split Line Here dialog: today's `SplitLineOptions`
@@ -234,37 +234,33 @@ impl Project {
         self.repoint_vias(line, new_id, &second_stations);
         let arrived: BTreeSet<StationId> = chain[k + 1..].iter().copied().collect();
         self.repoint_alias_lines(line, new_id, &arrived);
-        self.repoint_shared_alias(line, new_id, shared, &arrived);
+        self.share_alias_with_second_half(line, new_id, shared)?;
         Ok(new_id)
     }
 
-    /// The split station is on both halves. Its alias hints that named the
-    /// line stay with the first half, unless the station whose name it
-    /// shares there (invariant 8 exempts the junction on a line that knows it
-    /// by an alias) went to the second half: then the hints follow it, so
-    /// neither half holds two stations of one name that only an exemption
-    /// allowed.
-    fn repoint_shared_alias(
+    /// The split station is on both halves, and each half shows it by the
+    /// name the line did (plan 5.3 per line). When the line knew it by an
+    /// alias, the first half keeps that alias and the second half gets one
+    /// of its own with the same name, under a fresh id (as a merge gives an
+    /// extra line that knew its retired station by name).
+    fn share_alias_with_second_half(
         &mut self,
         from: LineId,
         to: LineId,
         shared: StationId,
-        arrived: &BTreeSet<StationId>,
-    ) {
-        let Some(name) = self.stations.get(&shared).map(|s| s.name.clone()) else {
-            return;
+    ) -> Result<(), EditError> {
+        let Some(alias) = self.line_alias(shared, from).cloned() else {
+            return Ok(());
         };
-        let exempt = |p: &Project, s: StationId| {
-            p.stations
-                .get(&s)
-                .is_some_and(|st| st.aliases.iter().any(|a| a.line == Some(to)))
-        };
-        let clash_moved = arrived
-            .iter()
-            .any(|&s| !exempt(self, s) && self.stations.get(&s).is_some_and(|st| st.name == name));
-        if clash_moved {
-            self.repoint_alias_lines(from, to, &BTreeSet::from([shared]));
+        let id = self.mint_station_id()?;
+        if let Some(s) = self.stations.get_mut(&shared) {
+            s.aliases.push(StationAlias {
+                id,
+                name: alias.name,
+                line: Some(to),
+            });
         }
+        Ok(())
     }
 }
 

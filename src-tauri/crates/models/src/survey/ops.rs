@@ -3,7 +3,9 @@
 //! ([`OpOutcome`]) and the one command pipeline ([`Project::run_op`]).
 //!
 //! Every command runs the M0 protocol: snapshot the anchors, mutate, drop
-//! stale attachments, settle the anchors (plan 4.1), run the orphan-closure
+//! stale attachments, give a station left only on lines that know it by an
+//! alias that identity back (`Project::restore_alias_identities`), settle the
+//! anchors (plan 4.1), run the orphan-closure
 //! sweep when the command is a topology edit (plan 5.5), then
 //! [`Project::validate`]. A refusal or a violation restores the project as it
 //! was (the rollback is a clone taken before the mutation), so a failed
@@ -191,6 +193,8 @@ impl Project {
         let before = self.anchor_snapshot();
         let result = op(self).and_then(|(value, ctx)| {
             self.drop_stale_attachments();
+            let reidentified = self.restore_alias_identities(before.topology());
+            let ctx = ctx.with_reidentified(&reidentified);
             let anchors = self.settle_anchors(&before, &ctx);
             let sweep = match sweep {
                 Sweep::Run => self.sweep_orphan_closures(),
@@ -227,15 +231,20 @@ impl Project {
         }
     }
 
-    /// A station as the user reads it on `line`: `Main Line / 4`. Falls back
-    /// to the station's first line, then to `a station`.
+    /// A station as the user reads it on `line`: `Main Line / 4`, by the
+    /// name that line shows it by. Falls back to the station's first line,
+    /// then to `a station`.
     pub fn station_text(&self, station: StationId, line: Option<LineId>) -> String {
         let topology = self.topology();
         let line = line
             .filter(|&l| topology.slot_on(station, l).is_some())
             .or_else(|| topology.first_slot(station).map(|slot| slot.line_id));
         match (line, self.stations.get(&station)) {
-            (Some(line), Some(s)) => format!("{} / {}", self.line_label_of(line), s.name),
+            (Some(line), Some(s)) => format!(
+                "{} / {}",
+                self.line_label_of(line),
+                self.name_on(station, line).unwrap_or(&s.name)
+            ),
             (None, Some(s)) => s.name.clone(),
             (_, None) => "a station".to_string(),
         }

@@ -1,19 +1,22 @@
 //! Detach (unmerge, plan 5.2): give one line its own copy of a junction.
 //!
-//! Detaching line L from station S mints S' (a fresh id; S's name, then
-//! uniquified; no comment, aliases or external id) and puts it in L's chain
-//! where S was, so S' sits exactly where S did. When one of S's aliases
-//! names L (the station L had before it was merged into S: a 0.6.0 merge
-//! member, or the moving station of a merge), S' takes that alias's id back,
-//! and its name too when no other station of L holds it, and the alias
-//! leaves S (review finding UX-4: merging by mistake and detaching gives the
-//! line back as it was). Combine Lines' torn junctions keep the fresh id. What belonged to L's member of
-//! the old merge follows it: the datums and closure ends whose `via` is L, and
-//! L's hand move at S. The anchor algorithm then settles both pieces (a fix
-//! that came along with L and is now the first datum of L's piece is promoted
-//! and puts that piece on its GPS, as today's unmerge does), and the
-//! orphan-closure sweep promotes a closure that only joined L's piece to the
-//! rest.
+//! Detaching line L from station S mints S' (a fresh id; the name L shows S
+//! by, then uniquified; no comment, aliases or external id) and puts it in
+//! L's chain where S was, so S' sits exactly where S did. When one of S's
+//! aliases names L (the station L had before it was merged into S: a 0.6.0
+//! merge member, or the moving station of a merge), S' takes that alias's id
+//! and name back, and the alias leaves S (review finding UX-4: merging by
+//! mistake and detaching gives the line back as it was). When instead every
+//! other line knows S by an alias, L keeps S (its id, name and comment) and
+//! the other lines get back the station they had, as detaching them would
+//! (I-1: a station is not left only on lines that know it by another name).
+//! Combine Lines' torn junctions keep the fresh id. What belonged to L's
+//! member of the old merge follows it: the datums and closure ends whose
+//! `via` is L, and L's hand move at S. The anchor algorithm then settles
+//! both pieces (a fix that came along with L and is now the first datum of
+//! L's piece is promoted and puts that piece on its GPS, as today's unmerge
+//! does), and the orphan-closure sweep promotes a closure that only joined
+//! L's piece to the rest.
 //!
 //! Two forms, both detaching ONE line: the pair form detaches the second
 //! slot's line from the station the two slots share; the station form
@@ -28,7 +31,10 @@
 use crate::{LineId, StationId, StationRef};
 
 use super::ops::{OpError, OpOutcome, Sweep};
-use super::{AnchorReport, ClosureEnd, ClosureId, EditContext, Project, Station, SweepReport};
+use super::{
+    AnchorReport, ClosureEnd, ClosureId, EditContext, Project, Station, StationAlias, SweepReport,
+    Topology,
+};
 
 /// What a detach did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,9 +51,13 @@ pub struct DetachReport {
     pub moved_closure_ends: Vec<(ClosureId, ClosureEnd)>,
     /// Whether the line's hand move at the junction moved too.
     pub moved_hand_move: bool,
-    /// Whether the new station took back the id of the junction's alias that
-    /// named the line (its name too when free on the line).
+    /// Whether the new station took back the id and name of the junction's
+    /// alias that named its line.
     pub restored_alias: bool,
+    /// The line kept the junction and the other lines, which all knew it by
+    /// aliases, got back their own station (`new_station`): see
+    /// [`Project::detach_line`].
+    pub kept: bool,
 }
 
 /// What detaching a line would give it, for the Detach dialog: the new
@@ -58,6 +68,9 @@ pub struct DetachNaming {
     pub name: String,
     pub id: StationId,
     pub restored_alias: bool,
+    /// The line keeps the junction; `name` and `id` are what the other lines
+    /// get back.
+    pub kept: bool,
 }
 
 impl Project {
@@ -126,6 +139,7 @@ impl Project {
             name,
             id: report.new_station,
             restored_alias: report.restored_alias,
+            kept: report.kept,
         })
     }
 
@@ -148,13 +162,15 @@ impl Project {
     }
 
     /// The low-level detach (plan 5.2's mutation): mint the new station
-    /// (named as the junction, then letter-suffixed if taken on the line; no
-    /// comment, aliases or external id), rewrite the line's chain, move what
-    /// the line's member owned (datums and closure ends whose `via` is the
-    /// line, its hand move). With `restore`, an alias of the junction that
-    /// names the line gives the new station its id, and its name when no
-    /// other station of the line holds it (module docs). Refused, with
-    /// nothing changed, as [`Self::detach_line`]. No anchors, no sweep, no
+    /// (named as the line shows the junction, then letter-suffixed if taken
+    /// on the line; no comment, aliases or external id), rewrite the line's
+    /// chain, move what the line's member owned (datums and closure ends
+    /// whose `via` is the line, its hand move). With `restore`, an alias of
+    /// the junction that names the line gives the new station its id and
+    /// name (module docs); and when every other line knows the junction by an
+    /// alias the line keeps the junction and those lines get back their own
+    /// station instead ([`Self::detach_others`]). Refused, with nothing
+    /// changed, as [`Self::detach_line`]. No anchors, no sweep, no
     /// validation.
     pub(super) fn detach_ids(
         &mut self,
@@ -163,37 +179,38 @@ impl Project {
         restore: bool,
     ) -> Result<DetachReport, OpError> {
         self.detach_refusal(station, line)?;
+        let topology = self.topology_arc();
+        let others: Vec<LineId> = topology
+            .lines_of(station)
+            .into_iter()
+            .filter(|&l| l != line)
+            .collect();
+        if restore
+            && !self.known_by_alias_on(station, line)
+            && others.iter().all(|&l| self.known_by_alias_on(station, l))
+        {
+            return self.detach_others(station, line, &others);
+        }
         let junction = self
             .stations
             .get(&station)
             .ok_or(OpError::UnknownStation(station))?;
-        let mut name = junction.name.clone();
+        // The name the line shows the junction by (its alias's, when one
+        // names it): the line keeps showing it.
+        let name = self
+            .name_on(station, line)
+            .map_or_else(|| junction.name.clone(), str::to_string);
         // The line's own alias: the last one naming it (the latest merge).
         let own = if restore {
-            junction
-                .aliases
-                .iter()
-                .rposition(|a| a.line == Some(line))
-                .map(|i| (i, junction.aliases[i].clone()))
+            junction.aliases.iter().rposition(|a| a.line == Some(line))
         } else {
             None
         };
         let restored = match own {
-            Some((index, alias)) => {
-                let topology = self.topology();
-                let held = |n: &str| {
-                    topology.chain(line).unwrap_or(&[]).iter().any(|s| {
-                        *s != station && self.stations.get(s).is_some_and(|st| st.name == n)
-                    })
-                };
-                if let Some(own_name) = alias.name.as_deref().filter(|n| !held(n)) {
-                    own_name.clone_into(&mut name);
-                }
-                if let Some(j) = self.stations.get_mut(&station) {
-                    j.aliases.remove(index);
-                }
-                Some(alias.id)
-            }
+            Some(index) => self
+                .stations
+                .get_mut(&station)
+                .map(|j| j.aliases.remove(index).id),
             None => None,
         };
         let new_station = match restored {
@@ -203,37 +220,9 @@ impl Project {
         self.stations
             .insert(new_station, Station::new(new_station, name));
 
-        let mut moved_hand_move = false;
-        if let Some(l) = self.line_mut(line) {
-            if l.start == station {
-                l.start = new_station;
-            } else if let Some(shot) = l.shots.iter_mut().find(|shot| shot.to == station) {
-                shot.to = new_station;
-            }
-            if let Some(hand) = l.hand_moves.remove(&station) {
-                l.hand_moves.insert(new_station, hand);
-                moved_hand_move = true;
-            }
-        }
-
-        let mut moved_datums = Vec::new();
-        for (index, datum) in self.datums.iter_mut().enumerate() {
-            if datum.station == station && datum.via == Some(line) {
-                datum.station = new_station;
-                moved_datums.push(index);
-            }
-        }
-        let mut moved_closure_ends = Vec::new();
-        for closure in &mut self.closures {
-            if closure.a == station && closure.a_via == Some(line) {
-                closure.a = new_station;
-                moved_closure_ends.push((closure.id, ClosureEnd::A));
-            }
-            if closure.b == station && closure.b_via == Some(line) {
-                closure.b = new_station;
-                moved_closure_ends.push((closure.id, ClosureEnd::B));
-            }
-        }
+        let moved_hand_move = self.move_slots(station, new_station, &[line]);
+        let (moved_datums, moved_closure_ends) =
+            self.move_attachments(station, new_station, |via| via == Some(line));
         self.uniquify_station_name(new_station);
         Ok(DetachReport {
             line,
@@ -243,6 +232,170 @@ impl Project {
             moved_closure_ends,
             moved_hand_move,
             restored_alias: restored.is_some(),
+            kept: false,
         })
+    }
+
+    /// Detach `line` from `station` when every other line (`others`) knows
+    /// the station by an alias (I-1): `line` keeps the station (its id, name,
+    /// comment and external id), and the other lines get back the identity
+    /// the first of those aliases (list order) records, its id and name, as
+    /// a Detach of one of them would give it back; the aliases naming the
+    /// other lines go with them. What was not the line's own follows the
+    /// other lines: datums and closure ends whose `via` is not the line, and
+    /// their hand moves.
+    fn detach_others(
+        &mut self,
+        station: StationId,
+        line: LineId,
+        others: &[LineId],
+    ) -> Result<DetachReport, OpError> {
+        let junction = self
+            .stations
+            .get_mut(&station)
+            .ok_or(OpError::UnknownStation(station))?;
+        let names_other = |a: &StationAlias| a.line.is_some_and(|l| others.contains(&l));
+        let (moving, staying): (Vec<StationAlias>, Vec<StationAlias>) =
+            std::mem::take(&mut junction.aliases)
+                .into_iter()
+                .partition(|a| names_other(a));
+        junction.aliases = staying;
+        let fallback = junction.name.clone();
+        let mut moving = moving.into_iter();
+        let first = moving.next().ok_or(OpError::NotDirectlyMerged)?;
+        let new_station = first.id;
+        let mut identity = Station::new(new_station, first.name.unwrap_or(fallback));
+        identity.aliases = moving.collect();
+        self.stations.insert(new_station, identity);
+
+        let moved_hand_move = self.move_slots(station, new_station, others);
+        let (moved_datums, moved_closure_ends) =
+            self.move_attachments(station, new_station, |via| via != Some(line));
+        Ok(DetachReport {
+            line,
+            station,
+            new_station,
+            moved_datums,
+            moved_closure_ends,
+            moved_hand_move,
+            restored_alias: true,
+            kept: true,
+        })
+    }
+
+    /// Put `to` where `from` is on each of `lines` (its chain slot and its
+    /// hand-move key). Whether a hand move moved.
+    fn move_slots(&mut self, from: StationId, to: StationId, lines: &[LineId]) -> bool {
+        let mut moved_hand_move = false;
+        for &id in lines {
+            if let Some(l) = self.line_mut(id) {
+                if l.start == from {
+                    l.start = to;
+                } else if let Some(shot) = l.shots.iter_mut().find(|shot| shot.to == from) {
+                    shot.to = to;
+                }
+                if let Some(hand) = l.hand_moves.remove(&from) {
+                    l.hand_moves.insert(to, hand);
+                    moved_hand_move = true;
+                }
+            }
+        }
+        moved_hand_move
+    }
+
+    /// Move the datums and closure ends on `from` whose `via` passes `moves`
+    /// to `to`: their list indices and ends.
+    fn move_attachments(
+        &mut self,
+        from: StationId,
+        to: StationId,
+        moves: impl Fn(Option<LineId>) -> bool,
+    ) -> (Vec<usize>, Vec<(ClosureId, ClosureEnd)>) {
+        let mut moved_datums = Vec::new();
+        for (index, datum) in self.datums.iter_mut().enumerate() {
+            if datum.station == from && moves(datum.via) {
+                datum.station = to;
+                moved_datums.push(index);
+            }
+        }
+        let mut moved_closure_ends = Vec::new();
+        for closure in &mut self.closures {
+            if closure.a == from && moves(closure.a_via) {
+                closure.a = to;
+                moved_closure_ends.push((closure.id, ClosureEnd::A));
+            }
+            if closure.b == from && moves(closure.b_via) {
+                closure.b = to;
+                moved_closure_ends.push((closure.id, ClosureEnd::B));
+            }
+        }
+        (moved_datums, moved_closure_ends)
+    }
+
+    /// I-1: every station an edit took a line off and left only on lines
+    /// that know it by an alias goes back to the identity the first of those
+    /// aliases (list order) records, as a Detach gives a line back its
+    /// station: the alias's id and name, the alias leaving the station. The
+    /// station keeps its comment (it may hold every line's notes), its
+    /// external id and its other aliases; its slots, hand moves, datums,
+    /// closure ends and placement follow the new id. Each line still shows
+    /// the name it showed (invariant 8 holds as before). Runs in the epilogue
+    /// of every edit and command (not Combine Lines, whose torn junctions
+    /// keep their ids) after stale attachments are dropped (so an alias of a
+    /// line that left is no longer a reason); `before` is the topology before
+    /// the edit, so a station the edit did not take a line off is left
+    /// alone. Returns `(old, new)` per station, in id order, for the anchor
+    /// algorithm ([`EditContext::reidentified`]).
+    pub(super) fn restore_alias_identities(
+        &mut self,
+        before: &Topology,
+    ) -> Vec<(StationId, StationId)> {
+        let topology = self.topology_arc();
+        let candidates: Vec<StationId> = self
+            .stations
+            .iter()
+            .filter(|(&id, s)| {
+                s.aliases.iter().any(|a| a.line.is_some())
+                    && topology.slots_of(id).len() < before.slots_of(id).len()
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for station in candidates {
+            let lines = topology.lines_of(station);
+            if lines.is_empty() || !lines.iter().all(|&l| self.known_by_alias_on(station, l)) {
+                continue;
+            }
+            let Some(mut identity) = self.stations.remove(&station) else {
+                continue;
+            };
+            let Some(index) = identity
+                .aliases
+                .iter()
+                .position(|a| a.line.is_some_and(|l| lines.contains(&l)))
+            else {
+                self.stations.insert(station, identity);
+                continue;
+            };
+            let alias = identity.aliases.remove(index);
+            let new = alias.id;
+            identity.id = new;
+            if let Some(name) = alias.name {
+                identity.name = name;
+            }
+            self.stations.insert(new, identity);
+            self.move_slots(station, new, &lines);
+            self.move_attachments(station, new, |_| true);
+            for placement in &mut self.placements {
+                if placement.station == station {
+                    placement.station = new;
+                }
+            }
+            out.push((station, new));
+        }
+        out
     }
 }
