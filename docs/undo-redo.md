@@ -122,9 +122,11 @@ gates (a read-only SpeleoDB session or a read-only file refuses), pop the
 entry and step it (`changeset::step`):
 
 - on a refusal the entry goes back where it was and the refusal is the error;
-- an entry decoded from a file (no session ids) is validated after its step;
-  a violation is rolled back with the inverse step (exact) and the step is
-  refused;
+- an entry decoded from a file (no session ids) is stepped on a project kept
+  aside first and validated after its step; on a violation the project is put
+  back from that copy and the step is refused. Not the inverse step: a step
+  checks only the side it reads, so a crafted entry's other side (its runs,
+  edits or hash) can be refused, and the survey must never be left invalid;
 - on success it moves to the other stack, `modified_at` is stamped, the
   revision is bumped, the file is marked dirty and, on a linked project, the
   SpeleoDB dirty bit is set (an undo is not a forward edit: the Unwind
@@ -151,8 +153,11 @@ shot, a created or deleted line, a line metadata edit, a credit edit, a
 station comment. An entry therefore never changes after later edits: a
 reverse, an insert or a rename does not make an older entry name another
 station, and a deleted line stays named. Batch rows name lines and stations
-as they were before the batch. K's characterisation goldens are the oracle
-for the wording (`core/state/characterization_dump_tests.rs`).
+as they were before the batch. K's characterisation dump was the oracle for
+the wording when it was ported (compared with 0.6.0's once, plan C18); in
+CI the wording is pinned by `core/state/history_labels_tests.rs` and
+`batch_label_tests.rs` (the dump, `characterization_dump_tests.rs`, runs on
+demand).
 
 ### Persisted entries
 

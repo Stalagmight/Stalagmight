@@ -339,3 +339,39 @@ fn stale_vias_and_hand_moves_are_dropped_by_the_epilogue_helper() {
     assert_eq!(report.placed_on_gps, vec![1]);
     assert_eq!(p.validate(), Vec::new());
 }
+
+/// `lines_of` lists each line through a station once, in list order, and
+/// `is_junction` agrees with it, at a hub past the scan limit and on an
+/// invalid model whose two lines share an id (their slots are not adjacent):
+/// the set check that keeps a hub of thousands of lines linear
+/// (I-import-export-2) gives the scan's answer.
+#[test]
+fn lines_of_and_is_junction_hold_at_a_hub_and_on_a_repeated_line_id() {
+    let mut p = project();
+    let trunk = add(&mut p, StartAt::New, vec![flat(0.0, 1.0)]);
+    let hub = at(&p, trunk, 0);
+    let mut spokes = vec![trunk];
+    for i in 0..40 {
+        spokes.push(add(
+            &mut p,
+            StartAt::Station(hub),
+            vec![flat(f64::from(i * 9), 1.0)],
+        ));
+    }
+    assert_eq!(p.topology().lines_of(hub), spokes);
+    assert!(p.topology().is_junction(hub));
+    let lone = at(&p, spokes[5], 1);
+    assert_eq!(p.topology().lines_of(lone), vec![spokes[5]]);
+    assert!(!p.topology().is_junction(lone));
+
+    // Line 3 again at the end of the list (invalid: a repeated id).
+    let mut lines = p.lines().to_vec();
+    lines.push(lines[3].clone());
+    let topology = super::Topology::build(&lines);
+    assert_eq!(topology.slots_of(hub).len(), spokes.len() + 1);
+    assert_eq!(topology.lines_of(hub), spokes, "line 3 once");
+    let one = vec![lines[3].clone(), lines[3].clone()];
+    let topology = super::Topology::build(&one);
+    assert_eq!(topology.lines_of(hub), vec![spokes[3]]);
+    assert!(!topology.is_junction(hub), "one line id twice is one line");
+}

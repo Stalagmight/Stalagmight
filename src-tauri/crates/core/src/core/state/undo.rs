@@ -4,10 +4,12 @@
 //! A step applies the entry's changeset either way with its preconditions
 //! (`changeset::step`): a refusal changes nothing and keeps the entry where
 //! it was. An entry decoded from a file (no session ids) is also validated
-//! after its step and rolled back with the inverse step on a violation
-//! (U10: only a crafted file can get there). Nothing derived is stored, so
-//! nothing is re-measured or healed after a step: `undo_to` / `redo_to`
-//! apply N steps and bump the revision once.
+//! after its step and, on a violation, the project is put back as it was
+//! before the step (U10: only a crafted file can get there). The rollback is
+//! the copy kept aside, not the inverse step: a step checks only the side it
+//! reads, so a crafted entry's other side can be refused. Nothing derived is
+//! stored, so nothing is re-measured or healed after a step: `undo_to` /
+//! `redo_to` apply N steps and bump the revision once.
 
 use crate::core::undo::history_item::history_item;
 use crate::core::{CommandResult, ReversedLine, UndoHistoryItem};
@@ -105,22 +107,20 @@ impl AppState {
             let Some(entry) = entry else {
                 break;
             };
+            // A decoded entry is stepped with the project as it was kept
+            // aside: a step checks only the side it reads, so the inverse of
+            // a crafted entry can be refused, and the rollback must not
+            // depend on it.
+            let decoded = !entry.entry().changes.has_session_ids();
+            let before = decoded.then(|| project.clone());
             let refused = match step(project, &entry.entry().changes, direction) {
                 Err(refusal) => Some(refusal.to_string()),
-                Ok(()) if !entry.entry().changes.has_session_ids() => {
+                Ok(()) => before.and_then(|before| {
                     let violations = project.validate();
-                    violations.first().map(|first| {
-                        let back = match direction {
-                            Direction::Undo => Direction::Redo,
-                            Direction::Redo => Direction::Undo,
-                        };
-                        if let Err(e) = step(project, &entry.entry().changes, back) {
-                            tracing::error!(error = %e, "rolling back an invalid history step failed");
-                        }
-                        format!("the step would leave the survey invalid: {first}")
-                    })
-                }
-                Ok(()) => None,
+                    let first = violations.first()?.to_string();
+                    *project = before;
+                    Some(format!("the step would leave the survey invalid: {first}"))
+                }),
             };
             let mut stack = self
                 .undo_stack

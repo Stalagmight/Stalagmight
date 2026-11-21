@@ -6,11 +6,15 @@
 //! Total on invalid models: a dangling `to`, a station twice on one chain or a
 //! cycle are indexed as they are, and [`super::Project::validate`] reports them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{LineId, StationId, StationRef};
 
 use super::Line;
+
+/// [`Topology::lines_of`] checks a repeat by scanning the list up to this
+/// many lines, by a set past it.
+const LINES_OF_SCAN: usize = 16;
 
 /// A connected component: stations joined by shots, junctions joined because
 /// they are one station.
@@ -176,17 +180,36 @@ impl Topology {
     /// chain repeats it).
     pub fn lines_of(&self, station: StationId) -> Vec<LineId> {
         let mut lines: Vec<LineId> = Vec::new();
+        // A hub can hold tens of thousands of lines: past a few, the repeat
+        // check is a set instead of a scan of the list, so the call stays
+        // linear in the station's slots (I-import-export-2).
+        let mut seen: HashSet<LineId> = HashSet::new();
         for slot in self.slots_of(station) {
-            if lines.last() != Some(&slot.line_id) && !lines.contains(&slot.line_id) {
+            if lines.last() == Some(&slot.line_id) {
+                continue;
+            }
+            let fresh = if lines.len() < LINES_OF_SCAN {
+                !lines.contains(&slot.line_id)
+            } else {
+                if seen.is_empty() {
+                    seen.extend(lines.iter().copied());
+                }
+                seen.insert(slot.line_id)
+            };
+            if fresh {
                 lines.push(slot.line_id);
             }
         }
         lines
     }
 
-    /// Whether `station` is on two or more lines.
+    /// Whether `station` is on two or more lines (no allocation, and it stops
+    /// at the first slot of a second line).
     pub fn is_junction(&self, station: StationId) -> bool {
-        self.lines_of(station).len() > 1
+        let slots = self.slots_of(station);
+        slots
+            .first()
+            .is_some_and(|first| slots.iter().any(|slot| slot.line_id != first.line_id))
     }
 
     /// The first slot of `station` (its address on the wire).

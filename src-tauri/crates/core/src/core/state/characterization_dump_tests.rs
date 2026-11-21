@@ -63,9 +63,30 @@
 //! normal test run, into a temporary directory, as a gate on those three
 //! failure kinds (`every_characterisation_scenario_does_what_it_expects`).
 //!
+//! **What this does and does not gate** (J-docs-tests-truth-4). The
+//! comparison with 0.6.0 is not a CI gate and cannot become one: the 0.6.0
+//! dump was recorded once on `models::project` before that module was
+//! deleted, so it can never be recorded again, and it was compared once
+//! (plan stream C18, every difference in a declared class). The outputs are
+//! not committed (the exports include `.csv` and Ariane files, which this
+//! repository does not track). In CI the scenarios gate only on the three
+//! failure kinds above, so a behaviour change that is not declared (a
+//! different preview, export column, history label or position) passes them.
+//! What does gate parity with 0.6.0 in CI is the code that still runs 0.6.0:
+//! the frozen crate (`crates/legacy`) through the migration's per-slot
+//! verification and the wire-equivalence suite (`persistence::migrate`), and
+//! the `models::survey` cross-checks that build equivalent surveys with the
+//! frozen model (layout, Computed View, rigid groups, gas engine, edits); and
+//! the Ariane export's pinned legacy document (`tml_survey_tests.rs`). A run
+//! of this dump on a later build, compared with an earlier run of the same
+//! build (`compare-characterization.mjs <old> <new>`), shows what a change
+//! did to it, on demand.
+//!
 //! The scenario functions only speak `Command`, the `AppState` recipes and
 //! positional handles (`StationRef` slots, line ids, shots by position); they
-//! are the 0.6.0 scripts unchanged. The query half reads what the IPC
+//! are the 0.6.0 scripts, changed after the 0.6.0 recording only where the API
+//! moved (`split_options` lost its two `SplitSide` arguments, `.loop_closures`
+//! is `.closures`, `.lines` is `.lines()`). The query half reads what the IPC
 //! handlers send on the station graph: `get_project_state` is
 //! `AppState::project_state_wire` (the wire `Project` without
 //! `line_offsets`, the per-slot stations, stats, frozen shots), the previews

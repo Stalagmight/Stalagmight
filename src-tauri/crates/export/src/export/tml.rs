@@ -11,10 +11,11 @@
 //! reproduces the naming convention used by Ariane.
 //!
 //! Key Ariane format rules learned from real files:
-//! - One START shot per ENTRANCE, not per file. A line merged into the survey
-//!   connects via `FromID` on its first REAL/VIRTUAL shot pointing directly at the
-//!   parent station, and gets no START; a line merged into nothing is a separate
-//!   entrance and gets one of its own, as Ariane's own multi-entrance files do.
+//! - One START shot per ENTRANCE, not per file. A line joined to the survey at a
+//!   junction connects via `FromID` on its first REAL/VIRTUAL shot pointing
+//!   directly at the junction's row, and gets no START; a line joined to nothing
+//!   is a separate entrance and gets one of its own, as Ariane's own
+//!   multi-entrance files do.
 //!   A parentless shot that is NOT a START is an orphan root, and Ariane draws an
 //!   empty map for any survey that has one alongside a closure - see
 //!   `ensure_rooted_chain`.
@@ -431,8 +432,8 @@ fn write_shot<W: std::io::Write>(
     write_text_element(writer, n.up, &format_f64(shot.up))?;
 
     // Stable per-shot UUID. Emitted for every block that stands for a REAL
-    // PROJECT SHOT - the forward blocks and the reversed "(pre-zero-datum)" /
-    // merge legs alike - and omitted only for the blocks this exporter
+    // PROJECT SHOT - the forward blocks and the reversed "(reversed)" /
+    // "(pre-zero-datum)" legs alike - and omitted only for the blocks this exporter
     // SYNTHESIZES, which are the START stations, the CLOSURE connectors and the
     // VIRTUAL padding shot. It is what makes a re-export of an unchanged project
     // byte-identical, which the SpeleoDB co-push render relies on. Ariane 26+
@@ -685,12 +686,15 @@ fn list_capped(names: &[&str]) -> String {
 /// identity would render to different bytes on each export.
 ///
 /// What this value guarantees is STABILITY across re-exports. Uniqueness is the
-/// model's: a shot UUID is held by one shot in the whole project (every door that
-/// brings ids in renames repeats, and the load heals a file saved before that).
-/// The export still settles repeats after the full shot list is assembled -
-/// `remint_duplicate_uuids` (user profile) and `harden_for_speleodb` (sidecar) -
-/// as a safety net for the one state that can still hold one in memory: an undo
-/// of an integrity Repair, which restores the recorded state verbatim.
+/// model's: a shot UUID is held by one shot in the whole project, an invariant
+/// `Project::validate` checks (every door that brings ids in re-mints repeats,
+/// the frozen 0.6.0 reader heals an old file that repeats one, and a version 2
+/// file that repeats one is refused at load). Every edit and history step is
+/// validated, so a project the app holds has no repeat. The export still
+/// settles repeats after the full shot list is assembled, with
+/// `remint_duplicate_uuids` (user profile) and `harden_for_speleodb`
+/// (sidecar), as a safety net only: neither can fire on a valid project.
+///
 /// Never returns an empty string: an empty stored UUID is treated as "no identity
 /// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
 /// is worse than an ephemeral one (it reads as a real, shared key).
@@ -704,9 +708,9 @@ fn export_uuid(stored: Option<&str>) -> String {
 /// Document-level `<UUID>` uniqueness for the user-facing export.
 ///
 /// The model keeps shot UUIDs unique across the project (see `export_uuid`),
-/// so this is a safety net: a project that holds a repeat anyway - an undo of an
-/// integrity Repair restores one verbatim, until the next load heals it - would
-/// otherwise carry the same `<UUID>` twice in one document. How Ariane treats a repeated
+/// so this is a safety net: a project that held a repeat anyway (an invalid
+/// one, which no edit, history step or load leaves) would otherwise carry the
+/// same `<UUID>` twice in one document. How Ariane treats a repeated
 /// id is untestable from here, and a consumer keying features on `<UUID>` would
 /// alias the copies - so the export fails safe the same way the sidecar does: the
 /// FIRST occurrence keeps its identity (round-trip fidelity for the copy that
@@ -1154,8 +1158,8 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
         shot.date = Some(speleodb_date(shot.date.as_deref()));
         // A repeat aliases the two shots onto one GeoJSON feature id. The model
         // keeps shot UUIDs unique across the project (see `export_uuid`), so
-        // this is a safety net for the one state that can still hold a repeat;
-        // omitting the optional element costs nothing downstream.
+        // this is a safety net that a valid project never trips; omitting the
+        // optional element costs nothing downstream.
         //
         // The CANONICAL spelling is written back, not the one that came in.
         // `Uuid::parse_str` accepts `{braced}`, `urn:uuid:…` and hyphenless forms, so
@@ -1172,7 +1176,11 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
         shot.uuid = canonical;
     }
 
-    // Ids come off one counter that is never reset, so this cannot fire; it is
+    // A row's id is the Station ID of the station it ends at (a START's, the
+    // station it stands on), and CLOSURE rows and GPS-fix STARTs are numbered
+    // above every station. In a valid project each line is walked once, from
+    // the one station it shares with the lines walked before it (the forest
+    // invariant), so there is one row per station and this cannot fire. It is
     // here because a duplicate `<ID>` fails the whole file rather than one shot,
     // and the failure would surface as a missing map days later.
     debug_assert_eq!(duplicate_ids, 0, "exported Ariane ids must be unique");

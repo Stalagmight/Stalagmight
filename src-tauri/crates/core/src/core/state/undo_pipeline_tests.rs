@@ -1684,7 +1684,8 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
 /// The decoded-entry guard (plan Deviation U10): an entry read from a file
 /// has no session ids, and one whose step passes its preconditions yet would
 /// leave an invalid survey (only a crafted file can hold one) is rolled back
-/// with the inverse step: refused, the project untouched, the entry kept.
+/// from the project kept before the step: refused, the project untouched,
+/// the entry kept.
 #[test]
 fn a_decoded_entry_that_would_leave_an_invalid_survey_is_refused_and_kept() {
     let state = new_state();
@@ -1725,6 +1726,89 @@ fn a_decoded_entry_that_would_leave_an_invalid_survey_is_refused_and_kept() {
     assert_same(&snapshot(&state), &before, "rolled back exactly");
     assert_eq!(state.get_redo_stack().len(), 1, "the entry is kept");
     assert!(!state.can_undo());
+}
+
+/// The same guard when the inverse step would be refused (E-undo-pipeline-4):
+/// a step checks only the side it reads, so a crafted entry can pair a
+/// valid-looking target with a source side the inverse refuses (here the
+/// undo side's length of an edited shot, 5 m, tampered to 5.5 m). The
+/// rollback is the project kept aside before the step, so the survey is
+/// left valid and exactly as it was: it still saves and takes edits.
+#[test]
+fn a_decoded_entry_whose_inverse_is_refused_is_still_rolled_back() {
+    let state = new_state();
+    let line_id = create(
+        &state,
+        "Line",
+        vec![test_shot_data(5.0), test_shot_data(7.0)],
+    );
+    state.undo_stack.lock().unwrap().clear();
+    let before_project = project(&state);
+    let mut invalid = before_project.clone();
+    let id = invalid.counters.next_station_id;
+    invalid.insert_station(Station::new(id, "orphan")).unwrap();
+    invalid.line_mut(line_id).unwrap().shots[0].length = 6.0;
+    assert!(
+        !invalid.validate().is_empty(),
+        "setup: the target is invalid"
+    );
+    let mut changes = capture(&before_project, &invalid);
+    changes.forget_session_ids();
+    let entry = UndoEntry::new(HistoryEntry {
+        timestamp: chrono::Utc::now(),
+        kind: "batch".to_string(),
+        label: "Crafted".to_string(),
+        refs: HistoryRefs::default(),
+        preview: RecordedPreview::default(),
+        changes,
+    })
+    .unwrap();
+    let text = entry.raw().as_str().to_string();
+    let tampered = text.replacen("[5.0]", "[5.5]", 1);
+    assert_ne!(
+        tampered, text,
+        "setup: the undo side's length is in the entry"
+    );
+    let decoded = UndoEntry::decode(
+        &stalx_v2::RawJson::parse(&tampered).unwrap(),
+        &crate::models::survey::changeset::EntryLimits::default(),
+    )
+    .expect("the crafted entry decodes");
+    state.undo_stack.lock().unwrap().push_redo(decoded);
+
+    let before = snapshot(&state);
+    let r = state.redo();
+    assert!(!r.success);
+    assert!(
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("the step would leave the survey invalid"),
+        "{:?}",
+        r.error
+    );
+    assert!(
+        state.integrity_violation_messages().is_empty(),
+        "the survey is left valid: {:?}",
+        state.integrity_violation_messages()
+    );
+    assert_same(&snapshot(&state), &before, "rolled back exactly");
+    assert_eq!(state.get_redo_stack().len(), 1, "the entry is kept");
+    let dir = TempDir::new().unwrap();
+    let save = state.execute(Command::SaveProject {
+        path: Some(dir.path().join("kept.stalx")),
+    });
+    assert!(save.success, "it still saves: {:?}", save.error);
+    let shot_id = shot_ids(&state, line_id)[1];
+    let edit = state.execute(Command::UpdateShot {
+        line_id,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(8.0),
+            ..Default::default()
+        },
+    });
+    assert!(edit.success, "it still takes edits: {:?}", edit.error);
 }
 
 /// Moving a datum (a GPS edit of an existing datum) records the previous

@@ -609,6 +609,19 @@ in a named class (a declared change) or fails the test; `STALAGMIGHT_RUST_WIRE_S
 (ignored) and prints the classes. The combine classes are characterised
 only (M1's ported combine tests are its oracle).
 
+Positions are waived per component and checked per slot, never per case: a
+slot may sit elsewhere than 0.6.0 sent it only in a component (raw: shot
+component; Computed View: least-squares component) where the migrated
+model's own position of some slot differs from 0.6.0's, with the migration's
+verification of that view clean, and only to exactly the migrated model's
+position (0.6.0's payload being exactly 0.6.0's position). The figures that
+read positions (a GPS fix's gap, far fixes, a closure preview's misclosure,
+a merge's datum shift) are waived per component the same way, and a
+difference in the failed components only when the verification explained
+it. `a_wire_move_the_migration_did_not_make_fails_even_where_it_moved_positions`
+pins the oracle: a 1 km or 0.5 m move of one wire slot in such a component
+fails, in both views.
+
 ## The app core on the model (stream C)
 
 `stalagmight-core` holds the open survey as `models::survey::Project` in
@@ -648,7 +661,7 @@ the model:
 | `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
 | `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
 | `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
-| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction), `append_project` |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction; a different name the file gives it becomes an alias under a minted retired id, and a new station whose file name is the junction's is suffixed and reported in the receipt), `append_project` |
 
 Subsystems ported onto the model and the v2 file:
 
