@@ -310,13 +310,22 @@ unknown `requires` feature, or an unknown key in a survey record (stations,
 lines, shots, datums, placements, closures, Sections) - opens read-only, with
 the "made with a newer Stalagmight" banner. The backend refuses every edit,
 undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
-`useEditingBlocked` reports it as a project-level block, a refused save is
-worded for it, and autosave pauses. An edit the frontend turns away before
-any command leaves (a key typed into a data-table cell, F2, Delete on a
-selection) shows the same worded notice as a refused Ctrl+Z
-(`notifyIfFileReadOnly`), once while it is on screen; the disabled menu rows
-are faded and say why on hover; the Ariane export's notice about lines
-without a zero datum does not suggest setting one (demo finding I-10). The
+`useEditingBlocked` reports it as a project-level block, and autosave pauses.
+An edit the frontend turns away before any command leaves (a key typed into a
+data-table cell, F2, Delete on a selection) shows the same worded notice as a
+refused Ctrl+Z (`notifyIfFileReadOnly`), once while it is on screen; the
+Ariane export's notice about lines without a zero datum does not suggest
+setting one (demo finding I-10). Saving it is never an error (demo issue
+N-1): Save, Ctrl+S, Save As, Ctrl+Shift+S and Ctrl+I give that same notice
+before any IPC or file dialog, and a save refused anyway (`surfaceSaveFailure`)
+gets it too, never the "Save Failed" dialog. Save As is not offered either: a
+copy would be written by this version's encoder, which drops what the newer
+version stored, so the backend refuses every destination. The menu's Save,
+Save As, Save and Close, Import and Import from MNemo are off; Save and Close
+and Close Project close without saving or asking, since nothing of the user's
+can be unsaved. A disabled menu row, these and the station menu's edit rows,
+says why in the app's tooltip, and a click on it shows the notice (N-12). The
+status bar reads "Read-only" (N-7). The
 local-only durable saves still work on it and copy the survey members byte for
 byte; the keys of `local` a newer build wrote and this one does not know are
 written back as read, so a display toggle never erases that build's
@@ -326,7 +335,12 @@ per-machine or sync state.
 
 The first save of a migrated legacy file (its origin is `Legacy` in
 `FileState`) writes version 2 over it, through `legacy_upgrade::upgrade`
-(`core/state/legacy_upgrade.rs`).
+(`core/state/legacy_upgrade.rs`). Until a save writes the open project (to
+its own path, or a Save As elsewhere) the status bar reads "Old format:
+converted when you save" instead of "Saved": the frontend asks
+`project_file_is_legacy` with the rest of the file status, and the converting
+save's `legacy_converted` clears it (demo issue N-6). A conversion that raised
+no notice reads the same.
 
 A legacy file is not always one file. Beside a file an old build was killed
 writing sits a HOT `-journal`: it holds the before-images of the pages the
@@ -492,7 +506,7 @@ mirrors the markers; `saveFeedback.ts` turns them into copy.
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
 | `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
-| `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only wording |
+| `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only notice (warning toast, key `edit-disabled`), never the error dialog |
 | (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 
 The version 2 writer reports typed I/O errors with the step that failed

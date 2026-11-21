@@ -44,12 +44,12 @@ Derived views and Plan mode:
 Files:
 
 - **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
-- **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Why: the product decision, with the original kept restorable.
+- **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Until that save the status bar reads "Old format: converted when you save", not "Saved" (RO5). Why: the product decision, with the original kept restorable.
 - **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (since U1 only a name 0.6.0 showed twice on a line, lettered: every other slot keeps its 0.6.0 name) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Its last sentence says whether the new format is on disk yet, and the converting save says so (DM1). Why: data never moves or changes name silently.
 - **A 0.6.0 file this build cannot convert is not called corrupt**: it opens as "This file needs converting ..., and this version cannot convert it: <reason>", and Attempt Repair never rewrites a file that opens or that only the conversion refuses, nor says it succeeded while the open still fails (UR4). Why: the recovery dialog and its repair are for damage.
 - **A Save As onto another 0.6.0 file upgrades it**: the 0.6.0 file it replaces is kept in Recovery, and no SQLite sidecar is left beside the JSON file (UR5). Why: an old build would roll a journal into the JSON file.
 - **Local state of an open 0.6.0 file waits for the upgrading save**: SpeleoDB bookkeeping counts as unsaved and the close prompt asks; a display toggle rides the next save but alone is not an unsaved change, so it never arms autosave and a close without a save drops it; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6, amended by demo issue I-6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it, and only a save the user asked for (or the autosave of a real edit) may do that.
-- **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). Why: never rewrite what this build would lose.
+- **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). The menu's Save, Save As, Save and Close, Import and Import from MNemo are off and say why, their shortcuts and any refused save get the worded read-only notice (never the error dialog), the status bar reads "Read-only", and closing it never asks to save (RO1 to RO4). Why: never rewrite what this build would lose.
 - **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
 - **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned; an ignore whose shot an undo or redo step of the saved history can bring back is kept with it (0.6.0 dropped it at the save) (12.2, 6.5, C11, N9, F-command-parity-2). Why: ignores are survey content.
 - **Save a Copy onto the open file's own path is a normal save** (0.6.0 refused it) (C6). Why: the destination is the open file, so there is no copy to detach.
@@ -1272,3 +1272,40 @@ untrue. Labels `DM1`...
   tune yet; `warn_depth_change_per_shot_max` measures something else (one
   shot's depth change).
 
+## Deviations (real-app demo fixes, package V1: read-only and old-format status)
+
+The real-app demo of sg/core (issues N-1, N-6, N-7, N-12) found the save
+paths of a read-only file answering with the "Save Failed ... report it as a
+bug" dialog, and the status bar saying "Saved" when the file on disk was not
+this version's. Labels `RO`...
+
+- **RO1. A refused save of a read-only file is the blocked-edit notice**
+  (amends C7, N13). `surfaceSaveFailure` routes `READ_ONLY_FILE` to the worded
+  warning toast a typed key and Ctrl+Z get (`showReadOnlyFileNotice`, key
+  `edit-disabled`, once while one is on screen), never `ErrorDialog`. Save,
+  Ctrl+S, Save As, Ctrl+Shift+S and Ctrl+I refuse such a file before any IPC
+  or file dialog (`notifyIfFileReadOnly`).
+- **RO2. Save As stays off.** A copy to a new path is not safe: it is written
+  by this build's encoder, which drops what the newer build stored, and the
+  backend refuses every destination of a read-only file (`save_with`, F8:
+  every encode mode refuses while `Extras.read_only` is set). So the menu does
+  not offer it.
+- **RO3. The menu's save and import rows are off for a read-only file**
+  (amends the #407/#508 "Import is never disabled" rule for this one cause,
+  which no switch or lock fixes): Save, Save As, Save and Close, Import and
+  Import from MNemo carry the read-only notice as `disabledReason`. Save and
+  Close of such a file, and Close Project, close without saving or asking
+  (there is nothing of the user's to save; the prompt's Save could only be
+  refused).
+- **RO4. A disabled menu row says why where it renders** (amends I-10). A
+  row with a reason (`AppMenuItem.disabledReason`, `ContextMenuItem.reason`)
+  is `aria-disabled` instead of `disabled`, shows the reason in the app's
+  `Tooltip` (WebKitGTK drew no native `title` on the disabled row, and a
+  `disabled` button gets no click), and a click shows the reason as the
+  blocked-edit notice, never the action.
+- **RO5. The status bar names the file's state.** "Read-only" for a read-only
+  file whatever autosave last did; "Old format: converted when you save" while
+  the file on disk is still the 0.6.0 file (`project_file_is_legacy`, a peek
+  of `FileOrigin::Legacy`, true until a save writes the open project, also for
+  a conversion that raised no notice); unsaved changes and the autosave
+  countdown still come first.

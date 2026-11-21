@@ -780,10 +780,15 @@ with its reason, is the plan's "Status (final)" section:
   new format is on disk yet; the converting save turns it to "Saved in the new
   format", or, with the notice dismissed, says so in a toast. A display toggle
   before that save is kept for it but is not an unsaved change, so it never
-  starts an autosave that converts the file. A file made
+  starts an autosave that converts the file. Until that save the status bar
+  reads "Old format: converted when you save" instead of "Saved". A file made
   with a newer Stalagmight opens read-only when it only uses features this
   version does not know, and is refused (update Stalagmight) when it is a
   newer major format or cannot be read correctly without those features. A
+  read-only file's status bar reads "Read-only"; Save, Save As, Save and
+  Close, Import and Import from MNemo are off in the menu and say why, and
+  their shortcuts show the read-only notice; Close Project closes it without
+  asking to save. A
   save refuses a file another
   program changed since it was opened and asks which version to keep. An older
   Stalagmight cannot open a file this version saved, and SpeleoDB pushes send

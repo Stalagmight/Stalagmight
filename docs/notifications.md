@@ -158,8 +158,13 @@ regions). Read the comment blocks in those two files plus
   save lands; the banner's Save opens the prompt.
 - **A read-only file and a converted file are banners, not dialogs.** A file
   made with a newer Stalagmight opens read-only with a banner naming the reason
-  (`read-only-file-banner`, no button: there is nothing to do here but update);
-  a refused save is worded for it. An old
+  (`read-only-file-banner`, no button: there is nothing to do here but update),
+  and the status bar reads "Read-only". Anything it turns away - a typed key,
+  Ctrl+Z, Save, Ctrl+S, Save As, Import, a click on a disabled menu row, a
+  save the backend refused (`surfaceSaveFailure`) - is the `warning` toast
+  `edit-disabled` with the read-only notice, once while it is on screen,
+  never the error dialog: it is a blocked action, not a failure, and the
+  report-a-bug footer would be wrong advice (demo issue N-1). An old
   file whose conversion moved stations, changed a depth, could not place a
   station, showed a station under another name or joined comments shows the
   one-time conversion notice (`conversion-notice-banner`) until dismissed: one
@@ -170,8 +175,10 @@ regions). Read the comment blocks in those two files plus
   legacy SpeleoDB revision converted on download, "the original revision is
   unchanged on SpeleoDB" instead). The converting save moves that sentence on;
   with no banner showing it is a success toast instead (one event, one
-  surface). The history-discarded banner (`history-discarded-banner`) is
-  unchanged: it also covers an old file's history, which the conversion drops.
+  surface). Until that save the status bar reads "Old format: converted when
+  you save", not "Saved", banner or not (N-6). The history-discarded banner
+  (`history-discarded-banner`) is unchanged: it also covers an old file's
+  history, which the conversion drops.
 
 ## Command-failure contract
 
