@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{StationRef, ZeroDatumWire};
 
+use super::super::ops_test_helpers::{free_line, run};
 use super::super::test_helpers::{add, at, flat, gps, project, three_line_junction};
 use super::super::{ClosureStrategy, OpError, Project, StartAt, ZeroDatum};
 
@@ -150,6 +151,30 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
             [raw_slot.x, raw_slot.y, raw_slot.z]
         );
     }
+}
+
+/// A merged station's retired ids and names (its aliases) ride every slot
+/// of it, for the station details' "Also known as"; a station without any
+/// sends none (H-frontend-wire-5).
+#[test]
+fn a_merged_stations_aliases_ride_every_slot() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    let a2_name = p.stations[&a2].name.clone();
+    let merged = p.merge_stations(a2, b0).unwrap();
+    assert_eq!((merged.value.survivor, merged.value.retired), (b0, a2));
+    let stations = p.stations_wire(&p.raw_positions());
+    let expected = Some(vec![crate::StationAliasWire {
+        id: a2,
+        name: Some(a2_name),
+    }]);
+    assert_eq!(station_at(&stations, slot(a, 2)).aliases, expected);
+    assert_eq!(station_at(&stations, slot(b, 0)).aliases, expected);
+    assert_eq!(station_at(&stations, slot(a, 1)).aliases, None);
+    let json = serde_json::to_value(station_at(&stations, slot(b, 0))).unwrap();
+    assert_eq!(json["aliases"][0]["id"], serde_json::json!(a2));
 }
 
 #[test]

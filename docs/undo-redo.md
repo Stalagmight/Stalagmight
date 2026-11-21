@@ -111,6 +111,9 @@ never recorded; only the sanitized file name is in the label.
 `CloseProject`, `CreateProject`, `MergeProjects`. Display toggles, SpeleoDB
 state and Ignore / Unignore of a warning are not undo steps either (the
 ignores ride the next save as survey content, but are not in the history).
+An ignore keyed by a shot the survey no longer has stays in the file while a
+saved undo or redo step can bring that shot back (file-format.md 5.13), so an
+undo after a reopen finds it, as within the session.
 
 ### Undo, redo, jumps
 
@@ -443,9 +446,9 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 Labels and previews never show the positional ids (`line:index`, shot ids):
 lines, stations and shots are named the way the user reads them -
 `Update shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`,
-`Delete line "Main Line"`. A junction has one name on every line, so both
-slots of a merged station read the same (`Unmerge station pair Pair / 2 and
-Pair Partner / 2`).
+`Delete line "Main Line"`. A junction has one name on every line, so a
+detach names the line that leaves and the station once, in the menu's words
+(`Detach line "Side" from station 2`).
 
 The names are worded **at record time**, with the names before the edit
 (`core/state/labels.rs`), and stored in the entry. A metadata edit that renames

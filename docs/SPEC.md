@@ -1061,7 +1061,13 @@ the test ids) but are never shown:
 
 **A junction** (a station on several lines) is one station: its Station ID,
 name and comment are the same from every slot. "Merged with" lists the other
-lines through it, each with a button that detaches that line (tooltip "Detach <line> from this station").
+lines through it by line name (never the station's own name again), each
+with a button that detaches that line (tooltip "Detach <line> from this
+station"; the history row reads `Detach line "<line>" from station <name>`).
+"Also known as" lists the Station IDs and names merged into the station (its
+aliases: a merge's retired station, or a 0.6.0 merge group's other members),
+`<name> (Station ID <id>)`, so a surveyor can still find a former name from
+the field notes; hidden when it has none.
 "Connected" also lists every shot that meets the station on the other lines
 (`StationOtherLineShots.tsx`), so a junction of three lines shows three or
 more shots, not just a previous and a next. A junction's zero datum is found

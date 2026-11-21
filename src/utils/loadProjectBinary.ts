@@ -26,6 +26,7 @@ import type { Person } from '../types/ipc/Person';
 import type { SurveyCredit } from '../types/ipc/SurveyCredit';
 import { noteLazyLineCredits } from './projectPeople';
 import type { StationRef } from '../types/ipc/StationRef';
+import type { StationAlias } from '../types/ipc/StationAlias';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
 import type { LoopClosure } from '../types/ipc/LoopClosure';
@@ -91,7 +92,8 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * gone (positions are derived from placements and datums, nothing reads it),
  * and a junction's slots share ONE Station ID, name and comment, so
  * `stations_ids`, `station_names` and `station_comments` are no longer
- * unique per slot. The layout is otherwise unchanged.
+ * unique per slot; the sparse `station_aliases` list (a merged station's
+ * retired ids and names) is new. The layout is otherwise unchanged.
  */
 const EXPECTED_VERSION = 9;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
@@ -131,6 +133,9 @@ export interface BinaryEnvelope {
   station_names: Array<[number, string]>;
   /** Per-station u32 LE: the project-unique Station ID (v8). */
   stations_ids: Uint8Array;
+  /** Sparse: the ids and names merged into a station, on every slot of it
+   *  (v9). Optional so an envelope without the key decodes as "none". */
+  station_aliases?: Array<[number, StationAlias[]]>;
   stats: ProjectStats;
   warnings: ProjectWarning[];
   display_settings: DisplaySettings;
@@ -456,6 +461,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   for (const [i, c] of env.station_comments) commentByIdx.set(i, c);
   const nameByIdx = new Map<number, string>();
   for (const [i, n] of env.station_names) nameByIdx.set(i, n);
+  const aliasesByIdx = new Map<number, StationAlias[]>();
+  for (const [i, a] of env.station_aliases ?? []) aliasesByIdx.set(i, a);
 
   // Build the new SoA layout. This reuses the same typed-array views we
   // already created above; per-shot/station numeric fields aren't copied,
@@ -470,7 +477,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
   const surveyData = withGpsFixFlags(
-    buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx),
+    buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx, aliasesByIdx),
     env.project_header.zero_datums
   );
 
@@ -535,6 +542,7 @@ function buildSurveyData(
   stationClosures: Map<number, ClosureRef[]>,
   stationComments: Map<number, string>,
   stationNames: Map<number, string>,
+  stationAliases: Map<number, StationAlias[]>,
 ): SurveyData {
   const N = env.shot_count;
   const shotIds = new Uint32Array(N);
@@ -658,6 +666,7 @@ function buildSurveyData(
     stationComments,
     stationNames,
     stationIds,
+    stationAliases,
   };
 }
 

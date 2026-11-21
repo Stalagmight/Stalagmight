@@ -50,7 +50,7 @@ Files:
 - **Local state of an open 0.6.0 file counts as unsaved**: a display toggle (or SpeleoDB bookkeeping) waits for the upgrading save and the close prompt asks; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it.
 - **A file this build cannot fully read opens read-only** (an unknown `requires` feature, unknown survey keys or values) with a banner; edits, undo, redo and saves are refused, local-only saves still work and keep the newer build's unknown `local` keys; one whose survey breaks a rule without the unknown feature is refused with the newer-version prompt (6.4, F7, C7, N13, R1 to R3). Why: never rewrite what this build would lose.
 - **A save never overwrites a file another program changed, moved or deleted** since it was read: the user picks Keep my version, Save as a new file or Use the file's version, and an autosave refusal pauses autosave (6.5, C7, N13). Why: the external-modification guard.
-- **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned (12.2, 6.5, C11, N9). Why: ignores are survey content.
+- **Warning ignores ride the save**: an Ignore makes the project unsaved, "Don't save" discards it, and an ignore follows its shot's uuid, never re-pinned; an ignore whose shot an undo or redo step of the saved history can bring back is kept with it (0.6.0 dropped it at the save) (12.2, 6.5, C11, N9, F-command-parity-2). Why: ignores are survey content.
 - **Save a Copy onto the open file's own path is a normal save** (0.6.0 refused it) (C6). Why: the destination is the open file, so there is no copy to detach.
 - **Export Salvageable Data on a legacy file** lists the frozen open's error instead of a best-effort project when that open refuses the file (Q4). Why: the full project comes from the open that runs 0.6.0's integrity checks.
 
@@ -833,6 +833,7 @@ The wire API is `docs/survey-model.md`, "Wire API".
 - **W8. The merge check's closure preview reads each end's depth on the picked slot's line** (`closure_metrics_via`), as today's slot-based preview did; M2's `merge_check` uses first slots.
 - **W9. The binary load envelope drops `line_offsets`: version 8 -> 9.** Every other field keeps its name and element type.
 - **W10. `file_path` is sent lossily as UTF-8**; today a non-UTF-8 path failed the serialization.
+- **W11. A station's aliases are on the wire** (`Station::aliases`, TS `StationAlias[]`, absent when none; the binary envelope's sparse `station_aliases`, still version 9): the station details show them as "Also known as", and "Merged with" names the other lines, not the station again (review UX-7, H-frontend-wire-5). A detach's history row uses the menu's words, `Detach line "Side" from station 3a`.
 
 ## Deviations (stream C0, the core switch foundation)
 

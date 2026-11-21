@@ -29,8 +29,11 @@ import { create } from 'zustand';
 import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
+import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from './ipc';
 import { RELEASE_CANCELLED } from './speleoReleaseFailure';
+import { classifySaveError } from './saveErrors';
+import { saveFailureLine } from './saveFeedback';
 
 /** What the user is trying to do. Picks the wording only - the choices are the same. */
 export type SpeleoExitReason = 'close' | 'switch' | 'quit';
@@ -104,8 +107,12 @@ export function resetSpeleoExitPromptForTests(): void {
   useSpeleoExitPrompt.setState({ request: null, working: false });
 }
 
-/** How carrying out an answer ended. `warning` is a non-fatal note for the user. */
-export type ExitCloseOutcome = { ok: true; warning?: string } | { ok: false; error: string };
+/**
+ * How carrying out an answer ended. `warning` is a non-fatal note for the user.
+ * `handedOff`: another prompt took over the failure (the save prompt for a file
+ * another program changed), so the exit is abandoned without an error of its own.
+ */
+export type ExitCloseOutcome = { ok: true; warning?: string } | { ok: false; error: string; handedOff?: boolean };
 
 async function closeWith(opts: { releaseLock?: boolean; discardLocal?: boolean }): Promise<ExitCloseOutcome> {
   let result;
@@ -142,7 +149,15 @@ export async function closeKeepingLock(): Promise<ExitCloseOutcome> {
       return { ok: false, error: getErrorMessage(error, i18n.t('speleoExitPrompt.errors.saveFailed')) };
     }
     if (!saved?.success) {
-      return { ok: false, error: saved?.error || i18n.t('speleoExitPrompt.errors.saveFailed') };
+      if (!saved?.error) return { ok: false, error: i18n.t('speleoExitPrompt.errors.saveFailed') };
+      // Another program changed the copy since it was opened: the save prompt
+      // decides which version to keep (plan 6.5), as Ctrl+S would. The exit
+      // steps aside for it; the user leaves again once it is settled.
+      if (classifySaveError(saved.error) === 'externally-modified') {
+        useUIStore.getState().openDialog('save-conflict', { error: saved.error });
+        return { ok: false, error: saveFailureLine(saved.error), handedOff: true };
+      }
+      return { ok: false, error: saveFailureLine(saved.error) };
     }
   }
   return closeWith({ releaseLock: false });

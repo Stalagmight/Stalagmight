@@ -1001,13 +1001,13 @@ impl Command {
                 ..
             } => format!("Merge stations {station_a} and {station_b}"),
             Command::UnmergeStations { station_ref } => {
-                format!("Unmerge station {station_ref}")
+                format!("Detach line at {station_ref} from its station")
             }
             Command::UnmergeStationPair {
                 station_a,
                 station_b,
             } => {
-                format!("Unmerge station pair {station_a} and {station_b}")
+                format!("Detach line at {station_b} from station {station_a}")
             }
             Command::CreateLoopClosure {
                 station_a,
@@ -1780,14 +1780,14 @@ mod tests {
                 Command::UnmergeStations {
                     station_ref: station_a,
                 },
-                "Unmerge station 1:0",
+                "Detach line at 1:0 from its station",
             ),
             (
                 Command::UnmergeStationPair {
                     station_a,
                     station_b,
                 },
-                "Unmerge station pair 1:0 and 1:1",
+                "Detach line at 1:1 from station 1:0",
             ),
             (
                 Command::RemoveLoopClosure { closure_id: 42 },

@@ -36,7 +36,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
-import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
+import { isEditingBlockedNow, selectFileReadOnly } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
@@ -290,6 +290,15 @@ export async function routeOpenedFile(
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
       const nonSurveyMode = ui.appMode !== 'survey';
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
+      if (selectFileReadOnly(useProjectStore.getState())) {
+        // A file made with a newer Stalagmight is read-only whatever the mode,
+        // view or lock (plan 6.4): no switch fixes it, so the prompt has its
+        // own cause with no switch to offer. Checked first: offering the
+        // view's or mode's switch would re-route into this same guard (a loop).
+        ui.openDialog('import-blocked', { path, cause: 'file' });
+        handedOff = true;
+        return;
+      }
       if (!speleoReadOnly) {
         // Every non-SpeleoDB cause is one safe click from fixed, so it's a
         // choice, not an error: the import-blocked prompt offers the switch

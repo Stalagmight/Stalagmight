@@ -84,6 +84,7 @@ export * from './ipc/TornTieReason';
 export * from './ipc/KeptMovesReason';
 export * from './ipc/LineEnd';
 export * from './ipc/Station';
+export * from './ipc/StationAlias';
 export * from './ipc/StationRef';
 export * from './ipc/StationMerge';
 export * from './ipc/ZeroDatum';

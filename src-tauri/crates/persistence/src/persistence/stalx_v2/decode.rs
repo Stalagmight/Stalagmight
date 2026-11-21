@@ -537,8 +537,14 @@ impl RawDoc {
         project.counters = counters_of(&project, &counters);
 
         let before = extras.ignored_warnings.len();
-        extras.ignored_warnings =
-            kept_ignores(&project, std::mem::take(&mut extras.ignored_warnings));
+        extras.ignored_warnings = kept_ignores(
+            &project,
+            std::mem::take(&mut extras.ignored_warnings),
+            &[
+                extras.history.undo.as_slice(),
+                extras.history.redo.as_slice(),
+            ],
+        );
         let dropped = before - extras.ignored_warnings.len();
         if dropped > 0 {
             notes.push(DecodeNote::IgnoresDropped { count: dropped });
@@ -576,13 +582,18 @@ fn counters_of(project: &Project, raw: &RawCounters) -> Counters {
     }
 }
 
-/// The ignores that name a shot of the project, the first of each
-/// (shot, code) pair, in file order.
-fn kept_ignores(project: &Project, ignores: Vec<IgnoredWarning>) -> Vec<IgnoredWarning> {
-    let uuids = project.shot_uuids();
+/// The ignores that name a shot of the project or one the file's history can
+/// bring back ([`super::ignores`]), the first of each (shot, code) pair, in
+/// file order.
+fn kept_ignores(
+    project: &Project,
+    ignores: Vec<IgnoredWarning>,
+    history: &[&[RawJson]],
+) -> Vec<IgnoredWarning> {
     let mut seen = BTreeSet::new();
-    ignores
+    super::ignores::reachable(project, &ignores, history)
         .into_iter()
-        .filter(|w| uuids.contains(&w.shot) && seen.insert((w.shot.clone(), w.code.clone())))
+        .filter(|w| seen.insert((w.shot.clone(), w.code.clone())))
+        .cloned()
         .collect()
 }

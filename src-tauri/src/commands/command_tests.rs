@@ -5482,8 +5482,11 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // shot_id). If the dead row were carried over at its stale id, the two would
     // collide on UNIQUE(line_id, shot_id, warning_code) and INSERT OR REPLACE
     // would - depending on insert order - drop the SURVIVOR's still-valid ignore.
-    // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
-    // ignore always persists and dead rows don't accumulate.
+    // The survivor's ignore always persists, and dead rows don't accumulate. On
+    // the station graph a row is keyed by uuid, and the deleted shot's is not
+    // dead while the saved undo history can bring the shot back
+    // (F-command-parity-2): it is kept, and undoing the delete after a reopen
+    // finds it. A row whose shot nothing can bring back is still pruned.
     let project = project_with_line(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5502,7 +5505,20 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     let loaded = state(&app).inner().get_project_state().unwrap();
     let line_id = loaded.lines()[0].id;
     let shot_a_id = loaded.lines()[0].shots[0].id;
+    let deleted_uuid = loaded.lines()[0].shots[0].uuid.clone();
     let survivor_uuid = loaded.lines()[0].shots[1].uuid.clone();
+    // A dead row: its shot is in neither the survey nor the history.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            line_id,
+            shot_id: shot_a_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: Some("no-such-shot".to_string()),
+        })
+        .unwrap();
 
     // Delete the first shot. The successor shifts into its index/position, so the
     // orphaned by-UUID row for the deleted shot now shares the survivor's new
@@ -5522,20 +5538,25 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
         survivor.is_resolved,
         "the surviving shot's ignore must not be clobbered by the deleted shot's dead row"
     );
-    // ...and the deleted shot's dead row must have been pruned from the file
-    // (one row, keyed to the survivor), so dead rows don't accumulate across
-    // saves. The ignores ride the `.stalx` itself now (plan 6.5).
-    let rows = decode_v2(&saved).extras.ignored_warnings;
+    // ...the dead row must have been pruned from the file, so dead rows don't
+    // accumulate across saves, while the deleted shot's row stays: the undo
+    // history the file holds can bring that shot back. The ignores ride the
+    // `.stalx` itself now (plan 6.5).
+    let mut rows: Vec<String> = decode_v2(&saved)
+        .extras
+        .ignored_warnings
+        .into_iter()
+        .map(|w| w.shot)
+        .collect();
+    rows.sort();
+    let mut expected = vec![deleted_uuid, survivor_uuid];
+    expected.sort();
     assert_eq!(
-        rows.len(),
-        1,
-        "the deleted shot's dead resolved row must be pruned"
+        rows, expected,
+        "the survivor's row and the restorable deleted shot's, never the dead one"
     );
-    assert_eq!(
-        rows[0].shot, survivor_uuid,
-        "the surviving row must be the survivor's by-UUID ignore"
-    );
-    // A reopen reads exactly that one ignore back, still matching the survivor.
+    // A reopen reads them back; the survivor's still matches, and undoing the
+    // delete brings the deleted shot back still ignored.
     let reopened = app_with_state();
     assert_success(&open_project(state(&reopened), saved));
     let after = validation::get_project_warnings(state(&reopened));
@@ -5548,8 +5569,13 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
             .load_resolved_warnings()
             .unwrap()
             .len(),
-        1
+        2
     );
+    assert_success(&history::undo(state(&reopened)));
+    let after = validation::get_project_warnings(state(&reopened));
+    let short: Vec<_> = after.iter().filter(|w| w.code == "SHORT_SHOT").collect();
+    assert_eq!(short.len(), 2);
+    assert!(short.iter().all(|w| w.is_resolved));
 }
 
 #[test]

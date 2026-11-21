@@ -370,6 +370,19 @@ fn closures_absent_or_empty(closures: &Option<Vec<ClosureRef>>) -> bool {
     closures.as_ref().is_none_or(Vec::is_empty)
 }
 
+/// A Station ID, and the name it had, that was merged into a station (plan
+/// 5.1; a migration's merge group too): the station's details show it as
+/// "Also known as", so a surveyor can still find a retired name from the
+/// field notes. The wire form of [`crate::survey::StationAlias`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(rename = "StationAlias")]
+pub struct StationAliasWire {
+    /// The retired Station ID.
+    pub id: StationId,
+    /// The name the station had then (`None` when it had none).
+    pub name: Option<String>,
+}
+
 /// A computed station in the cave survey
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Station {
@@ -421,6 +434,13 @@ pub struct Station {
     /// without a uuid), which a loaded project never has.
     #[serde(default)]
     pub name: String,
+    /// The ids and names merged into this station, oldest first; `None` when
+    /// it has none (most stations), so the key stays off the wire and costs
+    /// nothing per station (the `closures_with` reasoning). Every slot of a
+    /// junction carries them, as it carries the shared id and name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub aliases: Option<Vec<StationAliasWire>>,
 }
 
 impl Station {
@@ -435,6 +455,7 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
+            aliases: None,
         }
     }
 
@@ -449,6 +470,7 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
+            aliases: None,
         }
     }
 
@@ -675,6 +697,34 @@ mod tests {
         assert!(
             decl.contains("merged_with: Array<StationRef>"),
             "merged_with is always serialized, so it must stay required: {decl}"
+        );
+    }
+
+    /// A station's aliases leave the wire when it has none (most stations,
+    /// paid per station on every refresh) and are declared optional.
+    #[test]
+    fn aliases_are_omitted_when_absent_and_declared_optional() {
+        use ts_rs::TS;
+
+        let plain = serde_json::to_value(Station::new(StationRef::new(1, 0))).unwrap();
+        assert!(
+            !plain.as_object().unwrap().contains_key("aliases"),
+            "a station with no aliases must omit the key: {plain}"
+        );
+        let mut junction = Station::new(StationRef::new(1, 0));
+        junction.aliases = Some(vec![StationAliasWire {
+            id: 7,
+            name: Some("0".into()),
+        }]);
+        let junction = serde_json::to_value(junction).unwrap();
+        assert_eq!(
+            junction["aliases"],
+            serde_json::json!([{ "id": 7, "name": "0" }])
+        );
+        let decl = Station::decl();
+        assert!(
+            decl.contains("aliases?: Array<StationAlias>"),
+            "aliases leave the wire when absent, so the declaration carries the `?`: {decl}"
         );
     }
 

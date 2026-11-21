@@ -63,10 +63,19 @@ export function surfaceSaveFailure(
  * The line a failed save gets on a user-facing surface. A marked destination
  * failure is reworded - the backend's own text for one is SQLite's "Failed to
  * open database", which tells the user nothing about the folder being gone
- * (#429) - and everything else is relayed as the backend wrote it.
+ * (#429) - and everything else is relayed as the backend wrote it. A marker
+ * never reaches the user.
  */
+export function saveFailureLine(error: string): string {
+  return saveFailureMessage(classifySaveError(error), error);
+}
+
 function saveFailureMessage(kind: SaveErrorKind, error: string): string {
   switch (kind) {
+    case 'permission':
+      return i18n.t('banners.autosave.permissionDenied');
+    case 'externally-modified':
+      return i18n.t('banners.autosave.externallyModified');
     case 'path-not-found':
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':

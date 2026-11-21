@@ -532,11 +532,9 @@ fn unmerges_name_the_stations_they_detach() {
             .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
-    // A junction has one name on every line.
-    assert_eq!(
-        item.description,
-        "Unmerge station pair Main / 2 and Branch / 2"
-    );
+    // The menu's words (Detach Line from Station): the pair form detaches
+    // the second slot's line; a junction has one name on every line.
+    assert_eq!(item.description, "Detach line \"Branch\" from station 2");
     assert_eq!(
         rows(&item),
         vec![
@@ -555,7 +553,7 @@ fn unmerges_name_the_stations_they_detach() {
             .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Unmerge station Branch / 2");
+    assert_eq!(item.description, "Detach line \"Branch\" from station 2");
     assert_eq!(rows(&item), vec![r("Station", "", "Branch / 2")]);
 }
 

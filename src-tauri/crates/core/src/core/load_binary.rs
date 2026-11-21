@@ -33,8 +33,8 @@ use serde_bytes::ByteBuf;
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
     AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LineId, LoopClosureWire, Person,
-    ProjectStats, ProjectWarning, Section, SectionId, ShotId, StationMergeWire, StationRef,
-    SurveyCredit, SurveyDirection, ZeroDatumWire,
+    ProjectStats, ProjectWarning, Section, SectionId, ShotId, StationAliasWire, StationMergeWire,
+    StationRef, SurveyCredit, SurveyDirection, ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -109,7 +109,9 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 ///
 /// Bumped 8 -> 9 by the station-graph switch: `ProjectHeaderBinary` lost
 /// `line_offsets` (a stale decoder would iterate a missing key), and
-/// `stations_ids`, names and comments are shared by a junction's slots.
+/// `stations_ids`, names and comments are shared by a junction's slots. The
+/// same unreleased version gained the sparse `station_aliases` list (a
+/// junction's retired ids and names).
 pub const BINARY_FORMAT_VERSION: u32 = 9;
 
 #[derive(Serialize)]
@@ -166,6 +168,9 @@ pub struct LoadProjectFullBinaryResult {
     /// Per-station u32 (LE): the project-unique Station ID, in station order
     /// (`station_count * 4` bytes).
     pub stations_ids: ByteBuf,
+    /// Sparse: stations with aliases (ids and names merged into them),
+    /// [`crate::models::Station::aliases`]; every slot of such a junction.
+    pub station_aliases: Vec<(u32, Vec<StationAliasWire>)>,
 
     pub stats: ProjectStats,
     pub warnings: Vec<ProjectWarning>,
@@ -410,6 +415,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut station_comments: Vec<(u32, String)> = Vec::new();
     let mut station_names: Vec<(u32, String)> = Vec::with_capacity(station_count);
     let mut stations_ids: Vec<u8> = Vec::with_capacity(station_count * 4);
+    let mut station_aliases: Vec<(u32, Vec<StationAliasWire>)> = Vec::new();
 
     for (idx, station) in stations.into_iter().enumerate() {
         let idx_u32 = idx as u32;
@@ -441,6 +447,9 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         stations_ids.extend_from_slice(&station.id.to_le_bytes());
         if !station.name.is_empty() {
             station_names.push((idx_u32, station.name));
+        }
+        if let Some(aliases) = station.aliases.filter(|a| !a.is_empty()) {
+            station_aliases.push((idx_u32, aliases));
         }
     }
 
@@ -489,6 +498,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_comments,
         station_names,
         stations_ids: ByteBuf::from(stations_ids),
+        station_aliases,
         stats,
         warnings,
         display_settings,
@@ -544,6 +554,7 @@ mod tests {
         station_merged_with: Vec<(u32, Vec<StationRef>)>,
         station_names: Vec<(u32, String)>,
         stations_ids: ByteBuf,
+        station_aliases: Vec<(u32, Vec<StationAliasWire>)>,
     }
     #[derive(Deserialize)]
     struct DecodedHeader {
@@ -740,6 +751,39 @@ mod tests {
             .map(|(i, _)| *i)
             .collect();
         assert_eq!(merged, [1, 3]);
+    }
+
+    /// A merged station's aliases ride the envelope on every slot of it, so a
+    /// binary load shows "Also known as" like a JSON refresh does.
+    #[test]
+    fn a_junctions_aliases_ride_every_slot() {
+        let mut project = Project::new("aliases", None);
+        let main = add_free_line(
+            &mut project,
+            meta("Main", "#ff0000"),
+            vec![shot(0.0, 4.0, 0.0, 0.0), shot(0.0, 4.0, 0.0, 0.0)],
+        );
+        let side = add_free_line(
+            &mut project,
+            meta("Side", "#00ff00"),
+            vec![shot(90.0, 3.0, 0.0, 0.0)],
+        );
+        let junction = project.line(main).unwrap().station(1).unwrap();
+        let side_start = project.line(side).unwrap().start;
+        let merged = project.merge_stations(junction, side_start).unwrap().value;
+        let retired_name = Some(if merged.retired == junction { "1" } else { "0" }.to_string());
+
+        let decoded = decode(&project);
+
+        let expected = vec![StationAliasWire {
+            id: merged.retired,
+            name: retired_name,
+        }];
+        // Slots in line order: Main 0, 1 (junction), 2; Side 0 (junction), 1.
+        assert_eq!(
+            decoded.station_aliases,
+            vec![(1, expected.clone()), (3, expected)]
+        );
     }
 
     #[test]

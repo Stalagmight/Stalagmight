@@ -706,14 +706,34 @@ fn ignored_warnings_survive_the_add_a_save_and_a_reload() {
     let reopened = open(&path);
     assert_eq!(ignores_of(&reopened), carried, "reloaded");
 
-    // An undo leaves the ignore matching nothing: the next save drops it.
+    // An undo takes the shot away, but the redo the file keeps can bring it
+    // back: the next save keeps its ignore (F-command-parity-2), and a reopen
+    // then a redo find it.
     assert!(reopened.undo().success);
     save(&reopened);
-    assert!(read_v2(&path).extras.ignored_warnings.is_empty());
-    // A redo brings the shot back, and the ignore with it.
+    assert_eq!(read_v2(&path).extras.ignored_warnings, carried, "kept");
+    drop(reopened);
+    let reopened = open(&path);
     assert!(reopened.redo().success);
+    assert_eq!(ignores_of(&reopened), carried, "after the redo");
     save(&reopened);
     assert_eq!(read_v2(&path).extras.ignored_warnings, carried);
+    // Undone again, then a new edit drops the redo: nothing can bring the
+    // shot back, and the next save drops the ignore.
+    assert!(reopened.undo().success);
+    let project = reopened.get_project_state().unwrap();
+    let line = &project.lines()[0];
+    let edited = reopened.execute(Command::UpdateShot {
+        line_id: line.id,
+        shot_id: line.shots[0].id,
+        updates: ShotUpdates {
+            length: Some(11.5),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    save(&reopened);
+    assert!(read_v2(&path).extras.ignored_warnings.is_empty());
 }
 
 /// The second add of one file re-mints every shot uuid the first add already

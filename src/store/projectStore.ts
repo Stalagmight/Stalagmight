@@ -861,7 +861,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
   ...createProjectFileStatusActions(set, get),
-  ...createProjectWarningActions(set, get),
+  ...createProjectWarningActions(set, get, nextProjectTreeGeneration),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
   // splitLine / combineLines live in lineStructureActions.ts

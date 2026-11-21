@@ -28,6 +28,7 @@ export const STATION_ARRAY_FIELDS = [
 ] as const satisfies readonly (keyof SurveyData)[];
 export const STATION_MAP_FIELDS = [
   'stationGps', 'stationMergedWith', 'stationClosuresWith', 'stationComments', 'stationNames',
+  'stationAliases',
 ] as const satisfies readonly (keyof SurveyData)[];
 /** The rest, handled one by one below. */
 export const OTHER_FIELDS = [
