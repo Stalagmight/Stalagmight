@@ -46,6 +46,11 @@
       "status": "Status",
       "section": "Line"
     },
+    "list": {
+      "two": "{{first}} and {{last}}",
+      "many": "{{head}} and {{last}}",
+      "more": "{{head}} and {{count}} more"
+    },
     "states": {
       "disabled": "Disabled",
       "enabled": "Enabled",
@@ -1198,10 +1203,15 @@
     "detachLine": {
       "title": "Detach a Line from This Station",
       "lead": "{{station}} is where {{count}} lines meet. Choose the line to detach:",
+      "leadWaiting": "{{station}} is where {{count}} lines meet.",
+      "comesOff": "{{line}} comes off: it gets back {{name}} (Station ID {{id}}); {{keeper}} keeps {{station}}.",
+      "commentStaysWith": "The station's comment stays with {{keeper}}. If part of it was {{line}}'s own, copy it over after detaching.",
+      "explainComesOff": "{{line}} keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.",
       "explain": "The line you detach keeps its shots and gets its own station here, with no comment. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
       "explainKeeps": "The line you detach keeps its shots and this station, with its comment. The other lines get their own station here, with no comment, and a datum or loop closure set on them goes with them. They stay joined, and Undo puts it back.",
       "restores": "{{line}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
-      "keeps": "{{line}} keeps this station. {{others}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
+      "keeps_one": "{{line}} keeps this station. {{others}} gets back the station it had here before the merge: {{name}} (Station ID {{id}}).",
+      "keeps_other": "{{line}} keeps this station. {{others}} get back the station they had here before the merge: {{name}} (Station ID {{id}}).",
       "copies": "{{line}} gets a new station here named {{name}}.",
       "commentStays": "The station's comment stays with the other lines. If part of it was {{line}}'s own, copy it over after detaching.",
       "thisLine": "{{line}} (the line you clicked)",
@@ -1261,10 +1271,10 @@
     },
     "mergeStations": {
       "becomesClosure": "These stations are already connected, so merging them would make a loop. A loop closure is created instead.",
-      "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
-      "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
-      "pieceMore_one": "{{name}} and 1 more line",
-      "pieceMore_other": "{{name}} and {{count}} more lines",
+      "datumShift_one": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShift_other": "{{piece}} are placed by their own GPS. They move {{distance}} m to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove_one": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove_other": "{{piece}} are placed by their own GPS. The merge moves them to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
       "moves_one": "{{piece}} moves {{distance}} m to join {{station}}.",
       "moves_other": "{{piece}} move {{distance}} m to join {{station}}.",
       "depths": "Depths {{a}} and {{b}} become {{joined}}: the joined station takes the mean of its depth readings."
@@ -1980,7 +1990,7 @@
       "comment": "Comment"
     },
     "connMenu": {
-      "merged": "Merged with",
+      "merged": "Also on",
       "closures": "Closures with"
     },
     "stationGps": {
@@ -2132,15 +2142,16 @@
       "gpsFixGapExceeds": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey.",
       "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
-      "mergedWith": "Merged with",
-      "mergedWithHint": "This station is where these lines meet: they share it and its Station ID. Each line keeps its own name for it.",
+      "alsoOn": "Also on",
+      "alsoOnHint": "The other lines through this station. They share it, its Station ID and its comment, and each shows it by its own name. A Station ID beside a line is the one that line had here before a merge; Detach gives it back.",
+      "otherLineName": "{{name}} (Station ID {{id}})",
+      "otherLineId": "Station ID {{id}}",
       "nameOnLine": "{{name}} (on {{line}})",
-      "junction": "Junction",
-      "junctionName": "{{name}} on {{lines}}",
       "alsoKnownAs": "Also known as",
       "alsoKnownAsHint": "Stations merged into this one. They keep their old name and Station ID here, so you can find them from your notes.",
       "alias": "{{name}} (Station ID {{id}})",
       "aliasOnLine": "{{name}} on {{line}} (Station ID {{id}})",
+      "aliasIdOnLine": "Station ID {{id}} on {{line}}",
       "aliasNoName": "Station ID {{id}}",
       "detachLine": "Detach {{line}} from this station",
       "connected": "Connected",

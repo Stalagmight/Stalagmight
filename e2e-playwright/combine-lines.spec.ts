@@ -171,7 +171,7 @@ test.describe('Combine Lines', () => {
     const submenu = page.getByTestId('context-menu-submenu');
     await expect(submenu).toBeVisible();
     await expect(submenu.getByRole('button')).toHaveText([/^Trunk with Left/, /^Trunk with Right/, /^Left with Right/]);
-    await expect(submenu.getByRole('button', { name: 'Trunk with Left' })).toContainText('Merged here');
+    await expect(submenu.getByRole('button', { name: 'Trunk with Left' })).toContainText('Joined here');
     await submenu.getByRole('button', { name: 'Trunk with Right' }).click();
 
     // The dialog opens on that pair, with no picker of its own.

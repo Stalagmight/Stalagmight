@@ -155,7 +155,7 @@ describe('ContextMenu combine row', () => {
     expect(rowIds()).toEqual(before);
     expect(combineRow()).toHaveAccessibleName('Combine Line With Line 2...');
     expect(combineRow()).toBeEnabled();
-    expect(hintLine()).toHaveTextContent('Merged here');
+    expect(hintLine()).toHaveTextContent('Joined here');
     expect(combineRow()).not.toHaveAttribute('aria-haspopup');
     fireEvent.click(combineRow());
     expect(screen.queryByTestId('context-menu-submenu')).toBeNull();
@@ -225,9 +225,9 @@ describe('ContextMenu combine row', () => {
     expect(hintLine()).toHaveTextContent('3 lines end here');
     fireEvent.mouseEnter(combineRow());
     expect(submenuRows()).toEqual([
-      ['Main with Line 2', true, 'Merged here'],
+      ['Main with Line 2', true, 'Joined here'],
       ['Main with Line 4', false, 'Different quality'],
-      ['Line 2 with Line 4', true, 'Merged here'],
+      ['Line 2 with Line 4', true, 'Joined here'],
     ]);
     // A disabled pair opens nothing; a pair of the others keeps the first-named.
     fireEvent.click(screen.getByTestId('context-menu-subitem-1'));
@@ -260,8 +260,8 @@ describe('ContextMenu combine row', () => {
     ]);
     fireEvent.mouseEnter(screen.getByTestId('context-menu-subitem-0'));
     expect(submenuRows('context-menu-submenu-2')).toEqual([
-      ['Line 2 (1 shot)', true, 'Merged here'],
-      ['Line 4 (1 shot)', true, 'Merged here'],
+      ['Line 2 (1 shot)', true, 'Joined here'],
+      ['Line 4 (1 shot)', true, 'Joined here'],
       ['Line 5 (1 shot)', false, 'No'],
     ]);
     // Another line's list: it is the one kept.

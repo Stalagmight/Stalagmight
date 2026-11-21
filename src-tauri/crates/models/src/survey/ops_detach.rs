@@ -143,6 +143,23 @@ impl Project {
         })
     }
 
+    /// Whether detaching `line` from `station` (with the alias restore every
+    /// command detach uses) keeps the station on `line` and gives the other
+    /// lines back their own station instead ([`Self::detach_others`]): the
+    /// line shows the station by its own name and every other line through
+    /// it knows it by an alias (I-1). Then the lines that come off are the
+    /// others, which is what the history names (N-2).
+    pub fn detach_keeps(&self, station: StationId, line: LineId) -> bool {
+        let lines = self.topology().lines_of(station);
+        lines.contains(&line)
+            && lines.len() > 1
+            && !self.known_by_alias_on(station, line)
+            && lines
+                .iter()
+                .filter(|&&l| l != line)
+                .all(|&l| self.known_by_alias_on(station, l))
+    }
+
     /// Why line `line` may not be detached from `station`, if it may not:
     /// an unknown station or line, a station off the line, or a station no
     /// other line passes (nothing to detach from).
@@ -185,10 +202,7 @@ impl Project {
             .into_iter()
             .filter(|&l| l != line)
             .collect();
-        if restore
-            && !self.known_by_alias_on(station, line)
-            && others.iter().all(|&l| self.known_by_alias_on(station, l))
-        {
+        if restore && self.detach_keeps(station, line) {
             return self.detach_others(station, line, &others);
         }
         let junction = self

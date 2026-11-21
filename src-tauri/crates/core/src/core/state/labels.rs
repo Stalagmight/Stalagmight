@@ -125,6 +125,27 @@ impl<'p> NameBook<'p> {
         Some(format!("{} / {name}", self.line(slot.line_id)?))
     }
 
+    /// The slots of the lines a detach at `slot` takes off the station
+    /// there: the slot itself, or, when its line keeps the station
+    /// (`Project::detach_keeps`), one slot of each other line, in slot order
+    /// ([`detach`]). The slot alone when it does not exist.
+    fn detached_slots(&self, slot: StationRef) -> Vec<StationRef> {
+        let topology = self.project.topology();
+        let Some(station) = topology.station_at(slot) else {
+            return vec![slot];
+        };
+        if !self.project.detach_keeps(station, slot.line_id) {
+            return vec![slot];
+        }
+        let mut off: Vec<StationRef> = Vec::new();
+        for &other in topology.slots_of(station) {
+            if other.line_id != slot.line_id && off.iter().all(|o| o.line_id != other.line_id) {
+                off.push(other);
+            }
+        }
+        off
+    }
+
     /// `Line name / station name` of `station` on its `via` line, else its
     /// first slot (a closure end, a datum).
     pub(crate) fn station_via(&self, station: StationId, via: Option<LineId>) -> Option<String> {
@@ -179,11 +200,24 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
     }
 }
 
-/// `Detach line "Side" from station 3a`: the line at `slot` leaves the
-/// station there, named once, by the name that line shows it by.
+/// `Detach line "Side" from station 3a`: the line that comes off the station
+/// at `slot`, and the station once, by the name that line shows it by. That
+/// is the slot's line, unless the slot's line keeps the station (it shows the
+/// station by its own name and every other line there knows it by an alias,
+/// I-1): then the other lines come off, each getting back the station it
+/// had, and the label names them (`Detach lines "B" and "C" from station 0`,
+/// by the first one's name for it), never the line that keeps the station
+/// (demo finding N-2).
 fn detach(names: &NameBook<'_>, slot: StationRef) -> String {
-    match (quoted_line(names, slot.line_id), names.station_name(slot)) {
-        (Some(line), Some(station)) => format!("Detach line {line} from station {station}"),
+    let off = names.detached_slots(slot);
+    let lines: Option<Vec<String>> = off.iter().map(|s| quoted_line(names, s.line_id)).collect();
+    let station = off.first().and_then(|&first| names.station_name(first));
+    match (lines, station) {
+        (Some(lines), Some(station)) if !lines.is_empty() => format!(
+            "Detach {} {} from station {station}",
+            if lines.len() == 1 { "line" } else { "lines" },
+            listed(&lines)
+        ),
         _ => "Detach line from station".to_string(),
     }
 }

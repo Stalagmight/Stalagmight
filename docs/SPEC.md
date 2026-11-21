@@ -1093,24 +1093,33 @@ the test ids) but are never shown:
 
 **A junction** (a station on several lines) is one station: its Station ID
 and comment are the same from every slot, and each slot shows the name its
-line knows it by. When its lines show it by different names, Name says which
-line this one is on (`0 (on North Passage)`); a Junction row lists the names
-the other lines show it by (`3 on Main Line`). "Merged with" lists the other
-lines through it by line name (never the station's own name again), each
-with a button that detaches that line (tooltip "Detach <line> from this
-station"; the history row reads `Detach line "<line>" from station <name>`).
-"Also known as" lists the Station IDs and names merged into the station (its
-aliases: a merge's retired station, or a 0.6.0 merge group's other members),
-`<name> on <line> (Station ID <id>)` while that line still shows it by that
-name, else `<name> (Station ID <id>)`, so a surveyor can still find a former
-name and Station ID from the field notes; hidden when it has none.
+line knows it by. The details say each fact once (demo finding N-3). When its
+lines show it by different names, Name says which line this one is on
+(`3 (on Main Line)`). "Also on" lists the other lines through it, one row
+each, the same for every junction however it was made (a merge, Split Line
+Here, a line started there, an import; I-9): the line by name (a link to its
+slot; never the station's own name again), then the name that line shows the
+station by when it is not the Name row's, and the Station ID that line had
+there before a merge when it has one (the alias naming the line, which Detach
+gives back): `North Passage 0 (Station ID 9)`. Each row has a button that
+detaches that line (tooltip "Detach <line> from this station"; the history
+row reads `Detach line "<line>" from station <name>`). "Also known as" lists
+the Station IDs and names merged into the station (its aliases: a merge's
+retired station, or a 0.6.0 merge group's other members) that no "Also on"
+row shows: `<name> on <line> (Station ID <id>)` while a line still shows it
+by that name, the slot's own line's as `Station ID <id> on <line>` (the Name
+row says its name), else `<name> (Station ID <id>)`, so a surveyor can still
+find a former name and Station ID from the field notes; hidden when none is
+left. The Data table's Conn picker and Edit Station head their list of the
+other lines "Also on" too, Adjust Position says "Joined to N other lines",
+and the combine menu says "Joined here" for two lines sharing a station.
 "Connected" also lists every shot that meets the station on the other lines
 (`StationOtherLineShots.tsx`), so a junction of three lines shows three or
 more shots, not just a previous and a next. A junction's zero datum is found
 from any of its slots, here and in Edit Station.
 
 **Loop Closures Section:**
-- Placed after "Merged with", before "Connected" section
+- Placed after "Also on" and "Also known as", before "Connected" section
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries
 - Closures grouped by `closure_id`; direct closures listed first, then transitive
@@ -1765,7 +1774,8 @@ Shown when merging two **unconnected** stations (different line groups).
 
 The dialog says what the merge does before it does it, from the merge check
 (`ConnectivityResult.merge_preview`, the merge run on a copy): the lines of the
-piece that moves, how far (not said below 1 cm, nor after a snap-to-merge drag,
+piece that moves (named, up to three, then counted: "Upstream and Upstream
+Side move 24 m", "A, B, C and 2 more move"; demo finding N-13), how far (not said below 1 cm, nor after a snap-to-merge drag,
 which already moved it; when both pieces are placed by their own GPS the datum
 notice says it instead), and the station it joins; and, when the two stations'
 depths differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), both depths and
@@ -1947,12 +1957,26 @@ is the junction's owner, a line no alias names, and a line that shows the
 junction by its own name stays on it, so the owner does not keep the
 junction) while another line was merged there: that line, which gets its own
 Station ID and name back, is preselected. A clicked owner that keeps the
-junction stays selected, since either choice then gives every line the same
-station. When the chosen line gets its station back and the others keep the
+junction stays selected (on a hub, where the other lines then come off
+together). When the chosen line gets its station back and the others keep the
 junction, the station's comment stays with them; a merge or the 0.6.0 upgrade
 may have joined the detached line's own comment into it, which no alias
 keeps, so the dialog then says the comment stays and to copy that part over
 (demo finding I-7).
+
+When the choice does not change the result there is no choice (demo finding
+N-2): on a junction of two lines where one keeps the station when detached
+and the other gets back exactly the station it had, both choices leave the
+same two stations, so the dialog asks for both lines' previews first, then
+says in one sentence what happens ("North Passage comes off: it gets back 0
+(Station ID 9); Main Line keeps 3."), with the comment notice when the
+station has one, and Detach / Cancel. Detach then detaches the line that
+comes off, whichever slot the dialog was opened on. Everywhere else the list
+of lines stays. The history row always names the line that comes off, never
+the one that keeps the station: a detach of the keeping line (the other lines
+come off with the station they had) reads `Detach line "North Passage" from
+station 0`, and on a hub `Detach lines "B" and "C" from station 0`, by the
+first one's name for it.
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
@@ -1996,6 +2020,12 @@ keeps, so the dialog then says the comment stays and to copy that part over
 4. Map updates in real-time
 5. Auto-saved
 
+A comment of several lines (a merge joins two stations' comments with a
+blank line) shows its lines separated by " / " in its one-line cell
+("T-junction, line arrow points out / Silt bank, low visibility"); hovering
+the cell shows it whole, and the comment editor, the Station details and a
+copy keep its line breaks (demo finding N-9).
+
 **Via Map:**
 1. User clicks station/shot with Select tool
 2. Detail Panel shows properties
@@ -2027,7 +2057,10 @@ keeps, so the dialog then says the comment stays and to copy that part over
 3. On Split Line, the line splits into two, named "<line> A" and
    "<line> B" by default, each made unique against the other lines (both
    editable; an empty name, another line's name or the two names equal is
-   refused inline and disables the button). When the split leaves a loop
+   refused inline and disables the button). Half A keeps the line's colour;
+   half B, a new line, gets the colour a new line gets (the next palette
+   colour no line uses), as Split Line Here gives it; a range split does the
+   same (demo finding I-9: both halves were the line's colour). When the split leaves a loop
    closure as the only connection between the two halves' pieces, that closure
    becomes a junction and the piece past it moves onto it by the misclosure (as
    in 0.6.0); the Delete Shot dialog ("If you choose Split Line, ...") and the

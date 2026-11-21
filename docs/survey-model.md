@@ -253,7 +253,7 @@ Shared cores (one copy each):
 | Core | Used by |
 |---|---|
 | `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming each line that showed it by its own name: the retired id for the first, a fresh id for the others, so every line keeps its names and nothing is renamed), the comment rule (`Join`, or Combine's pick), `external` | Merge Stations, the sweep's promotions, Combine's join |
-| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station named as the line showed the junction (with `restore`, the junction's alias naming the line gives it its id and name back; and when every other line knows the junction by an alias, the line keeps it and those lines get the first alias's identity back, `detach_others`, `DetachReport::kept`); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
+| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station named as the line showed the junction (with `restore`, the junction's alias naming the line gives it its id and name back; and when every other line knows the junction by an alias, the line keeps it and those lines get the first alias's identity back, `detach_others`, `DetachReport::kept`; `detach_keeps` is that test, which the history label also reads to name the lines that come off); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
 | `restore_alias_identities(before)` (`ops_detach.rs`): a station the edit took a line off and left only on lines whose aliases name it takes the first such alias's id and name; slots, hand moves, datums, closure ends and the placement follow, and the anchor algorithm is told (`EditContext::reidentified`) | The epilogue of every edit and command (`finish_edit`, `run_op`), not Combine (I-1) |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |
@@ -504,7 +504,8 @@ one the user sees.
   ids and names merged into `S`, each with the line that shows it
   (`StationAliasWire`, TS `StationAlias`;
   absent when `S` has none, so most stations pay nothing; every slot of a
-  junction carries them, for the station details' "Also known as"), `merged_with` =
+  junction carries them, for the station details' "Also on" rows and "Also
+  known as"), `merged_with` =
   `S`'s other slots (so a junction's slots list each other, transitively,
   like today's merge groups), `is_zero_datum` / `gps_coordinates` = the datum
   the slot's datum dialog edits (`datum_index_for(S, Some(L))`, so every slot

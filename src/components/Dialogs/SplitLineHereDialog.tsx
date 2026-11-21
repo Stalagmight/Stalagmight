@@ -8,7 +8,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
 import { defaultSplitNames, lineNameProblemMessage, splitNameProblems } from '../../utils/nameValidation';
 import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
-import { getNextLineColor } from '../../utils/colors';
+import { splitSecondHalfColor } from '../../utils/colors';
 import { defaultConfig } from '../../types/config';
 import type { SplitAt } from '../../types/ipc/SplitAt';
 import { Button } from '../common/Button';
@@ -53,13 +53,7 @@ export default function SplitLineHereDialog() {
   const [colorA, setColorA] = useState(lineColor);
   // Half B is a new line, so it defaults to the colour a new line gets
   // (the next palette colour no line uses), which is never half A's.
-  // Compared lowercase: the palette is, a stored colour may not be.
-  const [colorB, setColorB] = useState(() =>
-    getNextLineColor(
-      (project?.lines ?? []).map((s) => s.color.toLowerCase()).concat(lineColor.toLowerCase()),
-      resolvedTheme
-    )
-  );
+  const [colorB, setColorB] = useState(() => splitSecondHalfColor(project?.lines, lineColor, resolvedTheme));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

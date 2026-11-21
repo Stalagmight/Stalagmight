@@ -355,10 +355,12 @@ test.describe('Context Menu Coverage', () => {
   });
 
   // On the station graph a merge is ONE station two or more lines pass; any one
-  // line can be detached from it (plan 5.2). The menu opens the dialog that
-  // names the lines, the clicked one first and chosen.
-  test('station menu detaches the clicked line from a two-line station', async ({ page }) => {
-    const { targetRef } = await setupProjectWithMergedStation(page, 1);
+  // line can be detached from it (plan 5.2). On two lines where either choice
+  // gives the same result (the clicked line keeps the station, the merged
+  // line gets back the station it had) the dialog offers no choice: it says
+  // which line comes off and detaches that one (N-2).
+  test('station menu detaches the line that comes off a two-line station', async ({ page }) => {
+    const { targetRef, mergeRefA } = await setupProjectWithMergedStation(page, 1);
 
     await openContextMenu(page, { type: 'station', ref: targetRef });
     await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toHaveCount(0);
@@ -366,10 +368,19 @@ test.describe('Context Menu Coverage', () => {
 
     const dialog = page.getByTestId('unmerge-stations-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('is where 2 lines meet');
-    await expect(page.getByTestId(`unmerge-station-option-${targetRef.line_id}-${targetRef.station_index}`)).toBeChecked();
+    await expect(page.getByTestId('unmerge-stations-naming')).toHaveText(
+      /^Merge B comes off: it gets back .+ \(Station ID \d+\); Merge A keeps .+\.$/,
+    );
+    await expect(page.getByTestId(`unmerge-station-option-${targetRef.line_id}-${targetRef.station_index}`)).toHaveCount(0);
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // The pair form detaches its partner: Merge B, the line that came off.
+    const calls = await page.evaluate(() =>
+      (window as unknown as { __MOCK_GET_UNMERGE_STATION_PAIR_CALLS__: () => Array<{ stationB: StationRef }> })
+        .__MOCK_GET_UNMERGE_STATION_PAIR_CALLS__(),
+    );
+    expect(calls.map((c) => c.stationB)).toEqual([mergeRefA]);
 
     await expect.poll(async () => {
       return page.evaluate(() => {

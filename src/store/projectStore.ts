@@ -23,6 +23,7 @@ import { notifyRemovedClosures } from '../utils/closureRemovalToast';
 import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
+import { splitSecondHalfColor } from '../utils/colors';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
@@ -483,6 +484,15 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   exportJson: (path: string) => Promise<void>;
   exportTml: (path: string) => Promise<void>;
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
+}
+
+/** The colour a delete-and-split gives its second half, a new line, as Split
+ *  Line Here does (demo finding I-9); `undefined` (the backend keeps the
+ *  line's colour) when the line is not in the project. */
+function splitColorB(project: Project | null, lineId: LineId): string | undefined {
+  const line = project?.lines.find((l) => l.id === lineId);
+  if (!line) return undefined;
+  return splitSecondHalfColor(project?.lines, line.color, useUIStore.getState().resolvedTheme);
 }
 
 /**
@@ -1682,7 +1692,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   deleteShotAndSplit: async (lineId: LineId, shotId: ShotId, nameA: string, nameB: string) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_and_split',
-      { lineId, shotId, nameA, nameB },
+      { lineId, shotId, nameA, nameB, colorB: splitColorB(get().project, lineId) },
       { purpose: 'delete shot and split line', fields: { lineId, shotId } }
     ));
   },
@@ -1704,7 +1714,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_split',
-      { lineId, startShotId, endShotId, nameA, nameB },
+      { lineId, startShotId, endShotId, nameA, nameB, colorB: splitColorB(get().project, lineId) },
       { purpose: 'delete shot range and split line', fields: { lineId, startShotId, endShotId } }
     ));
   },

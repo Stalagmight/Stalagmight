@@ -1,9 +1,21 @@
 /**
  * A junction's station details (UX-7, H-frontend-wire-5): a junction is ONE
- * station several lines pass, so "Merged with" names the other lines through
+ * station several lines pass, so "Also on" names the other lines through
  * it, never the station itself again ("3a | Side" read as merged with
  * itself); and the ids and names merged into it (its aliases) show as "Also
  * known as", so a surveyor can still find a retired name from the notes.
+ *
+ * Demo finding N-3: each fact once. The details said one fact three times
+ * ("Junction: 0 on North Passage", "Merged with: North Passage", "Also known
+ * as: 0 on North Passage (Station ID 9)"). Now each "Also on" row names the
+ * other line, the name it shows the station by and the Station ID it had
+ * there when that differs (`North Passage 0 (Station ID 9)`); there is no
+ * Junction row, and "Also known as" lists only the aliases no row shows.
+ * I-9: the heading reads the same for every junction ("Merged with" was
+ * wrong on a Split Line Here junction). Injections: putting the Junction row
+ * back fails "says each fact once"; dropping the `shown` filter from
+ * `StationAliases` fails it too; dropping the Station ID from a row fails
+ * "names each other line with its own name and Station ID".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -89,42 +101,86 @@ describe('a junction each line shows by its own name', () => {
     useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(project!.lines, list) });
   });
 
-  it("names the slot by its line's name, with the line, and lists the other lines' names", () => {
+  it("names the slot by its line's name, with the line, and each other line by its own name", () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 0) });
     render(<DetailPanel />);
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:0 (on Side)');
-    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:3a on Main');
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
+    // Main shows the junction by its own name and Station ID: nothing more to say.
+    expect(screen.getByTestId(`station-detail-other-name-${MAIN}-1`)).toHaveTextContent(/^3a$/);
+    // Side's own former Station ID: its name is on the Name row already.
+    expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent(/^Station ID 20 on Side$/);
   });
 
-  it('reads the same from the other line', () => {
+  it('names each other line with its own name and Station ID (N-3)', () => {
     render(<DetailPanel />);
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:3a (on Main)');
-    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:0 on Side');
+    const block = screen.getByTestId('station-detail-merged-with');
+    expect(block).toHaveTextContent(/^Also on:/);
+    expect(screen.getByTestId(`station-${SIDE}-0-link`)).toHaveTextContent('Side');
+    expect(screen.getByTestId(`station-detail-other-name-${SIDE}-0`)).toHaveTextContent(/^0 \(Station ID 20\)$/);
+    expect(screen.getByTestId(`detail-unmerge-${SIDE}-0`)).toHaveAccessibleName('Detach Side from this station');
   });
 
-  it('says which line knew it by an alias', () => {
+  it('says each fact once: no Junction row, no alias a row already shows (N-3)', () => {
     render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent('0 on Side (Station ID 20)');
+    const panel = screen.getByTestId('station-detail');
+    expect(screen.queryByTestId('station-detail-junction')).toBeNull();
+    expect(panel.textContent).not.toMatch(/Junction:|Merged with/);
+    // Side's alias is on its "Also on" row, so "Also known as" has nothing left.
+    expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
+    expect(panel.textContent?.match(/Station ID 20/g)).toHaveLength(1);
   });
 
   it('shows no "(on line)" when every line shows the junction by one name', () => {
     useProjectStore.setState({ stations: stations(), surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, stations()) });
     render(<DetailPanel />);
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
-    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:3a on Side');
+    // Side shows it as the Name row says: its row names the line only.
+    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
   });
 
-  it('shows no Junction row for a station on one line', () => {
+  it('shows no other lines for a station on one line', () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(MAIN, 2) });
     render(<DetailPanel />);
-    expect(screen.queryByTestId('station-detail-junction')).toBeNull();
+    expect(screen.queryByTestId('station-detail-merged-with')).toBeNull();
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:4$/);
   });
 });
 
+describe('a junction made by Split Line Here (I-9)', () => {
+  it('reads like every other junction: "Also on", never "Merged with"', () => {
+    // Both halves show the split station by one name and one Station ID: no
+    // alias, nothing merged.
+    const list = stations().map((s) => {
+      const plain = { ...s };
+      delete plain.aliases;
+      return plain;
+    });
+    useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
+    render(<DetailPanel />);
+    const block = screen.getByTestId('station-detail-merged-with');
+    expect(block).toHaveTextContent(/^Also on:/);
+    expect(block.textContent).not.toContain('Merged');
+    expect(block).toHaveTextContent(/^Also on:Side$/);
+    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
+    expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
+  });
+});
+
+describe('a joined comment in the station details (N-9)', () => {
+  it('keeps its line breaks', () => {
+    const list = stations().map((s) => ({ ...s, comment: 'T-junction, line arrow points out\n\nSilt bank, low visibility' }));
+    useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
+    render(<DetailPanel />);
+    const comment = screen.getByTestId('station-detail-comment');
+    expect(comment.textContent).toBe('T-junction, line arrow points out\n\nSilt bank, low visibility');
+    expect(comment).toHaveClass('whitespace-pre-wrap');
+  });
+});
+
 describe('junction station details', () => {
-  it('"Merged with" names the other line, never the station itself', () => {
+  it('"Also on" names the other line, never the station itself', () => {
     render(<DetailPanel />);
     const merged = screen.getByTestId('station-detail-merged-with');
     const link = screen.getByTestId(`station-${SIDE}-0-link`);
@@ -141,6 +197,8 @@ describe('junction station details', () => {
     expect(aliases).toHaveTextContent('Also known as');
     expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent('0 (Station ID 20)');
     expect(screen.getByTestId('station-detail-alias-21')).toHaveTextContent('Station ID 21');
+    // No line knows the station by them, so no "Also on" row shows them.
+    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
   });
 
   it('a station with no aliases shows no "Also known as"', () => {

@@ -19,7 +19,7 @@ use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::PreviewRow;
 use crate::models::survey::{Project as Survey, RangeDeleteMode};
-use crate::models::{LineId, ShotId};
+use crate::models::{LineId, LineUpdates, ShotId};
 
 /// The history kind 0.6.0 recorded every composite edit under (the icon the
 /// frontend maps): its undo entry was a labelled `Command::Batch`.
@@ -121,14 +121,17 @@ fn shot_uuids(project: &Survey, line: LineId, first: usize, last: usize) -> Vec<
 
 /// A split's mutation shared by both delete-and-split recipes: the shots
 /// `start..=end` (positions) go, the line keeps the shots before them
-/// renamed `name_a`, a new line `name_b` takes the shots after them. Returns
-/// the new line's id and the closure warnings.
+/// renamed `name_a`, a new line `name_b` takes the shots after them, in
+/// `color_b` when given (the colour a new line gets, as Split Line Here
+/// gives it; demo finding I-9), else in the line's colour (0.6.0's split,
+/// which copied the line's metadata). Returns the new line's id and the
+/// closure warnings.
 fn split_out(
     project: &mut Survey,
     record: &mut Record,
     line: LineId,
     (start, end): (usize, usize),
-    (name_a, name_b): (&str, &str),
+    (name_a, name_b, color_b): (&str, &str, Option<&str>),
     context: &str,
 ) -> Result<(LineId, Vec<crate::core::ValidationWarning>), String> {
     let (first, last) = {
@@ -161,6 +164,15 @@ fn split_out(
         .value
         .new_line
         .ok_or_else(|| "Failed to split the line".to_string())?;
+    if let Some(color) = color_b {
+        let updates = LineUpdates {
+            color: Some(color.to_string()),
+            ..LineUpdates::default()
+        };
+        project
+            .update_line_meta(new_line, &updates)
+            .map_err(|e| e.to_string())?;
+    }
     record.refs.lines.push(new_line);
     record.preview.rows = vec![
         row(
@@ -208,12 +220,29 @@ impl AppState {
     /// line `name_b` takes the shots after it, starting at the deleted shot's
     /// end station. Nothing else leaves the survey: the deleted shot's two
     /// stations stay, one on each half. Returns the new line as `line_id`.
+    /// The new line keeps the line's colour; the app passes the colour a new
+    /// line gets through [`Self::execute_delete_shot_and_split_with_color`].
     pub fn execute_delete_shot_and_split(
         &self,
         line_id: LineId,
         shot_id: ShotId,
         name_a: String,
         name_b: String,
+    ) -> CommandResult {
+        self.execute_delete_shot_and_split_with_color(line_id, shot_id, name_a, name_b, None)
+    }
+
+    /// [`Self::execute_delete_shot_and_split`] with the new line in
+    /// `color_b` when given, as Split Line Here colours its second half
+    /// (demo finding I-9: both halves of a Delete & Split were the line's
+    /// colour).
+    pub fn execute_delete_shot_and_split_with_color(
+        &self,
+        line_id: LineId,
+        shot_id: ShotId,
+        name_a: String,
+        name_b: String,
+        color_b: Option<String>,
     ) -> CommandResult {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
@@ -258,7 +287,7 @@ impl AppState {
                     record,
                     line_id,
                     (pos, pos),
-                    (&name_a, &name_b),
+                    (&name_a, &name_b, color_b.as_deref()),
                     "delete shot and split",
                 )
             },
@@ -285,7 +314,9 @@ impl AppState {
     /// new line `name_b` takes the shots after it. The stations strictly
     /// inside the range leave the line (a junction stays for its other
     /// lines). One undo entry. Prefix, suffix and whole ranges use the shift
-    /// or the line delete. Returns the new line as `line_id`.
+    /// or the line delete. Returns the new line as `line_id`, in the line's
+    /// colour ([`Self::execute_delete_shot_range_split_with_color`] for
+    /// another).
     pub fn execute_delete_shot_range_split(
         &self,
         line_id: LineId,
@@ -293,6 +324,25 @@ impl AppState {
         end_shot_id: ShotId,
         name_a: String,
         name_b: String,
+    ) -> CommandResult {
+        self.execute_delete_shot_range_split_with_color(
+            line_id,
+            start_shot_id,
+            end_shot_id,
+            (name_a, name_b),
+            None,
+        )
+    }
+
+    /// [`Self::execute_delete_shot_range_split`] with the new line in
+    /// `color_b` when given (demo finding I-9). `names` are the two halves'.
+    pub fn execute_delete_shot_range_split_with_color(
+        &self,
+        line_id: LineId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+        (name_a, name_b): (String, String),
+        color_b: Option<String>,
     ) -> CommandResult {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
@@ -340,7 +390,7 @@ impl AppState {
                     record,
                     line_id,
                     (start, end),
-                    (&name_a, &name_b),
+                    (&name_a, &name_b, color_b.as_deref()),
                     "delete shot range and split",
                 )
             },

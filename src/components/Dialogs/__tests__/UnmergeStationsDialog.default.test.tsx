@@ -7,8 +7,8 @@
  *   Since I-1 the owner gets a new Station ID only while a line that shows
  *   the junction by its own name stays on it (here Main Line B, started from
  *   Main 3); with only merged lines left the owner keeps the junction
- *   (`kept`) and stays selected, since either choice then gives every line
- *   the same station;
+ *   (`kept`) and stays selected (on a two-line junction there is then no
+ *   choice at all, N-2: `UnmergeStationsDialog.same.test.tsx`);
  * - a merge (or the 0.6.0 upgrade) joins the two stations' comments and the
  *   alias does not keep the merged line's part, so for a line that gets its
  *   station back while the others keep the junction the dialog says the
@@ -76,6 +76,13 @@ function openOn(clicked: ReturnType<typeof slot>, ...others: ReturnType<typeof s
 /** Main 3 shared by Main Line, North Passage (merged) and Main Line B. */
 const HUB_OTHERS = [slot(NORTH, 0), slot(SPLIT_B, 0)];
 
+/** The same hub when Main Line B was merged there too: Main Line keeps it. */
+const KEEPS_HUB = new Map<number, DetachLinePreview>([
+  [MAIN, KEEPS],
+  [NORTH, RESTORES],
+  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false }],
+]);
+
 beforeEach(() => {
   vi.clearAllMocks();
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
@@ -97,13 +104,14 @@ describe('Detach dialog default (I-7)', () => {
   });
 
   it('keeps the clicked owner when it keeps the junction (only merged lines left)', async () => {
-    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
-      args.lineId === NORTH ? RESTORES : KEEPS,
-    );
-    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    // A hub of merged lines: Main Line keeps it, and the other two come off
+    // together with North Passage's station, so the choice matters (a
+    // two-line junction offers none, N-2).
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) => KEEPS_HUB.get(args.lineId));
+    openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await waitFor(() =>
       expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
-        'Main Line keeps this station. North Passage gets back the station it had here before the merge: 0 (Station ID 9).',
+        'Main Line keeps this station. North Passage and Main Line B get back the station they had here before the merge: 0 (Station ID 9).',
       ),
     );
     expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).toBeChecked();
@@ -155,10 +163,8 @@ describe('Detach dialog and the joined comment (I-7)', () => {
   });
 
   it('says nothing when the clicked owner keeps the junction and its comment', async () => {
-    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
-      args.lineId === NORTH ? RESTORES : KEEPS,
-    );
-    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) => KEEPS_HUB.get(args.lineId));
+    openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await screen.findByTestId('unmerge-stations-naming');
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'The line you detach keeps its shots and this station, with its comment.',

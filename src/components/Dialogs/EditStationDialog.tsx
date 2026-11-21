@@ -374,7 +374,7 @@ export default function EditStationDialog() {
 
         {station.merged_with.length > 0 && (
           <div className="border-t border-border pt-3">
-            <span className="text-sm text-text-secondary">Merged with:</span>
+            <span className="text-sm text-text-secondary">Also on:</span>
             <ul className="mt-1">
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">

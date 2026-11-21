@@ -225,8 +225,8 @@ export default function LineAdjustDialog() {
             className="p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
             data-testid="line-adjust-connected-note"
           >
-            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} lines
-            move together so the merge stays aligned.
+            Joined to {connectedCount - 1} other line{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} lines
+            move together so they stay joined.
           </div>
         )}
 

@@ -78,11 +78,11 @@ describe('MergeDialog datum shift (#741)', () => {
     );
   });
 
-  it('counts the other lines of a moving piece', () => {
+  it('names the other lines of a moving piece (N-13)', () => {
     dialogData = { ...dialogData, datumShift: shift({ moving_line_ids: [2, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
-      'Second entrance and 1 more line is placed by its own GPS. It moves 4.3 m'
+      'Second entrance and Side passage are placed by their own GPS. They move 4.3 m'
     );
   });
 

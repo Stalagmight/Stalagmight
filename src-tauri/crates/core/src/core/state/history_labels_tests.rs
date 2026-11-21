@@ -559,6 +559,97 @@ fn unmerges_name_the_stations_they_detach() {
     assert_eq!(rows(&item), vec![r("Station", "", "Branch / 2")]);
 }
 
+/// Demo finding N-2: when the addressed line keeps the station (it shows it
+/// by its own name and the other line was merged there), the line that comes
+/// off is the other one, and the history names it, never the line that keeps
+/// the station ("Detach line "Main Line"" read as if Main Line had left).
+/// Both forms: the station form on the keeper's slot, and the pair form whose
+/// partner is the keeper. Injection: naming the addressed slot's line again
+/// (the old `detach`) gives `Detach line "Main" from station 4`.
+#[test]
+fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
+    let o = open();
+    exec(
+        &o.state,
+        Command::MergeStations {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+        },
+    );
+    let p = survey_of(&o.state);
+    let junction = p.topology().station_at(StationRef::new(MAIN, 4)).unwrap();
+    assert!(p.detach_keeps(junction, MAIN), "Main keeps the station");
+    assert!(!p.detach_keeps(junction, SIDE));
+    assert_eq!(p.name_on(junction, SIDE), Some("0"));
+
+    exec(
+        &o.state,
+        Command::UnmergeStations {
+            station_ref: StationRef::new(MAIN, 4),
+        },
+    );
+    let item = assert_survives(&o);
+    assert_eq!(item.description, "Detach line \"Side\" from station 0");
+    // The station form on the line that comes off reads the same.
+    assert!(o.state.undo().success);
+    exec(
+        &o.state,
+        Command::UnmergeStations {
+            station_ref: StationRef::new(SIDE, 0),
+        },
+    );
+    assert_eq!(
+        top(&o.state).description,
+        "Detach line \"Side\" from station 0"
+    );
+    // The pair form whose partner (the line it detaches) keeps the station.
+    assert!(o.state.undo().success);
+    exec(
+        &o.state,
+        Command::UnmergeStationPair {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+        },
+    );
+    assert_eq!(
+        top(&o.state).description,
+        "Detach line \"Side\" from station 0"
+    );
+}
+
+/// N-2 on a hub: when the addressed line keeps the station, every other line
+/// comes off with the identity the first of them had, and the label lists
+/// them by name, the station by the first one's name for it.
+#[test]
+fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
+    let mut p = survey();
+    let far = p
+        .add_line(named("Far"), StartAt::New, vec![shot(3.0, 270.0)])
+        .unwrap();
+    let far_start = p.line(far).unwrap().start;
+    p.set_placement(far_start, -100.0, 0.0).unwrap();
+    let o = open_on(&p);
+    for line in [SIDE, far] {
+        exec(
+            &o.state,
+            Command::MergeStations {
+                station_a: StationRef::new(line, 0),
+                station_b: StationRef::new(MAIN, 4),
+            },
+        );
+    }
+    exec(
+        &o.state,
+        Command::UnmergeStations {
+            station_ref: StationRef::new(MAIN, 4),
+        },
+    );
+    assert_eq!(
+        top(&o.state).description,
+        "Detach lines \"Side\" and \"Far\" from station 0"
+    );
+}
+
 #[test]
 fn closures_name_their_ends_when_created_and_removed() {
     let o = open();

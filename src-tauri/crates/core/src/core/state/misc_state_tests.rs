@@ -906,7 +906,9 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "update_project_settings",
     "set_surface_elevation",
     "execute_delete_shot_and_split",
+    "execute_delete_shot_and_split_with_color",
     "execute_delete_shot_range_split",
+    "execute_delete_shot_range_split_with_color",
     "execute_delete_shot_range_shift",
     "execute_delete_last_shot_and_line",
     "execute_split_shot_at_distance",
@@ -949,7 +951,7 @@ fn assert_disabled(label: &str, result: &CommandResult) {
 fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        25,
+        27,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -1003,6 +1005,16 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute_delete_shot_and_split(line, first, "A".to_string(), "B".to_string()),
         );
         assert_disabled(
+            "execute_delete_shot_and_split_with_color",
+            &state.execute_delete_shot_and_split_with_color(
+                line,
+                first,
+                "A".to_string(),
+                "B".to_string(),
+                Some("#123456".to_string()),
+            ),
+        );
+        assert_disabled(
             "execute_delete_shot_range_split",
             &state.execute_delete_shot_range_split(
                 line,
@@ -1010,6 +1022,16 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 first,
                 "A".to_string(),
                 "B".to_string(),
+            ),
+        );
+        assert_disabled(
+            "execute_delete_shot_range_split_with_color",
+            &state.execute_delete_shot_range_split_with_color(
+                line,
+                first,
+                first,
+                ("A".to_string(), "B".to_string()),
+                Some("#123456".to_string()),
             ),
         );
         assert_disabled(
