@@ -146,7 +146,7 @@ test.describe('.stalx v2 file status', () => {
       'Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).'
     );
     // One event, one surface: the banner says it, so no toast does.
-    await expect(page.getByText('Saved in the new format; the original is kept in Recent Projects')).toHaveCount(0);
+    await expect(page.locator('[data-toast-key="legacy-converted"]')).toHaveCount(0);
 
     await page.getByTestId('conversion-notice-dismiss-button').click();
     await expect(banner).toHaveCount(0);
@@ -186,12 +186,16 @@ test.describe('.stalx v2 file status', () => {
     await expect(page.getByTestId('conversion-notice-banner')).toHaveCount(0);
 
     await page.keyboard.press('Control+s');
-    await expect(page.getByText('Saved in the new format; the original is kept in Recent Projects')).toBeVisible();
+    const toast = page.locator('[data-toast-key="legacy-converted"]');
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('Saved in the new format; the original is kept in Recent Projects');
+    await toast.getByRole('button').click();
+    await expect(toast).toHaveCount(0);
     // Converted once: the next save says nothing more.
     await makeDirty(page);
     await page.keyboard.press('Control+s');
     await expect.poll(() => isDirty(page)).toBe(false);
-    await expect(page.getByText('Saved in the new format; the original is kept in Recent Projects')).toHaveCount(1);
+    await expect(toast).toHaveCount(0);
   });
 
   test('a warning ignore dirties the project: it rides the next save', async ({ page }) => {
