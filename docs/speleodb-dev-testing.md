@@ -189,7 +189,8 @@ save and push against a loopback server, with the protocol fuzzer's trace
 `after_a_confirmed_upload_a_lost_edit_leaves_no_un_uploaded_work`,
 `an_edit_taken_back_during_an_upload_stays_un_uploaded` (the push fence) and
 `a_copy_without_a_digest_keeps_its_mark` (a 0.6.0 copy and a version 2 copy
-without the digest). The digest itself is pinned in
+without the digest), and `the_digest_goes_with_its_base`. The digest itself
+is pinned in
 `persistence/stalx_v2/format_v2_digest_tests.rs`.
 
 A manual check against the test server, with a synthetic project: open it from

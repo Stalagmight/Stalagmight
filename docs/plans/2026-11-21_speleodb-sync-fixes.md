@@ -79,7 +79,8 @@ the fuzzer trace; a crash after an edit reopens clean (Recents and the
 SpeleoDB browser); a saved edit keeps its mark; an edit taken back and saved
 counts as clean (by hand, by Undo); a confirmed upload records the digest; an
 edit taken back during an upload stays un-uploaded; a copy without a digest
-keeps its mark (0.6.0 and version 2). Five fail on the code before the fix.
+keeps its mark (0.6.0 and version 2); the digest goes with its BASE and its
+project. Five fail on the code before the fix.
 Injections, each caught: the probe returning the header as read, no digest at
 the install, the open's clear off, the save's clear off, no digest at the
 landing, the landing's `has_unpushed_edits = true` removed. The digest is
