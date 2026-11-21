@@ -128,7 +128,7 @@ test.describe('.stalx v2 file status', () => {
     const banner = page.getByTestId('conversion-notice-banner');
     await expect(banner).toBeVisible();
     await expect(page.getByTestId('conversion-notice-text')).toContainText('4 stations moved by up to 0.42 m');
-    await expect(banner).toContainText('saved the next time you save');
+    await expect(banner).toContainText('The new format is written the first time the project is saved');
     await page.getByTestId('conversion-notice-dismiss-button').click();
     await expect(banner).toHaveCount(0);
   });
