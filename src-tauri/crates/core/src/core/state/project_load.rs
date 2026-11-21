@@ -437,13 +437,16 @@ impl AppState {
             }
         }
         // A legacy NULL undo mode is materialized from this machine's default
-        // on first open, and made durable (#303).
+        // on first open, and made durable (#303): at once in a version 2 file,
+        // by the converting save in a 0.6.0 one. It never asks on close: every
+        // open of the 0.6.0 file materializes the same mode, so a close that
+        // drops it loses nothing (pre-PR delta review finding 3; the rule on
+        // `FileState::local_pending_asks`).
         let mut link = file.speleo_link();
         if let Some(l) = link.as_mut() {
             if self.materialize_undo_mode(l) {
                 file.set_speleo_link(Some(l));
                 file.local_pending = true;
-                file.local_pending_asks = true;
             }
         }
         let watermark = file.extras.local.speleodb.inherited_through;

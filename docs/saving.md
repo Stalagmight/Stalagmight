@@ -163,7 +163,9 @@ happen during an open, both of state the file already implies:
   save ([below](#local-only-durable-saves)) that copies every other member,
   the history included, byte for byte, so an open never cuts or rewrites the
   history. A read-only file gets it too (local-only saves work there); a
-  legacy file keeps it in memory for the upgrading save.
+  legacy file keeps it in memory for the upgrading save, and it does not make
+  the project unsaved: every open of that file materializes the same mode, so
+  a close that drops it loses nothing ([Unsaved changes](#unsaved-changes)).
 
 ## Save Pipeline
 
@@ -508,24 +510,39 @@ backend's "changes no save has written": `FileState.dirty`, set by every
 recorded edit, by undo and redo, and by an Ignore or Unignore of a warning
 (ignored warnings are survey content: they ride the next save, and "Don't
 save" discards them); and, on a legacy file not yet upgraded, the local state
-waiting for the upgrading save that is not view state (`local_pending_asks`:
-SpeleoDB bookkeeping, a project name, a materialized undo mode), which 0.6.0
-wrote in place at once and which "Don't save" now discards. A display toggle
-on a legacy file waits for that save too (`local_pending`, through
-`persist_display_state`) but is not an unsaved change: counting it would arm
-autosave, and autosave would convert the 0.6.0 file the user only looked at
-(demo issue I-6). A close without a save drops it, as it drops any other view
-state. Display toggles and SpeleoDB state changes of a version 2 file are
-durable at once and set nothing. A save clears every flag. The frontend keeps
-its own `isDirty` for the indicator and autosave; it asks the backend after an
-Ignore, and never marks the project unsaved for a display toggle. Every way out
-of a project (quit and the window X, close, opening another project, local or
-from SpeleoDB, New Project, an account change, and the saves "Keep the lock"
-and "Quit now" make first) asks `openProjectHasUnsavedChanges`
-(`src/utils/unsavedChanges.ts`): `isDirty`, or else the backend's flag, read at
-that moment. So a 0.6.0 file's `local_pending_asks` gets the unsaved-changes
-prompt, while it still never arms autosave (that would convert a file the user
-only looked at); a failed ask counts as unsaved.
+waiting for the upgrading save that a close would lose for good
+(`local_pending_asks`), which 0.6.0 wrote in place at once and which "Don't
+save" now discards. The rule (`FileState::local_pending_asks`): a deferred
+change asks when a close that drops it changes what the user or the server
+sees afterwards. So the SpeleoDB name fold (the next open would show the old
+name), the link's sync state (the dirty bit, BASE, the Unwind chain pointer,
+the inherited-history watermark) and the history a confirmed push pruned (the
+next push would send it again) ask; an undo mode materialized from this
+machine's default (every open materializes the same one), the lock
+re-verification time (it only paces the next re-check) and a display toggle
+do not. Those wait for that save too (`local_pending`, through
+`persist_display_state`, `persist_unasked_state_at` and the open's own write)
+but are not unsaved changes: counting them would ask on every exit from a
+0.6.0 file the user only looked at, and arm autosave, which would convert it
+(demo issue I-6). A close without a save drops them. Display toggles and
+SpeleoDB state changes of a version 2 file are durable at once and set
+nothing. A save clears every flag. The frontend keeps its own `isDirty` for
+the indicator and autosave; it asks the backend after an Ignore, and never
+marks the project unsaved for a display toggle. Every way out of a project
+(quit and the window X, close, opening another project, local or from
+SpeleoDB, New Project, an account change, and the saves "Keep the lock" and
+"Quit now" make first), and an explicit Save of a SpeleoDB copy with nothing
+to upload, asks `askOpenProjectUnsaved` (`src/utils/unsavedChanges.ts`):
+`isDirty`, or else the backend's flag, read at that moment. So a 0.6.0 file's
+`local_pending_asks` gets the unsaved-changes prompt (and Ctrl+S saves it on
+this computer instead of saying "No changes to upload"), while it still never
+arms autosave. The ask is bounded (`UNSAVED_ASK_BOUND_MS`, 2 s): a backend that
+does not answer in time, or a failed ask, counts as unsaved, so the window X
+still gets its prompt from a stalled backend. And the answer belongs to the
+project it was asked about (its path, `created_at` and load): when a load or a
+close lands during the ask, no exit acts on the old answer. Quit, New Project,
+"Quit now" and an account change decide again for what is open now, an open
+is routed again, and close and "Keep the lock" step aside.
 
 ## Failure classification
 

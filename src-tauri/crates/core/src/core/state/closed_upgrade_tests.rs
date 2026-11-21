@@ -249,8 +249,9 @@ fn save_as_over_a_plain_legacy_file_keeps_it_in_recovery() {
 /// a legacy file only by upgrading it). It alone does not make the project
 /// unsaved (demo issue I-6): the frontend's autosave follows that flag, and
 /// would convert a file the user only looked at; a close then leaves the
-/// 0.6.0 file as it was. Local state that is not view state (a materialized
-/// undo mode, SpeleoDB bookkeeping) still asks. Injection: write the toggle
+/// 0.6.0 file as it was. SpeleoDB bookkeeping a close would lose still asks
+/// (`a_legacy_speleodb_copy_asks_only_for_bookkeeping_a_close_would_lose`).
+/// Injection: write the toggle
 /// with `persist_local_state` again (or answer `has_unsaved_changes` from
 /// `local_pending`) and the toggle makes the project unsaved.
 #[test]
@@ -327,6 +328,95 @@ fn other_local_state_on_a_legacy_project_is_still_unsaved() {
         assert!(state.save_project(None).success);
         assert!(!state.has_unsaved_changes());
         assert!(!state.with_file(|f| f.local_pending || f.local_pending_asks));
+        forget_backups(&stem);
+    });
+}
+
+/// Pre-PR delta review finding 3: opening an untouched 0.6.0 SpeleoDB copy
+/// whose link has no undo mode materializes this machine's default, and that
+/// made the copy unsaved, so every exit asked "unsaved changes" for a file the
+/// user only looked at. Every open materializes the same mode again, so a
+/// close that drops it loses nothing: it stays pending for the converting
+/// save (which writes it) and asks nothing. Bookkeeping a close WOULD lose
+/// still asks: the SpeleoDB name fold, the history a confirmed push pruned.
+/// A lock re-verification time only paces a re-check, and asks nothing.
+/// Injection: setting `local_pending_asks` with the materialized mode again
+/// (or writing the open's local state with `asks`) fails the first assert;
+/// deferring the fold or the prune without `asks` fails the later ones.
+#[test]
+fn a_legacy_speleodb_copy_asks_only_for_bookkeeping_a_close_would_lose() {
+    use super::robustness_kit::open_fresh;
+    use super::stalx_fixtures::legacy_linked_project;
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-undo-mode");
+        let path = legacy_linked_project(&dir.path().join(format!("{stem}.stalx")), Some(&link()));
+        let original = std::fs::read(&path).unwrap();
+
+        // Opened, looked at, closed: no prompt, and the file is untouched.
+        let state = open_fresh(&path).expect("open the 0.6.0 copy");
+        assert!(
+            state.speleo_link().is_some_and(|l| l.undo_mode.is_some()),
+            "the open materialized the undo mode"
+        );
+        assert!(
+            state.with_file(|f| f.local_pending),
+            "kept for the converting save"
+        );
+        assert!(
+            !state.has_unsaved_changes(),
+            "a mode every open derives again must not ask on close"
+        );
+        // Neither does the lock re-verification time Start Editing stamps.
+        {
+            let guard = state.project.lock().unwrap();
+            state.speleodb_stamp_verified_held(guard.as_ref(), chrono::Utc::now());
+        }
+        assert!(
+            !state.has_unsaved_changes(),
+            "a re-verify pace is not unsaved work"
+        );
+        assert!(state.close_project().success);
+        assert_eq!(std::fs::read(&path).unwrap(), original, "never converted");
+
+        // A SpeleoDB name fold the close would lose asks.
+        let state = open_fresh(&path).expect("reopen");
+        let generation = state.speleodb_session_generation();
+        state.speleodb_fold_local_name("Renamed on SpeleoDB", ID, generation);
+        assert_eq!(
+            state.get_project_state().unwrap().name,
+            "Renamed on SpeleoDB"
+        );
+        assert!(
+            state.has_unsaved_changes(),
+            "the next open would show the old name"
+        );
+        assert!(state.close_project().success);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        // So does a pruned history (the next push would send it again).
+        let state = open_fresh(&path).expect("reopen");
+        {
+            let guard = state.project.lock().unwrap();
+            state.speleodb_clear_undo_after_push(guard.as_ref(), chrono::Utc::now());
+        }
+        assert!(
+            state.has_unsaved_changes(),
+            "a pruned history is asked about"
+        );
+        assert!(state.close_project().success);
+
+        // The converting save writes the materialized mode.
+        let state = open_fresh(&path).expect("reopen");
+        let mode = state.speleo_link().and_then(|l| l.undo_mode);
+        assert!(state.save_project(None).success);
+        assert!(is_v2(&path));
+        assert!(state.close_project().success);
+        let reopened = open_fresh(&path).expect("open the converted file");
+        assert_eq!(reopened.speleo_link().and_then(|l| l.undo_mode), mode);
+        assert!(!reopened.has_unsaved_changes());
         forget_backups(&stem);
     });
 }

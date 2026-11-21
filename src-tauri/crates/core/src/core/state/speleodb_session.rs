@@ -286,11 +286,34 @@ impl AppState {
         // this session without the gate being open.
         self.speleodb_bind_edit_claim(project_id, &open.endpoint, acquired_here, acquired_here)?;
         if entry_generation.is_some() {
-            let _ = self.speleodb_mutate_link_held(proj_guard.as_ref(), |l| {
-                l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
-            });
+            self.speleodb_stamp_verified_held(proj_guard.as_ref(), chrono::Utc::now());
         }
         Ok(())
+    }
+
+    /// Stamp the open link's `last_verify_at`, the pace of the lazy lock
+    /// re-verify, and make it durable. The caller holds the `project` guard
+    /// (`project` is its content). Losing the stamp at a close only makes
+    /// the next edit re-verify sooner, so on a 0.6.0 copy waiting for its
+    /// converting save it does not make the project unsaved (the rule on
+    /// `FileState::local_pending_asks`). Best-effort, as the stamp always was.
+    pub(super) fn speleodb_stamp_verified_held(
+        &self,
+        project: Option<&crate::models::survey::Project>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let stamped = self.with_file(|file| {
+            let mut link = file.speleo_link()?;
+            link.last_verify_at = Some(at.to_rfc3339());
+            file.set_speleo_link(Some(&link));
+            Some(())
+        });
+        if stamped.is_none() {
+            return;
+        }
+        if let Err(e) = self.persist_unasked_state_at(project.and_then(|p| p.file_path.clone())) {
+            tracing::debug!(error = %e, "the lock re-verification time is set in memory only");
+        }
     }
 
     /// `speleodb_mutate_link` for a caller that holds the `project` guard:
