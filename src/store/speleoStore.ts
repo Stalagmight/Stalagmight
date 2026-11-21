@@ -10,6 +10,7 @@ import type {
   SpeleoLinkStatus,
   SpeleoLoginResult,
   SpeleoProjectSummary,
+  SpeleoRevision,
   SpeleoSessionStatus,
   StartEditingResult,
   UndoMode,
@@ -70,11 +71,34 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
     is transient action feedback; `no_anchor` (no georeferenced zero datum on
     push/unlock) is the #200 non-blocking notice; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
-    after 3 s, leaving a failed upload with no trace). */
+    after 3 s, leaving a failed upload with no trace); `replaced_revision` (R3)
+    is an upload that landed on top of revisions another session pushed
+    meanwhile (see {@link ReplacedRevisionBanner}). */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'no_anchor' }
-  | PushFailedBanner;
+  | PushFailedBanner
+  | ReplacedRevisionBanner;
+
+/** [R3] The upload landed, but SpeleoDB put it on top of revisions another
+    session (of this account, which holds the same per-account lock) uploaded
+    between the push's check that nothing had moved and the upload itself. Their
+    changes are not in ours; they are still in the project's revision history.
+    Persistent until dismissed: it is the only report of the lost race, and the
+    work it names is at risk of being overlooked (notifications.md: data at risk
+    never rides a toast). `revisions` is newest first, from the backend's
+    `replaced_revisions`. */
+export interface ReplacedRevisionBanner {
+  kind: 'replaced_revision';
+  revisions: SpeleoRevision[];
+}
+
+/** [R3] The banner a landed upload raises when it replaced revisions, or `null`. */
+function replacedRevisionBanner(
+  revisions: SpeleoRevision[] | undefined,
+): ReplacedRevisionBanner | null {
+  return revisions && revisions.length > 0 ? { kind: 'replaced_revision', revisions } : null;
+}
 
 /** [#260] The last push/unlock failed. Carries the already-humanized error plus
     enough context for the banner's Retry to re-issue the SAME verb with the SAME
@@ -1277,7 +1301,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'released':
           // Lock released and edits are on the server - clear the holder (or we'd
           // read as still holding it), drop the dirty bit + any push-unconfirmed
-          // banner, and reset the remote state.
+          // banner, and reset the remote state. An upload that replaced revisions
+          // pushed meanwhile (R3) says so instead.
           return {
             link: {
               ...state.link,
@@ -1290,7 +1315,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               serverError: null,
             },
             divergence: null,
-            banner: null,
+            banner: replacedRevisionBanner(r.kind === 'released' ? r.replaced_revisions : undefined),
           };
         case 'divergence_needed':
           return { divergence: 'done' };
@@ -1316,7 +1341,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       switch (kind) {
         case 'pushed':
           // Lock retained (still editing); edits are now on the server. Clear a
-          // prior push-unconfirmed banner since this push landed.
+          // prior push-unconfirmed banner since this push landed - or say that it
+          // replaced revisions pushed meanwhile (R3).
           return {
             link: {
               ...state.link,
@@ -1325,7 +1351,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            banner: null,
+            banner: replacedRevisionBanner(r.kind === 'pushed' ? r.replaced_revisions : undefined),
           };
         case 'divergence_needed':
           return { divergence: 'push' };

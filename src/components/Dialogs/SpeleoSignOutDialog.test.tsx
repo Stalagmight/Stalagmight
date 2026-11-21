@@ -203,6 +203,20 @@ describe('SpeleoSignOutDialog', () => {
     expect(released).toEqual([]);
   });
 
+  it('R3: an upload that replaced a revision pushed meanwhile stops the sign-out, so its banner is read', async () => {
+    const replaced = {
+      id: '0123456789abcdef0123456789abcdef01234567', parent_ids: [], author_email: 'diver@example.com',
+      authored_date: null, message: 'Surveyed the sump',
+    };
+    doneMock.mockResolvedValue({ kind: 'released', replaced_revisions: [replaced] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
+    await userEvent.type(screen.getByTestId('speleodb-signout-message'), 'm');
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-upload-confirm'));
+    expect(await answer).toBe(false);
+    expect(released).toEqual([]);
+  });
+
   it('Discard: a "lost forever" step listing what is lost, then the discarding close and the sign-out', async () => {
     useProjectStore.setState({ isDirty: true });
     const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x')] });

@@ -13,11 +13,15 @@ export const UPLOAD_PROGRESS_LIMIT_MS = 120_000;
 
 /**
  * How an exit upload ended. `released`: uploaded, lock handed back, nothing newer
- * left behind. `diverged`: SpeleoDB moved on, and its own resolution dialog takes
- * over. `failed`: not uploaded; the failure notice is on screen. `newer`: the
- * upload landed but edits made meanwhile are still only local.
+ * left behind. `diverged`: SpeleoDB moved on (including another session of this
+ * account uploading first, R3), nothing was uploaded, and its own resolution
+ * dialog takes over. `failed`: not uploaded; the failure notice is on screen.
+ * `newer`: the upload landed but edits made meanwhile are still only local.
+ * `replaced`: the upload landed and the lock is back, but on top of revisions
+ * another session uploaded meanwhile (R3, the lost race); the project's banner
+ * names them, so the exit stops for the user to read it.
  */
-export type ExitUploadResult = 'released' | 'diverged' | 'failed' | 'newer';
+export type ExitUploadResult = 'released' | 'diverged' | 'failed' | 'newer' | 'replaced';
 
 /**
  * The upload the exit prompt and the sign-out run: the ordinary Finish editing
@@ -56,6 +60,7 @@ export function useSpeleoExitUpload() {
       if (isShown && !isShown() && isCurrent()) toastLateUploadOutcome(resolved);
       if (resolved?.kind === 'divergence_needed') return 'diverged';
       if (resolved?.kind !== 'released') return 'failed';
+      if (resolved.replaced_revisions?.length) return 'replaced';
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) return 'newer';
       return 'released';
     } finally {

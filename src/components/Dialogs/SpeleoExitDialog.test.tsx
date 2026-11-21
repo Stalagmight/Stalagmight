@@ -174,6 +174,28 @@ describe('SpeleoExitDialog', () => {
     expect(closeProject).not.toHaveBeenCalled();
   });
 
+  it('R3: an upload that replaced a revision pushed meanwhile stops the exit, so its banner is read', async () => {
+    const replaced = {
+      id: '0123456789abcdef0123456789abcdef01234567', parent_ids: [], author_email: 'diver@example.com',
+      authored_date: null, message: 'Surveyed the sump',
+    };
+    doneMock.mockImplementation(async () => {
+      useSpeleoStore.setState({
+        link: link({ editState: 'read-only', hasUnpushedEdits: false }),
+        banner: { kind: 'replaced_revision', revisions: [replaced] },
+      });
+      return { kind: 'released', replaced_revisions: [replaced] };
+    });
+    const answer = raise('quit');
+    await userEvent.click(screen.getByTestId('speleodb-exit-upload'));
+    await userEvent.type(screen.getByTestId('speleodb-exit-message'), 'm');
+    await userEvent.click(screen.getByTestId('speleodb-exit-upload-confirm'));
+    expect(await answer).toBe(false);
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(useSpeleoExitPrompt.getState().request).toBeNull();
+    expect(useSpeleoStore.getState().banner?.kind).toBe('replaced_revision');
+  });
+
   it('an older-version copy says so before the upload, and the upload is the informed choice', async () => {
     useSpeleoStore.setState({ link: link({ unwound: true }) });
     void raise();

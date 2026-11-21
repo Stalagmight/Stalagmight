@@ -64,6 +64,15 @@ const reset = () => {
   });
 };
 
+/** R3: a revision another session uploaded while ours was on its way (synthetic). */
+const REPLACED = {
+  id: '0123456789abcdef0123456789abcdef01234567',
+  parent_ids: ['fedcba9876543210fedcba9876543210fedcba98'],
+  author_email: 'diver@example.com',
+  authored_date: '2026-11-21T10:00:00.000Z',
+  message: 'Surveyed the sump',
+};
+
 describe('speleoStore', () => {
   beforeEach(reset);
 
@@ -499,6 +508,19 @@ describe('speleoStore', () => {
       expect(s.divergence).toBe('done');
       expect(s.link?.editState).toBe('editing');
     });
+
+    it('R3: released with replaced revisions raises the banner that names them', () => {
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [REPLACED] });
+      const s = useSpeleoStore.getState();
+      expect(s.banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+      // The upload itself landed: the lock is back and nothing is left to upload.
+      expect(s.link?.editState).toBe('read-only');
+      expect(s.link?.hasUnpushedEdits).toBe(false);
+      // An empty list is the ordinary case.
+      useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [] });
+      expect(useSpeleoStore.getState().banner).toBeNull();
+    });
   });
 
   describe('applyPush', () => {
@@ -533,6 +555,14 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.banner).toEqual({ kind: 'push_unconfirmed' });
       expect(s.link?.editState).toBe('editing');
+    });
+
+    it('R3: pushed with replaced revisions raises the banner that names them, still editing', () => {
+      useSpeleoStore.getState().applyPush({ kind: 'pushed', replaced_revisions: [REPLACED] });
+      const s = useSpeleoStore.getState();
+      expect(s.banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+      expect(s.link?.editState).toBe('editing');
+      expect(s.link?.hasUnpushedEdits).toBe(false);
     });
   });
 
