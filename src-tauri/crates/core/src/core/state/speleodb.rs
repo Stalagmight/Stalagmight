@@ -1625,7 +1625,8 @@ impl AppState {
     }
 
     /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
-    /// no remote project is open.
+    /// no remote project is open. Tests only (see [`Self::mutate_speleo_link`]).
+    #[cfg(test)]
     pub(super) fn speleodb_mutate_link(
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),

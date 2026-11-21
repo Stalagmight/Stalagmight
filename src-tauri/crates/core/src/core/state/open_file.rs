@@ -383,7 +383,9 @@ impl AppState {
     }
 
     /// Change the link in memory and make it durable at once (local-only
-    /// save). `f` returns whether it changed anything.
+    /// save). `f` returns whether it changed anything. Tests only: the app
+    /// changes the link through `speleodb_mutate_link_held` and the landing.
+    #[cfg(test)]
     pub(crate) fn mutate_speleo_link(
         &self,
         f: impl FnOnce(&mut Option<SpeleoLink>) -> bool,
