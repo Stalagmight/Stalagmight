@@ -402,7 +402,10 @@ settle already rewrote it, the session's guard follows the new bytes, so the
 next save works. A failed write removes the copy step 4 kept while the original
 still holds the same bytes (never a copy an earlier upgrade kept), so an
 autosave retried on a read-only folder does not fill the backups folder. The next upgrade of the same file removes what a
-killed one left behind (the hidden settled copy, a partial backup). An original
+killed one left behind (the hidden settled copy, a partial backup). Nothing
+else is ever removed from the backups folder: it is not pruned, so every
+original an upgrade kept stays there (Recovery offers the ones of the
+project's path) until the user deletes it. An original
 whose unfinished changes SQLite cannot fold in (a damaged pair) is never
 replaced, not even by Keep my version: there would be no whole copy of it. The
 save says so ("the original's unfinished changes could not be finished") and
