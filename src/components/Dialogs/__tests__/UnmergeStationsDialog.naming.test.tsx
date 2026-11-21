@@ -57,6 +57,9 @@ describe('Detach dialog naming', () => {
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
     expect(naming).toHaveTextContent('Side gets back the station it had here before the merge: 0 (Station ID 7).');
+    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+      'The line you detach keeps its shots and gets its own station here, with no comment.',
+    );
     expect(invokeIpc).toHaveBeenCalledWith(
       'preview_detach_line',
       { stationRef: slot(SIDE, 0), lineId: SIDE },
@@ -72,6 +75,10 @@ describe('Detach dialog naming', () => {
       expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
         'Main keeps this station. Side gets back the station it had here before the merge: 0 (Station ID 7).',
       ),
+    );
+    // What stays and what goes is said the same way round.
+    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+      'The line you detach keeps its shots and this station, with its comment.',
     );
   });
 

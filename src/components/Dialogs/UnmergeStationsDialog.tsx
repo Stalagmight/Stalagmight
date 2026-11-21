@@ -184,7 +184,9 @@ export default function UnmergeStationsDialog() {
           </p>
         )}
 
-        <p className="text-xs text-text-secondary">{t('dialogs.detachLine.explain')}</p>
+        <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">
+          {t(naming?.kept ? 'dialogs.detachLine.explainKeeps' : 'dialogs.detachLine.explain')}
+        </p>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="unmerge-stations-cancel">
