@@ -197,12 +197,17 @@ A reader should not depend on the member order (except `format` and `version`
 first). A reader that wants only the header (a project list, a link check)
 may stop at the first survey member (`sections` onwards) once it has met
 every header member it needs; otherwise a member it needs may still follow
-the body. Stalagmight's header read does exactly that: a file it wrote,
-which always puts the header first, is read from its first few kilobytes,
-and a reordered file is read to its end (its project list alone stops at the
-body, so it may list such a file without a link). A file without
-`"end":true` is incomplete and refused, which, with the closing brace, makes
-a truncated file impossible to mistake for a project.
+the body. Stalagmight's header read stops there when it has met every
+header member it reads, or when the header before the body is in the
+canonical form (section 8: header members in the order of the table, the
+first four on the first line and each later one on a line of its own) and
+`summary.speleodb` names the same project as the `speleodb` member, or both
+are absent. So a file it wrote is read from its first few kilobytes, linked
+or not, and any other file is read to its end (its project list alone stops
+at the body, so it may list such a file without a link). A program that
+writes the canonical layout must keep the canonical order with it. A file
+without `"end":true` is incomplete and refused, which, with the closing
+brace, makes a truncated file impossible to mistake for a project.
 
 ## 5. Member reference
 
