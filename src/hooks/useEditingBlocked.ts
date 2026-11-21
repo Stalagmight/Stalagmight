@@ -32,8 +32,7 @@
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { useProjectStore } from '../store/projectStore';
-import { TOAST_KEYS } from '../utils/toastKeys';
-import { READ_ONLY_FILE_NOTICE } from '../utils/editErrors';
+import { showReadOnlyFileNotice } from '../utils/blockedNotice';
 
 /**
  * The third term: the open FILE is read-only because a newer Stalagmight made
@@ -67,19 +66,18 @@ export function isEditingBlockedNow(): boolean {
 }
 
 /**
- * Say why an edit did nothing when the open FILE is read-only (made with a
+ * Say why an action did nothing when the open FILE is read-only (made with a
  * newer Stalagmight): the worded notice the backend's `READ_ONLY_FILE`
- * refusal gets (Ctrl+Z, a dialog), for the edits the frontend refuses before
- * any command leaves - a key typed into a data-table cell, the Delete key on
- * a selection (demo finding I-10). Once: while that notice is on screen a
- * repeat (every further keystroke) adds nothing. Returns whether the file is
- * read-only; any other reason editing is blocked stays silent here.
+ * refusal gets (Ctrl+Z, a dialog), for what the frontend refuses before any
+ * command leaves - a key typed into a data-table cell, the Delete key on a
+ * selection (demo finding I-10), Save, Save As and Import (N-1). Once: while
+ * that notice is on screen a repeat (every further keystroke) adds nothing
+ * (`showReadOnlyFileNotice`). Returns whether the file is read-only; any
+ * other reason editing is blocked stays silent here.
  */
 export function notifyIfFileReadOnly(): boolean {
   if (!selectFileReadOnly(useProjectStore.getState())) return false;
-  const ui = useUIStore.getState();
-  const showing = ui.toasts.some((toast) => toast.key === TOAST_KEYS.EDIT_DISABLED && !toast.leaving);
-  if (!showing) ui.showToast(READ_ONLY_FILE_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  showReadOnlyFileNotice();
   return true;
 }
 

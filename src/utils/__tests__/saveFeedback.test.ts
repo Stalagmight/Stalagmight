@@ -66,15 +66,26 @@ describe('surfaceSaveFailure', () => {
     expect(openDialog).toHaveBeenCalledWith('save-conflict', { error });
   });
 
-  it('says a read-only file was made with a newer Stalagmight', () => {
+  // Demo issue N-1: a save of a read-only file is turned away like any edit of
+  // it, so it gets the worded warning toast typing and Ctrl+Z get, once, and
+  // never the "Save Failed ... report it as a bug" dialog. Injection: dropping
+  // the 'read-only-file' branch of surfaceSaveFailure opens the error dialog.
+  it('says a read-only file was made with a newer Stalagmight, as a toast and never the error dialog', () => {
+    useUIStore.getState().clearToast();
     const openDialog = vi.fn();
+    const error = `${READ_ONLY_FILE}: this project was made with a newer Stalagmight`;
 
-    surfaceSaveFailure(`${READ_ONLY_FILE}: this project was made with a newer Stalagmight`, openDialog);
+    surfaceSaveFailure(error, openDialog);
+    surfaceSaveFailure(error, openDialog, { title: 'Detach Failed' });
 
-    const [, data] = openDialog.mock.calls[0] as [string, { message: string }];
-    expect(openDialog.mock.calls[0]?.[0]).toBe('error');
-    expect(data.message).toContain('made with a newer version of Stalagmight');
-    expect(data.message).not.toContain(READ_ONLY_FILE);
+    expect(openDialog).not.toHaveBeenCalled();
+    const toasts = useUIStore.getState().toasts.filter((toast) => toast.key === 'edit-disabled');
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.kind).toBe('warning');
+    expect(toasts[0]?.message).toBe(i18n.t('editGate.readOnlyFileNotice'));
+    expect(toasts[0]?.message).toContain('made with a newer version of Stalagmight');
+    expect(toasts[0]?.message).not.toContain(READ_ONLY_FILE);
+    useUIStore.getState().clearToast();
   });
 
   it('shows the error dialog for a real failure', () => {

@@ -18,6 +18,7 @@ import { quitApp } from './quit';
 import { setProjectActionSource } from './telemetry';
 import { openOrImportFilters, inProjectImportFilters } from './fileDialogs';
 import { useProjectStore } from '../store/projectStore';
+import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
 
 export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit';
 
@@ -40,7 +41,10 @@ export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit
  * purpose: it silently swallowed the keystroke, and it wrongly blocked the
  * now-legal non-mutating routes (.stalx open, import-as-new-project). The
  * additive DMP-into-open-project case is still rejected - by routeOpenedFile's
- * read-only guard, which explains WHICH read-only cause to fix.
+ * read-only guard, which explains WHICH read-only cause to fix. The one
+ * exception is a file made with a newer Stalagmight: nothing can be added to
+ * it whatever is picked, and no switch fixes it, so Ctrl+I says so at once
+ * (the worded read-only notice) instead of opening a picker (demo issue N-1).
  */
 export function runFileShortcutAction(action: FileShortcutAction): void {
   switch (action) {
@@ -55,8 +59,9 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       void pickAndRoute(openOrImportFilters(), 'Open Failed');
       break;
     case 'import_dmp': {
-      setProjectActionSource('keyboard');
       const additive = !!useProjectStore.getState().project;
+      if (additive && notifyIfFileReadOnly()) break;
+      setProjectActionSource('keyboard');
       void pickAndRoute(additive ? inProjectImportFilters() : openOrImportFilters(), 'Import Failed', {
         importDoor: additive,
       });

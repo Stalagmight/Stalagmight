@@ -30,11 +30,17 @@ export interface ProjectFileStatusState {
    *  (`noteLegacyConverted`). Shown as a banner until dismissed. The backend
    *  hands it over once. */
   conversionNotice: ConversionNoticeView | null;
+  /** The file on disk is still the 0.6.0 file the project was opened from:
+   *  no save has converted it yet, so the status bar says so instead of
+   *  "Saved" (demo issue N-6). True for a conversion that raised no notice
+   *  too. A converting save clears it (`noteLegacyConverted`). */
+  legacyFileOnDisk: boolean;
 }
 
 export interface ProjectFileStatusActions {
-  /** Ask the backend for the open file's status: the read-only reason (a peek)
-   *  and the conversion notice (taken once). */
+  /** Ask the backend for the open file's status: the read-only reason and
+   *  whether it is still a 0.6.0 file (peeks), and the conversion notice
+   *  (taken once). */
   checkFileStatus: () => Promise<void>;
   /** Hide the conversion notice for the open project. */
   dismissConversionNotice: () => void;
@@ -49,6 +55,7 @@ export interface ProjectFileStatusActions {
 export const FILE_STATUS_CLEARED = {
   fileReadOnlyReason: null,
   conversionNotice: null,
+  legacyFileOnDisk: false,
 } as const;
 
 /** Last-issued-wins, as for the other post-load checks. */
@@ -84,6 +91,14 @@ export function createProjectFileStatusActions(
         console.error('Failed to read the project read-only reason:', e);
       }
       try {
+        const legacy = await invokeIpc<boolean>('project_file_is_legacy', undefined, {
+          purpose: 'say in the status bar that the file on disk is still the old format',
+        });
+        if (!stale()) set({ legacyFileOnDisk: legacy === true });
+      } catch (e) {
+        console.error('Failed to read whether the project file is the old format:', e);
+      }
+      try {
         // A take: the backend answers it once per open. A second check (React
         // StrictMode runs the effect twice) gets null and must not clear it.
         const notice = await invokeIpc<ConversionNoticeView | null>('take_conversion_notice', undefined, {
@@ -98,6 +113,8 @@ export function createProjectFileStatusActions(
     dismissConversionNotice: () => set({ conversionNotice: null }),
 
     noteLegacyConverted: (file) => {
+      // Either way the open project now lives in a version 2 file.
+      set({ legacyFileOnDisk: false });
       const notice = get().conversionNotice;
       if (notice !== null) {
         set({ conversionNotice: { ...notice, file } });

@@ -10,6 +10,7 @@ import { getErrorMessage, invokeIpc } from './ipc';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
 import { TOAST_KEYS } from './toastKeys';
+import { showReadOnlyFileNotice } from './blockedNotice';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 import type { ToastKind } from '../store/uiStore';
@@ -29,7 +30,10 @@ import type { ToastKind } from '../store/uiStore';
  * Ahead of all three: a file another program changed since it was opened
  * (`EXTERNALLY_MODIFIED`, the `.stalx` v2 guard) opens the save prompt, where the
  * user keeps their version, saves it as a new file, or takes the file's. A
- * read-only file (made with a newer Stalagmight) gets the error dialog, reworded.
+ * read-only file (made with a newer Stalagmight) is not an error either: the
+ * save was turned away, as every edit of that file is, so it gets the same
+ * worded warning toast as a typed key or Ctrl+Z, never the error dialog and
+ * its "report it as a bug" footer (demo issue N-1).
  *
  * `title` overrides the dialog title (e.g. "Detach Failed") without leaving the
  * router.
@@ -53,6 +57,10 @@ export function surfaceSaveFailure(
   if (!error) return;
   // Already surfaced by `saveProject` through the folder-access guidance dialog.
   if (kind === 'permission') return;
+  if (kind === 'read-only-file') {
+    showReadOnlyFileNotice();
+    return;
+  }
   openDialog('error', {
     message: saveFailureMessage(kind, error),
     title: opts?.title ?? i18n.t('dialogs.saveFailure.title'),

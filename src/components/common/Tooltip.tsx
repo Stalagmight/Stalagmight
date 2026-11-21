@@ -39,6 +39,9 @@ interface TooltipProps {
   open?: boolean | undefined;
   /** Fires whenever hover would open or close the bubble. */
   onHoverChange?: (hovered: boolean) => void;
+  /** ARIA role of the wrapper around the trigger: `none` where the trigger is
+   *  a menu's row, so the menu still owns its items directly. */
+  role?: 'none';
 }
 
 /**
@@ -59,6 +62,7 @@ export function Tooltip({
   closeDelayMs = 0,
   open,
   onHoverChange,
+  role,
 }: TooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
@@ -179,6 +183,7 @@ export function Tooltip({
   return (
     <span
       ref={triggerRef}
+      role={role}
       className={`inline-flex min-w-0 ${className}`}
       onMouseEnter={() => scheduleHover(true)}
       onMouseLeave={() => scheduleHover(false)}

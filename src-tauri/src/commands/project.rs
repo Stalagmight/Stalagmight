@@ -111,6 +111,14 @@ pub fn project_read_only_reason(state: State<'_, AppState>) -> Option<String> {
     state.read_only_reason()
 }
 
+/// Whether the open project's file on disk is still a 0.6.0 file: opened
+/// from one and not saved yet (the first save converts it, plan 7.2.10). A
+/// peek: the status bar says so instead of "Saved" until a save lands.
+#[tauri::command]
+pub fn project_file_is_legacy(state: State<'_, AppState>) -> bool {
+    state.file_is_legacy()
+}
+
 /// What a close does with a held SpeleoDB write lock - the exit prompt's three
 /// answers, plus the silent default for a project with nothing un-uploaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

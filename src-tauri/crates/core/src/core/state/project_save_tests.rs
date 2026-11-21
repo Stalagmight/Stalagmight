@@ -902,6 +902,64 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     );
 }
 
+/// Demo issue N-6: a 0.6.0 file whose conversion changed nothing a line shows
+/// raises no notice, yet the file on disk stays the 0.6.0 file until a save
+/// writes the open project; the status bar reads `file_is_legacy` so it never
+/// says "Saved" before that. A save to the file's own path ends it, and so
+/// does a Save As elsewhere (the open project then lives in the new file),
+/// which leaves the 0.6.0 file as it was.
+#[test]
+fn the_file_is_legacy_until_a_save_writes_the_open_project() {
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let stem = format!("legacy-status-{}", uuid::Uuid::new_v4());
+    let open = |path: &Path| {
+        let state = AppState::new().unwrap();
+        let opened = state.execute(Command::OpenProject {
+            path: path.to_path_buf(),
+        });
+        assert!(opened.success, "{:?}", opened.error);
+        state
+    };
+
+    let path = dir.path().join(format!("{stem}.stalx"));
+    write_legacy_unchanged(&path);
+    let state = open(&path);
+    assert_eq!(state.take_conversion_notice(), None, "a silent conversion");
+    assert!(state.file_is_legacy(), "still the 0.6.0 file on disk");
+    assert!(!state.has_unsaved_changes());
+    let saved = state.execute(Command::SaveProject { path: None });
+    assert!(saved.success, "{:?}", saved.error);
+    assert!(!state.file_is_legacy(), "the save converted it");
+    assert!(!open(&path).file_is_legacy(), "a version 2 file never is");
+
+    let old = dir.path().join(format!("{stem}-old.stalx"));
+    write_legacy_unchanged(&old);
+    let state = open(&old);
+    assert!(state.file_is_legacy());
+    let saved = state.execute(Command::SaveProject {
+        path: Some(dir.path().join(format!("{stem}-new.stalx"))),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    assert!(
+        !state.file_is_legacy(),
+        "the open project is in the new file"
+    );
+    assert_eq!(
+        stalx_v2::sniff(&std::fs::read(&old).unwrap()),
+        Format::Legacy,
+        "the 0.6.0 file is left as it was"
+    );
+
+    if let Some(folder) = super::project_io::upgrade_backup_dir() {
+        for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&stem) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 /// Review finding UX-1: a conversion that moved nothing still says what each
 /// line now shows differently: the two members' comments are one station's
 /// comment now. C's start keeps its own name (I-3), so no name is listed.

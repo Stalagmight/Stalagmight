@@ -34,6 +34,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Side panels stack their actions as full-width buttons (the home screen's project details, the shot details, the SpeleoDB tab), at the size the panel uses for all of them.
 - A button that opens the browser carries `ExternalLinkIcon` as its `icon`.
 - A disabled button says why in its tooltip (`title`).
+- A menu row a read-only state turns off says why with `disabledReason` (`AppMenu`) or `reason` (`ContextMenu`): the row is `aria-disabled`, the app's `Tooltip` shows the reason on hover, and a click shows it as the blocked-edit notice. Not a native `title`: WebKitGTK drew none on a disabled row, and a `disabled` row gets no click to answer.
 - Labels and confirmations explain the action independently of colour.
 - Use `icon` on `Button` for leading icons. When the same kind of action appears in the menus, give its icon the menus' colour with `iconColor` and `MENU_ICON_COLORS` (`src/components/common/menuColors.ts`), so an action wears one colour everywhere: the SpeleoDB tab's Save Changes is the menus' Save, Resume editing is Import, opening a page on the SpeleoDB website is Project Details, Reload Project is Open, Close Project is Close, and Switch to Read Only Mode is the neutral grey. `Button` applies the tint on `secondary` and `ghost` only; a filled `primary` or `danger` button keeps its own text colour on the icon.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.

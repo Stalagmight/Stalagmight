@@ -115,4 +115,27 @@ describe('runFileShortcutAction - Ctrl+O vs Ctrl+I (#508)', () => {
     runFileShortcutAction('import_dmp');
     expect(pickAndRouteMock).toHaveBeenCalledWith(inProjectImportFilters(), 'Import Failed', { importDoor: true });
   });
+
+  // Demo issue N-1: the one block no switch or lock fixes is a file made with a
+  // newer Stalagmight. Nothing can be added to it whatever is picked, so Ctrl+I
+  // says so at once with the worded read-only notice (the menu row is off for
+  // the same reason) instead of a picker whose every answer is refused.
+  // Injection: dropping the read-only check in runFileShortcutAction opens it.
+  it('import_dmp into a file made with a newer Stalagmight says why instead of opening the picker', () => {
+    useUIStore.getState().clearToast();
+    useProjectStore.setState({ fileReadOnlyReason: 'requires zz-future' } as never);
+    try {
+      runFileShortcutAction('import_dmp');
+      expect(pickAndRouteMock).not.toHaveBeenCalled();
+      const notice = useUIStore.getState().toasts.filter((toast) => toast.key === 'edit-disabled');
+      expect(notice).toHaveLength(1);
+      expect(notice[0]?.message).toContain('made with a newer version of Stalagmight');
+      // Ctrl+O still opens anything (opening is not an import).
+      runFileShortcutAction('open_file');
+      expect(pickAndRouteMock).toHaveBeenCalledWith(openOrImportFilters(), 'Open Failed');
+    } finally {
+      useProjectStore.setState({ fileReadOnlyReason: null } as never);
+      useUIStore.getState().clearToast();
+    }
+  });
 });

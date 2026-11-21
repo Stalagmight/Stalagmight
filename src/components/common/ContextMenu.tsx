@@ -21,6 +21,7 @@ import { setSource, trackContextMenuAction, trackDialogComplete } from '../../ut
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
 import { ChevronRightIcon } from './icons';
+import { showBlockedNotice } from '../../utils/blockedNotice';
 import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
 import { CAVE_SECTION_VIEW_LABEL_KEYS, caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
 
@@ -62,7 +63,8 @@ interface ContextMenuItem {
   /** Why the item is disabled, shown as its tooltip. */
   hint?: string | undefined;
   /** Why a read-only view or file disabled the item: its tooltip only (no
-   *  second line, which every row of the menu would then carry). */
+   *  second line, which every row of the menu would then carry), and a click
+   *  on the row shows it as the blocked-edit notice. */
   reason?: string | undefined;
   danger?: boolean;
   separator?: boolean;
@@ -1063,8 +1065,13 @@ export default function ContextMenu() {
               key={index}
               data-testid={`context-menu-item-${index}`}
               onClick={(e) => {
+                // A row the read-only gate turned off stays clickable so it can
+                // say why (`reason`, demo finding N-12): the notice, never the action.
+                if (item.disabled) {
+                  if (item.reason !== undefined) showBlockedNotice(item.reason);
+                  return;
+                }
                 if (hasSubmenu) {
-                  if (item.disabled) return;
                   if (expanded) setSubmenuPath([]);
                   else openSubmenuFrom(e.currentTarget);
                   return;
@@ -1082,8 +1089,9 @@ export default function ContextMenu() {
               aria-haspopup={hasSubmenu ? 'menu' : undefined}
               aria-expanded={hasSubmenu ? expanded : undefined}
               disabled={item.disabled}
-              title={item.hint ?? item.reason}
+              title={item.hint}
               hint={item.hint}
+              reason={item.disabled ? item.reason : undefined}
               label={item.label}
               icon={item.icon}
               showIcons={showIcons}
