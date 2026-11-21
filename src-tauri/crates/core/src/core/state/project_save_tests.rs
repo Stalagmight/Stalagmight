@@ -941,7 +941,10 @@ fn the_file_is_legacy_until_a_save_writes_the_open_project() {
         path: Some(dir.path().join(format!("{stem}-new.stalx"))),
     });
     assert!(saved.success, "{:?}", saved.error);
-    assert!(!state.file_is_legacy(), "the open project is in the new file");
+    assert!(
+        !state.file_is_legacy(),
+        "the open project is in the new file"
+    );
     assert_eq!(
         stalx_v2::sniff(&std::fs::read(&old).unwrap()),
         Format::Legacy,
