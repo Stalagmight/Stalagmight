@@ -1943,7 +1943,14 @@ hub of three or more lines only the chosen line leaves.
    position-aware: an edge shot gets "Are you sure you want to delete this
    shot?" and is deleted without splitting; a mid-line shot opens the Delete
    Shot dialog offering [Split Line] or [Shift Geometry]; the last remaining
-   shot removes the whole line
+   shot removes the whole line. Shift Geometry is not offered, and the dialog
+   says why, when the shot is in a loop ("This shot is part of a loop") or the
+   two sides reach different zero datums ("Both sides are anchored to a zero
+   datum."); a shot in a loop gives only the loop reason, even when both
+   sides reach the one datum through it. A range whose two sides reach one
+   datum through a loop closure says "Both sides are tied to the same zero
+   datum through a loop closure." (demo finding I-8; 0.6.0 said "Both sides
+   are anchored" in each case)
 3. On Split Line, the line splits into two, named "<line> A" and
    "<line> B" by default, each made unique against the other lines (both
    editable; an empty name, another line's name or the two names equal is

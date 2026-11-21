@@ -480,6 +480,11 @@ impl Project {
     /// a mid-line shot closes a gap; it is blocked when its two ends are still
     /// connected without it (over shots, junctions and closures: a loop), or
     /// both sides reach a placement datum without it.
+    ///
+    /// The reasons name what blocks it. "Both sides are anchored" is listed
+    /// only when the two sides reach different datums: in a loop both sides
+    /// reach the same one, which the loop reason already covers (0.6.0 listed
+    /// both; demo finding I-8). The verdict is 0.6.0's either way.
     pub(super) fn delete_shift_blocked_reasons(&self, line: LineId, index: usize) -> Vec<String> {
         let Some(l) = self.line(line) else {
             return Vec::new();
@@ -494,15 +499,15 @@ impl Project {
         let excluded = |l2: LineId, i: usize| l2 == line && i == index;
         let mut reasons = Vec::new();
         let sides = self.reach_without_shots(&[before, after], &excluded, true);
-        if sides[0].contains(&after) {
+        let looped = sides[0].contains(&after);
+        if looped {
             reasons.push(
                 "This shot is part of a loop (the two sides are already connected).".to_string(),
             );
         }
         let placement_stations = self.placement_datum_stations();
-        let held = |side: &BTreeSet<StationId>| placement_stations.iter().any(|s| side.contains(s));
-        if held(&sides[0]) && held(&sides[1]) {
-            reasons.push("Both sides are anchored to a zero datum.".to_string());
+        if let Some(reason) = anchored_sides_reason(&placement_stations, &sides, looped) {
+            reasons.push(reason.to_string());
         }
         reasons
     }
@@ -740,5 +745,42 @@ impl Project {
             head_data,
             tail_updates,
         })
+    }
+}
+
+/// The shift-blocked reason for two sides that each reach a placement datum.
+pub(super) const ANCHORED_SIDES: &str = "Both sides are anchored to a zero datum.";
+
+/// The shift-blocked reason for two sides a loop closure ties to the same
+/// placement datum (a range delete, whose loop walk leaves closures out).
+pub(super) const TIED_TO_ONE_DATUM: &str =
+    "Both sides are tied to the same zero datum through a loop closure.";
+
+/// The datum reason of a gap-close's shift verdict, for `sides` (the
+/// stations each side of the gap reaches) and the placement datum stations
+/// `held`: `None` unless each side reaches one. Sides that reach different
+/// datums are [`ANCHORED_SIDES`]. Sides that reach the same ones are
+/// connected: when the loop reason is listed (`looped`) it already says so
+/// and nothing is added, else the connection is a loop closure the loop walk
+/// left out, [`TIED_TO_ONE_DATUM`]. 0.6.0 said "Both sides are anchored" in
+/// all three cases, which read as two datums where there was one (demo
+/// finding I-8); whether the shift is blocked is unchanged.
+pub(super) fn anchored_sides_reason(
+    held: &[StationId],
+    sides: &[BTreeSet<StationId>],
+    looped: bool,
+) -> Option<&'static str> {
+    let reached = |side: &BTreeSet<StationId>| -> BTreeSet<StationId> {
+        held.iter().copied().filter(|s| side.contains(s)).collect()
+    };
+    let (first, second) = (reached(sides.first()?), reached(sides.get(1)?));
+    if first.is_empty() || second.is_empty() {
+        None
+    } else if first != second {
+        Some(ANCHORED_SIDES)
+    } else if looped {
+        None
+    } else {
+        Some(TIED_TO_ONE_DATUM)
     }
 }
