@@ -313,10 +313,16 @@ The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
   prompt then says the file was moved or deleted), nor for a file that
   appeared where a first save goes (`FILE_EXISTS`; opening it would put a
   stranger's file in the project's place, and the prompt says "A file named
-  ... appeared at this location"). Before it closes the
-  session it asks `project_file_reload_refusal`, which reads and decodes the
-  file as an open would and changes nothing: a file that would not open
-  keeps the session, and the unsaved changes, with the reason shown;
+  ... appeared at this location"). It is ONE backend operation
+  (`reload_project_full_binary`, `AppState::do_reload_project_full`, through
+  `loadProject(path, { reload: true })`): the file is read and decoded (or
+  converted) once, as a load reads it, and replaces the session only when it
+  opened, in the load's own commit, which also refuses when the session moved
+  during the read. Nothing is closed first, so a file that would not open
+  keeps the session and the unsaved changes, with the reason shown in the
+  prompt. (It used to check the file, close the session, then load it: a
+  sync client writing the file between those reads, or a load the frontend
+  turned away after the close, lost the edits);
 - **Decide later**: keep editing.
 
 A SpeleoDB-managed copy gets only Keep my version: its reload belongs to the

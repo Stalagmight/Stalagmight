@@ -1834,7 +1834,6 @@ pub fn run() {
             commands::project::has_unsaved_changes,
             commands::project::project_read_only_reason,
             commands::project::project_file_is_legacy,
-            commands::project::project_file_reload_refusal,
             commands::project::close_project,
             commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
@@ -1852,6 +1851,7 @@ pub fn run() {
             commands::project::merge_projects,
             commands::project::load_project_full,
             commands::project::load_project_full_binary,
+            commands::project::reload_project_full_binary,
             commands::project::create_project_full,
             commands::project::cancel_loading,
             // SpeleoDB commands (read-only spike, #183)

@@ -143,7 +143,7 @@ const FILE_STATUS_COMMANDS: [&str; 6] = [
     "has_unsaved_changes",
     "project_read_only_reason",
     "project_file_is_legacy",
-    "project_file_reload_refusal",
+    "reload_project_full_binary",
 ];
 
 /// Every `.ts` / `.tsx` file under `dir` that is not a test.
@@ -235,15 +235,29 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     )
     .unwrap();
 
+    /// The reload's progress events go nowhere here.
+    struct NullSink;
+    impl crate::core::events::EventSink for NullSink {
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+        fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            false
+        }
+    }
+
     let app = tauri::test::mock_app();
     app.manage(AppState::new().unwrap());
     let state = || app.state::<AppState>();
-    let reload_refusal = || {
-        tauri::async_runtime::block_on(project::project_file_reload_refusal(app.handle().clone()))
+    state().set_event_sink(std::sync::Arc::new(NullSink));
+    // "Use the file's version": `Err` keeps the session; `Ok` replaced it.
+    let reload = || {
+        tauri::async_runtime::block_on(project::reload_project_full_binary(app.handle().clone()))
+            .map(|_| ())
+            .map_err(|e| e.message)
     };
 
     // Nothing open: nothing to say, and nothing to reopen.
-    assert!(reload_refusal().is_some());
+    assert!(reload().is_err());
     assert!(!project::has_unsaved_changes(state()));
     assert_eq!(project::take_conversion_notice(state()), None);
     assert_eq!(project::project_read_only_reason(state()), None);
@@ -278,18 +292,17 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
     assert!(!refused.success);
     let error = refused.error.unwrap_or_default();
     assert!(error.starts_with(EXTERNALLY_MODIFIED_CODE), "{error}");
-    // Changed, not gone: the prompt may offer the file's version, which opens.
+    // Changed, not gone: the prompt may offer the file's version.
     assert!(
         !error.contains(FILE_MISSING_MARKER),
         "a changed file is not a missing one: {error}"
     );
-    assert_eq!(reload_refusal(), None);
     assert!(project::has_unsaved_changes(state()));
 
     // Moved away: the refusal says the file is gone (the prompt then offers
-    // no reopen), and the reopen check refuses before any close. Injection:
-    // dropping the marker from `guard_refusal`, or answering `None` from the
-    // check, fails here.
+    // no reopen), and a reload refuses with the session and its edits kept.
+    // Injection: dropping the marker from `guard_refusal`, or closing the
+    // session before the reload reads the file, fails here.
     let moved = dir.path().join("moved.stalx");
     std::fs::rename(&path, &moved).unwrap();
     let refused = project::save_project(state(), None, None);
@@ -301,17 +314,37 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
         "{error}"
     );
     assert!(error.contains("moved or deleted"), "{error}");
-    assert!(reload_refusal().is_some());
+    assert!(reload().is_err());
     assert!(project::has_unsaved_changes(state()), "the edits are kept");
     // Something that is not a project in its place: still no reopen.
     std::fs::write(&path, b"not a project").unwrap();
-    assert!(reload_refusal().is_some());
+    assert!(reload().is_err());
+    assert!(project::has_unsaved_changes(state()), "the edits are kept");
     std::fs::rename(&moved, &path).unwrap();
-    assert_eq!(reload_refusal(), None);
     let overwritten = project::save_project_overwriting(state(), None);
     assert!(overwritten.success, "{:?}", overwritten.error);
     assert!(!project::has_unsaved_changes(state()));
     assert_ne!(std::fs::read_to_string(&path).unwrap(), theirs);
+
+    // "Use the file's version" over a file another program changed: the
+    // session is the file's now, its edits dropped as the user chose, and
+    // the save guard follows the file.
+    let edited = state().execute(Command::UpdateShot {
+        line_id: line,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(6.0),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    let theirs = format!("{}\n", std::fs::read_to_string(&path).unwrap());
+    std::fs::write(&path, &theirs).unwrap();
+    reload().unwrap();
+    assert!(!project::has_unsaved_changes(state()));
+    let length = state().get_project_state().unwrap().lines()[0].shots[0].length;
+    assert!((length - 5.0).abs() < 1e-9, "the file's version: {length}");
+    assert!(project::save_project(state(), None, None).success);
 
     // A file made with a newer Stalagmight: the banner's reason, and no save.
     let text = std::fs::read_to_string(&path).unwrap();

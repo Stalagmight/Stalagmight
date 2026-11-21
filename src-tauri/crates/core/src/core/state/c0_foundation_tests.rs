@@ -342,6 +342,92 @@ fn a_first_save_that_found_a_file_at_its_path_says_so() {
     );
 }
 
+/// Pre-PR delta review finding 2: "Use the file's version" checked that the
+/// file opens (`project_file_reload_refusal`), closed the session, then loaded
+/// the file: three reads a sync client could write between, and a load the
+/// frontend could still refuse after the close had dropped the edits. It is
+/// one backend operation now (`do_reload_project_full`): the file is read and
+/// decoded once, and only a read that opened replaces the session. A load
+/// that fails keeps the session and its edits. Injection: closing the session
+/// before the read (the old order) drops the edits on the failed reloads.
+#[test]
+fn use_the_files_version_replaces_the_session_only_with_a_read_that_opened() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let state = open(&path);
+    state.set_event_sink(std::sync::Arc::new(super::robustness_kit::NullSink));
+    assert!(set_length(&state, 11.25).success);
+    let length = |state: &AppState| project_of(state).lines()[0].shots[0].length;
+
+    // Not a project any more, or gone: refused, the edits are kept.
+    let ours = std::fs::read(&path).unwrap();
+    std::fs::write(&path, b"not a project").unwrap();
+    let refused = state.do_reload_project_full().err().unwrap();
+    assert_eq!(refused.code, "CORRUPT", "{refused:?}");
+    assert!(state.has_unsaved_changes());
+    assert_eq!(length(&state), 11.25);
+    std::fs::remove_file(&path).unwrap();
+    let refused = state.do_reload_project_full().err().unwrap();
+    assert_eq!(refused.code, "NOT_FOUND", "{refused:?}");
+    assert!(state.has_unsaved_changes());
+    assert_eq!(length(&state), 11.25);
+
+    // Another program's version: it replaces the session, the edits go (as
+    // the user chose), and the save guard is on the file's bytes.
+    let mut theirs = survey();
+    let (line_id, shot_id) = first_shot(&theirs);
+    theirs
+        .update_shot(
+            line_id,
+            shot_id,
+            &ShotUpdates {
+                length: Some(7.5),
+                ..ShotUpdates::default()
+            },
+        )
+        .unwrap();
+    let theirs_path = write_v2(dir.path(), &theirs, &Extras::default());
+    assert_eq!(theirs_path, path);
+    assert_ne!(std::fs::read(&path).unwrap(), ours);
+    let reloaded = state.do_reload_project_full().ok().unwrap();
+    assert_eq!(reloaded.project.lines[0].shots[0].length, 7.5);
+    assert!(!state.has_unsaved_changes());
+    assert_eq!(length(&state), 7.5);
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+}
+
+/// The reload replaces only the session it was asked for: a read whose
+/// session moved before its commit (another open of the same file landed)
+/// commits nothing, and the reload says so instead of reading again.
+/// Injection: dropping the `replacing` check commits it over the new session.
+#[test]
+fn a_reload_whose_session_moved_before_its_commit_replaces_nothing() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let state = open(&path);
+    let session = state.speleodb_session_generation();
+    let mut opened = state.read_project_file(&path).unwrap();
+    opened.replacing = Some(session);
+
+    // A close and an open of the same file land while the reload reads.
+    assert!(state.close_project().success);
+    assert!(state.execute(Command::OpenProject { path }).success);
+    assert!(set_length(&state, 11.25).success);
+    let revision = state.current_revision();
+
+    let refused = state.commit_opened(opened, super::project_load::IfChanged::ReadAgain);
+    assert_eq!(
+        refused.err(),
+        Some(super::project_load::NotCommitted::SessionMoved)
+    );
+    assert_eq!(state.current_revision(), revision, "nothing was committed");
+    assert!(
+        state.has_unsaved_changes(),
+        "the new session's edit is kept"
+    );
+    assert_eq!(project_of(&state).lines()[0].shots[0].length, 11.25);
+}
+
 #[test]
 fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     let dir = TempDir::new().unwrap();

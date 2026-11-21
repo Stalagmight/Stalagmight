@@ -64,7 +64,7 @@ export interface ImportReceiptProvenance {
   linesFound?: number;
 }
 import type { CreateProjectFullResult } from '../types/loading';
-import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
+import { askAboutUnrecognisedShotKinds } from './unrecognisedShotKinds';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
@@ -226,6 +226,8 @@ export interface LoadProjectOutcome {
    * must not roll anything back on it. Never set together with `success: true`.
    */
   superseded?: boolean;
+  /** Why a reload (`reload: true`, the save prompt's "Use the file's version") replaced nothing: the session and its unsaved changes are as they were. */
+  error?: string;
 }
 
 export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectFileStatusActions, ProjectFileStatusState, ProjectWarningActions, ProjectShotActions, LineStructureActions, CaveSectionActions {
@@ -316,7 +318,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean; reload?: boolean }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -966,7 +968,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // Current same-path requests share decoding and geometry work. Ownership is
   // reserved before preflight; operation IDs protect dispatched loads afterward.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) =>
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean; reload?: boolean }) =>
     runDeduplicatedProjectLoad(path, opts?.request, (request) => {
     const actionSource = peekProjectActionSource();
     let openedRemote = false;
@@ -1008,10 +1010,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Binary IPC: msgpack envelope + typed-array byte buffers for shots
         // and stations. The decoder reconstructs the same shape as the legacy
         // `load_project_full` JSON response so the rest of the load pipeline
-        // doesn't need to change. See utils/loadProjectBinary.ts.
-        const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+        // doesn't need to change. See utils/loadProjectBinary.ts. A reload
+        // (`reload`, the open file read again in place of the session) is
+        // ONE backend operation: only a read that opened replaced the session.
+        const binary = await import('../utils/loadProjectBinary');
         if (!current()) return superseded;
-        const result = await loadProjectFullBinary(path);
+        const result = await (opts?.reload ? binary.reloadProjectFullBinary() : binary.loadProjectFullBinary(path));
         // The await above includes both the Rust handler runtime AND the
         // JS-side msgpack decode + typed-array materialization.
         const tIpcDone = performance.now();
@@ -1031,7 +1035,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // loads. The source is still armed (setView clears it below). Deduped
         // same-path calls returned before the async body ran, so this fires once
         // per actual load.
-        trackCommand('load_project_full', actionSource);
+        trackCommand(opts?.reload ? 'reload_project_full_binary' : 'load_project_full', actionSource);
 
         // Set backend loadingId from result for event correlation
         get().setLoadingProgress({ loadingId: result.loadingId });
@@ -1127,35 +1131,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // every held lock reads as "locked by other").
         void useSpeleoStore.getState().refreshSession();
 
-        // #27: shots whose stored `kind` this build could not read. The backend
-        // already failed them closed to Reference (so nothing routes through a
-        // leg it could not parse) and hands them over exactly once, but that is
-        // a substitution the user never agreed to - ask what they should be.
-        // Staleness-guarded: a user who switched projects before this resolved
-        // must not get a dialog about a file that is no longer open. The list
-        // has already been consumed from the backend, so losing this dialog
-        // loses the prompt for the session, leaving substitutions unreviewed.
-        try {
-          const found = await invokeIpc<UnrecognisedShotKind[]>(
-            'take_unrecognised_shot_kinds',
-            // Scoped to THIS load: a cancelled load runs on to its next
-            // checkpoint, so without the id an abandoned project's shot ids
-            // could be handed to the one actually open.
-            { loadingId: result.loadingId },
-            { purpose: 'resolve unreadable shot kinds' }
-          );
-          const st = get();
-          if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
-            useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
-          }
-        } catch {
-          /* best-effort: the shots are already safely Reference either way */
-        }
+        // #27: ask what the shots with an unreadable stored kind should be,
+        // only while this load's project is still the open one.
+        await askAboutUnrecognisedShotKinds(result.loadingId, () => get().project !== null && get().loading.clientOpId === clientOpId);
 
         return current() ? { success: true } : superseded;
       } catch (e) {
         if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
         const error = parseLoadError(e);
+        // A reload that replaced nothing: the save prompt says why, over the session it kept.
+        if (opts?.reload) {
+          get().resetLoading();
+          clearProjectActionSource();
+          return { success: false, error: error.message };
+        }
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
         if (error.code === 'ALREADY_OPEN') {

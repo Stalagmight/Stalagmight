@@ -10,7 +10,7 @@ import { saveProjectAs } from '../../utils/projectActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { classifySaveError, isFileExistsError, isFileMissingError } from '../../utils/saveErrors';
 import { extractFilename } from '../../utils/path';
-import { getErrorMessage, invokeIpc } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 
 type Choice = 'overwrite' | 'saveAs' | 'reload';
 
@@ -45,10 +45,12 @@ function conflictKey(variant: Variant, key: string): string {
  *   Nor for a FIRST save that found a file at its path (`FILE_EXISTS`): that
  *   file is not this project's, and opening it would put a stranger's file
  *   in the project's place; the prompt says a file appeared at the location.
- *   The answer first asks the backend whether the file opens as it is now
- *   (`project_file_reload_refusal`), and closes the session (dropping the
- *   unsaved changes) only when it does: a reopen that fails after the close
- *   would leave the user with neither version.
+ *   The answer is one backend operation (`reload_project_full_binary`,
+ *   through `loadProject(path, { reload: true })`): the file is read and
+ *   decoded once, and replaces the session (dropping the unsaved changes)
+ *   only when it opened. It used to check the file, close the session, then
+ *   load: a sync client writing the file between those reads, or a load the
+ *   frontend refused after the close, left the user with neither version.
  *
  * "Decide later" keeps editing; autosave stays paused (the autosave banner
  * says why) until a save lands.
@@ -99,26 +101,24 @@ export default function SaveConflictDialog() {
       }
       const path = filePath;
       if (!path) return;
-      // The close below drops the unsaved changes, so it happens only for a
-      // file the reopen will take: gone, unreadable or no longer a project
-      // keeps the session and says why.
-      const refusal = await invokeIpc<string | null>('project_file_reload_refusal', undefined, {
-        purpose: "check the file opens before dropping the unsaved changes for the file's version",
-      });
-      if (refusal) {
-        setError(t('dialogs.saveConflict.reloadRefused', { error: refusal }));
+      // ONE backend operation (`reload_project_full_binary`): the file is read
+      // and decoded, and replaces the session (dropping the unsaved changes,
+      // as the user chose) only when it opened. Nothing is closed first, so a
+      // file that is gone, unreadable or no longer a project, or one a sync
+      // client rewrites meanwhile, keeps the session and its changes.
+      const reloaded = await useProjectStore.getState().loadProject(path, { reload: true });
+      if (reloaded.success || reloaded.superseded) {
+        // The load may have raised a question of its own (an unreadable shot
+        // kind); this prompt only steps aside if it still holds the slot.
+        if (useUIStore.getState().activeDialog === 'save-conflict') finish();
+        else trackDialogComplete('save-conflict');
         return;
       }
-      // The path is the open one, so a plain load would be refused as already
-      // open and change nothing. Close the session first: the user chose to
-      // lose the unsaved changes, and the close drops them without saving.
-      const closed = await useProjectStore.getState().closeProject();
-      if (!closed.success) {
-        setError(t('dialogs.saveConflict.failed', { error: closed.error ?? '' }));
-        return;
-      }
-      finish();
-      await useProjectStore.getState().loadProject(path);
+      setError(
+        reloaded.error
+          ? t('dialogs.saveConflict.reloadRefused', { error: reloaded.error })
+          : t('dialogs.saveConflict.failed', { error: '' }),
+      );
     } catch (e) {
       setError(t('dialogs.saveConflict.failed', { error: getErrorMessage(e, String(e)) }));
     } finally {

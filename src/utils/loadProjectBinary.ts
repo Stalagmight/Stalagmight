@@ -218,11 +218,26 @@ function isAlreadyOpen(e: unknown): boolean {
  * shape `load_project_full` returned. The frontend can swap one call for
  * the other without touching consumers.
  */
-export async function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
+export function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
+  return invokeBinaryLoad(() => invoke<ArrayBuffer>('load_project_full_binary', { path }));
+}
+
+/**
+ * Invoke `reload_project_full_binary` (the save prompt's "Use the file's
+ * version"): the backend reads the open project's own file and replaces the
+ * session with it only when it opens, in one operation, and answers with
+ * the payload a load answers with, decoded the same way. A rejection means
+ * nothing was replaced: the session and its unsaved changes are as they were.
+ */
+export function reloadProjectFullBinary(): Promise<LoadProjectFullResultWithSoa> {
+  return invokeBinaryLoad(() => invoke<ArrayBuffer>('reload_project_full_binary'));
+}
+
+async function invokeBinaryLoad(call: () => Promise<unknown>): Promise<LoadProjectFullResultWithSoa> {
   const tInvoke = performance.now();
   let raw: ArrayBuffer | Uint8Array | unknown;
   try {
-    raw = await invoke<ArrayBuffer>('load_project_full_binary', { path });
+    raw = await call();
   } catch (e) {
     // Still rethrown either way - only the level changes, so the expected
     // short-circuit stops masquerading as a load failure in the debug log.

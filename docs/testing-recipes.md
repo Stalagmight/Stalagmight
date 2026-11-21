@@ -967,14 +967,16 @@ as well as the names:
   required `Station` fields with `id` and `merged_with` taken from the junction.
 - **File status hooks**: `__MOCK_SET_EXTERNALLY_MODIFIED__(true)` makes the next
   saves refuse with `EXTERNALLY_MODIFIED` (`'missing'`: with `FILE_MISSING`, the
-  file moved or deleted, and `project_file_reload_refusal` refuses), `__MOCK_SET_READ_ONLY_REASON__(text)`
+  file moved or deleted, and `reload_project_full_binary` refuses; `'exists'`:
+  with `FILE_EXISTS`, a file where a first save goes), `__MOCK_SET_READ_ONLY_REASON__(text)`
   opens the file read-only, `__MOCK_SET_CONVERSION_NOTICE__(view)` queues a
   conversion notice (a `ConversionNoticeView`), `__MOCK_SET_LEGACY_ORIGIN__(true)`
   makes the next successful save report `legacy_converted` (the converting
   save of a 0.6.0 file), `__MOCK_GET_SAVE_CALLS__()` returns the save calls. The
   mock answers `save_project_overwriting`, `take_conversion_notice`,
   `has_unsaved_changes` (cleared by a save, a close and an open),
-  `project_read_only_reason`, `project_file_reload_refusal`, `resolve_warning`
+  `project_read_only_reason`, `reload_project_full_binary` (the load's
+  payload for the open path; recorded in `__MOCK_EXIT_CALLS__`), `resolve_warning`
   and `unresolve_warning`.
 - The binary load envelope is version 9 (no `line_offsets`).
 
