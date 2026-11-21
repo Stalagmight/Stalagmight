@@ -108,6 +108,7 @@ so the ratios matter more than the milliseconds. "Before" is `lsq.rs` and
 | maze 40 x 40 with unit mistakes (every 40th line's first shot x 1000) | 18,720 | 14.9 | 20.3 | 1.37 |
 | maze 70 x 70 with unit mistakes | 19,320 | 36.6 | 41.6 | 1.14 |
 | 20k gate + 3,000 random closures, unit mistakes | 20,031 | 17.9 | 21.3 | 1.19 |
+| star: 3,000 six-shot lines off the entrance, each closed back onto it (one hub of 6,000 shots) | 18,000 | 10.0 | 11.0 | 1.10 |
 
 At `opt-level = 3` the ratios were 0.89 to 1.23. A maze is a grid of
 junctions joined by passages, each passage into a junction that already exists

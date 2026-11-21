@@ -116,6 +116,34 @@ fn maze(g: usize, l: usize, spacing: f64, seed: u64) -> Project {
     p
 }
 
+/// `n` lines of `l` shots off the entrance, each closed back onto it by a
+/// soft closure: one hub group of `2 n` shots.
+fn star(n: usize, l: usize) -> Project {
+    let mut rng = Rng(77);
+    let mut p = Project::new("Star", None);
+    let mut entrance: Option<(StationId, LineId)> = None;
+    for k in 0..n {
+        let base = (k as f64 * 137.5) % 360.0;
+        let shots: Vec<ShotData> = (0..l)
+            .map(|i| shot(&mut rng, base + 60.0 * i as f64, 4.0, &format!("s{k}-{i}")))
+            .collect();
+        let start = entrance.map_or(StartAt::New, |(s, _)| StartAt::Station(s));
+        let id = p
+            .add_line(meta(format!("S{k}")), start, shots)
+            .expect("a spoke");
+        let stations = p.line_stations(id).expect("a line").to_vec();
+        let (hub, via) = *entrance.get_or_insert((stations[0], id));
+        let end = *stations.last().expect("an end");
+        p.push_closure(end, Some(id), hub, Some(via), ClosureStrategy::Batch);
+    }
+    let (hub, via) = entrance.expect("the entrance");
+    p.push_datum(ZeroDatum {
+        via: Some(via),
+        ..ZeroDatum::new(hub, gps(20.5, -87.25))
+    });
+    p
+}
+
 /// Every closure soft (the size gate's are snaps, which the solve skips).
 fn soft(mut p: Project) -> Project {
     for c in &mut p.closures {
@@ -197,6 +225,7 @@ fn computed_view_bench() {
             "web-20k+3000-unit",
             Box::new(|| unit_mistakes(web(400, 3000, 7))),
         ),
+        ("star-3000x6", Box::new(|| star(3000, 6))),
     ];
     for (name, build) in &cases {
         let p = build();
