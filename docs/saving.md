@@ -294,9 +294,13 @@ or deleted) refuses the save with `EXTERNALLY_MODIFIED: <path> was changed by
 another program since it was opened`; nothing is written and the edits stay in
 memory. A file that is gone (moved or deleted) is refused with
 `EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted by another
-program since it was opened` (`FILE_MISSING_MARKER`, `guard_refusal`). A touch
-or a rewrite with the same bytes is no change. The local-only saves are
-guarded the same way.
+program since it was opened` (`FILE_MISSING_MARKER`, `guard_refusal`). A
+FIRST save (a project whose path was chosen free, `Guard::Absent`) that finds a
+file at that path, at the guard's check or at the hard-link placement, is
+refused with `EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`
+(`FILE_EXISTS_MARKER`): that file is not this project's. A touch or a rewrite
+with the same bytes is no change. The local-only saves are guarded the same
+way.
 
 The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
 
@@ -306,7 +310,10 @@ The frontend asks (`SaveConflictDialog`, a modal: data is at risk):
   and moves the session to the new one;
 - **Use the file's version**: reopen the file as it is now, discarding the
   unsaved changes. Not offered for a file that is gone (`FILE_MISSING`; the
-  prompt then says the file was moved or deleted). Before it closes the
+  prompt then says the file was moved or deleted), nor for a file that
+  appeared where a first save goes (`FILE_EXISTS`; opening it would put a
+  stranger's file in the project's place, and the prompt says "A file named
+  ... appeared at this location"). Before it closes the
   session it asks `project_file_reload_refusal`, which reads and decodes the
   file as an open would and changes nothing: a file that would not open
   keeps the session, and the unsaved changes, with the reason shown;
@@ -556,7 +563,7 @@ mirrors the markers; `saveFeedback.ts` turns them into copy.
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
-| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk (`FILE_MISSING` after it: the file was moved or deleted) | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
+| `EXTERNALLY_MODIFIED` | The guard refused: the file changed on disk (`FILE_MISSING` after it: the file was moved or deleted; `FILE_EXISTS`: a first save found a file at its path) | `SaveConflictDialog` (manual save), the autosave banner (autosave) |
 | `READ_ONLY_FILE` | The file was made with a newer Stalagmight | The read-only notice (warning toast, key `edit-disabled`), never the error dialog |
 | (none) | Everything else - disk full, an invalid survey | Error dialog, backend message verbatim |
 

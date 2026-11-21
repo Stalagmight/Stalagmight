@@ -8,11 +8,24 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { saveProjectAs } from '../../utils/projectActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
-import { classifySaveError, isFileMissingError } from '../../utils/saveErrors';
+import { classifySaveError, isFileExistsError, isFileMissingError } from '../../utils/saveErrors';
 import { extractFilename } from '../../utils/path';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 
 type Choice = 'overwrite' | 'saveAs' | 'reload';
+
+/** What the guard found: the file changed, gone, or a stranger's file where a first save goes. */
+type Variant = 'changed' | 'missing' | 'exists';
+
+function conflictVariant(error: string | null): Variant {
+  if (isFileExistsError(error)) return 'exists';
+  return isFileMissingError(error) ? 'missing' : 'changed';
+}
+
+/** The variant's string under `dialogs.saveConflict` (the changed file's at the top level). */
+function conflictKey(variant: Variant, key: string): string {
+  return variant === 'changed' ? `dialogs.saveConflict.${key}` : `dialogs.saveConflict.${variant}.${key}`;
+}
 
 /**
  * The save prompt for a file another program changed, moved or deleted since
@@ -29,6 +42,9 @@ type Choice = 'overwrite' | 'saveAs' | 'reload';
  *   by the sync, which has its own reload. Not offered for a file that is
  *   GONE either (moved or deleted: the refusal carries `FILE_MISSING`): there
  *   is no file's version, and the prompt says the file was moved or deleted.
+ *   Nor for a FIRST save that found a file at its path (`FILE_EXISTS`): that
+ *   file is not this project's, and opening it would put a stranger's file
+ *   in the project's place; the prompt says a file appeared at the location.
  *   The answer first asks the backend whether the file opens as it is now
  *   (`project_file_reload_refusal`), and closes the session (dropping the
  *   unsaved changes) only when it does: a reopen that fails after the close
@@ -44,9 +60,9 @@ export default function SaveConflictDialog() {
   const filePath = useProjectStore((s) => s.project?.file_path ?? null);
   const linked = useSpeleoStore((s) => s.link !== null);
   // Every opener hands the refusal over (`surfaceSaveFailure`, the SpeleoDB
-  // exit's keep-the-lock save): moved or deleted reads differently, and
-  // offers no reopen.
-  const missing = useUIStore((s) => isFileMissingError(typeof s.dialogData.error === 'string' ? s.dialogData.error : null));
+  // exit's keep-the-lock save): moved or deleted, or a file that appeared
+  // where a first save goes, reads differently and offers no reopen.
+  const variant = useUIStore((s): Variant => conflictVariant(typeof s.dialogData.error === 'string' ? s.dialogData.error : null));
   const [busy, setBusy] = useState<Choice | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -112,7 +128,7 @@ export default function SaveConflictDialog() {
 
   return (
     <DialogWrapper
-      title={t(missing ? 'dialogs.saveConflict.missing.title' : 'dialogs.saveConflict.title')}
+      title={t(conflictKey(variant, 'title'))}
       onClose={closeDialog}
       size="md"
       closeOnBackdropClick={false}
@@ -120,10 +136,10 @@ export default function SaveConflictDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="save-conflict-lead">
-          {t(missing ? 'dialogs.saveConflict.missing.lead' : 'dialogs.saveConflict.lead', { fileName })}
+          {t(conflictKey(variant, 'lead'), { fileName })}
         </p>
         <p className="text-sm text-text-secondary">
-          {t(missing ? 'dialogs.saveConflict.missing.unsaved' : 'dialogs.saveConflict.unsaved')}
+          {t(conflictKey(variant, 'unsaved'))}
         </p>
 
         {error && (
@@ -135,7 +151,7 @@ export default function SaveConflictDialog() {
         <ul className="space-y-2">
           <li className="flex items-start justify-between gap-3">
             <span className="text-sm text-text-secondary pt-1">
-              {t(missing ? 'dialogs.saveConflict.missing.overwriteDetail' : 'dialogs.saveConflict.overwriteDetail')}
+              {t(conflictKey(variant, 'overwriteDetail'))}
             </span>
             <Button
               variant="primary"
@@ -150,14 +166,14 @@ export default function SaveConflictDialog() {
           {!linked && (
             <li className="flex items-start justify-between gap-3">
               <span className="text-sm text-text-secondary pt-1">
-                {t(missing ? 'dialogs.saveConflict.missing.saveAsDetail' : 'dialogs.saveConflict.saveAsDetail')}
+                {t(conflictKey(variant, 'saveAsDetail'))}
               </span>
               <Button onClick={() => void run('saveAs')} disabled={busy !== null} data-testid="save-conflict-save-as">
                 {t('dialogs.saveConflict.saveAs')}
               </Button>
             </li>
           )}
-          {!linked && !missing && filePath && (
+          {!linked && variant === 'changed' && filePath && (
             <li className="flex items-start justify-between gap-3">
               <span className="text-sm text-text-secondary pt-1">{t('dialogs.saveConflict.reloadDetail')}</span>
               <Button variant="danger" onClick={() => void run('reload')} disabled={busy !== null} data-testid="save-conflict-reload">

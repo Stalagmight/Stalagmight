@@ -545,6 +545,8 @@ mod tests_support;
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
 pub use conversion_notice::{ConversionFile, ConversionNoticeView};
-pub use open_file::{EXTERNALLY_MODIFIED_CODE, FILE_MISSING_MARKER, READ_ONLY_FILE_CODE};
+pub use open_file::{
+    EXTERNALLY_MODIFIED_CODE, FILE_EXISTS_MARKER, FILE_MISSING_MARKER, READ_ONLY_FILE_CODE,
+};
 pub use project_io::set_generator;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

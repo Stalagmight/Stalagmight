@@ -1,7 +1,8 @@
 /**
  * The save prompt for a file another program changed (`.stalx` v2, plan 6.5):
  * keep my version (overwrite), save as a new file, or use the file's version;
- * and for one it moved or deleted (`FILE_MISSING`), only the first two.
+ * and for one it moved or deleted (`FILE_MISSING`), or a file that appeared
+ * where a first save goes (`FILE_EXISTS`), only the first two.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -144,6 +145,34 @@ describe('SaveConflictDialog', () => {
     expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
     expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pre-PR delta review finding 5: a FIRST save that found a file at its path
+   * (`FILE_EXISTS` after the guard's code: another program put a file where
+   * the project was to be saved) read as a changed file and offered "Use the
+   * file's version", which would open that stranger's file in the project's
+   * place. It says a file appeared there and offers only Save As and
+   * Overwrite. Injection: deriving the variant without `isFileExistsError`
+   * shows the reload button (and the changed-file wording) here.
+   */
+  it('says a file appeared where a first save goes, and offers no reopen of it', () => {
+    useUIStore.setState({
+      dialogData: { error: 'EXTERNALLY_MODIFIED: FILE_EXISTS: /caves/Main Sump.stalx already exists' },
+    } as never);
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-lead')).toHaveTextContent(
+      'A file named Main Sump.stalx appeared at this location'
+    );
+    expect(screen.getByTestId('save-conflict-lead')).not.toHaveTextContent('Another program changed');
+    expect(screen.getByText('Another file is in the way')).toBeInTheDocument();
+    expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
+    expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(invokeIpc).not.toHaveBeenCalled();
     expect(closeProject).not.toHaveBeenCalled();
     expect(loadProject).not.toHaveBeenCalled();
   });

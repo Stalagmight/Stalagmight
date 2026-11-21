@@ -309,6 +309,39 @@ fn a_save_says_a_moved_or_deleted_file_is_missing() {
     );
 }
 
+/// Pre-PR delta review finding 5: a first save that found a file at its path
+/// (`WriteError::Exists`, from the guard's check or from the hard-link
+/// placement) was coded like a changed file, so the save prompt offered "Use
+/// the file's version", which would open a stranger's file in place of the
+/// project. It carries its own marker now, and never the missing one; a
+/// changed file carries neither. Injection: mapping `Exists` to the plain
+/// `ExternallyModified` again (in `write_error`) fails here.
+#[test]
+fn a_first_save_that_found_a_file_at_its_path_says_so() {
+    use crate::persistence::stalx_v2::WriteError;
+    let path = PathBuf::from("/caves/New cave.stalx");
+    let exists = format!(
+        "{}: {}: ",
+        super::EXTERNALLY_MODIFIED_CODE,
+        super::FILE_EXISTS_MARKER
+    );
+    let error = super::open_file::guard_refusal(&WriteError::Exists { path: path.clone() });
+    assert!(error.starts_with(&exists), "{error}");
+    assert!(error.contains("already exists"), "{error}");
+    assert!(!error.contains(super::FILE_MISSING_MARKER), "{error}");
+
+    let changed = super::open_file::guard_refusal(&WriteError::ExternallyModified {
+        path,
+        found_len: Some(3),
+    });
+    assert!(
+        changed.starts_with(super::EXTERNALLY_MODIFIED_CODE)
+            && !changed.contains(super::FILE_EXISTS_MARKER)
+            && !changed.contains(super::FILE_MISSING_MARKER),
+        "{changed}"
+    );
+}
+
 #[test]
 fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     let dir = TempDir::new().unwrap();

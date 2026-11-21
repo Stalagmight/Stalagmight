@@ -58,10 +58,21 @@ pub const EXTERNALLY_MODIFIED_CODE: &str = "EXTERNALLY_MODIFIED";
 /// close dropped the unsaved changes).
 pub const FILE_MISSING_MARKER: &str = "FILE_MISSING";
 
+/// Marker right after [`EXTERNALLY_MODIFIED_CODE`] when a FIRST save (the
+/// project's path was chosen free) found a file at that path
+/// (`WriteError::Exists`, from the guard's check or from the hard-link
+/// placement): `EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`.
+/// The file there is not this project's at all, so the prompt offers no
+/// "Use the file's version" (it would open a stranger's file in place of the
+/// project) and says that a file appeared at this location (pre-PR delta
+/// review finding 5).
+pub const FILE_EXISTS_MARKER: &str = "FILE_EXISTS";
+
 /// The coded failure of a write the guard refused (`ExternallyModified`,
 /// `Exists`), as every save path sends it to the frontend:
 /// [`EXTERNALLY_MODIFIED_CODE`], then [`FILE_MISSING_MARKER`] when the file
-/// is gone, then the sentence.
+/// is gone or [`FILE_EXISTS_MARKER`] when a first save found one, then the
+/// sentence.
 pub(crate) fn guard_refusal(e: &WriteError) -> String {
     write_error(e).to_string()
 }
@@ -286,6 +297,9 @@ pub(crate) enum LocalSaveError {
     /// The file is gone (moved or deleted): coded with
     /// [`FILE_MISSING_MARKER`] after the guard's code.
     Missing(String),
+    /// A first save found a file at its path: coded with
+    /// [`FILE_EXISTS_MARKER`] after the guard's code.
+    Exists(String),
     Io(String),
     Encode(String),
 }
@@ -295,6 +309,7 @@ impl std::fmt::Display for LocalSaveError {
         match self {
             Self::ExternallyModified(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {m}"),
             Self::Missing(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {FILE_MISSING_MARKER}: {m}"),
+            Self::Exists(m) => write!(f, "{EXTERNALLY_MODIFIED_CODE}: {FILE_EXISTS_MARKER}: {m}"),
             Self::Io(m) | Self::Encode(m) => f.write_str(m),
         }
     }
@@ -342,9 +357,8 @@ pub(super) fn write_error(e: &WriteError) -> LocalSaveError {
         WriteError::ExternallyModified {
             found_len: None, ..
         } => LocalSaveError::Missing(e.to_string()),
-        WriteError::ExternallyModified { .. } | WriteError::Exists { .. } => {
-            LocalSaveError::ExternallyModified(e.to_string())
-        }
+        WriteError::ExternallyModified { .. } => LocalSaveError::ExternallyModified(e.to_string()),
+        WriteError::Exists { .. } => LocalSaveError::Exists(e.to_string()),
         WriteError::Io { .. } => LocalSaveError::Io(e.to_string()),
     }
 }

@@ -22,6 +22,7 @@ import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
 import {
   EXTERNALLY_MODIFIED,
+  FILE_EXISTS,
   FILE_MISSING,
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
@@ -197,6 +198,11 @@ describe('autosaveFailureMessage (#429)', () => {
     expect(missing).toBe(i18n.t('banners.autosave.externallyMissing'));
     expect(missing).toContain('moved or deleted');
     expect(missing).not.toContain(FILE_MISSING);
+    // A file that appeared where a first save goes says so.
+    const exists = autosaveFailureMessage(`${EXTERNALLY_MODIFIED}: ${FILE_EXISTS}: x`);
+    expect(exists).toBe(i18n.t('banners.autosave.externallyExists'));
+    expect(exists).toContain('A different file appeared');
+    expect(exists).not.toContain(FILE_EXISTS);
   });
 
   it('relays an unmarked failure as the backend wrote it', () => {
