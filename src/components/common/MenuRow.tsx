@@ -65,6 +65,11 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
   ref,
 ) {
   const hintId = useId();
+  // A disabled row fades its icon and label (as a disabled `Button` does,
+  // `opacity-50`), so it reads as off at a glance: the muted text colour alone
+  // was hard to tell from an enabled row (demo finding I-10). The hint, which
+  // says why, keeps its full muted colour.
+  const faded = buttonProps.disabled ? ' opacity-50' : '';
   // With a hint, the accessible name stays the label and the hint describes it.
   const hintProps =
     hint === undefined ? {} : { 'aria-label': buttonProps['aria-label'] ?? label, 'aria-describedby': hintId };
@@ -78,7 +83,7 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
     >
       {showIcons && (
         <span
-          className="w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center"
+          className={`w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center${faded}`}
           style={iconStyle}
           aria-hidden="true"
         >
@@ -86,10 +91,10 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
         </span>
       )}
       {hint === undefined ? (
-        <span className="flex-1 truncate">{label}</span>
+        <span className={`flex-1 truncate${faded}`}>{label}</span>
       ) : (
         <span className="flex-1 min-w-0 flex flex-col">
-          <span className="truncate">{label}</span>
+          <span className={`truncate${faded}`}>{label}</span>
           <span
             id={hintId}
             className={`${hintWraps ? MENU_ROW_HINT_WRAP_CLASS : MENU_ROW_HINT_CLASS} text-text-secondary`}

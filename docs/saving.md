@@ -303,7 +303,12 @@ lines, shots, datums, placements, closures, Sections) - opens read-only, with
 the "made with a newer Stalagmight" banner. The backend refuses every edit,
 undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
 `useEditingBlocked` reports it as a project-level block, a refused save is
-worded for it, and autosave pauses. The
+worded for it, and autosave pauses. An edit the frontend turns away before
+any command leaves (a key typed into a data-table cell, F2, Delete on a
+selection) shows the same worded notice as a refused Ctrl+Z
+(`notifyIfFileReadOnly`), once while it is on screen; the disabled menu rows
+are faded and say why on hover; the Ariane export's notice about lines
+without a zero datum does not suggest setting one (demo finding I-10). The
 local-only durable saves still work on it and copy the survey members byte for
 byte; the keys of `local` a newer build wrote and this one does not know are
 written back as read, so a display toggle never erases that build's

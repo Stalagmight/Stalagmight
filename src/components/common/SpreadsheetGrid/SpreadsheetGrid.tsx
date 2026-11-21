@@ -145,6 +145,10 @@ export interface SpreadsheetGridProps<Row> {
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
    *  on read-only/unparseable cells. Let the host surface a notice. */
   onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
+  /** A key meant to edit a cell the grid will not write (typing, F2, a
+   *  double-click, Delete) - for a host whose whole grid is read-only to say
+   *  why instead of swallowing the key. */
+  onLockedEdit?: () => void;
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
@@ -234,7 +238,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onInsertRows, pasteGrowsRows,
     trailingPlaceholderRows = 0,
     onDeleteRows,
-    onPasteReport,
+    onPasteReport, onLockedEdit,
     onRowHover,
     selectedRow,
     hoveredRow,
@@ -663,6 +667,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const col = colAt(colIdx);
       // `noInlineEdit` blocks every way in (double-click, F2, type-to-edit)
       // without touching cellEditable, so paste/fill/clear still write it.
+      if (col && !cellEditable(rowIdx, col)) onLockedEdit?.();
       if (!col || col.noInlineEdit || col.openEditor || !cellEditable(rowIdx, col)) return;
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
@@ -678,7 +683,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       suppressBlurCommitRef.current = false; // a stale flag must not eat this session's blur-commit
       setEditing({ row: rowIdx, colKey: col.key, draft: seed ?? initial, initial });
     },
-    [colAt, cellEditable, rows, locale, isMissing, openCellEditor],
+    [colAt, cellEditable, rows, locale, isMissing, openCellEditor, onLockedEdit],
   );
 
   // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
@@ -1263,7 +1268,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const typeToEdit = () => {
         if (ctrl || e.altKey || !PRINTABLE.test(e.key) || e.nativeEvent.isComposing) return;
         const col = colAt(colIdx);
-        if (!col || !cellEditable(row, col)) return;
+        if (!col || !cellEditable(row, col)) return void (col && onLockedEdit?.());
         // Consumed by the grid, so it must not ALSO fire a host shortcut bound
         // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
         if (col.openEditor) {
@@ -1334,7 +1339,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           // delete-selected-entity shortcut would fire on a plain cell clear.
           e.stopPropagation();
           const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
+          const activeCol = colAt(colIdx);
           if (onDeleteRows && rowSelectIntent.current && fullRows) deleteRowsCollapsing(rect.r0, rect.r1);
+          else if (onLockedEdit && !(activeCol && cellEditable(row, activeCol))) onLockedEdit();
           else doClear();
           return;
         }
@@ -1356,6 +1363,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, deleteRowsCollapsing, colAt, cellEditable,
       rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect, openCellEditor,
+      onLockedEdit,
     ],
   );
 

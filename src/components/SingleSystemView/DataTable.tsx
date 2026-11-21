@@ -4,7 +4,7 @@ import { type Line, type Shot, type ShotData, type Station, type StationRef } fr
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { notifyIfFileReadOnly, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
@@ -1058,6 +1058,7 @@ export default function DataTable({ lines }: DataTableProps) {
    *  longer leaves the rows with their selection gone. */
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number): boolean => {
+      if (editingBlocked) notifyIfFileReadOnly();
       if (!selectedLine || editingBlocked) return false;
       setSource('data-table');
       const inRange = rowEntries
@@ -1777,6 +1778,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}
+                onLockedEdit={notifyIfFileReadOnly}
                 selectedRow={shotScrollToRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
@@ -1812,6 +1814,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
+                onLockedEdit={notifyIfFileReadOnly}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}
                 selectedRow={stationScrollToRow}

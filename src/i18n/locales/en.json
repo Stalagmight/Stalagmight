@@ -1744,6 +1744,9 @@
       "bodyAllUnanchored": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
       "bodyPartial_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
       "bodyPartial_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyAllUnanchoredReadOnly": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
       "listHeading": "Lines without a zero datum connection"
     },
     "about": {

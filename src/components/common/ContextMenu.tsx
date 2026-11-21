@@ -61,6 +61,9 @@ interface ContextMenuItem {
   disabled?: boolean;
   /** Why the item is disabled, shown as its tooltip. */
   hint?: string | undefined;
+  /** Why a read-only view or file disabled the item: its tooltip only (no
+   *  second line, which every row of the menu would then carry). */
+  reason?: string | undefined;
   danger?: boolean;
   separator?: boolean;
 }
@@ -1000,11 +1003,19 @@ export default function ContextMenu() {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly || fileReadOnly;
+    // What the disabled rows say on hover (demo finding I-10: they read as
+    // enabled, and nothing said why). The file wins: leaving the view or
+    // taking a lock would not make it editable.
+    const readOnlyReason = fileReadOnly
+      ? t('editGate.readOnlyFileNotice')
+      : speleoReadOnly
+        ? t('editGate.readOnlyNotice')
+        : t('map.readOnlyPill.resumeRawTitle');
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', ...CAVE_SECTION_VIEW_LABEL_KEYS.map((k) => t(k))]);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
       return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-        ? { ...nested, disabled: true }
+        ? { ...nested, disabled: true, reason: readOnlyReason }
         : nested;
     };
     items = buildMenuItems().map((item) => {
@@ -1071,7 +1082,7 @@ export default function ContextMenu() {
               aria-haspopup={hasSubmenu ? 'menu' : undefined}
               aria-expanded={hasSubmenu ? expanded : undefined}
               disabled={item.disabled}
-              title={item.hint}
+              title={item.hint ?? item.reason}
               hint={item.hint}
               label={item.label}
               icon={item.icon}
