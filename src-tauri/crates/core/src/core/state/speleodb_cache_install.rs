@@ -24,8 +24,8 @@ use crate::models::survey::Project;
 use crate::models::SpeleoLink;
 use crate::persistence::migrate::{LegacyError, LegacyParity, MigrateError};
 use crate::persistence::stalx_v2::{
-    decode, encode, rewrite_local, sniff, DecodeError, DecodeNote, DecodeOptions, Extras,
-    Fingerprint, Format, History, LocalState, Mode,
+    decode, encode, rewrite_local, sniff, DecodeError, DecodeNote, DecodeOptions, EncodeError,
+    Extras, Fingerprint, Format, History, LocalState, Mode,
 };
 use crate::speleodb::SpeleoDbError;
 
@@ -134,17 +134,35 @@ pub(super) struct PreparedDownload {
 
 impl PreparedDownload {
     /// The bytes the cache file gets, with `display` (the outgoing copy's view
-    /// toggles) as its per-machine view.
+    /// toggles) as its per-machine view. Under a clean link the copy IS its
+    /// BASE revision, so the digest of the survey it gets is recorded as BASE's
+    /// (`local.speleodb.base_survey`, S2); a link the install marks un-uploaded
+    /// (a Restore) holds another revision than its BASE and records none.
     pub(super) fn cache_bytes(
         &mut self,
         display: BTreeMap<String, String>,
     ) -> Result<Vec<u8>, SpeleoDbError> {
+        let failed = |e: EncodeError| {
+            SpeleoDbError::Io(format!("could not write the downloaded project: {e}"))
+        };
         self.extras.local.display = display;
+        self.extras.local.speleodb.base_survey = None;
         let bytes = match &self.original {
             Some(original) => rewrite_local(original, &self.extras),
             None => encode(&self.project, &self.extras, Mode::Normal),
+        }
+        .map_err(failed)?;
+        let sync = &self.extras.local.speleodb;
+        if sync.unpushed_edits {
+            return Ok(bytes);
+        }
+        let Some(digest) =
+            super::speleodb_base_survey::base_digest(&bytes, sync.base_commit.as_deref())
+        else {
+            return Ok(bytes);
         };
-        bytes.map_err(|e| SpeleoDbError::Io(format!("could not write the downloaded project: {e}")))
+        self.extras.local.speleodb.base_survey = Some(digest);
+        rewrite_local(&bytes, &self.extras).map_err(failed)
     }
 
     /// The opened project the prepared reload commits, now that its bytes are

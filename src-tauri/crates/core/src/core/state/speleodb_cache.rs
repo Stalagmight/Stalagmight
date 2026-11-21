@@ -43,7 +43,7 @@ use super::open_file::FileState;
 use super::AppState;
 use crate::models::survey::Project;
 use crate::models::SpeleoLink;
-use crate::persistence::stalx_v2::{probe_path, Format};
+use crate::persistence::stalx_v2::Format;
 use crate::speleodb::SpeleoDbError;
 
 /// What a cache file says about itself, read without decoding the survey.
@@ -64,9 +64,11 @@ pub(super) enum CacheFile {
 /// Read the link and the view toggles of the cache file at `path`.
 ///
 /// A version 2 file is read through the header probe (the first bytes only,
-/// plan 6.1). A legacy (SQLite) copy, which an older build left in the cache,
-/// is read like every other link reader reads one (review G-speleodb-6):
-/// read-only, its two tables under the frozen schema guard
+/// plan 6.1; the whole file only for a copy marked un-uploaded whose BASE
+/// survey digest it holds, which reads as clean when its survey is BASE's,
+/// `speleodb_base_survey`). A legacy (SQLite) copy, which an older build left
+/// in the cache, is read like every other link reader reads one (review
+/// G-speleodb-6): read-only, its two tables under the frozen schema guard
 /// (`legacy_link::read_cached_copy`), never the full open. Only a copy that
 /// read cannot answer for - another schema version, whose open would migrate
 /// its view-toggle keys, or a hot journal - goes through the frozen 0.6.0
@@ -75,7 +77,7 @@ pub(super) enum CacheFile {
 /// is rolled back in the copy, which is exactly the committed state a
 /// read-write open would have recovered.
 pub(super) fn read_cache_file(path: &Path) -> CacheFile {
-    let header = match probe_path(path) {
+    let header = match super::speleodb_base_survey::probe_settled(path) {
         Ok(header) => header,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CacheFile::Absent,
         Err(e) => {

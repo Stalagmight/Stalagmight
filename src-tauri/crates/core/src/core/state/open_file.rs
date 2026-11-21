@@ -269,6 +269,10 @@ impl FileState {
             undo_mode: link.undo_mode,
         });
         let sync = &mut self.extras.local.speleodb;
+        if !same_project || sync.base_commit != link.base_commit_sha {
+            // The survey digest describes the BASE it was recorded for (S2).
+            sync.base_survey = None;
+        }
         sync.base_commit.clone_from(&link.base_commit_sha);
         sync.unpushed_edits = link.has_unpushed_edits;
         sync.last_edit_at = parse_time(link.last_edit_at.as_ref());
