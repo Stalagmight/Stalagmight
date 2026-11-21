@@ -407,7 +407,13 @@ SpeleoDB unlink (`persist_local_state_upgrading`) upgrades the file, with the
 survey it holds on disk (migrated again; the session's unsaved edits stay
 unsaved) and the session's local state, the original kept like any other.
 Save as an unmanaged file opens the detached copy right after the unlink, so
-a pending unlink would be lost and the cache copy left linked.
+a pending unlink would be lost and the cache copy left linked. The migration
+runs without the project lock, as an open's does, so other commands are not
+held for the seconds a large file takes; the write happens under the lock
+only if the project is still the one migrated (same file, same session,
+still unconverted, the guard's fingerprint unchanged). A save of ours in
+between makes it start over, as a local-only save of the now converted
+file; another program's change is refused by the write's guard.
 
 Other writes to a closed legacy file upgrade it the same way, with the same
 backup: a Recents rename (`set_project_name_for_path`) and the removal of a

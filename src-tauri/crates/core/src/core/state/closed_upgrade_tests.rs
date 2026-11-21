@@ -379,6 +379,112 @@ fn an_unlink_of_an_open_legacy_copy_is_written_at_once() {
     });
 }
 
+/// The 0.6.0 originals of `path` kept in Recovery.
+fn originals_kept(path: &Path) -> usize {
+    AppState::list_project_backups(path)
+        .into_iter()
+        .filter(|b| b.path.ends_with(".pre-v2.stalx"))
+        .count()
+}
+
+/// Review finding O2 (package U5): the unlink of an open 0.6.0 copy migrates
+/// the file (seconds on a large one) without the `project` guard, which every
+/// command waits on, and commits under it only while the project is the one
+/// it migrated for. A save of the session that lands during the migration
+/// (it upgrades the file with the session's edit) makes the unlink start
+/// over: it is then the local-only rewrite of that version 2 file, never the
+/// stale migration written over the save.
+/// Injection: migrate under the guard again and the first assertion inside
+/// the migration fails; skip the check at the commit and the upgrade is
+/// refused as changed by another program (or, with the guard read at the
+/// commit as before, writes the stale survey over the save).
+#[test]
+fn an_unlink_of_an_open_legacy_copy_migrates_outside_the_project_lock() {
+    use super::stalx_fixtures::{decoded, legacy_linked_project, link_on_disk};
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-unlink-unlocked");
+        let path = legacy_linked_project(&dir.path().join(format!("{stem}.stalx")), Some(&link()));
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path.clone()).success);
+        {
+            let mut project = state.project.lock().unwrap();
+            "Edited".clone_into(&mut project.as_mut().unwrap().name);
+        }
+        state.with_file(|file| file.dirty = true);
+        // What `speleodb_unlink` does before it makes the unlink durable.
+        state.with_file(|file| file.set_speleo_link(None));
+        let adjustment = state.get_config().closure_adjustment;
+
+        let mut migrations = 0;
+        state
+            .persist_local_state_upgrading_with(|at| {
+                migrations += 1;
+                assert!(
+                    state.project.try_lock().is_ok(),
+                    "the migration runs without the project lock"
+                );
+                let migrated = crate::persistence::migrate::migrate_path_for_app(at, &adjustment);
+                // A command that runs meanwhile: the session's save.
+                let saved = state.save_project(None);
+                assert!(saved.success, "{:?}", saved.error);
+                migrated
+            })
+            .unwrap();
+
+        assert_eq!(migrations, 1, "the file was version 2 at the second look");
+        assert!(is_v2(&path));
+        assert_eq!(
+            decoded(&path).project.name,
+            "Edited",
+            "the save's survey, not the migration's"
+        );
+        assert_eq!(link_on_disk(&path), None, "the unlink is written");
+        assert!(!state.has_unsaved_changes());
+        assert_eq!(originals_kept(&path), 1, "the save kept the original once");
+        forget_backups(&stem);
+    });
+}
+
+/// O2's other half: a file another program changes while the unlink's
+/// migration runs is not overwritten. The commit's write checks the file
+/// against the guard, as every save does, and the file stays as the other
+/// program left it. Injection: commit with `Guard::Overwrite` and the
+/// changed file is replaced.
+#[test]
+fn an_unlink_whose_file_another_program_changed_meanwhile_is_refused() {
+    use super::stalx_fixtures::legacy_linked_project;
+
+    crate::app_dirs::init_for_test();
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let stem = unique_stem("legacy-unlink-changed");
+        let path = legacy_linked_project(&dir.path().join(format!("{stem}.stalx")), Some(&link()));
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path.clone()).success);
+        state.with_file(|file| file.set_speleo_link(None));
+        let adjustment = state.get_config().closure_adjustment;
+
+        let mut changed = Vec::new();
+        let refused = state.persist_local_state_upgrading_with(|at| {
+            let migrated = crate::persistence::migrate::migrate_path_for_app(at, &adjustment);
+            let mut bytes = std::fs::read(at).unwrap();
+            bytes.extend_from_slice(&[0; 512]);
+            std::fs::write(at, &bytes).unwrap();
+            changed = bytes;
+            migrated
+        });
+
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), changed, "left as it was");
+        assert!(!is_v2(&path));
+        assert_eq!(originals_kept(&path), 0);
+        forget_backups(&stem);
+    });
+}
+
 /// The save that converts a project opened from a 0.6.0 file says so
 /// (demo issue I-5), so the banner never promises a save that already
 /// happened: `saved` for the save over the file itself (the original kept in

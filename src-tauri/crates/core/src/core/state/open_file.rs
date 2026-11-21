@@ -30,7 +30,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::models::SpeleoLink;
-use crate::persistence::migrate::{LegacyParity, MigratedExtras, MigrationReport};
+use crate::persistence::migrate::{
+    LegacyParity, MigrateError, Migrated, MigratedExtras, MigrationReport,
+};
 use crate::persistence::stalx_v2::{
     write_atomic, Extras, Fingerprint, Guard, History, IgnoredWarning, LocalSync, SpeleoDbLink,
     WriteError,
@@ -49,6 +51,11 @@ pub const EXTERNALLY_MODIFIED_CODE: &str = "EXTERNALLY_MODIFIED";
 /// read-only (an unknown `requires` feature or unknown structural content:
 /// "made with a newer Stalagmight", plan 6.4).
 pub const READ_ONLY_FILE_CODE: &str = "READ_ONLY_FILE";
+
+/// How many times [`AppState::persist_local_state_upgrading`] migrates a
+/// legacy file our own write changed meanwhile; the last migration runs
+/// under the `project` guard, so it is the one written.
+const UPGRADE_ATTEMPTS: usize = 3;
 
 /// Where the open project came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -538,33 +545,94 @@ impl AppState {
     /// with the session's local state, the original kept in Recovery, the
     /// `.plnx` pins rewritten. Anything else is
     /// [`Self::persist_local_state`].
+    ///
+    /// The migration reads the whole file (seconds on a large one), so it
+    /// runs without the `project` guard, which every command waits on, as
+    /// the open's does (review finding O2 of package U5). The commit takes
+    /// the guard and writes only while the project is the one it read for:
+    /// the same path and session, still legacy, the guard's fingerprint
+    /// unchanged. A save, Save As or reload of ours meanwhile makes it start
+    /// over ([`UPGRADE_ATTEMPTS`]); the last attempt migrates under the
+    /// guard. Another program's change is the write's guard's to refuse.
     pub(crate) fn persist_local_state_upgrading(&self) -> Result<(), LocalSaveError> {
-        let guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let path = guard.as_ref().and_then(|p| p.file_path.clone());
-        let legacy = self.with_file(|f| f.origin == FileOrigin::Legacy && f.fingerprint.is_some());
-        let result = match (path, legacy) {
-            (Some(path), true) => self.upgrade_legacy_on_disk(&path),
-            (path, _) => self.persist_local_state_with(path, false, true),
-        };
-        drop(guard);
-        result
+        let adjustment = self.get_config().closure_adjustment;
+        self.persist_local_state_upgrading_with(|path| {
+            crate::persistence::migrate::migrate_path_for_app(path, &adjustment)
+        })
     }
 
-    /// [`Self::persist_local_state_upgrading`]'s upgrade; the caller holds the
-    /// `project` guard.
-    fn upgrade_legacy_on_disk(&self, path: &Path) -> Result<(), LocalSaveError> {
-        let config = self.get_config();
-        let migrated =
-            crate::persistence::migrate::migrate_path_for_app(path, &config.closure_adjustment)
-                .map_err(|e| {
-                    LocalSaveError::Io(format!("could not read {}: {e}", path.display()))
-                })?;
+    /// [`Self::persist_local_state_upgrading`] with the migration given (the
+    /// app's, or a test's that looks at the window it runs in).
+    pub(super) fn persist_local_state_upgrading_with(
+        &self,
+        mut migrate: impl FnMut(&Path) -> Result<Migrated, MigrateError>,
+    ) -> Result<(), LocalSaveError> {
+        let lock = || {
+            self.project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        let mut attempt = 1;
+        loop {
+            let guard = lock();
+            let path = guard.as_ref().and_then(|p| p.file_path.clone());
+            let expected = self.with_file(|f| {
+                if f.origin == FileOrigin::Legacy {
+                    f.fingerprint.clone()
+                } else {
+                    None
+                }
+            });
+            let (Some(path), Some(expected)) = (path.clone(), expected) else {
+                let result = self.persist_local_state_with(path, false, true);
+                drop(guard);
+                return result;
+            };
+            let session = self.speleodb_session_generation();
+            let (guard, migrated) = if attempt < UPGRADE_ATTEMPTS {
+                drop(guard);
+                let migrated = migrate(&path);
+                (lock(), migrated)
+            } else {
+                let migrated = migrate(&path);
+                (guard, migrated)
+            };
+            let unchanged = guard.as_ref().and_then(|p| p.file_path.as_deref())
+                == Some(path.as_path())
+                && self.speleodb_session_generation() == session
+                && self.with_file(|f| {
+                    f.origin == FileOrigin::Legacy && f.fingerprint.as_ref() == Some(&expected)
+                });
+            if !unchanged {
+                drop(guard);
+                tracing::info!(
+                    attempt,
+                    purpose = "make a SpeleoDB unlink durable on a legacy file",
+                    "The project changed while its legacy file was migrated; starting over"
+                );
+                attempt += 1;
+                continue;
+            }
+            let result = migrated
+                .map_err(|e| LocalSaveError::Io(format!("could not read {}: {e}", path.display())))
+                .and_then(|migrated| self.upgrade_legacy_on_disk(&path, &expected, migrated));
+            drop(guard);
+            return result;
+        }
+    }
+
+    /// [`Self::persist_local_state_upgrading`]'s commit of `migrated` (the
+    /// file at `path` as it was when its guard was `expected`); the caller
+    /// holds the `project` guard.
+    fn upgrade_legacy_on_disk(
+        &self,
+        path: &Path,
+        expected: &Fingerprint,
+        migrated: Migrated,
+    ) -> Result<(), LocalSaveError> {
         let mut project = migrated.project;
         if !migrated.extras.validation_stored {
-            project.settings.validation = config.validation;
+            project.settings.validation = self.get_config().validation;
         }
         let parity = migrated.extras.legacy_parity.clone();
         let on_disk = FileState::from_migrated(migrated.extras, None, &migrated.report);
@@ -572,9 +640,6 @@ impl AppState {
             .file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(expected) = file.fingerprint.clone() else {
-            return Ok(());
-        };
         let mut extras = on_disk.extras;
         extras.speleodb.clone_from(&file.extras.speleodb);
         extras.local = file.extras.local.clone();
@@ -585,7 +650,7 @@ impl AppState {
             crate::persistence::stalx_v2::Mode::Normal,
         )
         .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
-        match super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(&expected)) {
+        match super::legacy_upgrade::upgrade(path, &bytes, Guard::Expect(expected)) {
             Ok(fingerprint) => {
                 file.fingerprint = Some(fingerprint);
                 file.origin = FileOrigin::V2;
