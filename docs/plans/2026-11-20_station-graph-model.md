@@ -1294,9 +1294,10 @@ this version's. Labels `RO`...
   (amends the #407/#508 "Import is never disabled" rule for this one cause,
   which no switch or lock fixes): Save, Save As, Save and Close, Import and
   Import from MNemo carry the read-only notice as `disabledReason`. Save and
-  Close of such a file, and Close Project, close without saving or asking
-  (there is nothing of the user's to save; the prompt's Save could only be
-  refused).
+  Close of such a file closes without saving, and, like Close Project, asks
+  nothing: such a file is never dirty (every edit, ignore, import and undo of
+  it is refused, and a display toggle is a local-only save), so nothing of
+  the user's can be unsaved.
 - **RO4. A disabled menu row says why where it renders** (amends I-10). A
   row with a reason (`AppMenuItem.disabledReason`, `ContextMenuItem.reason`)
   is `aria-disabled` instead of `disabled`, shows the reason in the app's

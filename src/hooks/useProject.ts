@@ -67,13 +67,10 @@ export function useProject() {
       setView('global');
       return { success: true };
     }
-    // Check for unsaved changes - use getState() to get current value, not stale closure.
-    // A file made with a newer Stalagmight holds nothing of the user's to save
-    // (every edit and save of it is refused), so it closes without asking: the
-    // prompt's Save could only be refused (demo issue N-1).
-    const { isDirty: currentIsDirty, fileReadOnlyReason } = useProjectStore.getState();
+    // Check for unsaved changes - use getState() to get current value, not stale closure
+    const currentIsDirty = useProjectStore.getState().isDirty;
     debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
-    if (currentIsDirty && fileReadOnlyReason === null) {
+    if (currentIsDirty) {
       // Open styled dialog - the dialog will handle the actual close
       openDialog('unsaved-changes');
       return { success: false, error: 'Showing dialog' };

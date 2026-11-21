@@ -9,12 +9,12 @@
  * version stored) and add nothing to it, so those rows are off, with the
  * read-only notice as their reason (shown on hover, and as the toast a click
  * gives: N-12). Open, Export and Close Project stay. Save and Close, should
- * it run anyway, closes without saving, and so does Close Project with no
- * unsaved-changes prompt (its Save could only be refused).
+ * it run anyway, closes without saving: there is nothing of the user's to
+ * save (every edit, ignore, import and undo of the file is refused, and a
+ * display toggle is a local-only save), and the save could only be refused.
  *
  * Injection: dropping `readOnlyOff` from a row fails the first case; dropping
- * the read-only branch of `saveAndClose` (it saves first) or of
- * `handleCloseProject` (it opens the unsaved-changes prompt) fails the third.
+ * the read-only branch of `saveAndClose` (it saves first) fails the third.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -84,9 +84,7 @@ describe('the project menu in a file made with a newer Stalagmight', () => {
   });
 
   it('Save and Close closes without saving, and asks nothing', async () => {
-    // Dirty on purpose: even a stray unsaved flag must not route the close
-    // through a save (or a prompt whose Save) the backend can only refuse.
-    useProjectStore.setState({ fileReadOnlyReason: 'requires zz-future', isDirty: true });
+    useProjectStore.setState({ fileReadOnlyReason: 'requires zz-future' });
     row(rows(), 'project-menu-save-and-close')?.onClick?.();
     await waitFor(() => expect(closeProject).toHaveBeenCalledTimes(1));
     expect(onSave).not.toHaveBeenCalled();
