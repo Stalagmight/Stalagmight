@@ -91,7 +91,10 @@ modification time and SHA-256: the save guard below), and sniffs it
     the project **read-only** (see [Read-only files](#read-only-files)).
   - A survey that breaks an invariant is refused through the corrupt route
     ("cannot be opened normally"), which offers Attempt Repair (see
-    [SPEC 14.4](SPEC.md#144-file-corruption-recovery)).
+    [SPEC 14.4](SPEC.md#144-file-corruption-recovery)). When the file also
+    requires a feature this build does not know, the feature may be what
+    relaxes the invariant: it gets the "saved by a newer version" refusal
+    (`NEWER_SCHEMA`, `DecodeError::NewerFeatures`) and no repair offer.
   - Each history entry is decoded; if any one fails, the whole history is
     dropped and the history-discarded banner says so (an entry of an earlier
     history version: "written by an earlier version"; anything else: "could
@@ -254,7 +257,9 @@ undo, redo and save of it with `READ_ONLY_FILE: ...`; the frontend's
 `useEditingBlocked` reports it as a project-level block, a refused save is
 worded for it, and autosave pauses. The
 local-only durable saves still work on it and copy the survey members byte for
-byte.
+byte; the keys of `local` a newer build wrote and this one does not know are
+written back as read, so a display toggle never erases that build's
+per-machine or sync state.
 
 ## Upgrading a legacy file
 
@@ -327,8 +332,12 @@ foreign copy's SpeleoDB link (`speleodb_remove_link_at`).
 
 `AppState::persist_local_state` rewrites the open file's `speleodb`, `local`
 and `history` members and copies every other member of the file on disk
-verbatim (`stalx_v2::rewrite_local`), behind the guard. Used at once, so these
-changes are durable without saving the survey:
+verbatim (`stalx_v2::rewrite_local`), behind the guard. It rewrites from the
+bytes the open or the last write of the file kept (`FileState.saved_bytes`,
+used only while their fingerprint is the guard's), so under the `project`
+lock the file is read once, by the guard's check before the rename; without
+kept bytes it reads the file first, checked against the guard, as before.
+Used at once, so these changes are durable without saving the survey:
 
 - every SpeleoDB state change: a push result, the dirty bit of a linked
   project's first edit, a pull install, the Unwind chain and watermark, the

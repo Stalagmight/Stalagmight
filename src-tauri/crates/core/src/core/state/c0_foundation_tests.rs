@@ -287,6 +287,61 @@ fn a_display_setting_is_durable_at_once_and_leaves_the_survey_bytes_alone() {
     assert!(r.success, "{:?}", r.error);
 }
 
+/// A display toggle reads the file once while it holds the project lock:
+/// it rewrites from the bytes the open (or its last write) kept, and only
+/// the guard reads the file, before the rename (review finding
+/// C-file-format-10). A marker planted in the kept copy (same length, same
+/// fingerprint) reaches the file, which a second read would have replaced. Kept bytes whose fingerprint is
+/// not the guard's are never used. Injection: rewriting from
+/// `read_unchanged` again loses the marker.
+#[test]
+fn a_display_toggle_rewrites_from_the_kept_bytes_and_reads_the_file_once() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let state = open(&path);
+    let on_disk = std::fs::read(&path).unwrap();
+    let kept = state.with_file(|f| f.saved_bytes.as_ref().map(|(_, b)| b.to_vec()));
+    assert_eq!(kept.as_deref(), Some(on_disk.as_slice()));
+
+    let marked = String::from_utf8(on_disk.clone()).unwrap().replacen(
+        "\"project\":{\"name\":\"C0\"",
+        "\"project\":{\"name\":\"K0\"",
+        1,
+    );
+    assert_ne!(marked.as_bytes(), on_disk.as_slice());
+    state.with_file(|f| {
+        let (fingerprint, _) = f.saved_bytes.take().unwrap();
+        f.saved_bytes = Some((fingerprint, std::sync::Arc::from(marked.as_bytes())));
+    });
+    state.save_display_setting("showGrid", "true").unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.contains("\"project\":{\"name\":\"K0\""), "{after}");
+    let kept = state.with_file(|f| f.saved_bytes.as_ref().map(|(_, b)| b.to_vec()));
+    assert_eq!(kept.as_deref(), Some(after.as_bytes()), "the write is kept");
+
+    // Kept bytes of another fingerprint are not used: the file is read.
+    state.with_file(|f| {
+        let other = stalx_v2::Fingerprint::of(b"other", None);
+        f.saved_bytes = Some((other, std::sync::Arc::from(&b"other"[..])));
+    });
+    state.save_display_setting("showGrid", "false").unwrap();
+    let decoded = stalx_v2::decode(
+        &std::fs::read(&path).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(decoded.project.name, "K0");
+    assert_eq!(
+        decoded
+            .extras
+            .local
+            .display
+            .get("showGrid")
+            .map(String::as_str),
+        Some("false")
+    );
+}
+
 #[test]
 fn a_file_with_an_unknown_required_feature_opens_read_only() {
     let dir = TempDir::new().unwrap();
@@ -306,6 +361,79 @@ fn a_file_with_an_unknown_required_feature_opens_read_only() {
     let r = state.execute(Command::SaveProject { path: None });
     assert!(!r.success);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), patched);
+}
+
+/// A file that requires an unknown feature and breaks an invariant without it
+/// gets the "saved by a newer Stalagmight" refusal (`NEWER_SCHEMA`, no
+/// repair offer), never the corrupt route (review finding C-file-format-2).
+/// The same file without the feature is still corrupt. Injection: mapping
+/// `DecodeError::NewerFeatures` to `LoadError::corrupt` fails the first
+/// assertion.
+#[test]
+fn a_rule_broken_under_an_unknown_feature_is_refused_as_newer_not_corrupt() {
+    let dir = TempDir::new().unwrap();
+    let path = write_v2(dir.path(), &survey(), &Extras::default());
+    let text = std::fs::read_to_string(&path).unwrap();
+    // A station on no line: an invariant a future feature could relax.
+    let station_counter = "\"counters\":{\"station\":";
+    let at = text.find(station_counter).unwrap() + station_counter.len();
+    let end = at + text[at..].find(',').unwrap();
+    let next: u32 = text[at..end].parse().unwrap();
+    let broken = format!(
+        "{}{}{}",
+        &text[..at],
+        next + 1,
+        &text[end..].replacen(
+            "\n],\n\"lines\":",
+            &format!(",\n[{next},\"Off line\"]\n],\n\"lines\":"),
+            1
+        )
+    );
+    assert!(broken.contains("\"Off line\""));
+    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+
+    std::fs::write(&path, newer.as_bytes()).unwrap();
+    let state = AppState::new().unwrap();
+    let error = state.read_project_file(&path).err().unwrap();
+    assert_eq!(error.code, "NEWER_SCHEMA", "{}", error.message);
+    assert!(
+        error.message.contains("newer version of Stalagmight")
+            && error.message.contains("x-from-the-future"),
+        "{}",
+        error.message
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+
+    std::fs::write(&path, broken.as_bytes()).unwrap();
+    let error = state.read_project_file(&path).err().unwrap();
+    assert_eq!(error.code, "CORRUPT", "{}", error.message);
+}
+
+/// A file whose closure counter is at the format's integer bound opens (its
+/// closure ids are used up), and a new loop closure is refused instead of
+/// leaving a project no save can write (review finding C-file-format-6).
+/// Injection: without the closure bounds in `validate` (the id and the
+/// counter), the closure is created and every later save fails with "above
+/// the largest integer".
+#[test]
+fn a_closure_past_the_id_space_is_refused_and_saves_keep_working() {
+    let dir = TempDir::new().unwrap();
+    let mut p = survey();
+    p.counters.next_closure_id = crate::models::survey::MAX_CLOSURE_ID;
+    let path = write_v2(dir.path(), &p, &Extras::default());
+    let state = open(&path);
+    let main = project_of(&state).lines()[0].id;
+    let branch = project_of(&state).lines()[1].id;
+    let r = state.execute(Command::CreateLoopClosure {
+        station_a: crate::models::StationRef::new(main, 3),
+        station_b: crate::models::StationRef::new(branch, 2),
+        closure_strategy: crate::models::ClosureStrategy::Batch,
+    });
+    assert!(!r.success, "a closure id past the bound was minted");
+    assert!(project_of(&state).closures.is_empty());
+    assert!(set_length(&state, 11.25).success);
+    let r = state.execute(Command::SaveProject { path: None });
+    assert!(r.success, "{:?}", r.error);
 }
 
 #[test]

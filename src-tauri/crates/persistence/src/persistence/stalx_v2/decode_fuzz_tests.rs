@@ -106,6 +106,7 @@ fn class(e: &DecodeError) -> &'static str {
         DecodeError::MissingEnd => "missing-end",
         DecodeError::DuplicateStation { .. } => "duplicate-station",
         DecodeError::Invalid { .. } => "invalid",
+        DecodeError::NewerFeatures { .. } => "newer-features",
     }
 }
 

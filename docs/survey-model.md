@@ -132,14 +132,23 @@ line, empty, overlong or repeated shot uuids), references (line starts,
 shot targets, datum / placement / closure stations, `via` hints, hand-move
 keys, Sections), simple chains, orphan stations, the forest (the shot that
 closes a cycle), one anchor per component, closures (`a != b`; across pieces
-only between two datum-held pieces), station names on every line, counters
-above every id in use (aliases included) and the station and Section
-counters at most 2^31, finite numbers (shots, quality,
+only between two datum-held pieces), station names on every line, Section
+names in the project, counters
+above every id in use (aliases included), the station and Section
+counters at most 2^31 and closure ids and the closure counter within
+`MAX_CLOSURE_ID` (2^53 - 1, the file's integers), finite numbers (shots, quality,
 azimuth corrections, hand moves, datums, placements, elevation, validation
 thresholds). Every `Violation` has a precise `Display` message. The `.stalx`
 v2 encoder and decoder refuse through it; no bound is checked twice.
 
 ## Solver v1 (`positions.rs`)
+
+The file records the solver version (`stalx_v2::SOLVER`). A change to any
+formula below bumps it, and a change that moves anything a user sees (a
+position, a depth, a closure figure, the Computed View) also adds a
+`requires` feature to the files it writes, so an older build opens them
+read-only instead of showing another layout without a word
+([file-format.md](file-format.md) section 3, "The solver rule").
 
 - `frame_datum()`: the first datum whose station is on a line.
 - `placement_datums()`: the first datum of each component (indexed like

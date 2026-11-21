@@ -944,6 +944,7 @@ fn extras_of(migrated: &Migrated) -> Extras {
             last_verify_at: time(link.last_verify_at.as_ref()),
             unwound_from: e.speleo_undo_chain.clone(),
             inherited_through: time(e.speleo_undo_watermark.as_ref()),
+            preserved: Vec::new(),
         };
     }
     extras

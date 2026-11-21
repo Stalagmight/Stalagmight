@@ -132,7 +132,7 @@ impl PreparedDownload {
             ..
         } = self;
         project.file_path = Some(dest);
-        let mut file = FileState::from_v2(extras, fingerprint);
+        let mut file = FileState::from_v2(extras, fingerprint, None);
         file.legacy_parity = legacy_parity;
         file.conversion = conversion;
         let history = file.saved_history.clone();

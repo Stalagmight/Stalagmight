@@ -469,6 +469,7 @@ fn extras_for(p: &Project, rng: &mut Rng, rich: bool) -> Extras {
             last_verify_at: rng.chance(0.5).then(|| instant(rng)),
             unwound_from: rng.chance(0.2).then(|| format!("{:040x}", rng.next())),
             inherited_through: rng.chance(0.3).then(|| instant(rng)),
+            preserved: Vec::new(),
         };
     }
     if rng.chance(0.7) {

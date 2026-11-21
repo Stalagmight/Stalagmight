@@ -6,7 +6,7 @@
 //! model type. Counts are checked as records arrive, so a hostile file cannot
 //! make the reader allocate past a [`CountLimits`] cap.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use crate::models::{
 };
 
 use super::error::DecodeError;
-use super::scan::Key;
+use super::scan::{Key, MAX_SMALL_MEMBERS};
 use super::tokens;
 use super::types::{CountLimits, Limit};
 use super::write::parse_date;
@@ -227,20 +227,35 @@ fn known(keys: &[&str], key: &str) -> Option<usize> {
     keys.iter().position(|k| *k == key)
 }
 
+/// The unknown keys one record object has had so far (for the duplicate
+/// check).
+type OtherKeys = BTreeSet<String>;
+
 /// Skip an unknown key's value, refusing a repeated unknown key.
+///
+/// The value is never held, so the key does not count against the
+/// preserved-content cap ([`Limit::Preserved`], content kept verbatim): a
+/// newer writer that adds one key to every shot opens read-only however
+/// large the survey (review finding C-file-format-1). What is bounded is one
+/// object: at most [`MAX_SMALL_MEMBERS`] unknown keys, the cap every object
+/// read whole has, and the duplicate check is a set lookup, so a flood of
+/// keys is refused quickly and costs no more than its bytes.
 fn skip_unknown<'de, A: MapAccess<'de>>(
     map: &mut A,
     ctx: &mut Ctx<'_>,
-    others: &mut Vec<String>,
+    others: &mut OtherKeys,
     key: &str,
 ) -> Result<(), A::Error> {
-    if others.iter().any(|k| k == key) {
+    if others.contains(key) {
         return Err(ctx.duplicate(key));
     }
-    // Unknown keys count against the preserved-content cap, which also
-    // bounds the duplicate scan above.
-    ctx.count(Limit::Preserved, 1)?;
-    others.push(key.to_string());
+    if others.len() >= MAX_SMALL_MEMBERS {
+        return Err(ctx.fail(DecodeError::TooComplex {
+            limit: Limit::Preserved,
+            max: MAX_SMALL_MEMBERS,
+        }));
+    }
+    others.insert(key.to_string());
     ctx.unknown_key(key);
     map.next_value::<IgnoredAny>()?;
     Ok(())
@@ -346,7 +361,7 @@ impl<'de> Visitor<'de> for StationExtrasSeed<'_, '_> {
         const KEYS: [&str; 3] = ["comment", "aliases", "external"];
         let ctx = self.ctx;
         let mut mask = 0;
-        let mut others = Vec::new();
+        let mut others = OtherKeys::new();
         while let Some(key) = map.next_key::<Key<'de>>()? {
             let key = key.0;
             let Some(index) = known(&KEYS, &key) else {
@@ -551,7 +566,7 @@ fn read_line_header<'de, A: MapAccess<'de>>(
         "hand",
     ];
     let mut mask = 0;
-    let mut others = Vec::new();
+    let mut others = OtherKeys::new();
     let mut id: Option<LineId> = None;
     let mut name = None;
     let mut color: Option<String> = None;
@@ -812,7 +827,7 @@ impl<'de> Visitor<'de> for TailSeed<'_, '_> {
         let ctx = self.ctx;
         let mut extras = RowExtras::default();
         let mut mask = 0;
-        let mut others = Vec::new();
+        let mut others = OtherKeys::new();
         while let Some(key) = map.next_key::<Key<'de>>()? {
             let key = key.0;
             let Some(index) = known(&KEYS, &key) else {
@@ -886,7 +901,7 @@ impl<'de> Visitor<'de> for OptCreditSeed<'_, '_> {
         let ctx = self.ctx;
         let mut credit = SurveyCredit::default();
         let mut mask = 0;
-        let mut others = Vec::new();
+        let mut others = OtherKeys::new();
         while let Some(key) = map.next_key::<Key<'de>>()? {
             let key = key.0;
             let Some(index) = known(&KEYS, &key) else {
@@ -977,7 +992,7 @@ impl<'de> Visitor<'de> for PersonSeed<'_, '_> {
         const KEYS: [&str; 2] = ["name", "email"];
         let ctx = self.ctx;
         let mut mask = 0;
-        let mut others = Vec::new();
+        let mut others = OtherKeys::new();
         let mut name = None;
         let mut email = None;
         while let Some(key) = map.next_key::<Key<'de>>()? {
@@ -1023,7 +1038,7 @@ impl<'de> Visitor<'de> for AzimuthSeed<'_, '_> {
         const KEYS: [&str; 4] = ["north", "correction", "source", "epoch"];
         let ctx = self.ctx;
         let mut mask = 0;
-        let mut others = Vec::new();
+        let mut others = OtherKeys::new();
         let mut north = None;
         let mut correction = 0.0;
         let mut source = None;

@@ -815,6 +815,62 @@ fn a_display_toggle_keeps_a_history_this_build_did_not_load() {
     }
 }
 
+/// A display toggle on a file a newer build saved keeps that build's unknown
+/// per-machine and sync keys (`local`, `local.speleodb`), on a read-only file
+/// and on an editable one, and a real save keeps them too (review finding
+/// H-frontend-wire-2). Injection: dropping an unknown `local` key in
+/// `read_local` again erases both on the first toggle.
+#[test]
+fn a_display_toggle_keeps_a_newer_builds_local_state() {
+    let _config = crate::test_helpers::isolated_config();
+    crate::app_dirs::init_for_test();
+    for read_only in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("newer-local.stalx");
+        let mut extras = Extras::default();
+        extras
+            .local
+            .display
+            .insert("showGrid".to_string(), "true".to_string());
+        extras.local.speleodb.base_commit = Some("ab".repeat(20));
+        write_v2(&path, &survey("Newer local"), &extras);
+        let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        let mut text = text
+            .replacen(
+                "\"local\":{",
+                "\"local\":{\"x-future-local\":{\"keep\":1},",
+                1,
+            )
+            .replacen("\"base\":", "\"x-future-sync\":[2],\"base\":", 1);
+        if read_only {
+            text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+        }
+        assert_eq!(text.matches("x-future-").count(), 2);
+        std::fs::write(&path, &text).unwrap();
+        let state = open(&path);
+        assert_eq!(state.read_only_reason().is_some(), read_only);
+
+        state.save_display_setting("showGrid", "false").unwrap();
+        let after = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert_ne!(after, text, "read_only={read_only}: the toggle was written");
+        assert!(
+            after.contains("\"x-future-local\":{\"keep\":1}")
+                && after.contains("\"x-future-sync\":[2]"),
+            "read_only={read_only}: the newer build's keys survive the toggle:\n{after}"
+        );
+        if !read_only {
+            assert!(set_length(&state, 6.0).success);
+            assert!(state.execute(Command::SaveProject { path: None }).success);
+            let saved = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+            assert!(
+                saved.contains("\"x-future-local\":{\"keep\":1}")
+                    && saved.contains("\"x-future-sync\":[2]"),
+                "and a real save:\n{saved}"
+            );
+        }
+    }
+}
+
 /// Renaming the open project outside the history (Recent Projects, the
 /// SpeleoDB name fold) never wedges undo: an earlier Project Settings rename
 /// and every older entry still undo, and redo, as 0.6.0's snapshot undo did

@@ -261,7 +261,8 @@ pub use stats::SurveyStats;
 pub use topology::{Component, ShotLocation, ShotUuidIndex, Topology};
 pub use types::{
     ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, ProjectSettings,
-    Shot, Station, StationAlias, ZeroDatum, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS,
+    Shot, Station, StationAlias, ZeroDatum, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE,
+    MAX_SHOT_UUID_CHARS,
 };
 pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
 

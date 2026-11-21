@@ -145,6 +145,25 @@ impl LoadError {
         err
     }
 
+    /// The open was refused because the file requires features this build
+    /// does not know, and read without them its survey does not hold
+    /// together (`stalx_v2::DecodeError::NewerFeatures`). The same
+    /// `NEWER_SCHEMA` code as [`Self::newer_schema`], so the frontend shows
+    /// its "saved by a newer Stalagmight" dialog and never the repair offer;
+    /// there are no format versions to name, so `newer_schema` is unset and
+    /// the dialog shows `message`. `path` rides in `details`.
+    pub fn newer_features(file: &str, features: &[String], path: &str) -> Self {
+        Self::with_details(
+            "NEWER_SCHEMA",
+            format!(
+                "\"{file}\" was saved by a newer version of Stalagmight: it uses features \
+                 this version does not know ({}). Update Stalagmight to open it.",
+                features.join(", ")
+            ),
+            path,
+        )
+    }
+
     /// Error when the OS denied filesystem access to the file - e.g. macOS
     /// forgot a previously-granted folder permission after an OS/app update.
     /// The `path` rides in `details` so the frontend can name the file.

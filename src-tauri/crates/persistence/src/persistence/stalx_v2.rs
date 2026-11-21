@@ -13,7 +13,8 @@
 //! - [`decode_salvage`]: best-effort repair of a file that parses but breaks
 //!   the invariants.
 //! - [`probe_bytes`] / [`probe_path`] / [`sniff`]: the cheap header read
-//!   (Recents, the foreign-copy probe, link readers).
+//!   (the foreign-copy probe, link readers), and [`probe_path_listing`] for
+//!   Recents.
 //! - [`rewrite_local`] / [`rename_project`]: rewrite the per-machine members
 //!   (or the project name) while copying every survey member verbatim.
 //! - [`write_atomic`] and [`Fingerprint`]: the durable save and the
@@ -139,6 +140,14 @@ mod format_v2_limits_tests;
 
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_forward_tests;
+
+#[cfg(test)]
+#[expect(
     clippy::panic,
     clippy::print_stderr,
     reason = "fuzz test: a failing seed prints its replay line, a sweep its verdicts"
@@ -150,7 +159,7 @@ pub use decode::{decode, decode_salvage};
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
 pub use error::{DecodeError, EncodeError};
 pub use local::{rename_project, rewrite_local, rewrite_local_keeping_history};
-pub use probe::{probe_bytes, probe_path, sniff, Format, Header, ProjectInfo};
+pub use probe::{probe_bytes, probe_path, probe_path_listing, sniff, Format, Header, ProjectInfo};
 pub use salvage::{Repair, SalvageReport};
 pub use summary::Summary;
 pub use types::{
@@ -198,6 +207,9 @@ pub const CONVENTIONS: [(&str, &str); 8] = [
 /// The largest integer the format holds (2^53 - 1): every JSON reader
 /// represents it exactly.
 pub const MAX_INTEGER: u64 = (1 << 53) - 1;
+
+// The closure id space is the format's integers (validate bounds both).
+const _: () = assert!(crate::models::survey::MAX_CLOSURE_ID == MAX_INTEGER);
 
 /// The deepest nesting accepted in preserved (unknown) content and history
 /// entries. The survey records themselves are at most five levels deep.

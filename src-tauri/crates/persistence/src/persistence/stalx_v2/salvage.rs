@@ -12,6 +12,7 @@ use std::fmt;
 
 use crate::models::survey::{
     ClosureId, ClosureStrategy, CounterKind, LoopClosure, Placement, Project, Station, Violation,
+    MAX_CLOSURE_ID,
 };
 use crate::models::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
@@ -111,6 +112,11 @@ pub enum Repair {
         id: StationId,
         name: String,
     },
+    /// A Section named like an earlier one got the first free `name (n)`.
+    RenamedSection {
+        id: SectionId,
+        name: String,
+    },
     RaisedCounter {
         counter: CounterKind,
         to: u64,
@@ -175,6 +181,7 @@ impl fmt::Display for Repair {
                 write!(f, "placed the piece of station {station} at the origin")
             }
             Self::RenamedStation { id, name } => write!(f, "station {id} is now named {name:?}"),
+            Self::RenamedSection { id, name } => write!(f, "Section {id} is now named {name:?}"),
             Self::RaisedCounter { counter, to } | Self::LoweredCounter { counter, to } => {
                 write!(f, "the next {counter} id is now {to}")
             }
@@ -263,6 +270,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::ClosureSelfLoop { .. }
         | Violation::ClosureAcrossUnplacedPieces { .. } => 3,
         Violation::DuplicateStationName { .. }
+        | Violation::DuplicateSectionName { .. }
         | Violation::CounterNotAbove { .. }
         | Violation::CounterOutOfRange { .. }
         | Violation::NonFinite { .. }
@@ -408,7 +416,15 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                         repairs.push(Repair::DroppedSection { id: section });
                     }
                 }
-                CounterKind::Closure => {}
+                CounterKind::Closure => {
+                    // Past the format's integer bound: no counter above it
+                    // can be written, so the closure goes.
+                    let before = p.closures.len();
+                    p.closures.retain(|c| c.id != *id);
+                    if p.closures.len() < before {
+                        repairs.push(Repair::DroppedClosure { id: *id });
+                    }
+                }
             },
             Violation::AliasCollision { station, alias }
             | Violation::AliasOutOfRange { station, alias } => {
@@ -578,6 +594,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if let Some(name) = p.uniquify_station_name(*second) {
                     repairs.push(Repair::RenamedStation { id: *second, name });
                 }
+            }
+            Violation::DuplicateSectionName { name, second, .. } => {
+                rename_section(p, *second, name, repairs);
             }
             Violation::CounterNotAbove { counter, .. } => raise_counter(p, *counter, repairs),
             Violation::CounterOutOfRange { counter, .. } => lower_counter(p, *counter, repairs),
@@ -766,6 +785,26 @@ fn restore_chain_station(
     });
 }
 
+/// Give Section `id` (named `name`, like an earlier one) the first free
+/// `name (n)`, the suffix Add .stalx gives a colliding name.
+fn rename_section(p: &mut Project, id: SectionId, name: &str, repairs: &mut Vec<Repair>) {
+    let taken: BTreeSet<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
+    // `taken` is finite, so some suffix is free.
+    let mut n = 2u64;
+    let fresh = loop {
+        let candidate = format!("{name} ({n})");
+        if !taken.contains(candidate.as_str()) {
+            break candidate;
+        }
+        n += 1;
+    };
+    let Some(section) = p.sections.iter_mut().find(|s| s.id == id) else {
+        return;
+    };
+    section.name.clone_from(&fresh);
+    repairs.push(Repair::RenamedSection { id, name: fresh });
+}
+
 fn lower_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair>) {
     let to = match counter {
         CounterKind::Station => {
@@ -776,7 +815,11 @@ fn lower_counter(p: &mut Project, counter: CounterKind, repairs: &mut Vec<Repair
             p.counters.next_section_id = MAX_SECTION_ID;
             u64::from(MAX_SECTION_ID)
         }
-        CounterKind::Line | CounterKind::Closure => return,
+        CounterKind::Closure => {
+            p.counters.next_closure_id = MAX_CLOSURE_ID;
+            MAX_CLOSURE_ID
+        }
+        CounterKind::Line => return,
     };
     repairs.push(Repair::LoweredCounter { counter, to });
 }

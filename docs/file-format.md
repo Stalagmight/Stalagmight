@@ -87,7 +87,8 @@ fixed meaning given below; positions in arrays are significant.
 **Integers** (ids, counters, counts, the marker index, the IGRF epoch) are
 written in decimal without a fraction or exponent and are at most
 `9007199254740991` (2^53 - 1), so every JSON reader holds them exactly.
-Station and Section ids are below 2^31; line ids are at most 42948.
+Station and Section ids are below 2^31; line ids are at most 42948; closure
+ids are below 2^53 - 1.
 
 **Strings** are any Unicode text. Stalagmight escapes only what JSON requires:
 `"` as `\"`, `\` as `\\`, and the control characters U+0000 to U+001F (`\b`,
@@ -98,9 +99,11 @@ Readers accept any valid JSON escape.
 **Times** are RFC 3339 strings, written in UTC with nine fractional digits and
 `Z`: `"2025-11-20T12:00:00.123456789Z"`. A reader accepts any RFC 3339 offset.
 Times are clamped into the years 0001 to 9999 and never hold a leap second, so
-every common date library (Python's `datetime.fromisoformat` included) parses
-them. The nanoseconds matter: a dive plan (`.plnx`) is matched to its project
-by the exact creation instant.
+common date libraries parse them. Python's `datetime.fromisoformat` does from
+Python 3.11 on (3.10 refuses the `Z`), but keeps only six fractional digits:
+a script that writes a time back must keep the original string. The
+nanoseconds matter: a dive plan (`.plnx`) is matched to its project by the
+exact creation instant.
 
 **Dates** (survey credit dates) are `"YYYY-MM-DD"` strings, clamped like
 times into 0001-01-01 to 9999-12-31.
@@ -115,16 +118,36 @@ comment.
 | Member | Meaning | A reader... |
 |---|---|---|
 | `version` | The major format version: `2`. | refuses a higher value (made with a newer Stalagmight) and any value below 2. |
-| `solver` | The version of the formulas that derive positions (section 9): `1`. | may derive positions with its own formulas; a different value is informative. |
+| `solver` | The version of the formulas that derive positions (section 9): `1`. | derives positions with its own formulas; a different value alone is informative (below). |
 | `requires` | Names of features a reader must understand to use the file correctly. Sorted, no duplicates. | that meets a name it does not know must not modify the file's survey; Stalagmight opens it read-only. |
 | `conventions` | Units and sign conventions, fixed for version 2 (below). | refuses any other value, a missing key or an extra key. |
 | `generator` | Who wrote the survey, e.g. `"Stalagmight 0.6.0"`. | may show it; nothing depends on it. |
 
 Version 2.0 defines no `requires` features; files written by this version have
 `"requires":[]`. A later writer adds a feature name whenever it stores
-something an older reader would misread (a new meaning, or a member that
-references ids), and bumps `version` only for changes no older reader could
-open at all.
+something an older reader would misread (a new meaning, a member that
+references ids, or a relaxed rule of section 6), and bumps `version` only for
+changes no older reader could open at all. A reader that meets an unknown
+feature reads the rest as far as it can: when the survey it reads then breaks
+a rule of section 6, the feature may be what relaxes the rule, so the file is
+reported as made with a newer Stalagmight, never as damaged (Stalagmight
+refuses it with its "saved by a newer version" message and no repair offer).
+
+**The solver rule.** Positions, depths, closure figures and the other derived
+values are not stored (section 9), so `solver` is the only trace of the
+formulas the author saw them with. A writer bumps it whenever it changes a
+formula. A different value is surfaced to the user only when it changes what
+the user sees, and only the writer can know that: a writer whose formulas
+would make a reader with an older `solver` show the file's survey differently
+(another position, depth or closure figure) must also add a `requires`
+feature, so that reader opens the file read-only with its "made with a newer
+Stalagmight" banner (Stalagmight does). A bump without a feature tells a
+reader that nothing it shows changes (a faster or more exact solve, a fix of
+a case the file does not have); the reader opens the file normally and may
+log the difference. On save a reader writes its own `solver`: the value names
+the formulas that derived what the user saw last. Solver 1 is the first; a
+later Stalagmight that reads a file of an older solver applies the same rule
+from its side, knowing both formulas.
 
 **Conventions** (the object is always exactly this):
 
@@ -171,8 +194,15 @@ reader treats keys it does not know inside the member (section 7).
 | `end` | yes | - | Always `true`. Last member. |
 
 A reader should not depend on the member order (except `format` and `version`
-first). A file without `"end":true` is incomplete and refused, which, with the
-closing brace, makes a truncated file impossible to mistake for a project.
+first). A reader that wants only the header (a project list, a link check)
+may stop at the first survey member (`sections` onwards) once it has met
+every header member it needs; otherwise a member it needs may still follow
+the body. Stalagmight's header read does exactly that: a file it wrote,
+which always puts the header first, is read from its first few kilobytes,
+and a reordered file is read to its end (its project list alone stops at the
+body, so it may list such a file without a link). A file without
+`"end":true` is incomplete and refused, which, with the closing brace, makes
+a truncated file impossible to mistake for a project.
 
 ## 5. Member reference
 
@@ -183,7 +213,9 @@ left out when unset.
 
 A cache so a project list can show a file without parsing the survey. The
 writer always recomputes it; a reader that has parsed the survey must ignore
-it.
+it. A `summary` that is not an object holds nothing: Stalagmight ignores it,
+leaves it out of a local-only rewrite or a rename (section 12), and writes a
+new one on the next save.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -253,7 +285,9 @@ Present when the project is a SpeleoDB-managed copy. It rides every upload.
 ### 5.6 `local`
 
 Per-machine state. Never in an upload, never in a detached copy, and lenient:
-a reader drops what it does not understand.
+a reader drops a value of a known key it cannot read, and keeps a key it does
+not know (another build's per-machine or sync state, at `local` or inside
+`local.speleodb`) verbatim, written back after the known keys.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -439,13 +473,16 @@ Always `true`, always last.
 
 Stalagmight refuses to open a file whose survey breaks these rules (and offers
 a repair that keeps the damaged file as a backup copy, section 12), and never
-writes one:
+writes one. A file that also requires a feature Stalagmight does not know is
+refused as made with a newer version instead, without the repair (section 3).
+The rules:
 
 1. Ids are unique: station ids, line ids, shot uuids (project-wide), closure
    ids, Section ids. Alias ids are not live station ids and appear once.
    Station ids, alias ids included, and Section ids are below 2^31; line ids
-   are at most 42948; a line holds at most 99,999 shots (Stalagmight numbers
-   a line's shots in its session by `line id * 100000 + index`).
+   are at most 42948; closure ids are below 2^53 - 1; a line holds at most
+   99,999 shots (Stalagmight numbers a line's shots in its session by
+   `line id * 100000 + index`).
 2. Every reference resolves: a line's `start`, a shot's `to`, every datum,
    placement and closure station, every `via` line (which must pass through
    that station), every hand-move station (on that line), every line's
@@ -460,9 +497,11 @@ writes one:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. Station names are unique among the stations of each line.
-9. Counters are above every id in use, and the station and Section counters
-   are at most 2^31 (at 2^31 the ids are used up).
+8. Station names are unique among the stations of each line, and Section
+   names are unique in the project (compared exactly).
+9. Counters are above every id in use; the station and Section counters
+   are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
+   the ids are used up, and Stalagmight refuses an edit that needs another).
 10. Every number is finite.
 
 ## 7. Unknown content
@@ -482,11 +521,15 @@ reader does depends on where they are:
 2. **Header objects** (`project`, `settings`, `settings.validation`,
    `speleodb`, `summary`) and unknown top-level members: kept verbatim and
    written back after the known keys, in their original order.
-3. **`local` and `history`**: unknown or unreadable keys of `local` are
-   dropped; a `history` this build cannot read is not loaded (the project
-   opens with nothing to undo) but stays in the file until a save of an edit
-   writes the new history: a local-only rewrite copies it byte for byte. The
-   project always opens.
+3. **`local` and `history`**: a value of a known `local` key that cannot
+   be read is dropped; an unknown key of `local` or `local.speleodb` is kept
+   verbatim and written back after the known keys, by a save and by a
+   local-only rewrite, so a newer build's per-machine and sync state survives
+   an older build's display toggle (a detached copy and an upload carry no
+   per-machine state, so neither has them). A `history` this build cannot
+   read is not loaded (the project opens with nothing to undo) but stays in
+   the file until a save of an edit writes the new history: a local-only
+   rewrite copies it byte for byte. The project always opens.
 
 Arrays have a fixed number of positions; a row with extra positions is an
 error, not unknown content. New fields go in the objects.
@@ -571,11 +614,23 @@ guide](survey-model.md) for the details and the least-squares view).
 
 ## 10. Reading a file in Python
 
-A minimal reader, standard library only:
+A minimal reader, standard library only. It refuses what a reader must refuse
+(section 3: another major version, other conventions), tells the caller when
+the file requires features it does not know (then the caller must not modify
+the survey), and reads an unknown shot `kind` as `"reference"`, never as a
+swimmable leg (section 7).
 
 ```python
 import json
 import math
+
+CONVENTIONS = {
+    "length": "m", "angles": "deg", "azimuth": "cw-from-north",
+    "inclination": "+down", "depth": "+down", "local": "enu-m",
+    "gps": "wgs84-deg", "temperature": "degC",
+}
+KNOWN_FEATURES = set()                    # version 2.0 defines none
+KINDS = {"normal", "jump", "reference"}
 
 def read_stalx(path):
     with open(path, "rb") as f:
@@ -605,6 +660,11 @@ def read_stalx(path):
         raise ValueError("not a version 2 file")
     if doc.get("end") is not True:
         raise ValueError("incomplete file")
+    if doc.get("conventions") != CONVENTIONS:
+        raise ValueError("other units or sign conventions than version 2's")
+    # Not empty: made with a newer Stalagmight; read it, never rewrite it.
+    unknown_features = [f for f in doc.get("requires", [])
+                        if f not in KNOWN_FEATURES]
 
     stations = {}
     for row in doc.get("stations", []):
@@ -621,17 +681,18 @@ def read_stalx(path):
         extras = tail.pop() if tail and isinstance(tail[-1], dict) else {}
         left, right, up, down = (tail + [None] * 4)[:4]
         previous = line["shots"][-1]["to"] if line["shots"] else line["start"]
+        kind = extras.get("kind", "normal")
         line["shots"].append({
             "uuid": uuid, "from": previous, "to": to,
             "length": float(length), "azimuth_in": float(az_in),
             "azimuth_out": float(az_out), "depth_in": float(depth_in),
             "depth_out": float(depth_out),
             "lrud": (left, right, up, down),
-            "kind": extras.get("kind", "normal"),
+            "kind": kind if kind in KINDS else "reference",
             "comment": extras.get("comment"),
             "credit": extras["credit"] if "credit" in extras else line.get("credit"),
         })
-    return doc, stations, lines
+    return doc, stations, lines, unknown_features
 ```
 
 Python's `json` parses `-0` (no fraction) as the integer 0. Stalagmight always
@@ -643,8 +704,12 @@ Stalagmight refuses, while it reads (before holding them in memory), files
 over 256 MiB and files holding more than 2,100,000 stations or aliases or
 hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
 ignored warnings, import hashes or credited people, 50,000 closures, 10,000
-unknown keys and members (and `requires` names) in all, or an object with
-more than 10,100 members. The id and per-line bounds of section 6 (rule 1 and
+preserved unknown keys and members (tier 2, section 7, and `requires` names)
+in all, or an object with more than 10,100 members (known and unknown keys
+together). Unknown keys of survey records (tier 1) are not held, so they count
+only against their object's 10,100: a newer writer that adds a key to every
+shot gives a file that opens read-only at any size. Up to 10,000 unknown
+`local` keys are kept; more are dropped (tier 3 never refuses). The id and per-line bounds of section 6 (rule 1 and
 rule 9) are validity rules: a file breaking them is refused after reading,
 with the repair offer, and is never written.
 Preserved unknown content nested deeper than 128 levels is refused. A history
@@ -684,9 +749,10 @@ For context; nothing here changes the format. The app's side is
   member byte for byte, even when the file is open read-only. When the
   history did not load (unreadable entries, a newer history format, a
   read-only file), the rewrite copies `history` byte for byte too, so a
-  display toggle never erases what another build can still undo. Renaming a
-  project from its Recent Projects card rewrites `project.name` and
-  `summary.name` the same way.
+  display toggle never erases what another build can still undo; unknown
+  keys of `local` are written back as read (section 7). Renaming a project
+  from its Recent Projects card rewrites `project.name` and `summary.name`
+  the same way.
 - **A legacy (SQLite) file** is converted in memory when opened; its first save
   writes version 2 over it. Before that write the original is made whole (a hot
   `-journal` an old build left is rolled back into it, a `-wal` checkpointed,

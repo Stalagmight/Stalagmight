@@ -146,5 +146,6 @@ pub(crate) fn decode_error(e: DecodeError) -> ReadError {
         | DecodeError::MissingEnd
         | DecodeError::DuplicateStation { .. }
         | DecodeError::Invalid { .. } => ReadError::invalid(InvalidKind::Corrupt, detail),
+        DecodeError::NewerFeatures { .. } => ReadError::invalid(InvalidKind::NewerFeatures, detail),
     }
 }

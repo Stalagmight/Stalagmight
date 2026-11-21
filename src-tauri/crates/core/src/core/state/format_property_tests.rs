@@ -26,8 +26,9 @@
 //!    succeeds. A touch, or a rewrite with the same bytes, is not a change.
 //! 4. **Unknown content** (plan 6.4). Tier 2 (an unknown top-level member,
 //!    unknown keys in `project`, `settings` and `summary`) survives an edit
-//!    and a save verbatim, and a local-only save too; tier 3 (an unknown key
-//!    in `local`) is dropped and the file opens; tier 1 (an unknown key in a
+//!    and a save verbatim, and a local-only save too; so does an unknown key
+//!    in `local` (tier 3: a newer build's per-machine state, review finding
+//!    H-frontend-wire-2), and the file opens; tier 1 (an unknown key in a
 //!    station record) opens read-only: edits and saves are refused, a display
 //!    toggle still saves locally, and the body is not rewritten.
 //! 5. **Old file shapes.** A legacy SQLite file surgically degraded the ways
@@ -633,9 +634,11 @@ const TOP_LEVEL: &str = "\"x_future_member\":{\"kept\":[1,2.5,\"three\"]},";
 const IN_PROJECT: &str = ",\"x_future_project\":{\"k\":true}";
 const IN_SETTINGS: &str = ",\"x_future_setting\":[0.125]";
 const IN_SUMMARY: &str = ",\"x_future_summary\":\"cached\"";
+const IN_LOCAL: &str = ",\"x_future_local\":7";
 
-/// Tiers 2 and 3: kept through an edit, a save and a local-only save; tier 3
-/// dropped.
+/// Tiers 2 and 3: kept through an edit, a save and a local-only save (an
+/// unknown `local` key is a newer build's per-machine state, kept since
+/// review finding H-frontend-wire-2).
 fn check_unknown_members(seed: u32) -> Vec<String> {
     let label = |what: &str| format!("seed {seed} [unknown content]: {what}");
     let Some(state) = build_state(seed, false, 8) else {
@@ -654,7 +657,7 @@ fn check_unknown_members(seed: u32) -> Vec<String> {
         .and_then(|t| inject_into(&t, "project", IN_PROJECT))
         .and_then(|t| inject_into(&t, "settings", IN_SETTINGS))
         .and_then(|t| inject_into(&t, "summary", IN_SUMMARY))
-        .and_then(|t| inject_into(&t, "local", ",\"x_future_local\":7"));
+        .and_then(|t| inject_into(&t, "local", IN_LOCAL));
     let Some(injected) = injected else {
         return vec![label("the injection points were not found")];
     };
@@ -677,15 +680,11 @@ fn check_unknown_members(seed: u32) -> Vec<String> {
             IN_PROJECT.trim_start_matches(','),
             IN_SETTINGS.trim_start_matches(','),
             IN_SUMMARY.trim_start_matches(','),
+            IN_LOCAL.trim_start_matches(','),
         ] {
             if !text.contains(fragment) {
                 problems.push(label(&format!("{what} dropped the unknown {fragment}")));
             }
-        }
-        if text.contains("x_future_local") {
-            problems.push(label(&format!(
-                "{what} kept an unknown key of `local` (tier 3 is dropped)"
-            )));
         }
     };
     // A local-only save first: it copies every other member verbatim.
@@ -694,7 +693,12 @@ fn check_unknown_members(seed: u32) -> Vec<String> {
     }
     let bytes = std::fs::read(&path).unwrap_or_default();
     let text = String::from_utf8_lossy(&bytes);
-    for fragment in [TOP_LEVEL.trim_end_matches(','), IN_PROJECT, IN_SETTINGS] {
+    for fragment in [
+        TOP_LEVEL.trim_end_matches(','),
+        IN_PROJECT,
+        IN_SETTINGS,
+        IN_LOCAL,
+    ] {
         if !text.contains(fragment.trim_start_matches(',')) {
             problems.push(label(&format!(
                 "the local-only save dropped the unknown {fragment}"

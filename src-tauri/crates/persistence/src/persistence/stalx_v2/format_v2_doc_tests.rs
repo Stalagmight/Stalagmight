@@ -179,6 +179,7 @@ pub(super) fn example() -> (Project, Extras) {
                 last_edit_at: Some(at(1_763_643_600, 0)),
                 ..LocalSync::default()
             },
+            preserved: Vec::new(),
         },
         ignored_warnings: vec![IgnoredWarning {
             shot: "5f0c2a1e-0000-4000-8000-000000000003".to_string(),

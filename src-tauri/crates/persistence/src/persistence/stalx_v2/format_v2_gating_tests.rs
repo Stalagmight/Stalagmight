@@ -352,8 +352,9 @@ fn unknown_header_content_is_preserved_on_resave() {
     );
 }
 
-/// Tier 3: `local` is lenient (unknown or unreadable keys are dropped with a
-/// note), an unreadable `history` is dropped whole.
+/// Tier 3: `local` is lenient (an unreadable value of a known key is dropped
+/// with a note, an unknown key is kept verbatim), an unreadable `history` is
+/// dropped whole.
 #[test]
 fn local_and_history_are_lenient() {
     let base = (0..50)
@@ -372,8 +373,12 @@ fn local_and_history_are_lenient() {
         .iter()
         .filter(|n| matches!(n, DecodeNote::LocalDropped { .. }))
         .collect();
-    assert_eq!(dropped.len(), 2, "{:?}", decoded.notes);
+    assert_eq!(dropped.len(), 1, "{:?}", decoded.notes);
     assert!(!decoded.extras.local.display.contains_key("bad"));
+    assert_eq!(
+        decoded.extras.local.preserved,
+        vec![("zz".to_string(), super::RawJson::parse("1").unwrap())]
+    );
 
     let not_object = base
         .replacen("\"local\":{", "\"local\":[{", 1)

@@ -207,6 +207,13 @@ fn write_header(
         "counters",
     ] {
         if let Some(raw) = find(top, key) {
+            if key == "summary" && !raw.get().starts_with('{') {
+                // A summary that is not an object holds nothing (the decoder
+                // keeps nothing of it) and cannot have keys replaced: it is
+                // left out, and a reader that wants one decodes the body
+                // (review finding C-file-format-5).
+                continue;
+            }
             string(out, key);
             out.push(b':');
             edit(key, raw, out)?;

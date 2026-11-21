@@ -20,6 +20,15 @@ use crate::{
 /// A loop closure's id: project-unique, never reused.
 pub type ClosureId = u64;
 
+/// The bound of the closure id space: 2^53 - 1, the largest integer a
+/// `.stalx` file holds (every JSON reader holds it exactly). Closure ids are
+/// below it and the closure counter is at most it: at the bound the ids are
+/// used up. Checked by `validate` (`IdOutOfRange`, `CounterOutOfRange`), so
+/// a file at the bound opens and an edit that would mint past it is refused
+/// instead of leaving a project no save can write (review finding
+/// C-file-format-6).
+pub const MAX_CLOSURE_ID: ClosureId = (1 << 53) - 1;
+
 /// The longest shot uuid the model accepts, in characters (plan 1.1). Shot
 /// uuids are opaque: minted v4 at creation, imported verbatim.
 pub const MAX_SHOT_UUID_CHARS: usize = 128;

@@ -131,6 +131,12 @@ fn decode_error(path: &Path, error: &DecodeError) -> LoadError {
             format!("The project breaks an invariant and cannot be opened normally: {error}"),
             &path_text(path),
         ),
+        // Not damaged: a feature this build does not know may relax the rule
+        // it breaks here. The newer-version prompt, never the repair offer
+        // (review finding C-file-format-2).
+        DecodeError::NewerFeatures { features, .. } => {
+            LoadError::newer_features(&file_name(path), features, &path_text(path))
+        }
         other => LoadError::corrupt(other.to_string(), &path_text(path)),
     }
 }
@@ -184,7 +190,22 @@ impl AppState {
             Format::V2 => {
                 let decoded = decode(&bytes, &options).map_err(|e| decode_error(path, &e))?;
                 for note in &decoded.notes {
-                    tracing::info!(note = ?note, "decode note");
+                    match note {
+                        // Informative by the format's rule: a newer writer
+                        // whose formulas change what users see also requires
+                        // a feature, which opens the file read-only.
+                        crate::persistence::stalx_v2::DecodeNote::OtherSolver { found }
+                            if *found > crate::persistence::stalx_v2::SOLVER =>
+                        {
+                            tracing::warn!(
+                                found,
+                                ours = crate::persistence::stalx_v2::SOLVER,
+                                "Saved by a newer solver; positions are derived with this \
+                                 version's formulas"
+                            );
+                        }
+                        _ => tracing::info!(note = ?note, "decode note"),
+                    }
                 }
                 if let Some(reason) = decoded.read_only() {
                     tracing::warn!(
@@ -195,7 +216,8 @@ impl AppState {
                 }
                 let mut project = decoded.project;
                 project.file_path = Some(path.to_path_buf());
-                let mut file = FileState::from_v2(decoded.extras, fingerprint);
+                let mut file =
+                    FileState::from_v2(decoded.extras, fingerprint, Some(Arc::from(bytes)));
                 let history = file.saved_history.clone();
                 // An unreadable history member was already dropped by the
                 // decoder (tier 3); the banner says so.

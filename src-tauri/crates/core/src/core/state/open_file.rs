@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
@@ -111,6 +112,14 @@ pub(crate) struct FileState {
     /// `None` until something of ours is on disk. For a legacy origin it is
     /// the SQLite file's, so the upgrading save is guarded too.
     pub(crate) fingerprint: Option<Fingerprint>,
+    /// Those bytes themselves, with the fingerprint computed from them, where
+    /// the read or write that set the fingerprint kept them. A local-only
+    /// save rewrites from them instead of reading the file first, so a
+    /// display toggle reads the file once (the guard's check), not twice,
+    /// while it holds the project lock (review finding C-file-format-10).
+    /// Used only while its fingerprint is the guard's: any other write of
+    /// the fingerprint makes it miss, and the save reads the file as before.
+    pub(crate) saved_bytes: Option<(Fingerprint, Arc<[u8]>)>,
     pub(crate) origin: FileOrigin,
     /// The survey (or its ignores) changed since the last save.
     pub(crate) dirty: bool,
@@ -136,17 +145,34 @@ fn parse_time(text: Option<&String>) -> Option<DateTime<Utc>> {
 }
 
 impl FileState {
-    /// A version 2 file just decoded.
-    pub(crate) fn from_v2(extras: Extras, fingerprint: Fingerprint) -> Self {
+    /// A version 2 file just decoded. `bytes`, when given, are the bytes
+    /// `fingerprint` was computed from (kept for the local-only save).
+    pub(crate) fn from_v2(
+        extras: Extras,
+        fingerprint: Fingerprint,
+        bytes: Option<Arc<[u8]>>,
+    ) -> Self {
         let mut extras = extras;
         let saved_history = std::mem::take(&mut extras.history);
         Self {
             extras,
             saved_history,
+            saved_bytes: bytes.map(|b| (fingerprint.clone(), b)),
             fingerprint: Some(fingerprint),
             origin: FileOrigin::V2,
             ..Self::default()
         }
+    }
+
+    /// The bytes on disk if this state still holds the ones the guard
+    /// expects (see [`Self::saved_bytes`]).
+    fn bytes_for(&self, expected: &Fingerprint) -> Option<Arc<[u8]>> {
+        self.saved_bytes
+            .as_ref()
+            .filter(|(fingerprint, bytes)| {
+                fingerprint.same_content(expected) && bytes.len() as u64 == fingerprint.len
+            })
+            .map(|(_, bytes)| Arc::clone(bytes))
     }
 
     /// A legacy file just migrated (its history is dropped, plan 7.2.8).
@@ -196,6 +222,15 @@ impl FileState {
             self.extras.local.speleodb = LocalSync::default();
             return;
         };
+        let same_project =
+            self.extras.speleodb.as_ref().is_some_and(|old| {
+                old.endpoint == link.endpoint && old.project_id == link.project_id
+            });
+        if !same_project {
+            // A newer build's sync keys describe the link they were kept
+            // with, never another project's.
+            self.extras.local.speleodb.preserved.clear();
+        }
         self.extras.speleodb = Some(SpeleoDbLink {
             endpoint: link.endpoint.clone(),
             project_id: link.project_id.clone(),
@@ -362,7 +397,14 @@ impl AppState {
             file.local_pending = true;
             return Ok(());
         };
-        let original = read_unchanged(&path, &expected)?;
+        // Read once: the bytes this state last read or wrote, when it kept
+        // them, else the file (checked against the guard). Either way the
+        // write below checks the file on disk against the guard before its
+        // rename, so a file another program changed is never overwritten.
+        let original = match file.bytes_for(&expected) {
+            Some(bytes) => bytes,
+            None => Arc::from(read_unchanged(&path, &expected)?),
+        };
         let mut extras = file.extras.clone();
         let keep_file_history = !file.dirty && file.history_unread;
         extras.history = if file.dirty || keep_file_history {
@@ -378,6 +420,7 @@ impl AppState {
         .map_err(|e| LocalSaveError::Encode(e.to_string()))?;
         let fingerprint =
             write_atomic(&path, &bytes, Guard::Expect(&expected)).map_err(|e| write_error(&e))?;
+        file.saved_bytes = Some((fingerprint.clone(), Arc::from(bytes)));
         file.fingerprint = Some(fingerprint);
         file.saved_history = extras.history;
         file.local_pending = false;

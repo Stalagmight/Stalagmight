@@ -52,7 +52,9 @@
 //! with [`ReadError::NewerSchema`], JSON files of a newer major format version
 //! with [`ReadError::NewerFormat`]; upgrade the crate to read them. A JSON file
 //! of this major version that uses features or survey fields this crate does
-//! not know is read, and says so in [`Survey::newer_content`].
+//! not know is read, and says so in [`Survey::newer_content`]; one whose survey
+//! read without those features breaks the format's rules is refused as
+//! [`InvalidKind::NewerFeatures`], never as corrupt.
 //!
 //! ```no_run
 //! let survey = stalx_reader::read_file(std::path::Path::new("project.stalx"))?;
@@ -414,6 +416,10 @@ pub enum InvalidKind {
     InvalidValue,
     /// Anything else the SQLite load path rejected.
     Other,
+    /// A JSON file that requires features this crate does not know, and read
+    /// without them its survey breaks the format's rules: made with a newer
+    /// Stalagmight, not damaged; upgrade the crate to read it.
+    NewerFeatures,
 }
 
 impl ReadError {
