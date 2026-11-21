@@ -95,9 +95,10 @@
 //! exactly where it was measured (its piece holding no datum), every slot of
 //! those lines and every placement on them is the atomic route's moved by
 //! one vector, and a single delete that moved that station without a datum
-//! in its piece promoted a closure (each single delete is checked against
-//! plan 4.1 (a) on its own). A loop closure between two partner pieces the range cuts
-//! apart is promoted by the range's own sweep, which moves one of the two
+//! in its piece promoted a closure onto that piece (each single delete is
+//! checked against plan 4.1 (a) on its own: the junction the merge made is
+//! on the head's piece afterwards). A loop closure between two partner
+//! pieces the range cuts apart is promoted by the range's own sweep, which moves one of the two
 //! pieces onto the other by the closure's measured gap (plan 5.5; two free
 //! pieces: the piece of the closure's first end moves, plan 4.2), so the
 //! atomic route's direction assertion is exact for that piece: every slot of
@@ -762,6 +763,13 @@ fn absorbed_promotion(
             atomic_comment,
         }),
     })
+}
+
+/// Whether `other` is a station of `station`'s piece in `p`.
+fn on_piece_of(p: &Project, station: StationId, other: StationId) -> bool {
+    let topology = p.topology();
+    topology.component_of(station).is_some()
+        && topology.component_of(station) == topology.component_of(other)
 }
 
 /// Whether the piece of `station` holds a datum.
@@ -1730,18 +1738,28 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
             return None;
         }
         let after_step = twins.right.get_project_state()?;
-        if step.is_empty() && !piece_holds_datum(&after_step, head) {
+        if !piece_holds_datum(&after_step, head) {
             let (was, is) = (
                 before_step.raw_positions().xy(head),
                 after_step.raw_positions().xy(head),
             );
             if let (Some(was), Some(is)) = (was, is) {
                 if (was[0] - is[0]).abs().max((was[1] - is[1]).abs()) > POSITION_TOLERANCE_M {
-                    head_moved.push(format!(
-                        "the single delete of shot {target} moved the edited line's first \
-                         station {head} from {was:?} to {is:?} and promoted nothing (plan 4.1 \
-                         (a): its still point)"
-                    ));
+                    // Only a merge of the head's own piece may move it: the
+                    // junction a promotion made is then on the head's piece.
+                    let joined = step
+                        .iter()
+                        .any(|promotion| on_piece_of(&after_step, head, promotion.survivor));
+                    if !joined {
+                        head_moved.push(format!(
+                            "the single delete of shot {target} moved the edited line's first \
+                             station {head} from {was:?} to {is:?} and promoted no closure onto \
+                             its piece (plan 4.1 (a): its still point; promoted {:?})",
+                            step.iter()
+                                .map(|p| (p.closure.id, p.survivor, p.retired))
+                                .collect::<Vec<_>>()
+                        ));
+                    }
                 }
             }
         }
