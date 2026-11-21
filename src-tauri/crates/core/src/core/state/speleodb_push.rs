@@ -815,7 +815,8 @@ impl AppState {
                     base = ?link.base_commit_sha,
                     head = ?tip,
                     purpose = "never upload over a revision this session did not make (R3)",
-                    "speleodb push: SpeleoDB's latest revision is not this copy's BASE                      and not an upload of ours; uploading nothing, asking the user to reconcile"
+                    "speleodb push: SpeleoDB's latest revision is not this copy's BASE \
+                     and not an upload of ours; uploading nothing, asking the user to reconcile"
                 );
                 return Ok(PushOutcome::Diverged);
             }
