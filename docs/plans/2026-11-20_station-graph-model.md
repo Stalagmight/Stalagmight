@@ -1519,3 +1519,18 @@ themselves. Labels `JP1`...
   (nine seeds; injections in its docs). Not changed: U1's restore takes the
   first alias in list order, so a delete after a merge is not its exact
   inverse in station ids (seed 17517958: the junction's id moves from 6 to 8).
+- **T4-O3. A closure carried by that merge is compared slot by slot**
+  (oracle only; farm seed 17523769, where the oracle panicked on its own
+  survey). The intermediate merge re-points every closure on the edited
+  line's end onto the partner station, so a closure the atomic range deletes
+  with that end survives in the singles, and once the next single delete
+  takes the junction off the edited line it can be the only link between two
+  pieces and be promoted too, joining two partner stations the atomic route
+  keeps apart. Each line still shows the same names in both routes. The
+  oracle gave the singles' junction one atomic station record on every line,
+  which showed one line two stations named alike, and the encoder's refusal
+  was a panic. It now adopts slot by slot (each line's slot takes the atomic
+  station there), folds the merges into one junction into one record, and
+  asserts that they join exactly the atomic stations at their own slots,
+  with the names, ids and comments 5.1 gives; an adopted survey the encoder
+  refuses is reported with the refusal, never a panic.
