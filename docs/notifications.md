@@ -160,11 +160,17 @@ regions). Read the comment blocks in those two files plus
   made with a newer Stalagmight opens read-only with a banner naming the reason
   (`read-only-file-banner`, no button: there is nothing to do here but update);
   a refused save is worded for it. An old
-  file whose conversion moved stations, changed a depth or could not place a
-  station shows the one-time conversion notice
-  (`conversion-notice-banner`, "the original file is kept": Recent Projects, right-click, Restore an earlier copy;
-  for a legacy SpeleoDB revision converted on download, "the original revision is unchanged on SpeleoDB" instead)
-  until dismissed. The whole sentence comes from the backend, which knows where the original is. The history-discarded banner (`history-discarded-banner`) is
+  file whose conversion moved stations, changed a depth, could not place a
+  station, showed a station under another name or joined comments shows the
+  one-time conversion notice (`conversion-notice-banner`) until dismissed: one
+  lead, the changes the backend words with their counts (a long list of
+  renamed stations behind Details), and one sentence on saving that is true
+  now ("the next time you save", or "Saved in the new format"; "the original
+  file is kept": Recent Projects, right-click, Restore an earlier copy; for a
+  legacy SpeleoDB revision converted on download, "the original revision is
+  unchanged on SpeleoDB" instead). The converting save moves that sentence on;
+  with no banner showing it is a success toast instead (one event, one
+  surface). The history-discarded banner (`history-discarded-banner`) is
   unchanged: it also covers an old file's history, which the conversion drops.
 
 ## Command-failure contract

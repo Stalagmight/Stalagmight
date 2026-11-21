@@ -44,7 +44,7 @@ Files:
 
 - **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
 - **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Why: the product decision, with the original kept restorable.
-- **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Why: data never moves or changes name silently.
+- **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Its last sentence says whether the new format is on disk yet, and the converting save says so (DM1). Why: data never moves or changes name silently.
 - **A 0.6.0 file this build cannot convert is not called corrupt**: it opens as "This file needs converting ..., and this version cannot convert it: <reason>", and Attempt Repair never rewrites a file that opens or that only the conversion refuses, nor says it succeeded while the open still fails (UR4). Why: the recovery dialog and its repair are for damage.
 - **A Save As onto another 0.6.0 file upgrades it**: the 0.6.0 file it replaces is kept in Recovery, and no SQLite sidecar is left beside the JSON file (UR5). Why: an old build would roll a journal into the JSON file.
 - **Local state of an open 0.6.0 file waits for the upgrading save**: SpeleoDB bookkeeping counts as unsaved and the close prompt asks; a display toggle rides the next save but alone is not an unsaved change, so it never arms autosave and a close without a save drops it; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6, amended by demo issue I-6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it, and only a save the user asked for (or the autosave of a real edit) may do that.
@@ -1089,3 +1089,54 @@ findings D-migration-upgrade-4 to -12, J-docs-tests-truth-3, -6, -7). Labels
 - **UR8. The staged settled copy carries only Unix mode bits**, as
   `write_atomic`'s temp does: on Windows a read-only staged copy could not be
   removed after its refused rename (not run on Windows).
+
+## Deviations (real-app demo fixes, package U3: banner, autosave, merge preview)
+
+The real-app demo of sg/core (issues I-4, I-5, I-6) found three places
+where the app changed data or files without saying so, or said something
+untrue. Labels `DM1`...
+
+- **DM1. The conversion notice is a view, and follows the converting save**
+  (amends C4, N13, UR1). `take_conversion_notice` hands over a
+  `ConversionNoticeView` (`core/state/conversion_notice.rs`): one short
+  clause per change worded with its count ("1 station moved by 0.40 m",
+  "3 stations moved by up to 2.50 m"), a renamed station as "North Passage
+  / 0 is now shown as 3" (more than three counted, the list behind
+  Details), the joined comments, and the file's state (`not_yet_saved`,
+  `saved` for a file a closed upgrade already wrote, `downloaded`). The
+  frontend says the lead once ("Converted from the old file format.") and
+  ONE sentence on saving. A save that writes the first version 2 file of a
+  project opened from a 0.6.0 file reports it (`CommandResult::
+  legacy_converted`: `saved`, or `saved_as_new_file` for a Save As
+  elsewhere, which leaves the 0.6.0 file as it was); the banner's sentence
+  then says it was saved, and with no banner showing a success toast does
+  (one event, one surface). Before, the lead repeated itself, a count of 1
+  read "1 stations", renames read "Branch 1 0 is now 19", and the banner
+  kept promising "the first time the project is saved" after that save.
+- **DM2. A display toggle on a 0.6.0 file is not an unsaved change**
+  (amends UR6): see UR6. It rides the next save; autosave, which follows
+  the unsaved flag, no longer converts a file the user only looked at.
+- **DM3. Merge says what it does before it does it** (amends 5.1, 9.3).
+  `check_merge_connectivity` carries `merge_preview` for a pair that may
+  merge: `Project::merge_preview` runs the merge on a copy (as the Delete
+  Shot preview measures a weld) and reports the moving piece's lines, the
+  largest horizontal move, the station it joins, and both stations' depths
+  with the joined one's. The wire sends the depths only when they differ by
+  more than `JUNCTION_DEPTH_SPREAD_M` (0.5 m). The joined depth is the mean
+  of every reading at the station, 0.6.0's `compute_station_depth` (checked
+  against the frozen crate in `merge_depth_tests.rs`: readings 15, 15 and 4
+  give 11.33 m, not the 9.5 m a mean of the two stations would), so the
+  merge's result is unchanged; only its announcement is new. Every
+  merge-tool pick that can merge opens the Merge dialog (map clicks, snaps,
+  snap-to-merge drags), so none is silent.
+- **DM4. A junction whose readings disagree is a warning.** A station on two
+  or more lines whose depth readings span more than the same 0.5 m gets an
+  advisory `JUNCTION_DEPTH_SPREAD` row (on the shot arriving at it;
+  `JUNCTION_DEPTH_SPREAD_START` on a leaving shot when every line starts
+  there, so no two rows share an Ignore key), naming the junction, the
+  spread and the mean, with Go to station and Ignore. The threshold is a
+  constant, not a `settings.validation` key: a new key would change every
+  file's canonical bytes and the settings UI for a check nobody asked to
+  tune yet; `warn_depth_change_per_shot_max` measures something else (one
+  shot's depth change).
+

@@ -967,8 +967,10 @@ as well as the names:
   required `Station` fields with `id` and `merged_with` taken from the junction.
 - **File status hooks**: `__MOCK_SET_EXTERNALLY_MODIFIED__(true)` makes the next
   saves refuse with `EXTERNALLY_MODIFIED`, `__MOCK_SET_READ_ONLY_REASON__(text)`
-  opens the file read-only, `__MOCK_SET_CONVERSION_NOTICE__(text)` queues a
-  conversion notice, `__MOCK_GET_SAVE_CALLS__()` returns the save calls. The
+  opens the file read-only, `__MOCK_SET_CONVERSION_NOTICE__(view)` queues a
+  conversion notice (a `ConversionNoticeView`), `__MOCK_SET_LEGACY_ORIGIN__(true)`
+  makes the next successful save report `legacy_converted` (the converting
+  save of a 0.6.0 file), `__MOCK_GET_SAVE_CALLS__()` returns the save calls. The
   mock answers `save_project_overwriting`, `take_conversion_notice`,
   `has_unsaved_changes`, `project_read_only_reason`, `resolve_warning` and
   `unresolve_warning`.
