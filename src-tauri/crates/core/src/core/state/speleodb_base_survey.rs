@@ -36,9 +36,7 @@ use std::path::Path;
 
 use super::open_file::FileState;
 use super::AppState;
-use crate::persistence::stalx_v2::{
-    self, Extras, Fingerprint, Format, Header, LocalSync, MAX_V2_FILE_BYTES,
-};
+use crate::persistence::stalx_v2::{self, Extras, Format, Header, LocalSync, MAX_V2_FILE_BYTES};
 use crate::speleodb::SpeleoDbError;
 
 /// Whether `sync` marks un-uploaded work over a survey that is exactly BASE's:
@@ -89,8 +87,8 @@ pub(super) fn probe_settled(path: &Path) -> std::io::Result<Header> {
     if !worth_reading {
         return Ok(header);
     }
-    let bytes = match Fingerprint::read(path, MAX_V2_FILE_BYTES) {
-        Ok((bytes, _)) => bytes,
+    let bytes = match read_whole(path) {
+        Ok(bytes) => bytes,
         Err(e) => {
             tracing::debug!(
                 path = %path.display(),
@@ -118,6 +116,23 @@ pub(super) fn probe_settled(path: &Path) -> std::io::Result<Header> {
         }
     }
     Ok(whole)
+}
+
+/// The file at `path`, at most [`MAX_V2_FILE_BYTES`] (the decoder's cap): a
+/// larger one is no version 2 file this build reads, so its mark stands.
+fn read_whole(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_V2_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_V2_FILE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "larger than a version 2 file this build reads",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// The open's half: a file just read (`bytes`) whose mark is stale opens clean.
