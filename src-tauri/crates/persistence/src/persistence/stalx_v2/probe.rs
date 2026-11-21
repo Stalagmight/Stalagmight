@@ -289,9 +289,13 @@ impl HeaderVisitor<'_, '_> {
 /// Whether the key `key`, a slice of `bytes`, directly follows `before` and
 /// its opening quote. A key that is not a slice of `bytes` (an escaped one,
 /// which the parser unescapes into a string of its own) never does: no
-/// canonical key has an escape.
+/// canonical key has an escape. A key in `bytes` starts before its end (its
+/// closing quote follows it).
 fn key_follows(bytes: &[u8], key: &str, before: &[u8]) -> bool {
-    let Some(start) = (key.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize) else {
+    let Some(start) = (key.as_ptr() as usize)
+        .checked_sub(bytes.as_ptr() as usize)
+        .filter(|&start| start < bytes.len())
+    else {
         return false;
     };
     start
