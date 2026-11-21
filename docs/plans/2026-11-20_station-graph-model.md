@@ -56,8 +56,8 @@ Files:
 
 SpeleoDB:
 
-- **Pushes send the version 2 JSON** (`application/json`, `project.stalx`); until the server accepts it, a push fails through the existing error path and the project stays dirty and locked (10.1). Why: the product decision; see the rollout prerequisites.
-- **Sync bookkeeping is durable at once**: every SpeleoDB state change, clear-on-lock included, is a local-only save; "Uploaded without undo history" shows only when every entry was cut; a download made by a newer build opens read-only; legacy revisions are converted on download; stripping a foreign copy's link upgrades a legacy copy to version 2 (backup kept); logout keeps the open project's Recents row while its link is dirty; Publish refuses an invalid survey or a read-only file (N10, N11). Why: there is no live database to defer a change to.
+- **Pushes send the version 2 JSON** (`application/json`, `project.stalx`); until the server accepts it, every push (Save Changes, Done, the close and quit prompts) fails with one error, "This SpeleoDB server does not accept projects saved by this version yet" (`UploadFormatRefused`: a 400, 406, 415 or 422 to a version 2 body, or a 5xx other than 503/504 after which the history shows nothing landed), and the project stays dirty and locked as after any failed push; Publish to such a server reports that the server project is empty and the local copy unchanged, and never creates a second one (10.1, review G-speleodb-2/3). Why: the product decision; see the rollout prerequisites.
+- **Sync bookkeeping is durable at once**: every SpeleoDB state change, clear-on-lock included, is a local-only save; "Uploaded without undo history" shows only when every entry was cut; a download made by a newer build opens read-only, and a Restore of one is refused (View still shows it; review G-speleodb-8); legacy revisions are converted on download, and an Unwind step onto one is refused, its SQLite history never being converted (G-speleodb-5); stripping a foreign copy's link upgrades a legacy copy to version 2 (backup kept); logout keeps the open project's Recents row while its link is dirty; Publish refuses an invalid survey or a read-only file (N10, N11). Why: there is no live database to defer a change to.
 
 Exports, imports and readers:
 
@@ -591,7 +591,7 @@ A batch that moves several slots of one station (today's co-located `move_statio
 ### 10.1 SpeleoDB
 
 - Push: the canonical v2 bytes in a "for push" mode (no `local`, no redo; undo only in Full mode, cut at the watermark), filename `project.stalx`, content type `application/json`. Fallback without history when over 5 MiB, as today.
-- The server currently rejects non-SQLite uploads; until it accepts v2, a push fails with the existing error path (the project stays dirty and locked). This is called out in the PR.
+- The server currently rejects non-SQLite uploads; until it accepts v2, a push fails with one dedicated error, "This SpeleoDB server does not accept projects saved by this version yet" (the project stays dirty and locked, as after any failed push), and Publish says the server project stayed empty. This is called out in the PR.
 - Pull/install/revisions/unwind: sniff; SQLite revisions are migrated in memory (7), v2 opened directly. 0.6.0's `drop_inherited_undo` (now `speleodb_clear_inherited_undo`), display-setting restore and the dirty columns map to the v2 `history` and `local` members.
 
 ### 10.2 stalx-reader

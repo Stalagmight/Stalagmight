@@ -31,10 +31,30 @@ struct Seen {
     uploads: Vec<String>,
 }
 
+/// How the loopback server answers an upload.
+#[derive(Clone, Copy)]
+enum Upload {
+    /// 200 with `PUSHED`, which lands on the history.
+    Accept,
+    /// `status` with nothing landed: a server that does not take version 2 yet
+    /// (the real server's answer is not recorded; the SDK declares 400, 406, 415
+    /// and 500 for the upload), or a transient failure.
+    Refuse(u16),
+    /// `status` AFTER the commit landed: the ambiguous server error.
+    FailAfterLanding(u16),
+}
+
 /// A loopback SpeleoDB: the lock is held by [`ME`], the history is `BASE` (and
-/// `PUSHED` on top once an upload landed), an upload answers 200 with `PUSHED`
-/// or, when `refuse_uploads`, the 400 a server that only takes SQLite sends.
-fn server(refuse_uploads: bool) -> (String, Arc<Mutex<Seen>>) {
+/// `PUSHED` on top once an upload landed), an upload is answered as `upload`
+/// says, a release frees the lock and a create (`POST /projects/`) answers the
+/// project.
+fn server(upload: Upload) -> (String, Arc<Mutex<Seen>>) {
+    server_touching(upload, None)
+}
+
+/// [`server`], appending a byte to `touch` (another program changing the cache
+/// file) before it answers an accepted upload.
+fn server_touching(upload: Upload, touch: Option<PathBuf>) -> (String, Arc<Mutex<Seen>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
     let seen = Arc::new(Mutex::new(Seen::default()));
@@ -68,20 +88,40 @@ fn server(refuse_uploads: bool) -> (String, Arc<Mutex<Seen>>) {
                 if let Ok(mut log) = log.lock() {
                     log.uploads.push(request.clone());
                 }
-                if refuse_uploads {
-                    (
-                        400,
-                        r#"{"detail":"Only SQLite project files are accepted."}"#.to_owned(),
-                    )
-                } else {
-                    landed = true;
-                    (
-                        200,
-                        format!(
-                            r#"{{"project":{project},"hexsha":"{PUSHED}","files":["project.stalx"],"message":"Saved","browser_url":null}}"#
-                        ),
-                    )
+                let refusal = r#"{"detail":"Synthetic refusal of the uploaded file."}"#;
+                match upload {
+                    Upload::Refuse(status) => (status, refusal.to_owned()),
+                    Upload::FailAfterLanding(status) => {
+                        landed = true;
+                        (status, refusal.to_owned())
+                    }
+                    Upload::Accept => {
+                        if let Some(path) = &touch {
+                            if let Ok(mut file) =
+                                std::fs::OpenOptions::new().append(true).open(path)
+                            {
+                                let _ = file.write_all(b"\n");
+                            }
+                        }
+                        landed = true;
+                        (
+                            200,
+                            format!(
+                                r#"{{"project":{project},"hexsha":"{PUSHED}","files":["project.stalx"],"message":"Saved","browser_url":null}}"#
+                            ),
+                        )
+                    }
                 }
+            } else if line.starts_with("POST /api/v2/projects/ ") {
+                // A create answers 201 with the new project.
+                (201, project)
+            } else if line.contains("/release/") {
+                (
+                    200,
+                    super::tests_support::sdk_fixture(&format!(
+                        r#"{{"id":"{ID}","name":"Remote","permission":"READ_AND_WRITE"}}"#
+                    )),
+                )
             } else {
                 (200, project)
             };
@@ -179,7 +219,7 @@ fn a_confirmed_push_uploads_v2_json_and_is_durable_at_once() {
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
-        let (endpoint, seen) = server(false);
+        let (endpoint, seen) = server(Upload::Accept);
         let (path, state) = editing(temp.path(), &endpoint);
         reverse_the_line(&state);
         assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
@@ -236,24 +276,152 @@ fn a_confirmed_push_uploads_v2_json_and_is_durable_at_once() {
     });
 }
 
+/// The one error every push surface shows for a server without version 2
+/// support (plan 12.1), checked on the DTO the frontend reads.
+fn assert_format_refused(refused: &crate::speleodb::SpeleoErrorDto, status: u16) {
+    assert_eq!(refused.format_refused, Some(true), "{refused:?}");
+    assert_eq!(refused.status, Some(status), "{refused:?}");
+    assert_eq!(refused.action, crate::speleodb::SpeleoDbAction::Fatal);
+    assert!(
+        refused.message.starts_with(
+            "This SpeleoDB server does not accept projects saved by this version yet."
+        ),
+        "{refused:?}"
+    );
+}
+
+/// What a failed push must leave: dirty at BASE on disk, the lock and the history
+/// kept, and no release sent (the lock lifecycle of any failed push in 0.6.0).
+fn assert_kept_dirty_and_locked(path: &Path, state: &AppState, seen: &Mutex<Seen>) {
+    let on_disk = link_on_disk(path).expect("linked");
+    assert!(
+        on_disk.has_unpushed_edits,
+        "the work is still marked un-pushed"
+    );
+    assert_eq!(
+        on_disk.base_commit_sha.as_deref(),
+        Some(BASE),
+        "BASE unchanged"
+    );
+    assert!(state.edit_enabled(), "the lock is still held");
+    assert!(state.can_undo(), "and the history is untouched");
+    assert!(
+        !seen
+            .lock()
+            .expect("log")
+            .lines
+            .iter()
+            .any(|l| l.contains("/release/")),
+        "nothing released the lock"
+    );
+}
+
 #[test]
-fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
-    // Plan 12.1 (rollout prerequisite S0): until SpeleoDB accepts v2 uploads, a
-    // push fails through the existing error path and nothing local is lost.
+fn every_refusal_of_the_content_is_the_one_format_error_on_every_push() {
+    // Plan 12.1 and the rollout decision: a server that refuses the version 2
+    // upload gets ONE clear error, from Save Changes and from Done alike (the
+    // close and quit prompts run Done), never "the upload could not be
+    // confirmed". Injection: drop the format check in `speleodb_upload` and the
+    // DTO carries no `format_refused` (and a 500 below turns unconfirmed).
+    for status in [400, 406, 415, 422] {
+        crate::test_helpers::with_isolated_config(|| {
+            let temp = tempfile::tempdir().expect("temp");
+            let _cache = TestCacheRoot::set(temp.path());
+            let (endpoint, seen) = server(Upload::Refuse(status));
+            let (path, state) = editing(temp.path(), &endpoint);
+            reverse_the_line(&state);
+
+            let pushed = state
+                .speleodb_push_only(Some("Synthetic push".to_owned()))
+                .expect_err("Save Changes is refused");
+            assert_format_refused(&pushed, status);
+            let done = state
+                .speleodb_done(Some("Synthetic push".to_owned()))
+                .expect_err("Done is refused");
+            assert_format_refused(&done, status);
+            assert_eq!(seen.lock().expect("log").uploads.len(), 2);
+            assert_kept_dirty_and_locked(&path, &state, &seen);
+        });
+    }
+}
+
+#[test]
+fn a_server_error_that_landed_nothing_is_the_same_refusal() {
+    // A server whose upload processor raises on the version 2 file answers 500
+    // and commits nothing: the history read right after shows the tip still at
+    // BASE, so it is the format error, not an ambiguous upload retried forever.
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
-        let (endpoint, seen) = server(true);
+        let (endpoint, seen) = server(Upload::Refuse(500));
+        let (path, state) = editing(temp.path(), &endpoint);
+        reverse_the_line(&state);
+
+        let refused = state
+            .speleodb_done(Some("Synthetic push".to_owned()))
+            .expect_err("Done is refused");
+        assert_format_refused(&refused, 500);
+        {
+            let log = seen.lock().expect("log");
+            let upload = log
+                .lines
+                .iter()
+                .position(|l| l.contains("/upload/"))
+                .expect("uploaded");
+            assert!(
+                log.lines[upload..]
+                    .iter()
+                    .any(|l| l.contains("/revisions/")),
+                "the history was read after the error: {:?}",
+                log.lines
+            );
+        }
+        assert_kept_dirty_and_locked(&path, &state, &seen);
+    });
+}
+
+#[test]
+fn a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed() {
+    // The ambiguity the ancestry recovery exists for is kept: a 5xx after the
+    // commit landed, and 503 (try later) or 504 (still working), are not a
+    // refusal of the file.
+    for upload in [
+        Upload::FailAfterLanding(500),
+        Upload::Refuse(503),
+        Upload::Refuse(504),
+    ] {
+        crate::test_helpers::with_isolated_config(|| {
+            let temp = tempfile::tempdir().expect("temp");
+            let _cache = TestCacheRoot::set(temp.path());
+            let (endpoint, _seen) = server(upload);
+            let (path, state) = editing(temp.path(), &endpoint);
+            reverse_the_line(&state);
+            let pushed = state
+                .speleodb_push_only(Some("Synthetic push".to_owned()))
+                .expect("an ambiguous upload is not an error");
+            assert!(matches!(pushed, PushResult::PushUnconfirmed), "{pushed:?}");
+            let on_disk = link_on_disk(&path).expect("linked");
+            assert!(on_disk.has_unpushed_edits);
+            assert!(state.edit_enabled());
+        });
+    }
+}
+
+#[test]
+fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
+    // Plan 12.1 (rollout prerequisite S0): until SpeleoDB accepts v2 uploads, a
+    // push fails with the format error and nothing local is lost.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, seen) = server(Upload::Refuse(400));
         let (path, state) = editing(temp.path(), &endpoint);
         reverse_the_line(&state);
 
         let refused = state
             .speleodb_push_only(Some("Synthetic push".to_owned()))
             .expect_err("the server refused the upload");
-        assert!(
-            refused.message.contains("Only SQLite") || refused.status == Some(400),
-            "{refused:?}"
-        );
+        assert_format_refused(&refused, 400);
         let on_disk = link_on_disk(&path).expect("linked");
         assert!(
             on_disk.has_unpushed_edits,
@@ -279,11 +447,48 @@ fn a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked() {
 }
 
 #[test]
+fn a_landed_push_whose_bookkeeping_save_fails_still_succeeds_and_clears_its_history() {
+    // Review G-speleodb-7: another program touched the cache file while the upload
+    // ran, so the local-only save after the landing is refused (the external-
+    // modification guard). The commit is on the server: the push succeeds, the
+    // history it carried is cleared, and the next push uploads nothing again.
+    // Injection: return the save's error from `speleodb_record_landing` and the
+    // push reports a failure with the pushed history still on the stack.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let path = cache_path_in(temp.path(), ID);
+        let (endpoint, seen) = server_touching(Upload::Accept, Some(path));
+        let (_, state) = editing(temp.path(), &endpoint);
+        reverse_the_line(&state);
+
+        let pushed = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("the commit landed");
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+        let link = state.speleodb_open_link().expect("linked");
+        assert!(!link.has_unpushed_edits);
+        assert_eq!(link.base_commit_sha.as_deref(), Some(PUSHED));
+        assert!(!state.can_undo(), "the pushed history is cleared");
+
+        let again = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("nothing left to push");
+        assert!(matches!(again, PushResult::Pushed { .. }), "{again:?}");
+        assert_eq!(
+            seen.lock().expect("log").uploads.len(),
+            1,
+            "the landed history is never uploaded twice"
+        );
+    });
+}
+
+#[test]
 fn clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk() {
     crate::test_helpers::with_isolated_config(|| {
         let temp = tempfile::tempdir().expect("temp");
         let _cache = TestCacheRoot::set(temp.path());
-        let (endpoint, _seen) = server(false);
+        let (endpoint, _seen) = server(Upload::Accept);
         let (path, state) = editing(temp.path(), &endpoint);
         for _ in 0..3 {
             reverse_the_line(&state);
@@ -322,5 +527,67 @@ fn clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk() {
             "the chain is cleared"
         );
         assert_eq!(file.extras.local.speleodb.inherited_through, None);
+    });
+}
+
+#[test]
+fn publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice() {
+    // The rollout decision: Publish reports a refused first upload clearly (the
+    // server project is empty, the local copy unchanged) instead of success, and
+    // a retry never POSTs a second server project. Injection: drop
+    // `upload_format_refused` from the result and the first assertion fails.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(&temp.path().join("cache"));
+        let (endpoint, seen) = server(Upload::Refuse(415));
+        let local = temp.path().join("local.stalx");
+        write_file(&local, &line_survey("Local"), &extras_for(None));
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(local.clone()).success,
+            "open the local file"
+        );
+        {
+            let mut session = state.speleodb.lock().expect("session");
+            session.endpoint = Some(endpoint);
+            session.email = Some(ME.to_owned());
+            session.token_store = TokenStore::from_in_memory_token("tok-1");
+            session.rehydrate_attempted = true;
+        }
+        let params = || crate::speleodb::SpeleoPublishParams {
+            message: Some("Synthetic publish".to_owned()),
+            name: "Remote".to_owned(),
+            description: String::new(),
+            country: "US".to_owned(),
+            visibility: crate::speleodb::Visibility::Private,
+            latitude: None,
+            longitude: None,
+        };
+        let creates = || {
+            seen.lock()
+                .expect("log")
+                .lines
+                .iter()
+                .filter(|l| l.starts_with("POST /api/v2/projects/ "))
+                .count()
+        };
+
+        let published = state.speleodb_publish(params()).expect("created");
+        assert_eq!(published.upload_format_refused, Some(true));
+        assert_eq!(published.undo_history_omitted, None);
+        assert_eq!(creates(), 1);
+        assert_eq!(seen.lock().expect("log").uploads.len(), 1);
+        // The local copy is unchanged and linked, its work still un-uploaded.
+        let cache = PathBuf::from(&published.local_path);
+        let link = link_on_disk(&cache).expect("the cache copy is linked");
+        assert!(link.has_unpushed_edits);
+        assert_eq!(decoded(&cache).project.lines().len(), 1);
+        assert!(std::fs::metadata(&local).is_ok(), "the original stays");
+
+        let again = state
+            .speleodb_publish(params())
+            .expect_err("a linked copy is never published twice");
+        assert!(again.message.contains("already linked"), "{again:?}");
+        assert_eq!(creates(), 1, "no second server project");
     });
 }

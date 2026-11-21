@@ -322,6 +322,15 @@ pub struct SpeleoPublishResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub undo_history_omitted: Option<bool>,
+    /// Plan 12.1: `Some(true)` when the server refused the first upload because it
+    /// does not take this build's project file format
+    /// ([`super::SpeleoDbError::UploadFormatRefused`]): the server project exists
+    /// with no file in it, and the local copy is unchanged (linked, nothing
+    /// uploaded). A retry is never a second create: the copy is linked, so
+    /// Publish refuses it. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upload_format_refused: Option<bool>,
 }
 
 /// Result of pulling + extracting a project, returned to the webview. The
@@ -616,6 +625,13 @@ pub struct SpeleoErrorDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub endpoint_refusal: Option<EndpointRefusal>,
+    /// `Some(true)` ONLY when the server refused this build's project file
+    /// format on upload ([`super::SpeleoDbError::UploadFormatRefused`], plan
+    /// 12.1), so every push surface shows the same line. Absent on every other
+    /// error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub format_refused: Option<bool>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -703,6 +719,7 @@ mod tests {
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
@@ -926,15 +943,19 @@ mod tests {
             plain(&pushed),
             r#"{"kind":"pushed","undo_history_omitted":true}"#
         );
-        let publish = |undo_history_omitted| SpeleoPublishResult {
+        let publish = |undo_history_omitted, upload_format_refused| SpeleoPublishResult {
             project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
             endpoint: "https://speleodb.example".to_owned(),
             local_path: "/cache/project.stalx".to_owned(),
             undo_history_omitted,
+            upload_format_refused,
         };
-        let quiet = serde_json::to_value(publish(None)).expect("serialize");
+        let quiet = serde_json::to_value(publish(None, None)).expect("serialize");
         assert!(quiet.get("undo_history_omitted").is_none());
-        let noted = serde_json::to_value(publish(Some(true))).expect("serialize");
+        assert!(quiet.get("upload_format_refused").is_none());
+        let noted = serde_json::to_value(publish(Some(true), None)).expect("serialize");
         assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
+        let refused = serde_json::to_value(publish(None, Some(true))).expect("serialize");
+        assert_eq!(refused["upload_format_refused"], serde_json::json!(true));
     }
 }

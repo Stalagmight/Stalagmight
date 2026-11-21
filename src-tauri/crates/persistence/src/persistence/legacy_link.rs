@@ -22,9 +22,15 @@
 //!   value SQLite may produce and a deadline after which any statement is
 //!   interrupted.
 //!
+//!
+//! [`read_cached_copy`] reads the view toggles beside the link, for the
+//! SpeleoDB cache's own reader (`read_cache_file`), on a copy at the frozen
+//! reader's schema version only.
+//!
 //! Built on rusqlite and the frozen legacy crate only, so it outlives the
 //! app's own SQLite layer (`persistence::sqlite`).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -55,6 +61,49 @@ pub struct ReadOptions {
 /// cap or the deadline): nothing is known about its link, and in particular
 /// NOT that it has none.
 pub fn read_link(path: &Path, options: &ReadOptions) -> Result<Option<SpeleoLink>> {
+    let (conn, started) = open_guarded(path, options)?;
+    let link = load_link(&conn)?;
+    within_deadline(started, options)?;
+    Ok(link)
+}
+
+/// What a legacy SpeleoDB cache copy holds for this machine: its link row and
+/// its per-machine view toggles (the `display_settings` table).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CachedCopy {
+    pub link: Option<SpeleoLink>,
+    pub display: BTreeMap<String, String>,
+}
+
+/// The link row and the view toggles of a legacy cache copy written at the
+/// frozen reader's own schema version (a copy 0.6.0 left), read like
+/// [`read_link`]: the schema guard first, then the two tables, nothing copied,
+/// healed, migrated or solved (review G-speleodb-6: the full open, run just to
+/// read a few rows, stalled the first pull of a large project).
+///
+/// A file at any other schema version is refused: the frozen open would run the
+/// migration chain over it, which renames and adds view-toggle keys on the way
+/// (v12, v13), so only that open answers for it. The caller falls back to it on
+/// any error, a hot journal on a read-only read included.
+pub fn read_cached_copy(path: &Path, options: &ReadOptions) -> Result<CachedCopy> {
+    let (conn, started) = open_guarded(path, options)?;
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version != stalagmight_legacy::SUPPORTED_SCHEMA_VERSION {
+        anyhow::bail!(
+            "schema version {version} is migrated on open; only the full open reads its view toggles"
+        );
+    }
+    let copy = CachedCopy {
+        link: load_link(&conn)?,
+        display: load_display(&conn)?,
+    };
+    within_deadline(started, options)?;
+    Ok(copy)
+}
+
+/// Open `path` as [`ReadOptions`] says, with the caps applied and the frozen
+/// schema guard passed. Returns the connection and when the read started.
+fn open_guarded(path: &Path, options: &ReadOptions) -> Result<(Connection, Instant)> {
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", path.display());
     }
@@ -68,16 +117,19 @@ pub fn read_link(path: &Path, options: &ReadOptions) -> Result<Option<SpeleoLink
         .context("Failed to open the legacy project to read its SpeleoDB link")?;
     harden(&mut conn, started, options)?;
     stalagmight_legacy::persistence::check_schema(&conn)?;
-    let link = load_link(&conn)?;
-    // The progress handler interrupts a long statement; a read made of short
-    // ones is checked once at the end, as 0.6.0's untrusted open was.
+    Ok((conn, started))
+}
+
+/// The progress handler interrupts a long statement; a read made of short ones
+/// is checked once at the end, as 0.6.0's untrusted open was.
+fn within_deadline(started: Instant, options: &ReadOptions) -> Result<()> {
     if options
         .deadline
         .is_some_and(|deadline| started.elapsed() >= deadline)
     {
         anyhow::bail!("The SpeleoDB link read ran past its deadline");
     }
-    Ok(link)
+    Ok(())
 }
 
 /// Apply the caps an untrusted file needs before the first read.
@@ -95,6 +147,26 @@ fn harden(conn: &mut Connection, started: Instant, options: &ReadOptions) -> Res
         conn.pragma_update(None, "cell_size_check", true)?;
     }
     Ok(())
+}
+
+/// The `display_settings` rows, as 0.6.0's `load_display_settings` reads them;
+/// none when the table is absent.
+fn load_display(conn: &Connection) -> Result<BTreeMap<String, String>> {
+    let table_exists = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'display_settings'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !table_exists {
+        return Ok(BTreeMap::new());
+    }
+    let mut statement = conn.prepare("SELECT key, value FROM display_settings")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+    Ok(rows)
 }
 
 /// The row itself. The table can be narrower than 0.6.0's (a file last written

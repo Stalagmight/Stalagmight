@@ -5,6 +5,7 @@
  *   out lands, and the success toast becomes a warning saying so.
  * - An upload too large even without history is refused before sending, and the
  *   Save dialog shows the clear "too large" reason.
+ * - A server without version 2 support (plan 12.1) gets its one clear line.
  * - Revision times (a UTC instant, or an older server's New York wall time with
  *   no zone) show as the same local time with the GMT offset stated.
  *
@@ -29,7 +30,7 @@ const LINK_STATUS = {
 };
 
 /** A remote project held for editing with un-uploaded work; `push` answers the Save. */
-async function editingRemoteProject(page: Page, push: 'without_history' | 'too_large'): Promise<void> {
+async function editingRemoteProject(page: Page, push: 'without_history' | 'too_large' | 'format_refused'): Promise<void> {
   await setupMockedPage(page);
   await createProject(page, 'Synthetic large upload');
   await page.evaluate(({ push, linkStatus }) => {
@@ -39,10 +40,16 @@ async function editingRemoteProject(page: Page, push: 'without_history' | 'too_l
     Object.defineProperty(overrides, 'speleodb_push', {
       get: () => push === 'without_history'
         ? Promise.resolve({ kind: 'pushed', undo_history_omitted: true })
-        : Promise.reject({
-          message: 'this project is too large to upload to SpeleoDB: it is 31.2 MB and the server accepts at most 5.2 MB, even without the undo history. Nothing was uploaded; your changes are still on this computer',
-          action: 'Fatal', status: null, transport: null, unpushed_local: null, newer_schema: null,
-        }),
+        : push === 'format_refused'
+          // Plan 12.1: a server without version 2 support refused the upload.
+          ? Promise.reject({
+            message: 'This SpeleoDB server does not accept projects saved by this version yet. Nothing was uploaded; your changes are still on this computer',
+            action: 'Fatal', status: 415, transport: null, unpushed_local: null, newer_schema: null, format_refused: true,
+          })
+          : Promise.reject({
+            message: 'this project is too large to upload to SpeleoDB: it is 31.2 MB and the server accepts at most 5.2 MB, even without the undo history. Nothing was uploaded; your changes are still on this computer',
+            action: 'Fatal', status: null, transport: null, unpushed_local: null, newer_schema: null,
+          }),
     });
     w.__MOCK_IPC_OVERRIDES__ = overrides;
     w.__E2E_TEST__.speleoStore.setState({
@@ -79,6 +86,17 @@ test('an upload too large even without history names the reason', async ({ page 
   await expect(dialog).toContainText('too large to upload');
   await expect(dialog).toContainText('Nothing was uploaded');
   // The work is still here, unuploaded.
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.speleoStore.getState().link?.hasUnpushedEdits)).toBe(true);
+});
+
+test('a server without version 2 support says so, and the work stays here', async ({ page }) => {
+  await editingRemoteProject(page, 'format_refused');
+  await saveToSpeleoDb(page);
+  const dialog = page.getByTestId('speleodb-done-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('This SpeleoDB server does not accept projects saved by this version yet.');
+  await expect(dialog).toContainText('the project stays locked for you');
+  await expect(dialog).not.toContainText('Could not');
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.speleoStore.getState().link?.hasUnpushedEdits)).toBe(true);
 });
 

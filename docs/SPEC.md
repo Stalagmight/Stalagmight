@@ -3069,7 +3069,9 @@ interrupted save never leaves a half-written project - see
 - The SpeleoDB server and its Python reader must accept version 2 before a
   managed project's upload can land (the rollout prerequisite of
   [plan 12.1](plans/2026-11-20_station-graph-model.md#121-rollout-prerequisites-outside-this-repository-called-out-in-the-pr));
-  until then an upload fails through the existing error path.
+  until then every upload fails with "This SpeleoDB server does not accept
+  projects saved by this version yet", keeping the project dirty and locked,
+  and Publish says the new server project stayed empty.
 
 **Legacy files.** Files written before version 2 are SQLite databases with the
 same extension. They are read by the frozen 0.6.0 reader (`crates/legacy`: the

@@ -102,6 +102,18 @@ impl AppState {
                 &super::speleodb_pull::download_decode_options(),
             )
             .map_err(local_dto)?;
+        // Review G-speleodb-8: a Restore stamps the copy un-pushed on top of the tip,
+        // but a revision a newer Stalagmight saved opens read-only here, so its save,
+        // and with it every push, is refused: a dirty copy holding the lock that only
+        // Discard gets out of. Refused before anything is replaced; a View (clean)
+        // still shows it, and restoring the tip itself stamps nothing.
+        if editing && prepared.link.has_unpushed_edits && prepared.extras.read_only.is_some() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "this revision was saved by a newer version of Stalagmight, so this version \
+                 can view it but not restore it; update Stalagmight to restore it"
+                    .to_owned(),
+            )));
+        }
         self.open_project_download(prepared, dest.to_path_buf(), binding.token, editing)
             .map_err(local_dto)?;
         self.while_swapped_in_project_is_open(dest, &project_id, |path| {

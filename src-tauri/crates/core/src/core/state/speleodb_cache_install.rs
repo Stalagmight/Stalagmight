@@ -69,6 +69,20 @@ fn migrate_refusal(error: &MigrateError) -> SpeleoDbError {
     }
 }
 
+/// The caps a downloaded legacy revision is migrated under (review
+/// G-speleodb-4): any collaborator who can upload controls the bytes, so the
+/// frozen open runs under the limits 0.6.0 validated a download with, the
+/// download's own size cap and [`DOWNLOADED_PROCESSING_DEADLINE`] for the load's
+/// SQLite statements, not a local open's one hour.
+///
+/// [`DOWNLOADED_PROCESSING_DEADLINE`]: super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE
+fn legacy_download_caps(options: &DecodeOptions) -> crate::persistence::migrate::UntrustedCaps {
+    crate::persistence::migrate::UntrustedCaps {
+        max_file_bytes: options.max_file_bytes,
+        sqlite_deadline: super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE,
+    }
+}
+
 pub(super) fn sync_cache_directory(dest: &Path) {
     #[cfg(unix)]
     if let Some(parent) = dest.parent() {
@@ -195,9 +209,10 @@ impl AppState {
             Format::Legacy => {
                 drop(bytes);
                 let config = self.get_config();
-                let migrated = crate::persistence::migrate::migrate_path_for_app(
+                let migrated = crate::persistence::migrate::migrate_untrusted_path_for_app(
                     source,
                     &config.closure_adjustment,
+                    legacy_download_caps(options),
                 )
                 .map_err(|e| migrate_refusal(&e))?;
                 tracing::info!(
@@ -319,8 +334,8 @@ impl AppState {
             self.guard_local_edits(project_id, dest)?;
         }
         // The view toggles of the copy on disk, read before any lock is taken: a
-        // legacy copy is read through the migration, which must not run under the
-        // `project` guard. Another install cannot land in between: it would move
+        // legacy copy the cheap read declines is read through the migration, which
+        // must not run under the `project` guard. Another install cannot land in between: it would move
         // the session generation, which the commit below checks.
         let on_disk_display = super::speleodb_cache::file_display(dest);
         let _lock_ops = self.speleodb_lock_ops_guard();
@@ -386,6 +401,45 @@ mod tests {
         seed_with_history, write_file, write_v2,
     };
     use crate::persistence::stalx_v2::temp_path;
+
+    #[test]
+    fn a_legacy_download_is_migrated_under_the_untrusted_caps() {
+        // Review G-speleodb-4: 0.6.0 read a download under a 64 MiB value cap and a
+        // 30 s SQLite deadline; the migration had fallen back to a local open's
+        // 1 GiB and one hour. Injection: call `migrate_path_for_app` in the legacy
+        // arm again and the tripwire below fails (the caps themselves are pinned
+        // behaviourally in `migrate_tests::an_untrusted_file_is_migrated_under_its_caps`).
+        let caps =
+            legacy_download_caps(&crate::core::state::speleodb_pull::download_decode_options());
+        assert_eq!(caps.max_file_bytes, 64 * 1024 * 1024);
+        assert_eq!(caps.sqlite_deadline, std::time::Duration::from_secs(30));
+        let src = include_str!("speleodb_cache_install.rs");
+        let body = src
+            .split_once("pub(super) fn prepare_download(")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    pub(super) fn ").next())
+            .expect("prepare_download is defined");
+        assert!(body.contains("migrate_untrusted_path_for_app("));
+        assert!(body.contains("legacy_download_caps(options)"));
+        assert!(!body.contains("migrate_path_for_app("));
+
+        // And a legacy revision still installs under them.
+        let dir = tempfile::tempdir().expect("temp");
+        let source = crate::core::state::stalx_fixtures::legacy_linked_project(
+            &dir.path().join("download.stalx"),
+            Some(&fixture_link("https://x", false)),
+        );
+        let state = AppState::new().expect("state");
+        let prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://x", false),
+                InheritedUndo::Drop,
+                &crate::core::state::speleodb_pull::download_decode_options(),
+            )
+            .expect("a legacy revision migrates under the caps");
+        assert_eq!(prepared.project.lines().len(), 1);
+    }
 
     #[test]
     fn a_failed_install_preserves_the_cache_and_cleans_the_stage() {

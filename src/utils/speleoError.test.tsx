@@ -44,6 +44,31 @@ beforeEach(() => {
   });
 });
 
+describe('humanizeSpeleoError - a server that refuses this build\'s file format (plan 12.1)', () => {
+  it('says one self-framed line on every push surface, whatever the server answered', () => {
+    for (const prefix of ['Could not save changes', 'Could not finish editing', undefined]) {
+      for (const status of [400, 415, 500]) {
+        const line = humanizeSpeleoError(
+          dto({ message: 'backend text', action: 'Fatal', status, transport: null, format_refused: true }),
+          prefix,
+        );
+        expect(line).toBe(
+          'This SpeleoDB server does not accept projects saved by this version yet. Nothing was uploaded; '
+          + 'your changes are still on this computer and the project stays locked for you.',
+        );
+      }
+    }
+  });
+
+  it('leaves every other refusal to its own wording', () => {
+    const line = humanizeSpeleoError(
+      dto({ message: 'Lock is held by someone else.', action: 'Fence', status: 403, transport: null }),
+      'Could not save changes',
+    );
+    expect(line).toBe('Could not save changes: Lock is held by someone else');
+  });
+});
+
 describe('humanizeSpeleoError - a download a newer Stalagmight saved (#649)', () => {
   it('says it in the open dialog wording, with the file and both versions, unprefixed', () => {
     const line = humanizeSpeleoError(

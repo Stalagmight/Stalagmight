@@ -3852,6 +3852,7 @@
       "unreachable": "Could not reach SpeleoDB at {{endpoint}}. Check your network connection and that the server is running.",
       "thisServer": "the configured server"
     },
+    "formatRefused": "This SpeleoDB server does not accept projects saved by this version yet. Nothing was uploaded; your changes are still on this computer and the project stays locked for you.",
     "httpExceptions": "localhost, 127.0.0.1 and 192.168.x.x addresses",
     "endpointRefused": {
       "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only for $t(speleodb.httpExceptions), because it would send your credentials unencrypted. Use an https:// address.",
@@ -4064,6 +4065,7 @@
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
       "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
+      "uploadRefused": "The project was created on SpeleoDB, but this SpeleoDB server does not accept projects saved by this version yet, so nothing was uploaded: the project on the server is empty. Your local copy is unchanged.",
       "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
     },
     "readOnlyNotice": {

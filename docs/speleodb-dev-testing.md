@@ -133,11 +133,26 @@ Python reader take only SQLite refuses it; that is the rollout prerequisite
 outside this repository ([plan 12.1](plans/2026-11-20_station-graph-model.md#121-rollout-prerequisites-outside-this-repository-called-out-in-the-pr):
 the server accepts version 2, its reader reads it, and ideally a
 minimum-client gate for projects whose HEAD is version 2). Until then a push
-fails through the existing error path: the project stays dirty, BASE is
-unchanged and the editing lock is held. `core/state/speleodb_push_v2_tests.rs`
-pins both sides against a loopback server
+fails with one dedicated error: the project stays dirty, BASE is unchanged and
+the editing lock is held, as after any failed push.
+
+What such a server answers is not recorded here (the SDK's OpenAPI declares
+400, 403, 404, 406, 415 and 500 for the upload), so the push reads the status,
+never the server's text (`contract::upload_refusal`): a 400, 406, 415 or 422
+to a version 2 body, or a 5xx other than 503 and 504 after which the history
+(read right after it) shows nothing landed, is `UploadFormatRefused`. Every
+push surface shows its one line, "This SpeleoDB server does not accept
+projects saved by this version yet"; a 5xx after a commit landed, a 503 and a
+504 stay the ambiguous "could not be confirmed". Publish to such a server
+creates the project, reports `upload_format_refused` (the server project is
+empty, the local copy unchanged) and never creates a second one.
+`core/state/speleodb_push_v2_tests.rs` pins this against a loopback server
 (`a_confirmed_push_uploads_v2_json_and_is_durable_at_once`,
+`every_refusal_of_the_content_is_the_one_format_error_on_every_push`,
+`a_server_error_that_landed_nothing_is_the_same_refusal`,
+`a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed`,
 `a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked`,
+`publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice`,
 `clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk`). A manual test
 of the app against a server without version 2 support should expect that
 refusal on every upload of an edited project; a legacy SQLite revision on the

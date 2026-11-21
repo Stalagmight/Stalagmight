@@ -164,6 +164,28 @@ describe('PublishToSpeleoDbDialog', () => {
     expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('without undo history'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
   });
 
+  it('says the server refused the file format and the server project is empty (plan 12.1)', async () => {
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_link_status') return { is_remote: true, project_id: 'p1', has_unpushed_edits: true, edit_enabled: false, permission: 'ADMIN', remote_state: 'up_to_date' };
+      return { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx', upload_format_refused: true };
+    });
+    render(<PublishToSpeleoDbDialog />);
+
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    const [message, key, kind] = showToastMock.mock.calls[0] ?? [];
+    expect(key).toBe(TOAST_KEYS.SPELEODB_PUBLISH);
+    expect(kind).toBe('error');
+    expect(message).toContain('does not accept projects saved by this version yet');
+    expect(message).toContain('the project on the server is empty');
+    expect(message).toContain('Your local copy is unchanged');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+
   it('adds the undo-history note to the reopen failure instead of a second toast (sdk#3)', async () => {
     invokeIpcMock.mockImplementation(async (cmd) => {
       if (cmd === 'speleodb_link_status') return { is_remote: true, project_id: 'p1', has_unpushed_edits: false, edit_enabled: false, permission: 'ADMIN', remote_state: 'up_to_date' };

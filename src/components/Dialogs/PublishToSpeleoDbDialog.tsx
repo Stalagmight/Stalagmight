@@ -118,7 +118,9 @@ export default function PublishToSpeleoDbDialog() {
       // and stands alone (as a warning) when the outcome has none.
       const historyNote = undoHistoryOmitted ? t('speleodb.publish.withoutHistory') : null;
       const withNote = (message: string) => (historyNote ? `${message} ${historyNote}` : message);
-      if (outcome === 'upload_pending') {
+      if (outcome === 'upload_refused') {
+        showToast(t('speleodb.publish.uploadRefused'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      } else if (outcome === 'upload_pending') {
         showToast(withNote(t('speleodb.publish.uploadPending')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       } else if (outcome === 'recent_cleanup_failed') {
         showToast(withNote(t('speleodb.publish.recentCleanupFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
