@@ -2811,7 +2811,6 @@
     },
     "conversion": {
       "lead": "This project was converted from the old file format.",
-      "detail": "The new format is written the first time the project is saved, or already was if you renamed it in Recent Projects or removed its SpeleoDB link; the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.",
       "dismiss": "Dismiss"
     },
     "historyDiscarded": {

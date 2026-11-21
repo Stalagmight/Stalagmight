@@ -162,8 +162,9 @@ regions). Read the comment blocks in those two files plus
   a refused save is worded for it. An old
   file whose conversion moved stations, changed a depth or could not place a
   station shows the one-time conversion notice
-  (`conversion-notice-banner`, "the original is kept": Recent Projects, right-click, Restore an earlier copy) until
-  dismissed. The history-discarded banner (`history-discarded-banner`) is
+  (`conversion-notice-banner`, "the original file is kept": Recent Projects, right-click, Restore an earlier copy;
+  for a legacy SpeleoDB revision converted on download, "the original revision is unchanged on SpeleoDB" instead)
+  until dismissed. The whole sentence comes from the backend, which knows where the original is. The history-discarded banner (`history-discarded-banner`) is
   unchanged: it also covers an old file's history, which the conversion drops.
 
 ## Command-failure contract

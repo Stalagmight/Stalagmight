@@ -106,11 +106,18 @@ modification time and SHA-256: the save guard below), and sniffs it
   the global config. The history is always dropped, with the
   "earlier version" banner. When the conversion changed what the user sees, a
   one-time conversion notice is kept (`AppState::take_conversion_notice`,
-  shown as a banner): "Converted from the old file format; N stations moved
-  by up to X m; M stations changed depth by up to Z m; K stations could not
-  be placed; the original is kept (Recent Projects: right-click, Restore an
-  earlier copy)", each part only when its count is not zero. A move is a
-  torn legacy merge collapsed into one station or an unexplained horizontal
+  shown as a banner): "Converted from the old file format; N stations moved by
+  up to X m; M stations changed depth by up to Z m; K stations could not be
+  placed", each part only when its count is not zero, then where the original
+  is: "The new format is written the first time the project is saved, or
+  already was if you renamed it in Recent Projects or removed its SpeleoDB
+  link; the original file is kept: to go back to it, right-click the project
+  in Recent Projects and choose Restore an earlier copy." A legacy SpeleoDB
+  revision is converted when it is downloaded into the cache, which is version
+  2 at once and keeps no local original, so its notice ends "This computer's
+  copy is already converted, and the original revision is unchanged on
+  SpeleoDB: it stays in the project's Revision history." A move is a torn
+  legacy merge collapsed into one station or an unexplained horizontal
   difference; a depth change is a snap whose derived alignment changed a
   depth tie, or an unexplained one; a slot with no finite position is never
   a move "by up to inf m". Computed View differences are logged and kept in

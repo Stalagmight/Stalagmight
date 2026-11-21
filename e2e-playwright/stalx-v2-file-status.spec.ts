@@ -120,7 +120,8 @@ test.describe('.stalx v2 file status', () => {
   test('an old-format file the conversion moved says so once, until dismissed', async ({ page }) => {
     await page.evaluate(() =>
       (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__(
-        'Converted from the old file format; 4 stations moved by up to 0.42 m; the original is kept (Recent Projects: right-click, Restore an earlier copy).'
+        // The backend writes the whole sentence, where the original is included.
+        'Converted from the old file format; 4 stations moved by up to 0.42 m. The new format is written the first time the project is saved, or already was if you renamed it in Recent Projects or removed its SpeleoDB link; the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.'
       )
     );
     await createProject(page, 'Old Format');

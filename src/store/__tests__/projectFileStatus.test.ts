@@ -43,7 +43,7 @@ describe('checkFileStatus', () => {
   });
 
   it('keeps the conversion notice a second (StrictMode) check cannot take again', async () => {
-    let notice: string | null = 'Converted from the old file format; 3 stations moved by up to 0.42 m; the original is kept (Recent Projects: right-click, Restore an earlier copy).';
+    let notice: string | null = 'Converted from the old file format; 3 stations moved by up to 0.42 m. The new format is written the first time the project is saved, or already was if you renamed it in Recent Projects or removed its SpeleoDB link; the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.';
     ipc.mockImplementation(async (command: string) => {
       if (command !== 'take_conversion_notice') return null;
       const taken = notice;
