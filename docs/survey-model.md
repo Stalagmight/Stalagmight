@@ -61,7 +61,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 
 ## Data and ids
 
-- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`.
+- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`; `StationAlias { id, name, line }`, where `line` is the line that knew the station by that alias (a 0.6.0 merge member's line, a merge's moving line), checked like a `via` hint, re-pointed by Split, range splits and Combine, remapped by Add, cleared when stale. Detach gives that line the alias's id and name back; on that line the station's own name is exempt from invariant 8 (`known_by_alias_on`).
 - `Project.lines` is private: read it with `lines()`, `line(id)`, `line_position(id)`;
   change it with `lines_mut()` / `line_mut(id)`, which drop the cached
   topology and shot-uuid index. Every other field is public and feeds no cache.
@@ -138,7 +138,12 @@ above every id in use (aliases included), the station and Section
 counters at most 2^31 and closure ids and the closure counter within
 `MAX_CLOSURE_ID` (2^53 - 1, the file's integers), finite numbers (shots, quality,
 azimuth corrections, hand moves, datums, placements, elevation, validation
-thresholds). Every `Violation` has a precise `Display` message. The `.stalx`
+thresholds), and distances and stored coordinates within their bounds:
+`MAX_MEASUREMENT_M` (1,000,000 m) for a shot's length, depths and passage
+dimensions, `MAX_COORDINATE_M` (100,000,000 m) for placements, datum
+corrections and hand moves, so every derived position is finite (review
+finding B-derived-solver-3; the shot doors refuse a distance past the bound
+in words, the migration clamps a 0.6.0 reading to it). Every `Violation` has a precise `Display` message. The `.stalx`
 v2 encoder and decoder refuse through it; no bound is checked twice.
 
 ## Solver v1 (`positions.rs`)
@@ -170,8 +175,15 @@ read-only instead of showing another layout without a word
   ends are less than `ALIGNMENT_TOLERANCE_M` (1 cm) apart and the tie would
   not join two datum-held components; others never.
 
-No hash order reaches a result; reordering lines, closures, or datums without
-changing roles changes no bit (tested).
+No hash order reaches a result. Reordering lines changes no bit (tested).
+Reordering closures changes no bit as long as the across-one-shot skip set
+stays the same: the skip set is decided in closure list order (the first
+closure whose union would collapse a shot is joined, a later one is skipped),
+so swapping two closures can swap which one is skipped and with it the
+Computed View (tested). Reordering datums changes no bit as long as the frame
+(the first datum in list order) and each piece's placement datum stay the
+same; moving another datum first moves the frame, so every raw position
+changes.
 
 ## The anchor algorithm (`anchors.rs`)
 
@@ -238,8 +250,8 @@ Shared cores (one copy each):
 
 | Core | Used by |
 |---|---|
-| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases, the comment rule (`Join`, or Combine's pick), `external`, names re-uniquified | Merge Stations, the sweep's promotions, Combine's join |
-| `detach_ids(station, line)` (`ops_detach.rs`): a line's slot gets a new station; `via` datums, closure ends and the hand move follow | Detach / Unmerge, Combine's torn junctions |
+| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming its line), the comment rule (`Join`, or Combine's pick), `external`, true clashes lettered (a line that knows the survivor by the new alias keeps its names) | Merge Stations, the sweep's promotions, Combine's join |
+| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station (with `restore`, the junction's alias naming the line gives it its id and name back); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |
 | `solve_hold(station)` (`adjust.rs`) | The Computed View's own partition; Combine's gauge rule |
@@ -263,8 +275,8 @@ Shared cores (one copy each):
 | File | Commands and queries |
 |---|---|
 | `ops.rs` | `OpError`, `OpOutcome`, `run_op`, `station_of_slot`, `station_text`. |
-| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias, comments joined, names re-uniquified on the moving lines, `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
-| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction); the `detach_ids` core. |
+| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias naming its line, comments joined, true clashes lettered on the moving lines (the line that knows the survivor by the new alias keeps its names), `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
+| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction), `detach_naming` (what the line would get, for the dialog); the `detach_ids` core. |
 | `ops_closures.rs` | `create_closure(a, a_via, b, b_via, strategy)` (reports `closure_metrics_via` of the picked slots), `create_closure_at(slot, slot, strategy)`, `remove_closure(id)`, `closure_refusal`, `closure_preview`, `closure_between`. |
 | `sweep.rs` | `sweep_orphan_closures() -> SweepReport` (plan 5.5): one pass in list order; `a == b` removed; a sole bridge promoted by a merge (end `a`'s piece moves unless it is placed and `b`'s is not), kept between two placed pieces. `sweep_orphan_closures_moving(ends)` (the deletes): the named closures first, the named end's piece moving. |
 | `ops_datums.rs` | `set_datum(station, via, gps, accuracy)` / `set_datum_at(slot, ...)` (append, accuracy-only edit, or GPS edit through the anchor algorithm), `remove_datum(index)` / `remove_datum_at(slot)` (sweeps), `set_datum_entrance`, `datum_entrance`, `datum_index_for(station, via)` (the datum a slot has), `preview_zero_datum`. |
@@ -288,7 +300,7 @@ form for the wire. Most take the alignment of this state,
 | Roles, entrances, gaps | `datum_roles`, `datum_entrances`, `entrance_stations`, `datum_gap`, `gps_fix_gaps`, `far_gps_fixes`, `gps_gap_warnings` | Entrance default: first or last station of the `via` line, else of the station's first line. Survey distance along shots only. |
 | Frozen shots | `frozen_shots(&aligned)`, `is_shot_frozen(line, index)` | Tarjan bridges over shots and aligned closures; positional output. |
 | Rigid groups | `rigid_groups(&aligned)` (`group_of`, `lines`, `has_datum`, `tied`), `rigid_lines_of`, `anchored_lines`, `immovable_stations(&ties)`, `merge_pairs()`; co-located stations are `tie_groups(&aligned).group(s)` | Fixes count as anchors for Move Segment and Move Station, as today (D15). |
-| Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct) and `slot_count`; `to_project_stats` keeps today's slot count. |
+| Stats | `survey_stats(&raw, include_reference) -> SurveyStats` | `station_count` (distinct, as the file summary counts), `slot_count` (0.6.0's station count) and `junction_count`; `to_project_stats` sends the distinct and junction counts. |
 | Survey graph | `survey_distances_from`, `penetration_distances`, `penetration`, `distance_field`, `along_line_between` | Junction = one node, closures zero-cost, reference ties infinite unless opted in; shots in line-id order. |
 | Gas | `gas_reach(..) -> GasReach`, `GasReach::to_wire`, `gas_reach_field_wire(..)` | Today's engine on stations; the route has no merge hops. |
 

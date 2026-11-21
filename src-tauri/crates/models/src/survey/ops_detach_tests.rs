@@ -225,3 +225,72 @@ fn closure_ends_attached_via_the_line_move_and_others_stay() {
     assert!(p.closures.iter().any(|c| c.id == via_b));
     assert!(p.topology().connected(at(&p, a, 0), at(&p, b, 0)));
 }
+
+/// Review finding UX-4: merging by mistake and detaching gives the line back
+/// as it was. A:2 merged into B:0 (A moves onto B; B:0 survives, A:2's id and
+/// name are an alias naming A). Detaching A gives A's slot that id and name
+/// back, and the alias leaves the junction; detaching B (the survivor's own
+/// line) mints a fresh station, as before. The preview says the same.
+#[test]
+fn detaching_the_line_an_alias_names_gives_it_its_id_and_name_back() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    let a2_name = p.stations[&a2].name.clone();
+    ok(p.merge_stations(a2, b0));
+    assert_eq!(p.stations[&b0].aliases[0].line, Some(a));
+    let merged = p.clone();
+
+    let preview = p.detach_naming(b0, a).unwrap();
+    assert_eq!(
+        (preview.id, preview.name.as_str(), preview.restored_alias),
+        (a2, a2_name.as_str(), true)
+    );
+    let out = ok(p.detach_line(b0, a));
+    assert_valid(&p);
+    assert!(out.value.restored_alias);
+    assert_eq!(out.value.new_station, a2);
+    assert_eq!(at(&p, a, 2), a2, "A's slot is A:2 again");
+    assert_eq!(p.stations[&a2].name, a2_name);
+    assert!(
+        p.stations[&b0].aliases.is_empty(),
+        "the alias left the junction"
+    );
+    assert_eq!(p.counters.next_station_id, merged.counters.next_station_id);
+
+    // The survivor's own line has no alias: a fresh id, today's name rule.
+    let mut q = merged.clone();
+    let preview = q.detach_naming(b0, b).unwrap();
+    assert!(!preview.restored_alias);
+    let out = ok(q.detach_line(b0, b));
+    assert_valid(&q);
+    assert!(!out.value.restored_alias);
+    assert_eq!(out.value.new_station, merged.counters.next_station_id);
+    assert_eq!(preview.id, out.value.new_station);
+    assert_eq!(q.stations[&out.value.new_station].name, preview.name);
+}
+
+/// The alias's name is given back only when no other station of the line
+/// holds it; the id comes back either way.
+#[test]
+fn a_taken_alias_name_falls_back_to_the_junctions_name() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a1, a2, b0) = (at(&p, a, 1), at(&p, a, 2), at(&p, b, 0));
+    let a2_name = p.stations[&a2].name.clone();
+    ok(p.merge_stations(a2, b0));
+    // A:1 takes the name A:2 had.
+    p.station_mut(a1).unwrap().name = a2_name.clone();
+    assert_valid(&p);
+    let out = ok(p.detach_line(b0, a));
+    assert_valid(&p);
+    assert_eq!(out.value.new_station, a2, "the id comes back");
+    let name = &p.stations[&a2].name;
+    assert_ne!(name, &a2_name, "the name is taken on A");
+    assert!(
+        name.starts_with(&p.stations[&b0].name),
+        "today's rule: {name}"
+    );
+}

@@ -96,8 +96,12 @@ pub struct Survey {
     pub station_comments: Vec<StationComment>,
     /// The station names (e.g. the MNemo station number a DMP import
     /// recorded), at every position: a junction's one name is listed once per
-    /// section it is on. Unique among the stations of each section, but not
-    /// across the survey: MNemo numbers restart at 0 in every section.
+    /// section it is on. Unique among the stations of each section, except
+    /// that a junction's name may repeat a section's own station's name on a
+    /// section that knows the junction by another name (the station it had
+    /// there before a merge or a 0.6.0 conversion joined it: in a version 2
+    /// file, an alias naming that section). Not unique across the survey:
+    /// MNemo numbers restart at 0 in every section.
     pub station_names: Vec<StationName>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when

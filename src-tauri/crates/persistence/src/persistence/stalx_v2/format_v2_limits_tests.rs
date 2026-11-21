@@ -183,6 +183,7 @@ fn alias_ids_and_counters_stay_in_range() {
     p.station_mut(host).unwrap().aliases.push(StationAlias {
         id: 4_000_000_000,
         name: None,
+        line: None,
     });
     p.counters.next_station_id = 4_000_000_001;
     // `validate` checks both ranges; the encoder refuses through it.

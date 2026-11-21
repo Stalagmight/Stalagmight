@@ -60,11 +60,11 @@ fn an_out_of_range_station_id_is_reported() {
 fn an_alias_equal_to_a_live_id_is_reported() {
     expect_violation(
         |p| {
-            p.stations
-                .get_mut(&0)
-                .unwrap()
-                .aliases
-                .push(StationAlias { id: 1, name: None });
+            p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
+                id: 1,
+                name: None,
+                line: None,
+            });
         },
         &Violation::AliasCollision {
             station: 0,
@@ -383,6 +383,7 @@ fn counters_must_be_above_every_id_in_use() {
             p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
                 id: 40,
                 name: Some("old".to_string()),
+                line: None,
             });
         },
         &Violation::CounterNotAbove {
@@ -524,6 +525,7 @@ fn an_alias_id_outside_the_station_id_space_is_reported() {
             p.station_mut(host).unwrap().aliases.push(StationAlias {
                 id: MAX_STATION_ID,
                 name: None,
+                line: None,
             });
         },
         &Violation::AliasOutOfRange {
@@ -784,4 +786,164 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
         reported += usize::from(!fast.is_empty());
     }
     assert!(reported > 200, "most corruptions are reported: {reported}");
+}
+
+/// Review finding B-derived-solver-3: a valid file could hold finite but
+/// absurd numbers (a shot of 1e200 m), which the layout summed to infinity
+/// and the solver turned into NaN. A distance is now bounded by
+/// `MAX_MEASUREMENT_M` and a stored coordinate by `MAX_COORDINATE_M`; the
+/// bound itself is valid.
+#[test]
+fn distances_and_coordinates_past_their_bound_are_reported() {
+    use super::{MAX_COORDINATE_M, MAX_MEASUREMENT_M};
+    let (mut p, _) = three_line_junction();
+    p.line_mut(0).unwrap().shots[0].length = MAX_MEASUREMENT_M;
+    p.line_mut(0).unwrap().shots[2].depth_out = -MAX_MEASUREMENT_M;
+    p.placements[0].x = MAX_COORDINATE_M;
+    assert_eq!(p.validate(), Vec::new(), "the bound itself is valid");
+
+    p.line_mut(0).unwrap().shots[1].length = 1e200;
+    p.line_mut(1).unwrap().shots[0].down = Some(-1.000_001e6);
+    p.line_mut(0).unwrap().shots[2].azimuth_in = 1e200; // an angle: unbounded
+    p.line_mut(2).unwrap().hand_moves.insert(3, [0.0, 2e8, 0.0]);
+    p.placements[0].y = -1e300;
+    let violations = p.validate();
+    let out: Vec<(NumberField, f64)> = violations
+        .iter()
+        .filter_map(|v| match v {
+            Violation::OutOfBounds { field, bound, .. } => Some((field.clone(), *bound)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(out.len(), violations.len(), "only bounds: {violations:?}");
+    assert_eq!(
+        out,
+        vec![
+            (
+                NumberField::Shot {
+                    line: 0,
+                    index: 1,
+                    field: "length"
+                },
+                MAX_MEASUREMENT_M
+            ),
+            (
+                NumberField::Shot {
+                    line: 1,
+                    index: 0,
+                    field: "down"
+                },
+                MAX_MEASUREMENT_M
+            ),
+            (
+                NumberField::HandMove {
+                    line: 2,
+                    station: 3,
+                    axis: 1
+                },
+                MAX_COORDINATE_M
+            ),
+            (
+                NumberField::Placement {
+                    placement: 0,
+                    axis: 1
+                },
+                MAX_COORDINATE_M
+            ),
+        ]
+    );
+    let mut datum = ZeroDatum::new(0, gps(10.0, 10.0));
+    datum.correction = Some([0.0, 1e9]);
+    p.placements.clear();
+    p.datums.push(datum);
+    assert!(p.validate().iter().any(|v| matches!(
+        v,
+        Violation::OutOfBounds {
+            field: NumberField::DatumCorrection { datum: 0, axis: 1 },
+            ..
+        }
+    )));
+}
+
+/// Within the bounds every derived position is finite: the longest line of
+/// the longest shots, depths swinging between the two bounds, placed at the
+/// coordinate bound, with a closure the solver adjusts.
+#[test]
+fn every_derived_position_is_finite_within_the_bounds() {
+    use super::{MAX_COORDINATE_M, MAX_MEASUREMENT_M};
+    let mut p = project();
+    let shots = (0..2_000)
+        .map(|i| {
+            let (a, b) = if i % 2 == 0 { (-1.0, 1.0) } else { (1.0, -1.0) };
+            super::test_helpers::shot(
+                f64::from(i % 360),
+                MAX_MEASUREMENT_M,
+                a * MAX_MEASUREMENT_M,
+                b * MAX_MEASUREMENT_M,
+            )
+        })
+        .collect();
+    let l = add(&mut p, StartAt::New, shots);
+    let s0 = at(&p, l, 0);
+    p.set_placement(s0, MAX_COORDINATE_M, -MAX_COORDINATE_M)
+        .unwrap();
+    let end = at(&p, l, 2_000);
+    p.push_closure(s0, Some(l), end, Some(l), ClosureStrategy::Batch);
+    assert_eq!(p.validate(), Vec::new());
+    let raw = p.raw_positions();
+    assert!(raw.iter().all(|(_, c)| c.iter().all(|v| v.is_finite())));
+    let adjusted = p.adjusted_positions(&crate::config::ClosureAdjustmentConfig::default());
+    assert!(adjusted
+        .iter()
+        .all(|(_, c)| c.iter().all(|v| v.is_finite())));
+}
+
+/// An alias's line must pass through its station (invariant 2, like a
+/// `via`), and on that line the station's own name need not be unique
+/// (invariant 8): the line knows it by the alias (review findings UX-4,
+/// D-migration-upgrade-8 and UX-3).
+#[test]
+fn an_alias_line_must_pass_its_station_and_exempts_it_from_that_lines_names() {
+    let (mut p, [l0, l1, _]) = three_line_junction();
+    let s1 = at(&p, l0, 1);
+    let l1_end = at(&p, l1, 2);
+    // s1 is the junction of L0 and L1; give L1's end the junction's name.
+    let name = p.stations[&s1].name.clone();
+    p.stations.get_mut(&l1_end).unwrap().name = name.clone();
+    assert!(p.validate().iter().any(|v| matches!(
+        v,
+        Violation::DuplicateStationName { line, .. } if *line == l1
+    )));
+    // L1 knows s1 by an alias: no clash there.
+    let alias = p.mint_station_id().unwrap();
+    p.stations.get_mut(&s1).unwrap().aliases.push(StationAlias {
+        id: alias,
+        name: Some("0".to_string()),
+        line: Some(l1),
+    });
+    assert_eq!(p.validate(), Vec::new());
+    assert!(p.known_by_alias_on(s1, l1));
+    assert!(!p.known_by_alias_on(s1, l0));
+    // A rename the user asks for still sees every name.
+    assert!(!p.conflicts_with_name(l1_end, &name).is_empty());
+
+    // A line that does not pass the station is a stale hint.
+    let s0 = at(&p, l0, 0);
+    let other = p.mint_station_id().unwrap();
+    p.stations.get_mut(&s0).unwrap().aliases.push(StationAlias {
+        id: other,
+        name: None,
+        line: Some(l1),
+    });
+    assert_eq!(
+        p.validate(),
+        vec![Violation::StaleAliasLine {
+            station: s0,
+            alias: other,
+            line: l1
+        }]
+    );
+    let dropped = p.drop_stale_attachments();
+    assert_eq!(dropped.alias_lines, vec![(s0, other)]);
+    assert_eq!(p.validate(), Vec::new());
 }

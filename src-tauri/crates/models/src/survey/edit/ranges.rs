@@ -122,7 +122,51 @@ impl Range {
     }
 }
 
+/// What Delete Shot + Split of one interior shot would weld (review finding
+/// UX-5): the closures the orphan sweep promotes once the split leaves them
+/// the only connection between the halves' pieces, and the largest raw move
+/// of a station the split keeps. 0.6.0's Delete Shot + Split promoted them
+/// the same way (`sweep_orphan_closures`, issue #8; the parity test is
+/// `persistence::migrate::migrate_tests::delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did`),
+/// so the dialog says so instead of the edit changing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitWeld {
+    /// The closures promoted to a junction, as they were.
+    pub promoted: Vec<Promotion>,
+    /// The largest raw (measured) horizontal move of any station, metres.
+    pub max_move_m: f64,
+}
+
 impl Project {
+    /// What Delete Shot + Split of shot `index` of `line` would weld
+    /// ([`SplitWeld`]), from the split run on a copy; `None` for an edge shot
+    /// or a split the edit refuses.
+    pub(super) fn split_delete_weld(&self, line: LineId, index: usize) -> Option<SplitWeld> {
+        let shots = &self.line(line)?.shots;
+        if index == 0 || index + 1 >= shots.len() {
+            return None;
+        }
+        let shot = shots[index].id;
+        let range = self.range_of(line, shot, shot).ok()?;
+        let before = self.raw_positions();
+        let mut copy = self.clone();
+        let edited = copy
+            .run_edit(self, |p| p.split_out_range(line, range, None))
+            .ok()?;
+        let after = copy.raw_positions();
+        let max_move_m = before
+            .iter()
+            .filter_map(|(s, [x, y, _])| {
+                let [ax, ay] = after.xy(s)?;
+                Some((ax - x).hypot(ay - y))
+            })
+            .fold(0.0, f64::max);
+        Some(SplitWeld {
+            promoted: edited.report.sweep.promoted,
+            max_move_m,
+        })
+    }
+
     /// Normalize a range given by two shot ids (either order).
     fn range_of(&self, line: LineId, first: ShotId, last: ShotId) -> Result<Range, EditError> {
         let n = self.line_or_refuse(line)?.shots.len();
@@ -348,6 +392,7 @@ impl Project {
         second.assign_session_shot_ids();
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &tail_stations);
+        self.repoint_alias_lines(line, new_id, &tail_stations);
 
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
@@ -395,6 +440,27 @@ impl Project {
             }
             if closure.b_via == Some(from) && moved(closure.b) {
                 closure.b_via = Some(to);
+            }
+        }
+    }
+
+    /// The alias line hints of `arrived` (stations that left `from` for
+    /// `to`) that named `from` now name `to`: the new line knows them by the
+    /// same aliases (UX-4; invariant 8 exempts them there as it did on
+    /// `from`). A station that was already on `to` is not in `arrived`.
+    pub(super) fn repoint_alias_lines(
+        &mut self,
+        from: LineId,
+        to: LineId,
+        arrived: &BTreeSet<StationId>,
+    ) {
+        for station in arrived {
+            if let Some(s) = self.stations.get_mut(station) {
+                for alias in &mut s.aliases {
+                    if alias.line == Some(from) {
+                        alias.line = Some(to);
+                    }
+                }
             }
         }
     }

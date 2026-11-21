@@ -259,6 +259,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::DanglingClosureEnd { .. }
         | Violation::StaleDatumVia { .. }
         | Violation::StaleClosureVia { .. }
+        | Violation::StaleAliasLine { .. }
         | Violation::HandMoveOffLine { .. }
         | Violation::DanglingSection { .. } => 1,
         Violation::RepeatedStationInChain { .. }
@@ -274,6 +275,7 @@ fn stage(v: &Violation) -> u8 {
         | Violation::CounterNotAbove { .. }
         | Violation::CounterOutOfRange { .. }
         | Violation::NonFinite { .. }
+        | Violation::OutOfBounds { .. }
         | Violation::TooManyShots { .. } => 4,
     }
 }
@@ -515,6 +517,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             }
             Violation::StaleDatumVia { .. }
             | Violation::StaleClosureVia { .. }
+            | Violation::StaleAliasLine { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
             Violation::DanglingSection { line, section } => {
                 if let Some(position) = pass.position(*line, 0) {
@@ -604,6 +607,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             Violation::TooManyShots { .. } => {}
             // No JSON number is non-finite; nothing to repair.
             Violation::NonFinite { .. } => {}
+            // A distance or coordinate past its bound (B-derived-solver-3) is
+            // not guessed at: such a file stays refused.
+            Violation::OutOfBounds { .. } => {}
         }
     }
     apply_line_edits(p, edits);
@@ -613,7 +619,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     if stale {
         let dropped = p.drop_stale_attachments();
         repairs.push(Repair::ClearedAttachments {
-            vias: dropped.datum_vias.len() + dropped.closure_vias.len(),
+            vias: dropped.datum_vias.len() + dropped.closure_vias.len() + dropped.alias_lines.len(),
             hand_moves: dropped.hand_moves.len(),
         });
     }

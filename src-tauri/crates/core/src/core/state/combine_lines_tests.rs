@@ -892,10 +892,11 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
         &[(slot(k, 1), slot(o, 0), CombineRemovedKind::LoopClosure)],
     );
     // By the names before the combine: K is "Joined" now, O is gone. O's
-    // start is "0a": the junction on K's start, named "0" on both lines
-    // (plan 5.3), lettered O's own "0".
+    // start keeps its "0": the junction on K's start is named "0" on both
+    // lines, and O knows it by its alias (O's own "3"), so the merge
+    // lettered nothing (review findings D-migration-upgrade-8 and UX-3).
     let o0 = p.stations.get(&st(&p, o, 0)).unwrap().name.clone();
-    assert_eq!(o0, "0a");
+    assert_eq!(o0, "0");
     assert_eq!(
         warnings,
         vec![format!(

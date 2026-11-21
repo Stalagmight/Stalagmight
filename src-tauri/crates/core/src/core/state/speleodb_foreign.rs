@@ -238,8 +238,7 @@ fn read_for_strip(
             if !migrated.extras.validation_stored {
                 project.settings.validation = validation.clone();
             }
-            let mut file =
-                FileState::from_migrated(migrated.extras, None, &migrated.report.verification);
+            let mut file = FileState::from_migrated(migrated.extras, None, &migrated.report);
             let link = file.speleo_link();
             file.set_speleo_link(None);
             Ok((

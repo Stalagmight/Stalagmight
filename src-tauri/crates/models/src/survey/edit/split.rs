@@ -232,7 +232,39 @@ impl Project {
         second.assign_session_shot_ids();
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &second_stations);
+        let arrived: BTreeSet<StationId> = chain[k + 1..].iter().copied().collect();
+        self.repoint_alias_lines(line, new_id, &arrived);
+        self.repoint_shared_alias(line, new_id, shared, &arrived);
         Ok(new_id)
+    }
+
+    /// The split station is on both halves. Its alias hints that named the
+    /// line stay with the first half, unless the station whose name it
+    /// shares there (invariant 8 exempts the junction on a line that knows it
+    /// by an alias) went to the second half: then the hints follow it, so
+    /// neither half holds two stations of one name that only an exemption
+    /// allowed.
+    fn repoint_shared_alias(
+        &mut self,
+        from: LineId,
+        to: LineId,
+        shared: StationId,
+        arrived: &BTreeSet<StationId>,
+    ) {
+        let Some(name) = self.stations.get(&shared).map(|s| s.name.clone()) else {
+            return;
+        };
+        let exempt = |p: &Project, s: StationId| {
+            p.stations
+                .get(&s)
+                .is_some_and(|st| st.aliases.iter().any(|a| a.line == Some(to)))
+        };
+        let clash_moved = arrived
+            .iter()
+            .any(|&s| !exempt(self, s) && self.stations.get(&s).is_some_and(|st| st.name == name));
+        if clash_moved {
+            self.repoint_alias_lines(from, to, &BTreeSet::from([shared]));
+        }
     }
 }
 

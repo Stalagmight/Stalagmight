@@ -238,6 +238,9 @@ impl<'p> ShotEditRun<'p> {
                 "Shot update has a non-finite (NaN/inf) value",
             ));
         }
+        if let Some(refusal) = updates.measurement_refusal() {
+            return Err(EditError::Refused(refusal));
+        }
         let index = self.project.shot_index(line, shot)?;
         if let Some(length) = updates.length {
             let label = self.project.shot_label_at(line, index);

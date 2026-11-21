@@ -1,10 +1,19 @@
 //! Station-name uniqueness (plan 5.3) and shot-uuid identity.
 //!
 //! A station's name must be unique among the stations of every line it is on;
-//! a junction is checked on all of its lines. Repeats are resolved by the
-//! existing letter-suffix rule
+//! a junction is checked on all of its lines, except a line that knows it by
+//! one of its aliases ([`Project::known_by_alias_on`]): there it keeps its
+//! own name even when a station of that line has it too, as a 0.6.0 merge
+//! kept each line's own name for its member (review findings
+//! D-migration-upgrade-8 and UX-3: a conversion or a merge renames only a
+//! true clash, two names a line holds as its own). Repeats are resolved by
+//! the existing letter-suffix rule
 //! ([`crate::station_naming::name_with_free_letter`]): `5` -> `5a`,
 //! `Junction` -> `Junction-a`.
+//!
+//! A rename the user asks for is checked against every name on every line of
+//! the station ([`Project::conflicts_with_name`]), so no one creates two
+//! stations of one name on a line by hand.
 
 use std::collections::BTreeSet;
 
@@ -23,6 +32,15 @@ pub struct NameConflict {
 }
 
 impl Project {
+    /// Whether `line` knows `station` by one of its aliases (an alias whose
+    /// `line` hint names it): the station's own name is not held to that
+    /// line's names (invariant 8).
+    pub fn known_by_alias_on(&self, station: StationId, line: LineId) -> bool {
+        self.stations
+            .get(&station)
+            .is_some_and(|s| s.aliases.iter().any(|a| a.line == Some(line)))
+    }
+
     /// The stations that share `station`'s name on a line it is on, by line
     /// (list order), then chain order.
     pub fn name_conflicts(&self, station: StationId) -> Vec<NameConflict> {
@@ -50,13 +68,19 @@ impl Project {
         out
     }
 
-    /// Every name held by another station on a line `station` is on.
+    /// Every name `station`'s own name must not repeat: the names other
+    /// stations hold as their own on the lines `station` is held to (a line
+    /// that knows `station`, or the other station, by an alias does not
+    /// count; invariant 8).
     pub fn names_around(&self, station: StationId) -> BTreeSet<String> {
         let topology = self.topology();
         let mut taken = BTreeSet::new();
         for line in topology.lines_of(station) {
+            if self.known_by_alias_on(station, line) {
+                continue;
+            }
             for &other in topology.chain(line).unwrap_or(&[]) {
-                if other != station {
+                if other != station && !self.known_by_alias_on(other, line) {
                     if let Some(s) = self.stations.get(&other) {
                         taken.insert(s.name.clone());
                     }
@@ -84,7 +108,8 @@ impl Project {
 
     /// Make the names on line `line` unique in chain order: the first holder of
     /// a name keeps it, a later one gets a letter suffix that is free on every
-    /// line it is on. Returns the renamed stations in chain order.
+    /// line it is on. A station the line knows by an alias takes no part.
+    /// Returns the renamed stations in chain order.
     pub fn uniquify_line_names(&mut self, line: LineId) -> Vec<StationId> {
         let Some(chain) = self.topology().chain(line).map(<[StationId]>::to_vec) else {
             return Vec::new();
@@ -92,6 +117,9 @@ impl Project {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut renamed = Vec::new();
         for station in chain {
+            if self.known_by_alias_on(station, line) {
+                continue;
+            }
             let Some(name) = self.stations.get(&station).map(|s| s.name.clone()) else {
                 continue;
             };

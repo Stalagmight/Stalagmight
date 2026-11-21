@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
+import type { DetachLinePreview } from '../../types/ipc.generated';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
@@ -23,9 +24,12 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
  * its `unmerge-stations` name for telemetry).
  *
  * On the station graph a merge is ONE station that two or more lines pass. The
- * user picks which line leaves it: that line gets its own copy of the station
- * at the same place (the name copied, no comment), and the datums and closures
- * attached through it go along; the other lines stay joined. The clicked slot's
+ * user picks which line leaves it: that line gets its own station at the same
+ * place (no comment), and the datums and closures attached through it go
+ * along; the other lines stay joined. A line that was merged there gets back
+ * the Station ID and name it had (the junction's alias naming it); any other
+ * gets the junction's name, made unique. The dialog says which, from the
+ * backend's `preview_detach_line` (review finding UX-4). The clicked slot's
  * line is listed first and preselected. Its own line detaches with
  * `unmerge_stations(slot)`; another line with `unmerge_station_pair(slot,
  * other)`, which detaches the PARTNER's line.
@@ -64,6 +68,29 @@ export default function UnmergeStationsDialog() {
     () => slots.find((ref) => stationRefKey(ref) === selectedKey) ?? null,
     [slots, selectedKey],
   );
+
+  // What the chosen line gets. A failed preview only hides the line; the
+  // detach reports its own refusal.
+  const [naming, setNaming] = useState<DetachLinePreview | null>(null);
+  useEffect(() => {
+    setNaming(null);
+    if (!stationRef || !selected) return;
+    let live = true;
+    invokeIpc<DetachLinePreview>(
+      'preview_detach_line',
+      { stationRef, lineId: selected.line_id },
+      { purpose: 'preview detach line' },
+    )
+      .then((result) => {
+        if (live) setNaming(result);
+      })
+      .catch(() => {
+        if (live) setNaming(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [stationRef, selected]);
 
   const handleConfirm = async () => {
     if (!stationRef || !selected) return;
@@ -132,6 +159,18 @@ export default function UnmergeStationsDialog() {
             );
           })}
         </div>
+
+        {naming && selected && (
+          <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
+            {naming.restored
+              ? t('dialogs.detachLine.restores', {
+                  line: labels.lineName(selected.line_id),
+                  name: naming.name,
+                  id: naming.station_id,
+                })
+              : t('dialogs.detachLine.copies', { line: labels.lineName(selected.line_id), name: naming.name })}
+          </p>
+        )}
 
         <p className="text-xs text-text-secondary">{t('dialogs.detachLine.explain')}</p>
 

@@ -162,7 +162,7 @@ impl Project {
                 .unwrap_or(StationRef::new(0, 0))
         };
         for d in &decision.detaches {
-            let fresh = self.detach_ids(d.station, d.line)?.new_station;
+            let fresh = self.detach_ids(d.station, d.line, false)?.new_station;
             renamed.push((d.station, fresh));
             slot_map.insert((d.line, d.station), fresh);
             if d.line == k && d.station == jk {
@@ -309,6 +309,16 @@ impl Project {
             return Err(EditError::line_gone());
         };
         let other = self.lines_mut().remove(position);
+        // The other line's stations come onto the kept line: their alias
+        // hints follow (UX-4), so a line that knew a station by an alias
+        // still does. A join merged here is the kept line's own station: its
+        // new alias (the retired join) knew the other line only and is
+        // cleared. A join both lines already shared keeps what the other line
+        // knew it by (Combine undoes a Split Line Here at its join).
+        let arrived: BTreeSet<StationId> = other
+            .stations()
+            .filter(|&s| jo == jk || (s != jk && s != jo))
+            .collect();
         let Some(line) = self.line_mut(k) else {
             return Err(EditError::line_gone());
         };
@@ -334,6 +344,7 @@ impl Project {
         absorb_legacy_credit(line);
         let kept_stations: BTreeSet<StationId> = line.stations().collect();
         self.repoint_vias(o, k, &kept_stations);
+        self.repoint_alias_lines(o, k, &arrived);
         self.uniquify_line_names(k);
 
         // Step 1's outcome: the fixed side stays, the moving side moves.
@@ -605,15 +616,18 @@ impl Project {
     ) -> crate::station_naming::CombinePrefixes {
         let kept_chain = self.line_stations(kept).unwrap_or(&[]);
         let shared_join = kept_chain.contains(&jo);
-        let names = |chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
+        // A station a line knows by an alias is not held to that line's names
+        // (invariant 8), and keeps that exemption on the combined line.
+        let names = |line: LineId, chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
             chain
                 .iter()
-                .filter(|s| Some(**s) != skip)
+                .filter(|s| Some(**s) != skip && !self.known_by_alias_on(**s, line))
                 .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
                 .collect()
         };
-        let kept_names = names(kept_chain, None);
+        let kept_names = names(kept, kept_chain, None);
         let other_names = names(
+            other,
             self.line_stations(other).unwrap_or(&[]),
             shared_join.then_some(jo),
         );
@@ -635,9 +649,12 @@ impl Project {
         let other_chain: Vec<StationId> = self.line_stations(other).unwrap_or(&[]).to_vec();
         let mut done: BTreeSet<StationId> = BTreeSet::new();
         let mut renamed: Vec<StationId> = Vec::new();
-        for (chain, renames) in [(kept_chain, &plan.kept), (other_chain, &plan.other)] {
+        for (line, chain, renames) in [
+            (kept, kept_chain, &plan.kept),
+            (other, other_chain, &plan.other),
+        ] {
             for s in chain {
-                if s == jo && s != jk || !done.insert(s) {
+                if s == jo && s != jk || self.known_by_alias_on(s, line) || !done.insert(s) {
                     continue;
                 }
                 if let Some(station) = self.stations.get_mut(&s) {
@@ -683,6 +700,7 @@ impl Project {
             self.line_stations(line)
                 .unwrap_or(&[])
                 .iter()
+                .filter(|s| !self.known_by_alias_on(**s, line))
                 .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
                 .collect()
         };

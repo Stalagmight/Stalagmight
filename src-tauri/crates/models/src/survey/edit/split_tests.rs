@@ -155,3 +155,79 @@ fn a_split_refuses_as_today() {
         &options("Main", "Main 2"),
     ));
 }
+
+/// The Project stats count distinct stations, as the file's summary does,
+/// and junctions (review finding UX-8: they counted slots and the wire's
+/// merge pairs, so a Split Line Here, which adds no station and merges
+/// nothing, raised Stations by one).
+#[test]
+fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
+    let mut p = empty();
+    let l = line(&mut p, "Main", run("m", 90.0, 10.0, 4));
+    let k = st(&p, l, 2);
+    line_from(&mut p, "Branch", k, run("b", 0.0, 5.0, 3));
+    let stats = |p: &super::super::Project| p.survey_stats(&p.raw_positions(), false);
+    let before = stats(&p);
+    assert_eq!(before.station_count, 8, "5 on Main, 3 more on Branch");
+    assert_eq!(before.slot_count, 9);
+    assert_eq!(before.junction_count, 1);
+    let wire = before.to_project_stats();
+    assert_eq!(
+        wire.station_count,
+        p.stations.len(),
+        "the file summary's count"
+    );
+    assert_eq!(wire.junction_count, 1);
+
+    ok(p.split_line(
+        l,
+        SplitAt::Station { station_index: 3 },
+        &options("Front", "Back"),
+    ));
+    let after = stats(&p).to_project_stats();
+    assert_eq!(after.station_count, 8, "a split adds no station");
+    assert_eq!(
+        after.junction_count, 2,
+        "the halves share the split station"
+    );
+    assert_eq!(after.station_count, p.stations.len());
+}
+
+/// Review finding UX-4: what a line knew its stations by follows them to the
+/// second half. Main's station 3 is a junction Main knows by an alias (it was
+/// Branch's station merged into Main's), and the split station 2 is one Main
+/// knows by an alias too, its name shared with Main's own station 4: after
+/// Split Line Here at 2 the hints name the second half, which holds both, and
+/// neither half holds two names that only the exemption allowed.
+#[test]
+fn a_split_moves_the_alias_hints_with_their_stations() {
+    use super::super::StationAlias;
+    let mut p = empty();
+    let l = line(&mut p, "Main", run("m", 90.0, 10.0, 5));
+    let (k, m3, m4) = (st(&p, l, 2), st(&p, l, 3), st(&p, l, 4));
+    line_from(&mut p, "Branch", k, run("b", 0.0, 5.0, 1));
+    let name4 = p.station(m4).unwrap().name.clone();
+    p.station_mut(k).unwrap().name.clone_from(&name4);
+    for (station, id) in [(k, 50), (m3, 51)] {
+        p.station_mut(station).unwrap().aliases.push(StationAlias {
+            id,
+            name: Some("old".to_string()),
+            line: Some(l),
+        });
+    }
+    p.counters.next_station_id = 52;
+    assert_valid(&p);
+    let second = ok(p.split_line(
+        l,
+        SplitAt::Station { station_index: 2 },
+        &options("Front", "Back"),
+    ));
+    assert_valid(&p);
+    assert_eq!(p.station(m3).unwrap().aliases[0].line, Some(second));
+    assert_eq!(
+        p.station(k).unwrap().aliases[0].line,
+        Some(second),
+        "its clash went to the second half"
+    );
+    assert_eq!(p.station(k).unwrap().name, name4, "nothing renamed");
+}

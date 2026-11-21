@@ -264,7 +264,9 @@ pub use types::{
     Shot, Station, StationAlias, ZeroDatum, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE,
     MAX_SHOT_UUID_CHARS,
 };
-pub use validate::{ClosureEnd, CounterKind, NumberField, Violation};
+pub use validate::{
+    ClosureEnd, CounterKind, NumberField, Violation, MAX_COORDINATE_M, MAX_MEASUREMENT_M,
+};
 
 pub use append::{AppendSummary, ShotUuidRename};
 pub use changeset::{Changeset, HistoryEntry, Refusal};
@@ -275,12 +277,12 @@ pub use edit::{
 pub use edit::{
     CreatedShot, DeleteRangePreview, DeleteShotPreview, DeletedLine, DeletedRange, DeletedShot,
     EditError, EditReport, Edited, RangeDeleteMode, ShotEditRun, ShotPlace, SplitLinePreview,
-    SplitOptions, SplitShot,
+    SplitOptions, SplitShot, SplitWeld,
 };
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;
 pub use ops_datums::{DatumChange, DatumSet};
-pub use ops_detach::DetachReport;
+pub use ops_detach::{DetachNaming, DetachReport};
 pub use ops_merge::{MergeCheck, MergeDatumShift, MergeReport};
 pub use ops_move::{SegmentMoved, StationMoved};
 pub use sweep::{Promotion, SweepReport};

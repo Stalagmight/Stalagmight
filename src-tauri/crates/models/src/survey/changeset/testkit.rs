@@ -1152,6 +1152,7 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
             st.aliases.push(crate::survey::StationAlias {
                 id: u32::MAX,
                 name: None,
+                line: None,
             });
             return Some("a station it records");
         }

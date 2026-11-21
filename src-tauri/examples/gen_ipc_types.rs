@@ -57,16 +57,17 @@ use stalagmight_lib::models::{
     CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
     CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
     ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
-    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
-    DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
-    GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
-    LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
-    LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
-    PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
-    RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
-    SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
-    StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
-    TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
+    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact,
+    DetachLinePreview, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
+    ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
+    ImportLineConfig, ImportPlacement, KeptMovesReason, LineCreditSummary, LineData, LineEnd,
+    LineRelationships, LineStats, LineUpdates, LoopClosureWire, MarkedPoint, MergeDatumShift,
+    NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata,
+    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
+    Section, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
+    SplitLineOptions, SplitPreview, SplitSide, Station, StationMergeWire, StationPair, StationRef,
+    SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie, TornTieKind, TornTieReason,
+    UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -315,6 +316,7 @@ fn main() {
     export::<DeleteShotImpact>(&out_dir);
     export::<RangeDeleteKind>(&out_dir);
     export::<DeleteShotRangeImpact>(&out_dir);
+    export::<DetachLinePreview>(&out_dir);
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
@@ -635,6 +637,7 @@ fn main() {
         "DeleteShotImpact",
         "RangeDeleteKind",
         "DeleteShotRangeImpact",
+        "DetachLinePreview",
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",

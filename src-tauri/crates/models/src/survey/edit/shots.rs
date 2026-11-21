@@ -130,6 +130,8 @@ pub struct DeleteShotPreview {
     pub shift_blocked: bool,
     /// Today's reasons, in today's words.
     pub shift_blocked_reasons: Vec<String>,
+    /// What choosing Split instead would weld (interior shots only).
+    pub split_weld: Option<super::SplitWeld>,
 }
 
 /// What a split at distance made.
@@ -263,6 +265,9 @@ impl Project {
         if !data.all_finite() {
             return Err(EditError::refused("Shot has a non-finite (NaN/inf) value"));
         }
+        if let Some(refusal) = data.measurement_refusal() {
+            return Err(EditError::Refused(refusal));
+        }
         if let Some(refusal) = self.shot_insert_refusal(line) {
             return Err(EditError::Refused(refusal));
         }
@@ -391,6 +396,9 @@ impl Project {
             return Err(EditError::refused(
                 "Shot update has a non-finite (NaN/inf) value",
             ));
+        }
+        if let Some(refusal) = updates.measurement_refusal() {
+            return Err(EditError::Refused(refusal));
         }
         let index = self.shot_index(line, shot)?;
         if let Some(length) = updates.length {
@@ -662,6 +670,7 @@ impl Project {
             removed_across_one_shot: edited.report.removed_across_one_shot,
             shift_blocked: !reasons.is_empty(),
             shift_blocked_reasons: reasons,
+            split_weld: self.split_delete_weld(line, index),
         })
     }
 

@@ -40,6 +40,8 @@ pub struct StaleAttachments {
     pub closure_vias: Vec<(ClosureId, ClosureEnd)>,
     /// Hand moves dropped, by `(line, station)`.
     pub hand_moves: Vec<(LineId, StationId)>,
+    /// Alias line hints cleared, by `(station, alias id)`.
+    pub alias_lines: Vec<(StationId, StationId)>,
 }
 
 /// Why a construction call was refused. Nothing was changed.
@@ -470,6 +472,14 @@ impl Project {
             for &station in line.hand_moves.keys() {
                 if !holds(station, line.id) {
                     dropped.hand_moves.push((line.id, station));
+                }
+            }
+        }
+        for (&station, s) in &mut self.stations {
+            for alias in &mut s.aliases {
+                if alias.line.is_some_and(|line| !holds(station, line)) {
+                    alias.line = None;
+                    dropped.alias_lines.push((station, alias.id));
                 }
             }
         }

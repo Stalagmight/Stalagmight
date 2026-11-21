@@ -1934,6 +1934,7 @@ pub fn run() {
             commands::station::merge_stations,
             commands::station::unmerge_stations,
             commands::station::unmerge_station_pair,
+            commands::station::preview_detach_line,
             commands::station::set_zero_datum,
             commands::station::preview_zero_datum,
             commands::station::remove_zero_datum,

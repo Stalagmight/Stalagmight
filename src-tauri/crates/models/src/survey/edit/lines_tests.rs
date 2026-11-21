@@ -279,3 +279,53 @@ fn delete_line_takes_a_member_tie_on_the_junction_it_leaves() {
     }
     assert_valid(&p);
 }
+
+/// Two closures join the junction J to the far station F, one via the kept
+/// line A and one via the deleted line B. Deleting B must not leave the same
+/// pair twice (Create Loop Closure refuses it as a duplicate): 0.6.0 skipped
+/// re-anchoring the doubled closure (`are_stations_in_closure`) and its
+/// `cleanup_line_references` dropped it (review finding A-model-edits-2).
+#[test]
+fn delete_line_drops_a_closure_the_kept_line_doubles() {
+    // A east 0..4; B north from A:2 (J); E north from A:0, with F = E:3.
+    let mut p = empty();
+    let a = line(&mut p, "A", run("a", 90.0, 10.0, 4));
+    let j = st(&p, a, 2);
+    let b = line_from(&mut p, "B", j, run("b", 0.0, 10.0, 3));
+    let a0 = st(&p, a, 0);
+    let e = line_from(&mut p, "E", a0, run("e", 0.0, 10.0, 3));
+    let f = st(&p, e, 3);
+    let kept = p.push_closure(j, Some(a), f, Some(e), ClosureStrategy::Batch);
+    let doubled = p.push_closure(j, Some(b), f, Some(e), ClosureStrategy::Batch);
+    assert_valid(&p);
+    assert!(
+        p.clone()
+            .create_closure(j, Some(a), f, Some(e), ClosureStrategy::Batch)
+            .is_err(),
+        "the pair is a duplicate once B is gone"
+    );
+    let before = p.raw_positions();
+
+    let edited = p.delete_line(b).unwrap();
+    assert_eq!(
+        edited
+            .value
+            .closures_removed
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        [doubled],
+        "the doubled closure leaves with the line"
+    );
+    assert_eq!(
+        p.closures.iter().map(|c| c.id).collect::<Vec<_>>(),
+        [kept],
+        "one closure for the pair"
+    );
+    assert!(edited.report.sweep.promoted.is_empty());
+    let after = p.raw_positions();
+    for s in [a0, st(&p, a, 4), f] {
+        near(xy(&after, s), xy(&before, s), TOL, "nothing moves");
+    }
+    assert_valid(&p);
+}

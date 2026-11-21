@@ -154,11 +154,29 @@ pub struct MigratedExtras {
     /// not, `project.settings.validation` is the 0.6.0 default and the app
     /// should seed the user's global thresholds instead (as 0.6.0 did).
     pub validation_stored: bool,
+    /// Every slot whose station now goes by another name than 0.6.0 gave it
+    /// there, in slot order: a junction has one name on all its lines (its
+    /// survivor's, kept wherever a line knows it by an alias), and a true
+    /// clash is lettered. Survey content for the conversion notice only,
+    /// never logged (review findings D-migration-upgrade-8, UX-3, UX-1).
+    pub names_changed: Vec<NameChange>,
     /// Record-orientation parity the legacy model kept for `.plnx` dive-plan
     /// pins (a single-neighbour pin reads which end of its shot it sits on).
     /// The station-graph model has no such field; carried so the dive-plan
     /// resolver can still read old pins.
     pub legacy_parity: LegacyParity,
+}
+
+/// One slot whose station's name changed in the conversion
+/// ([`MigratedExtras::names_changed`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NameChange {
+    /// The slot's line, by the name the converted project gives it.
+    pub line: String,
+    /// The name 0.6.0 showed at that slot.
+    pub from: String,
+    /// The station's name now.
+    pub to: String,
 }
 
 /// See [`MigratedExtras::legacy_parity`].
@@ -300,6 +318,7 @@ pub fn migrate(
         ignored_warnings,
         unrecognised_shot_kinds: unrecognised_shot_kinds(legacy, &built.project),
         validation_stored: legacy.load.validation_stored,
+        names_changed: built.names_changed.clone(),
         legacy_parity: LegacyParity {
             reversed_lines: lp
                 .lines

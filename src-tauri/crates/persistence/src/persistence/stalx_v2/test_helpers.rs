@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
-use crate::models::survey::{ClosureStrategy, LineMeta, Project, StartAt, StationAlias, ZeroDatum};
+use crate::models::survey::{
+    ClosureStrategy, LineMeta, Project, StartAt, StationAlias, ZeroDatum, MAX_COORDINATE_M,
+    MAX_MEASUREMENT_M,
+};
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, NorthReference, Person, Section, ShotData,
     ShotKind, StationId, SurveyCredit, SurveyDirection, UndoMode,
@@ -74,6 +77,20 @@ impl Rng {
             }
             7 => 0.1 + 0.2,
             _ => self.range(lo, hi),
+        }
+    }
+
+    /// [`Self::awkward`] for a distance or coordinate the survey bounds
+    /// (`MAX_MEASUREMENT_M`, `MAX_COORDINATE_M`; review finding
+    /// B-derived-solver-3): a draw past `bound` becomes the bound itself, with
+    /// its sign, so the edge is drawn too. Angles, the temperature and the
+    /// thresholds keep the whole finite range.
+    pub(super) fn awkward_within(&mut self, lo: f64, hi: f64, bound: f64) -> f64 {
+        let v = self.awkward(lo, hi);
+        if v.abs() > bound {
+            bound.copysign(v)
+        } else {
+            v
         }
     }
 }
@@ -275,10 +292,18 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let host = *rng.pick(&ids);
             let alias = p.mint_station_id().unwrap();
             let name = rng.chance(0.5).then(|| format!("old{alias}"));
-            p.station_mut(host)
-                .unwrap()
-                .aliases
-                .push(StationAlias { id: alias, name });
+            // Half of them name a line through the host (the line that knew
+            // it by the alias), with or without a name.
+            let line = if rng.chance(0.5) {
+                p.topology().lines_of(host).first().copied()
+            } else {
+                None
+            };
+            p.station_mut(host).unwrap().aliases.push(StationAlias {
+                id: alias,
+                name,
+                line,
+            });
         }
         // An empty credit object (`{}`) is a value of its own; `from_data`
         // never stores one, so set it on the model directly.
@@ -292,9 +317,9 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let chain = p.line_stations(line).unwrap().to_vec();
             let station = *rng.pick(&chain);
             let hand = [
-                rng.awkward(-1.0, 1.0),
-                rng.awkward(-1.0, 1.0),
-                rng.awkward(-1.0, 1.0),
+                rng.awkward_within(-1.0, 1.0, MAX_COORDINATE_M),
+                rng.awkward_within(-1.0, 1.0, MAX_COORDINATE_M),
+                rng.awkward_within(-1.0, 1.0, MAX_COORDINATE_M),
             ];
             p.line_mut(line).unwrap().hand_moves.insert(station, hand);
         }
@@ -319,9 +344,12 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
                     },
                     accuracy_m: rng.chance(0.5).then(|| rng.range(0.1, 30.0)),
                     entrance: rng.chance(0.3).then(|| rng.chance(0.5)),
-                    correction: rng
-                        .chance(0.5)
-                        .then(|| [rng.awkward(-5.0, 5.0), rng.awkward(-5.0, 5.0)]),
+                    correction: rng.chance(0.5).then(|| {
+                        [
+                            rng.awkward_within(-5.0, 5.0, MAX_COORDINATE_M),
+                            rng.awkward_within(-5.0, 5.0, MAX_COORDINATE_M),
+                        ]
+                    }),
                 });
             }
             datum_pieces.push(index);
@@ -329,8 +357,8 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
             let station = *rng.pick(&component.stations);
             p.placements.push(crate::models::survey::Placement {
                 station,
-                x: rng.awkward(-1000.0, 1000.0),
-                y: rng.awkward(-1000.0, 1000.0),
+                x: rng.awkward_within(-1000.0, 1000.0, MAX_COORDINATE_M),
+                y: rng.awkward_within(-1000.0, 1000.0, MAX_COORDINATE_M),
             });
         }
     }
@@ -398,11 +426,19 @@ fn shot(
             (rng.range(lo, hi) * 10.0).round() / 10.0
         }
     };
+    // A distance the survey bounds (B-derived-solver-3).
+    let dist = |rng: &mut Rng, lo: f64, hi: f64| {
+        if rich {
+            rng.awkward_within(lo, hi, MAX_MEASUREMENT_M)
+        } else {
+            (rng.range(lo, hi) * 10.0).round() / 10.0
+        }
+    };
     let lrud = rng.below(4);
     let cell = |rng: &mut Rng| match lrud {
         0 => None,
-        1 => Some(num(rng, 0.1, 6.0)),
-        _ => rng.chance(0.6).then(|| num(rng, 0.1, 6.0)),
+        1 => Some(dist(rng, 0.1, 6.0)),
+        _ => rng.chance(0.6).then(|| dist(rng, 0.1, 6.0)),
     };
     let left = cell(rng);
     let right = cell(rng);
@@ -422,9 +458,9 @@ fn shot(
         }),
         azimuth_in: num(rng, 0.0, 360.0),
         azimuth_out: num(rng, 0.0, 360.0),
-        length: num(rng, 0.3, 30.0),
-        depth_in: num(rng, 0.0, 60.0),
-        depth_out: num(rng, 0.0, 60.0),
+        length: dist(rng, 0.3, 30.0),
+        depth_in: dist(rng, 0.0, 60.0),
+        depth_out: dist(rng, 0.0, 60.0),
         pitch_in: (rich && rng.chance(0.2)).then(|| num(rng, -90.0, 90.0)),
         pitch_out: (rich && rng.chance(0.2)).then(|| num(rng, -90.0, 90.0)),
         left,

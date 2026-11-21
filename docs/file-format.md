@@ -310,19 +310,27 @@ physical line, in panel order.
 One row per station, in ascending id order:
 
 ```json
-[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0"]]}]
+[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0",1]]}]
 ```
 
 | Position | Type | Meaning |
 |---|---|---|
 | 0 | integer | Station id: the "Station ID" users see. Unique, never reused. |
-| 1 | string | Station name: unique among the stations of every line the station is on. |
+| 1 | string | Station name: unique among the stations of every line the station is on, except a line one of its aliases names (rule 8 of section 6). |
 | 2 | object, opt | Extras, written only when one is set. |
 
-Extras keys: `comment` (string), `aliases` (ids merged into this station, each
-`[id]` or `[id, "name"]`, oldest first; an alias id is never a live station's
-id), `external` (string: the identity an importer gave the station, e.g. a
-Compass or Walls station name or an Ariane station ID; an attribute only).
+Extras keys: `comment` (string), `aliases` (ids merged into this station,
+oldest first; an alias id is never a live station's id), `external` (string:
+the identity an importer gave the station, e.g. a Compass or Walls station
+name or an Ariane station ID; an attribute only).
+
+An alias is `[id]`, `[id, "name"]`, or `[id, "name", line]` / `[id, null,
+line]` when the line that knew the station by that alias is known (the line
+the merged station was on; a `null` name only before a line). That line must
+pass through the station (rule 2 of section 6). On it, the station's own name
+need not be unique (rule 8): the line knows the station by the alias, as a
+0.6.0 merge kept each line's own name for its member. Detaching that line
+from the station gives it its own station back with the alias's id and name.
 
 ### 5.9 `lines`
 
@@ -484,9 +492,9 @@ The rules:
    99,999 shots (Stalagmight numbers a line's shots in its session by
    `line id * 100000 + index`).
 2. Every reference resolves: a line's `start`, a shot's `to`, every datum,
-   placement and closure station, every `via` line (which must pass through
-   that station), every hand-move station (on that line), every line's
-   `section`.
+   placement and closure station, every `via` line and every alias's `line`
+   (which must pass through that station), every hand-move station (on that
+   line), every line's `section`.
 3. A line never passes the same station twice.
 4. Every station is on at least one line (a line with no shots holds just its
    `start`).
@@ -497,12 +505,20 @@ The rules:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. Station names are unique among the stations of each line, and Section
+8. Station names are unique among the stations of each line, leaving out a
+   station that one of its aliases says the line knows by that alias: there
+   the station keeps its own name even when a station of that line has it
+   too (a converted 0.6.0 merge, or a merge, renames nothing for it). Section
    names are unique in the project (compared exactly).
 9. Counters are above every id in use; the station and Section counters
    are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
    the ids are used up, and Stalagmight refuses an edit that needs another).
-10. Every number is finite.
+10. Every number is finite, and the distances and stored coordinates are
+    within bounds that keep every derived position finite: a shot's length,
+    `depth_in`, `depth_out`, `left`, `right`, `up` and `down` at most
+    1,000,000 m in magnitude, and a placement's `x` and `y`, a datum's
+    `correction` and a hand move at most 100,000,000 m. Angles, temperatures
+    and thresholds are only required to be finite.
 
 ## 7. Unknown content
 
@@ -792,7 +808,7 @@ what Stalagmight writes for it (a test keeps it so).
 "stations":[
 [0,"A0"],
 [1,"A1"],
-[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0"]]}],
+[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0",1]]}],
 [3,"A3"],
 [4,"B1"],
 [5,"C0"],

@@ -207,7 +207,10 @@ impl AppState {
                     purpose = "install a downloaded legacy revision",
                     "speleodb: migrated a legacy revision in memory; the cache gets version 2"
                 );
-                conversion = ConversionNotice::of(&migrated.report.verification);
+                conversion = ConversionNotice::of_migration(
+                    &migrated.report,
+                    &migrated.extras.names_changed,
+                );
                 let mut project = migrated.project;
                 if !migrated.extras.validation_stored {
                     project.settings.validation = config.validation;

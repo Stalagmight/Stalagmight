@@ -486,11 +486,24 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
                 if i > 0 {
                     b.push(b',');
                 }
+                // `[id]`, `[id, name]`, or with the line that knew the
+                // station by it `[id, name, line]` (`null` for no name).
                 b.push(b'[');
                 small(b, u64::from(alias.id));
-                if let Some(name) = &alias.name {
-                    b.push(b',');
-                    string(b, name);
+                match (&alias.name, alias.line) {
+                    (Some(name), line) => {
+                        b.push(b',');
+                        string(b, name);
+                        if let Some(line) = line {
+                            b.push(b',');
+                            small(b, u64::from(line));
+                        }
+                    }
+                    (None, Some(line)) => {
+                        b.extend_from_slice(b",null,");
+                        small(b, u64::from(line));
+                    }
+                    (None, None) => {}
                 }
                 b.push(b']');
             }

@@ -140,6 +140,19 @@ later closure sees what an earlier one did:
   two placed pieces a promotion would double-anchor, so the closure is kept:
   a closure may tie two placed pieces.
 
+A delete that splits a line inside a loop (Delete Shot + Split, a range split)
+can leave the loop's closure the only connection between the two halves'
+pieces: the closure is promoted, it becomes a junction, and the stranded piece
+moves onto it by the loop's misclosure. 0.6.0's Delete Shot + Split did the
+same (its sweep turned the closure into a merge, issue #8; the port is checked
+slot for slot against the frozen 0.6.0 model in
+`migrate_tests::delete_shot_and_split_welds_a_stranded_loop_closure_as_0_6_0_did`).
+The Delete Shot dialog and the Delete & Split dialog say so before the edit,
+from a dry run of the split in the delete preview (`DeleteShotPreview::split_weld`,
+on the wire `DeleteShotImpact.split_closure_to_merge` and `split_max_move_m`):
+"the loop closure A / 3 - B / 5 becomes a junction; the stations past it move
+by up to 2.2 m" (review finding UX-5).
+
 A promotion only joins pieces that were apart, so a closure the pass kept as a
 loop can never become one station later in the pass, and one pass settles
 everything. Each promotion runs the anchor algorithm on its own, so the next

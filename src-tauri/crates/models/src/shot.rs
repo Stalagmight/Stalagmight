@@ -592,6 +592,19 @@ impl ShotUpdates {
             .any(|o| matches!(o, Some(Some(v)) if !v.is_finite()))
     }
 
+    /// [`ShotData::measurement_refusal`] for the fields this update sets.
+    pub fn measurement_refusal(&self) -> Option<String> {
+        measurement_refusal(&[
+            ("length", self.length),
+            ("depth in", self.depth_in),
+            ("depth out", self.depth_out),
+            ("left", self.left.flatten()),
+            ("right", self.right.flatten()),
+            ("up", self.up.flatten()),
+            ("down", self.down.flatten()),
+        ])
+    }
+
     /// Returns true if this update touches any geometry fields
     /// (azimuth, length, depth, pitch).
     pub fn touches_geometry(&self) -> bool {
@@ -964,6 +977,22 @@ impl ShotData {
         !opts.into_iter().flatten().any(|v| !v.is_finite())
     }
 
+    /// The refusal for a distance past [`crate::survey::MAX_MEASUREMENT_M`]
+    /// (length, depths, passage dimensions), in the user's words; `None`
+    /// when every one is within it. Checked at the command doors next to
+    /// [`Self::all_finite`] (review finding B-derived-solver-3).
+    pub fn measurement_refusal(&self) -> Option<String> {
+        measurement_refusal(&[
+            ("length", Some(self.length)),
+            ("depth in", Some(self.depth_in)),
+            ("depth out", Some(self.depth_out)),
+            ("left", self.left),
+            ("right", self.right),
+            ("up", self.up),
+            ("down", self.down),
+        ])
+    }
+
     /// Horizontal projection of the shot length (meters).
     /// ShotData.length is slope distance, so horizontal is derived from depth change.
     pub fn horizontal_length(&self) -> f64 {
@@ -1010,6 +1039,17 @@ impl From<Shot> for ShotData {
             credit: shot.credit.filter(|c| !c.is_empty()),
         }
     }
+}
+
+/// The first of `fields` (name, value) past [`crate::survey::MAX_MEASUREMENT_M`],
+/// worded for the user.
+fn measurement_refusal(fields: &[(&str, Option<f64>)]) -> Option<String> {
+    let bound = crate::survey::MAX_MEASUREMENT_M;
+    fields.iter().find_map(|&(name, value)| {
+        value.filter(|v| v.abs() > bound).map(|v| {
+            format!("A shot's {name} of {v} m is beyond the {bound} m a survey measurement may be")
+        })
+    })
 }
 
 #[cfg(test)]

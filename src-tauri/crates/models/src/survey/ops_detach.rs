@@ -2,7 +2,12 @@
 //!
 //! Detaching line L from station S mints S' (a fresh id; S's name, then
 //! uniquified; no comment, aliases or external id) and puts it in L's chain
-//! where S was, so S' sits exactly where S did. What belonged to L's member of
+//! where S was, so S' sits exactly where S did. When one of S's aliases
+//! names L (the station L had before it was merged into S: a 0.6.0 merge
+//! member, or the moving station of a merge), S' takes that alias's id back,
+//! and its name too when no other station of L holds it, and the alias
+//! leaves S (review finding UX-4: merging by mistake and detaching gives the
+//! line back as it was). Combine Lines' torn junctions keep the fresh id. What belonged to L's member of
 //! the old merge follows it: the datums and closure ends whose `via` is L, and
 //! L's hand move at S. The anchor algorithm then settles both pieces (a fix
 //! that came along with L and is now the first datum of L's piece is promoted
@@ -40,6 +45,19 @@ pub struct DetachReport {
     pub moved_closure_ends: Vec<(ClosureId, ClosureEnd)>,
     /// Whether the line's hand move at the junction moved too.
     pub moved_hand_move: bool,
+    /// Whether the new station took back the id of the junction's alias that
+    /// named the line (its name too when free on the line).
+    pub restored_alias: bool,
+}
+
+/// What detaching a line would give it, for the Detach dialog: the new
+/// station's name and id, and whether they are the ones the line had before
+/// it was merged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachNaming {
+    pub name: String,
+    pub id: StationId,
+    pub restored_alias: bool,
 }
 
 impl Project {
@@ -51,7 +69,7 @@ impl Project {
     ) -> Result<OpOutcome<DetachReport>, OpError> {
         self.detach_refusal(station, line)?;
         self.run_op(Sweep::Run, |p| {
-            let report = p.detach_ids(station, line)?;
+            let report = p.detach_ids(station, line, true)?;
             let ctx = EditContext::line(line).with_renamed(station, report.new_station);
             Ok((report, ctx))
         })
@@ -94,6 +112,23 @@ impl Project {
         })
     }
 
+    /// The name and id the new station of [`Self::detach_line`] would get,
+    /// from the detach run on a copy. Refused as the detach is.
+    pub fn detach_naming(&self, station: StationId, line: LineId) -> Result<DetachNaming, OpError> {
+        let mut copy = self.clone();
+        let report = copy.detach_ids(station, line, true)?;
+        let name = copy
+            .stations
+            .get(&report.new_station)
+            .map(|s| s.name.clone())
+            .ok_or(OpError::UnknownStation(report.new_station))?;
+        Ok(DetachNaming {
+            name,
+            id: report.new_station,
+            restored_alias: report.restored_alias,
+        })
+    }
+
     /// Why line `line` may not be detached from `station`, if it may not:
     /// an unknown station or line, a station off the line, or a station no
     /// other line passes (nothing to detach from).
@@ -116,20 +151,55 @@ impl Project {
     /// (named as the junction, then letter-suffixed if taken on the line; no
     /// comment, aliases or external id), rewrite the line's chain, move what
     /// the line's member owned (datums and closure ends whose `via` is the
-    /// line, its hand move). Refused, with nothing changed, as
-    /// [`Self::detach_line`]. No anchors, no sweep, no validation.
+    /// line, its hand move). With `restore`, an alias of the junction that
+    /// names the line gives the new station its id, and its name when no
+    /// other station of the line holds it (module docs). Refused, with
+    /// nothing changed, as [`Self::detach_line`]. No anchors, no sweep, no
+    /// validation.
     pub(super) fn detach_ids(
         &mut self,
         station: StationId,
         line: LineId,
+        restore: bool,
     ) -> Result<DetachReport, OpError> {
         self.detach_refusal(station, line)?;
-        let name = self
+        let junction = self
             .stations
             .get(&station)
-            .map(|s| s.name.clone())
             .ok_or(OpError::UnknownStation(station))?;
-        let new_station = self.mint_station_id()?;
+        let mut name = junction.name.clone();
+        // The line's own alias: the last one naming it (the latest merge).
+        let own = if restore {
+            junction
+                .aliases
+                .iter()
+                .rposition(|a| a.line == Some(line))
+                .map(|i| (i, junction.aliases[i].clone()))
+        } else {
+            None
+        };
+        let restored = match own {
+            Some((index, alias)) => {
+                let topology = self.topology();
+                let held = |n: &str| {
+                    topology.chain(line).unwrap_or(&[]).iter().any(|s| {
+                        *s != station && self.stations.get(s).is_some_and(|st| st.name == n)
+                    })
+                };
+                if let Some(own_name) = alias.name.as_deref().filter(|n| !held(n)) {
+                    own_name.clone_into(&mut name);
+                }
+                if let Some(j) = self.stations.get_mut(&station) {
+                    j.aliases.remove(index);
+                }
+                Some(alias.id)
+            }
+            None => None,
+        };
+        let new_station = match restored {
+            Some(id) => id,
+            None => self.mint_station_id()?,
+        };
         self.stations
             .insert(new_station, Station::new(new_station, name));
 
@@ -172,6 +242,7 @@ impl Project {
             moved_datums,
             moved_closure_ends,
             moved_hand_move,
+            restored_alias: restored.is_some(),
         })
     }
 }

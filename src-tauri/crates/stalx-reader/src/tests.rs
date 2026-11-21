@@ -142,13 +142,28 @@ pub(super) fn name_at(survey: &Survey, at: StationId) -> String {
         .unwrap_or_default()
 }
 
-/// Station names are unique among the stations of every section.
+/// Station names are unique among the stations of every section, except a
+/// junction's name repeating a name on a section it joins (one that knows it
+/// by an alias: review findings D-migration-upgrade-8 and UX-3). The names a
+/// section's own stations (on that section alone) hold never repeat.
 pub(super) fn assert_names_unique_per_section(survey: &Survey) {
+    let id_at = |at: StationId| {
+        let section = survey.sections.iter().find(|s| s.id == at.section_id)?;
+        section.station_ids.get(at.index as usize).copied()
+    };
+    let sections_of = |id: u32| {
+        survey
+            .sections
+            .iter()
+            .filter(|s| s.station_ids.contains(&id))
+            .count()
+    };
     for section in &survey.sections {
         let mut names: Vec<&str> = survey
             .station_names
             .iter()
             .filter(|n| n.station.section_id == section.id)
+            .filter(|n| id_at(n.station).is_some_and(|id| sections_of(id) == 1))
             .map(|n| n.name.as_str())
             .collect();
         let count = names.len();
@@ -223,14 +238,15 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(survey.station_comments[0].text, "lead");
     // Every position has a name once the survey is read (an unnamed station
     // is seeded from its index, as the app does on open). The junction keeps
-    // Main's "2", made unique on Side (whose own station 2 is "2") by the
-    // conversion's letter suffix, and has that one name on both sections.
+    // Main's "2" and has that one name on both sections; Side knows it by its
+    // alias (Side's own start), so Side's own station 2 keeps "2" too and
+    // nothing is lettered (review findings D-migration-upgrade-8, UX-3).
     let name = |at: StationId| name_at(&survey, at);
     assert_eq!(
         [0, 1, 2, 3, 4].map(|i| name(id(main.id, i))),
-        ["0", "1", "2a", "3", "17"]
+        ["0", "1", "2", "3", "17"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2a", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "2"]);
     assert_eq!(survey.station_names.len(), 8);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.unresolved_references, 0);
@@ -473,16 +489,17 @@ fn a_file_without_station_names_reads_with_seeded_names() {
 
     let survey = read_file(&path).unwrap();
 
-    // One per position, seeded from the index; the junction has Main's,
-    // letter-suffixed against Side's own "2", on both sections.
+    // One per position, seeded from the index; the junction has Main's on
+    // both sections, and Side (which knows it by its alias) keeps its own
+    // "2" (review findings D-migration-upgrade-8, UX-3).
     assert_eq!(survey.station_names.len(), 8);
     let (main, side) = (survey.sections[0].id, survey.sections[1].id);
     let name = |section_id, index| name_at(&survey, StationId { section_id, index });
     assert_eq!(
         [0, 1, 2, 3, 4].map(|i| name(main, i)),
-        ["0", "1", "2a", "3", "4"]
+        ["0", "1", "2", "3", "4"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2a", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "2"]);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);

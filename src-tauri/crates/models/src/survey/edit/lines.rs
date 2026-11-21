@@ -126,6 +126,9 @@ impl Project {
                 "Line has a shot with a non-finite (NaN/inf) value",
             ));
         }
+        if let Some(refusal) = shots.iter().find_map(ShotData::measurement_refusal) {
+            return Err(EditError::Refused(refusal));
+        }
         let line_name = meta
             .name
             .as_deref()

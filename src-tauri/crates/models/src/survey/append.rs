@@ -158,12 +158,23 @@ impl Project {
                 .map(|&(_, to)| to)
         };
 
+        // The copied lines' ids, in the source's list order (each source line
+        // becomes `first_line + position`): alias hints are remapped by it.
+        let alias_line = |id: LineId| {
+            source
+                .lines()
+                .iter()
+                .position(|l| l.id == id)
+                .and_then(|i| LineId::try_from(i).ok())
+                .and_then(|i| first_line.checked_add(i))
+        };
         let mut stations = Vec::with_capacity(source.stations.len());
         for station in source.stations.values() {
             let mut copy = station.clone();
             copy.id = shift(station.id);
             for alias in &mut copy.aliases {
                 alias.id = shift(alias.id);
+                alias.line = alias.line.and_then(alias_line);
             }
             stations.push(copy.id);
             self.insert_station(copy)?;

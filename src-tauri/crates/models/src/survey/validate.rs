@@ -14,6 +14,19 @@ use super::{
     ClosureId, Project, Topology, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS,
 };
 
+/// The largest magnitude of a measured distance: a shot's length, its two
+/// depths and its passage dimensions (left, right, up, down), metres. No cave
+/// survey comes near it; it keeps every derived position finite (review
+/// finding B-derived-solver-3: two finite shots of 1e308 m summed to
+/// infinity, and the solver turned that into NaN). `docs/file-format.md`
+/// section 6.
+pub const MAX_MEASUREMENT_M: f64 = 1_000_000.0;
+
+/// The largest magnitude of a stored coordinate: a placement, a datum
+/// correction, a legacy hand move, metres (two and a half times the earth's
+/// circumference).
+pub const MAX_COORDINATE_M: f64 = 100_000_000.0;
+
 /// Which end of a closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ClosureEnd {
@@ -216,6 +229,13 @@ pub enum Violation {
         station: StationId,
         line: LineId,
     },
+    /// An alias's line hint names a line that does not pass through its
+    /// station.
+    StaleAliasLine {
+        station: StationId,
+        alias: StationId,
+        line: LineId,
+    },
     /// A hand move keyed on a station that is not on its line.
     HandMoveOffLine {
         line: LineId,
@@ -302,6 +322,13 @@ pub enum Violation {
     NonFinite {
         field: NumberField,
         value: f64,
+    },
+    /// A finite distance or coordinate past its bound ([`MAX_MEASUREMENT_M`],
+    /// [`MAX_COORDINATE_M`]).
+    OutOfBounds {
+        field: NumberField,
+        value: f64,
+        bound: f64,
     },
 }
 
@@ -398,6 +425,15 @@ impl fmt::Display for Violation {
                 "closure {closure} end {end} is attached via line {line}, which does not pass \
                  through station {station}"
             ),
+            Self::StaleAliasLine {
+                station,
+                alias,
+                line,
+            } => write!(
+                f,
+                "alias {alias} of station {station} names line {line}, which does not pass \
+                 through it"
+            ),
             Self::HandMoveOffLine { line, station } => write!(
                 f,
                 "line {line} has a hand move at station {station}, which is not on it"
@@ -484,6 +520,11 @@ impl fmt::Display for Violation {
                 write!(f, "the next {counter} id {next} is past {bound}")
             }
             Self::NonFinite { field, value } => write!(f, "{field} is {value}, not finite"),
+            Self::OutOfBounds {
+                field,
+                value,
+                bound,
+            } => write!(f, "{field} is {value} m, past the {bound} m bound"),
         }
     }
 }
@@ -697,6 +738,20 @@ impl Project {
                 }
             }
         }
+        for (&station, s) in &self.stations {
+            if !topology.contains(station) {
+                continue;
+            }
+            for alias in &s.aliases {
+                if let Some(line) = alias.line.filter(|&line| !via_holds(station, line)) {
+                    out.push(Violation::StaleAliasLine {
+                        station,
+                        alias: alias.id,
+                        line,
+                    });
+                }
+            }
+        }
     }
 
     fn check_chains(&self, out: &mut Vec<Violation>) {
@@ -847,13 +902,17 @@ impl Project {
             let Some(chain) = topology.chain_at(position) else {
                 continue;
             };
+            // A station the line knows by one of its aliases is not held to
+            // the line's names (`Project::known_by_alias_on`).
+            let named = |s: &StationId| {
+                self.stations
+                    .get(s)
+                    .filter(|st| !st.aliases.iter().any(|a| a.line == Some(line.id)))
+                    .map(|st| (st.name.as_str(), *s))
+            };
             // Fast path: no name on two stations of the chain.
             sorted.clear();
-            sorted.extend(
-                chain
-                    .iter()
-                    .filter_map(|s| self.stations.get(s).map(|st| (st.name.as_str(), *s))),
-            );
+            sorted.extend(chain.iter().filter_map(named));
             sorted.sort_unstable();
             if sorted
                 .windows(2)
@@ -863,7 +922,7 @@ impl Project {
             }
             let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
             for &station in chain {
-                let Some(name) = self.stations.get(&station).map(|s| s.name.as_str()) else {
+                let Some((name, _)) = named(&station) else {
                     continue;
                 };
                 match seen.get(name) {
@@ -959,10 +1018,29 @@ impl Project {
     }
 
     fn check_numbers(&self, out: &mut Vec<Violation>) {
-        let mut check = |field: NumberField, value: f64| {
+        // A distance or coordinate is finite and within its bound; any other
+        // number only finite.
+        let mut check_within = |field: NumberField, value: f64, bound: Option<f64>| {
             if !value.is_finite() {
                 out.push(Violation::NonFinite { field, value });
+            } else if let Some(bound) = bound.filter(|b| value.abs() > *b) {
+                out.push(Violation::OutOfBounds {
+                    field,
+                    value,
+                    bound,
+                });
             }
+        };
+        let measurement = Some(MAX_MEASUREMENT_M);
+        let coordinate = Some(MAX_COORDINATE_M);
+        let mut check = |field: NumberField, value: f64| match &field {
+            NumberField::Shot { field: name, .. } if is_measurement(name) => {
+                check_within(field, value, measurement);
+            }
+            NumberField::HandMove { .. }
+            | NumberField::DatumCorrection { .. }
+            | NumberField::Placement { .. } => check_within(field, value, coordinate),
+            _ => check_within(field, value, None),
         };
         for line in &self.lines {
             check(NumberField::LineQuality { line: line.id }, line.quality);
@@ -1066,4 +1144,13 @@ fn sorted_subset<'a>(
         }
     }
     true
+}
+
+/// Whether a shot field is a distance bounded by [`MAX_MEASUREMENT_M`] (the
+/// angles and the temperature are not).
+fn is_measurement(field: &str) -> bool {
+    matches!(
+        field,
+        "length" | "depth_in" | "depth_out" | "left" | "right" | "up" | "down"
+    )
 }

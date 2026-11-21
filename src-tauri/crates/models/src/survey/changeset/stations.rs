@@ -10,7 +10,7 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::StationId;
+use crate::{LineId, StationId};
 
 use super::super::{Station, StationAlias};
 use super::bits::Same;
@@ -229,7 +229,8 @@ impl StationChanges {
 }
 
 /// A station image, written as `[id, name]` or `[id, name, {comment, aliases,
-/// external}]` (aliases as `[id]` or `[id, name]`).
+/// external}]` (aliases as `[id]`, `[id, name]` or, with the line that knew
+/// the station by it, `[id, name, line]` / `[id, null, line]`).
 #[derive(Debug, Clone)]
 pub(crate) struct StationRow(pub(crate) Station);
 
@@ -248,11 +249,19 @@ struct AliasRow(StationAlias);
 
 impl Serialize for AliasRow {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let len = if self.0.name.is_some() { 2 } else { 1 };
+        let alias = &self.0;
+        let len = match (&alias.name, alias.line) {
+            (_, Some(_)) => 3,
+            (Some(_), None) => 2,
+            (None, None) => 1,
+        };
         let mut seq = s.serialize_seq(Some(len))?;
-        seq.serialize_element(&self.0.id)?;
-        if let Some(name) = &self.0.name {
-            seq.serialize_element(name)?;
+        seq.serialize_element(&alias.id)?;
+        if len > 1 {
+            seq.serialize_element(&alias.name)?;
+        }
+        if let Some(line) = alias.line {
+            seq.serialize_element(&line)?;
         }
         seq.end()
     }
@@ -260,22 +269,27 @@ impl Serialize for AliasRow {
 
 impl<'de> Deserialize<'de> for AliasRow {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let parts: (StationId, Option<String>) = {
+        type Parts = (StationId, Option<String>, Option<LineId>);
+        let parts: Parts = {
             struct V;
             impl<'de> Visitor<'de> for V {
-                type Value = (StationId, Option<String>);
+                type Value = Parts;
                 fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    f.write_str("[id] or [id, name]")
+                    f.write_str("[id], [id, name] or [id, name or null, line]")
                 }
                 fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                     let id = seq
                         .next_element()?
                         .ok_or_else(|| de::Error::custom("an alias without its id"))?;
-                    let name: Option<String> = seq.next_element()?;
+                    let name: Option<Option<String>> = seq.next_element()?;
+                    let line: Option<LineId> = seq.next_element()?;
+                    if matches!(name, Some(None)) && line.is_none() {
+                        return Err(de::Error::custom("an alias with a null name and no line"));
+                    }
                     if seq.next_element::<de::IgnoredAny>()?.is_some() {
                         return Err(de::Error::custom("an alias with extra elements"));
                     }
-                    Ok((id, name))
+                    Ok((id, name.flatten(), line))
                 }
             }
             d.deserialize_seq(V)?
@@ -283,6 +297,7 @@ impl<'de> Deserialize<'de> for AliasRow {
         Ok(Self(StationAlias {
             id: parts.0,
             name: parts.1,
+            line: parts.2,
         }))
     }
 }
