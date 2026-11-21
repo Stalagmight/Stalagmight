@@ -205,6 +205,33 @@ next open of that project shows "SpeleoDB is unreachable. Opened the last downlo
 copy; it may be out of date." and the copy opens read-only. Never do this against a
 shared or real SpeleoDB server.
 
+### Un-uploaded work is decided by content
+
+An edit marks the copy un-uploaded at once; the edit itself reaches the file
+with the next save. The mark over a copy that still holds exactly its BASE
+revision's survey (the edit was lost: a crash, or Don't save) is stale, and
+every reader treats it so
+([saving.md](saving.md#the-un-uploaded-mark-and-the-base-survey-digest)).
+`core/state/speleodb_base_survey_tests.rs` drives the real pull, open, edit,
+save and push against a loopback server, with the protocol fuzzer's trace
+(seed 900426) as its first test:
+`an_edit_lost_in_a_crash_leaves_no_un_uploaded_work_behind`,
+`a_crash_after_an_edit_reopens_clean`, `a_saved_edit_keeps_its_mark`,
+`an_edit_taken_back_and_saved_counts_as_clean` (by hand and by Undo),
+`after_a_confirmed_upload_a_lost_edit_leaves_no_un_uploaded_work`,
+`an_edit_taken_back_during_an_upload_stays_un_uploaded` (the push fence) and
+`a_copy_without_a_digest_keeps_its_mark` (a 0.6.0 copy and a version 2 copy
+without the digest), and `the_digest_goes_with_its_base`. The digest itself
+is pinned in
+`persistence/stalx_v2/format_v2_digest_tests.rs`.
+
+A manual check against the test server, with a synthetic project: open it from
+the SpeleoDB browser, edit, and close with Don't save; open it again: it opens
+without the "local edits that were never pushed" prompt, and Close asks
+nothing. Edit and save, then Undo and save: the un-uploaded indicator goes
+away and Close asks nothing. Edit, save and close: the next open still offers
+the local copy.
+
 ### The live test
 
 The live test generates synthetic project files in temporary directories (the

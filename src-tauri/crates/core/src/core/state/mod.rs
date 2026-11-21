@@ -39,6 +39,7 @@ mod raw_data;
 mod recent_projects;
 mod speleodb;
 mod speleodb_admin;
+mod speleodb_base_survey;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_cached;
@@ -417,6 +418,13 @@ mod snapshot_fixes_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_acquire_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_base_survey_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

@@ -64,6 +64,14 @@ pub struct SpeleoDbLink {
 pub struct LocalSync {
     /// The server revision this copy is based on; `None` is an empty repo.
     pub base_commit: Option<String>,
+    /// The digest of that revision's survey ([`super::survey_digest`]),
+    /// recorded when the copy is known to hold it (an install of the
+    /// revision, a confirmed upload of it). A copy marked
+    /// [`Self::unpushed_edits`] whose own survey has this digest holds no
+    /// un-uploaded work: the mark outlived the edits it stood for (a crash
+    /// or "Don't save" after an edit). `None`: not known, and the mark is
+    /// taken at its word.
+    pub base_survey: Option<String>,
     /// Set by the first accepted edit; cleared only by a confirmed push.
     pub unpushed_edits: bool,
     pub last_edit_at: Option<DateTime<Utc>>,

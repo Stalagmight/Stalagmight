@@ -19,6 +19,9 @@
 //!   (or the project name) while copying every survey member verbatim.
 //! - [`write_atomic`] and [`Fingerprint`]: the durable save and the
 //!   external-modification guard.
+//! - [`survey_digest`]: the digest of the survey a file holds, which tells a
+//!   SpeleoDB copy that holds exactly its BASE revision from one with
+//!   un-uploaded work.
 //!
 //! Nothing in the app uses this module yet; the SQLite format is untouched.
 
@@ -27,6 +30,7 @@ mod canon;
 mod decode;
 mod decode_meta;
 mod decode_records;
+mod digest;
 mod encode;
 mod error;
 mod ignores;
@@ -104,6 +108,13 @@ mod format_v2_modes_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_digest_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point; it prints its measurements"
 )]
@@ -157,6 +168,7 @@ mod decode_fuzz_tests;
 
 pub use atomic::{check_unchanged, temp_path, write_atomic, Fingerprint, Guard, Stage, WriteError};
 pub use decode::{decode, decode_salvage};
+pub use digest::survey_digest;
 pub use encode::{encode, encode_with_report, EncodeReport, HistoryCut};
 pub use error::{DecodeError, EncodeError};
 pub use local::{rename_project, rewrite_local, rewrite_local_keeping_history};

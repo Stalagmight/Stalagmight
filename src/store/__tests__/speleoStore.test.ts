@@ -584,6 +584,25 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link).toBe(after);
     });
 
+    // S2: a save found the copy holds its BASE survey again (an edit taken back) and
+    // the backend cleared its un-uploaded mark; the exit prompt reads this mirror.
+    it('clearUnpushedMark clears a marked link and no-ops on a clean one', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true }));
+      useSpeleoStore.getState().clearUnpushedMark();
+      const after = useSpeleoStore.getState().link;
+      expect(after?.hasUnpushedEdits).toBe(false);
+      expect(after?.editState).toBe('editing');
+      useSpeleoStore.getState().clearUnpushedMark();
+      expect(useSpeleoStore.getState().link).toBe(after);
+    });
+
+    it('clearUnpushedMark is a no-op with no link', () => {
+      useSpeleoStore.getState().clearUnpushedMark();
+      expect(useSpeleoStore.getState().link).toBeNull();
+    });
+
     it('markForwardEdit is a no-op with no link', () => {
       useSpeleoStore.getState().markForwardEdit();
       expect(useSpeleoStore.getState().link).toBeNull();

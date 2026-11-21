@@ -772,7 +772,7 @@ impl AppState {
                     undo_history_omitted: false,
                 };
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_record_landing(project.as_ref(), |l| {
+                self.speleodb_record_landing(project.as_ref(), None, |l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
                     l.last_edit_at = None;
@@ -978,8 +978,10 @@ impl AppState {
                     server_kind.as_deref(),
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
+                // What went up is the new BASE only when the landing names it.
+                let landed_bytes = new_base.is_some().then_some(snapshot.bytes.as_slice());
                 let project = self.speleodb_push_project_guard(generation)?;
-                self.speleodb_record_landing(project.as_ref(), |l| {
+                self.speleodb_record_landing(project.as_ref(), landed_bytes, |l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
                     // over a dirty copy fences straight to Diverged, then walks the
                     // whole history to the service-account creation root and calls
@@ -1010,6 +1012,11 @@ impl AppState {
                     if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(&push_start)) {
                         l.has_unpushed_edits = false;
                         l.last_edit_at = None;
+                    } else {
+                        // An edit after push_start is not in the commit. Set, not
+                        // kept: a save may have cleared a stale mark while the
+                        // upload ran (S2), over the BASE this landing replaces.
+                        l.has_unpushed_edits = true;
                     }
                 })?;
                 self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
@@ -1035,16 +1042,24 @@ impl AppState {
                         project_id,
                         server_kind.as_deref(),
                     );
+                    // The server holds exactly what went up, at BASE.
                     let project = self.speleodb_push_project_guard(generation)?;
-                    self.speleodb_record_landing(project.as_ref(), |l| {
-                        if sync::edits_captured_by_push(
-                            l.last_edit_at.as_deref(),
-                            Some(&push_start),
-                        ) {
-                            l.has_unpushed_edits = false;
-                            l.last_edit_at = None;
-                        }
-                    })?;
+                    self.speleodb_record_landing(
+                        project.as_ref(),
+                        Some(snapshot.bytes.as_slice()),
+                        |l| {
+                            if sync::edits_captured_by_push(
+                                l.last_edit_at.as_deref(),
+                                Some(&push_start),
+                            ) {
+                                l.has_unpushed_edits = false;
+                                l.last_edit_at = None;
+                            } else {
+                                // As in the 200 arm: a late edit stays un-uploaded.
+                                l.has_unpushed_edits = true;
+                            }
+                        },
+                    )?;
                     self.speleodb_clear_undo_after_push(project.as_ref(), undo_cutoff);
                     return Ok(landed);
                 }
@@ -1170,9 +1185,10 @@ impl AppState {
         }
     }
 
-    /// Record what a CONCLUDED landing changes on the link (BASE, the dirty bit):
-    /// in memory first, then made durable by the local-only save
-    /// (`speleodb_mutate_link_held`).
+    /// Record what a CONCLUDED landing changes on the link (BASE, the dirty bit)
+    /// and, when `pushed` (the bytes that went up) is the copy's BASE now, the
+    /// digest of their survey as BASE's (S2): in memory first, then made durable
+    /// by the local-only save (`speleodb_record_landed_link`).
     ///
     /// The commit is on the server whatever the disk says, so a failed save is
     /// logged, never returned (review G-speleodb-7). Returning it reported a push
@@ -1189,9 +1205,10 @@ impl AppState {
     fn speleodb_record_landing(
         &self,
         open: Option<&crate::models::survey::Project>,
+        pushed: Option<&[u8]>,
         record: impl FnOnce(&mut crate::models::SpeleoLink),
     ) -> Result<(), SpeleoErrorDto> {
-        match self.speleodb_mutate_link_held(open, record) {
+        match self.speleodb_record_landed_link(open, pushed, record) {
             Ok(()) => Ok(()),
             Err(SpeleoDbError::NoRemoteProject) => Err(local_dto(SpeleoDbError::NoRemoteProject)),
             Err(e) => {

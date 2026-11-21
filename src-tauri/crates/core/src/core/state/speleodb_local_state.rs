@@ -38,7 +38,7 @@ use super::open_file::FileState;
 use super::AppState;
 use crate::models::SpeleoLink;
 use crate::persistence::legacy_link::{self, ReadOptions};
-use crate::persistence::stalx_v2::{self, Extras, Format};
+use crate::persistence::stalx_v2::{Extras, Format};
 use crate::speleodb::models::SpeleoLocalProjectState;
 use crate::speleodb::SpeleoDbError;
 
@@ -76,9 +76,11 @@ pub(super) enum LegacyRead {
 /// The SpeleoDB link of the `.stalx` at `path`, the one reader every link
 /// reader shares (plan 6.1): the identity from `speleodb` and the sync state
 /// from `local.speleodb` of a version 2 header, or the `speleo_link` row of a
-/// legacy file.
+/// legacy file. A version 2 copy marked un-uploaded that holds exactly its
+/// BASE survey reads as clean (`speleodb_base_survey`, S2): only such a copy
+/// is read whole.
 pub(super) fn probe_link(path: &Path, legacy: LegacyRead) -> FileLink {
-    let header = match stalx_v2::probe_path(path) {
+    let header = match super::speleodb_base_survey::probe_settled(path) {
         Ok(header) => header,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FileLink::Missing,
         Err(e) => return FileLink::Unreadable(e.to_string()),

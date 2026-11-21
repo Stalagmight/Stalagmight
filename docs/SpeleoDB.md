@@ -555,6 +555,18 @@ routing to the upload dialog; the open-from-SpeleoDB and account-change question
 file of its own. Saved edits keep the copy's un-uploaded flag, so the next open
 offers to open the local copy.
 
+The flag is set the moment an edit is made, so a crash right after an edit is
+not forgotten; the edit itself reaches the file only when it is saved. What
+counts is the survey the copy holds: a copy that holds exactly the survey of
+the revision it is based on has nothing to upload, whatever its flag says (the
+edit was lost in a crash or closed with Don't save, or it was taken back and
+saved). Such a copy opens and updates like a clean one, the listing, the
+close, quit and sign-out prompts and the replace guard all say it has no
+un-uploaded changes, and its open clears the flag. A copy whose base
+revision's survey is not known (one downloaded by an earlier version, or a
+restored revision) keeps its flag at its word. The mechanism is in
+[saving.md](saving.md#the-un-uploaded-mark-and-the-base-survey-digest).
+
 Uploading requires a nonblank change description, saves locally first, and verifies
 current permission and lock ownership against the server. Ordinary successful upload
 retains the lock. The same centered progress surface blocks the app during explicit

@@ -597,6 +597,15 @@ pub struct CommandResult {
     /// optional fields above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub legacy_converted: Option<crate::core::state::ConversionFile>,
+    /// Set when this save found that the SpeleoDB copy holds exactly the survey
+    /// of its BASE revision again (an edit taken back, by hand or by Undo) and
+    /// cleared its un-uploaded mark in the file it wrote (S2). The frontend's
+    /// mirror of the mark (`hasUnpushedEdits`, which the exit prompt reads) is
+    /// set on every edit and refreshed only from a status read, so it is told.
+    /// `Option<bool>`, only ever `Some(true)`, for the same wire contract as
+    /// the optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speleodb_unpushed_cleared: Option<bool>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -644,6 +653,7 @@ impl CommandResult {
             lock_release: None,
             cave_section_id: None,
             legacy_converted: None,
+            speleodb_unpushed_cleared: None,
         }
     }
 
@@ -663,6 +673,7 @@ impl CommandResult {
             lock_release: None,
             cave_section_id: None,
             legacy_converted: None,
+            speleodb_unpushed_cleared: None,
         }
     }
 
