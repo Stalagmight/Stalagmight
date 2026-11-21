@@ -81,3 +81,47 @@ fn a_shotless_line_reverses_to_itself_and_a_missing_one_is_refused() {
     assert_eq!(p, snapshot);
     assert!(p.reverse_line(99, false).is_err());
 }
+
+/// Farm finding (sg-metamorphic reverse-twice-is-identity, e.g. seeds
+/// 17003130 and 17500744): a shot whose two readings were typed exactly
+/// opposite but are one ulp short of it in f64 (`158.1` / `338.1`,
+/// `267.1` / `87.1`). The reverse left that shot's bearing unturned, so one
+/// reverse moved every station past it by twice its horizontal length (11 m
+/// here), and a second reverse turned it the other way: the line ended up
+/// 11 m off. 0.6.0 does the same (declared fix, plan Deviations T4-R1).
+#[test]
+fn a_shot_typed_exactly_opposite_turns_with_its_line() {
+    for (azimuth_in, azimuth_out) in [(158.1, 338.1), (267.1, 87.1)] {
+        let mut p = empty();
+        let mut odd = shot_u(0.0, 5.5, 5.0, 5.0, "b");
+        odd.azimuth_in = azimuth_in;
+        odd.azimuth_out = azimuth_out;
+        let l = line(
+            &mut p,
+            "Main",
+            vec![
+                shot_u(0.0, 4.0, 5.0, 5.0, "a"),
+                odd,
+                shot_u(90.0, 3.0, 5.0, 5.0, "c"),
+            ],
+        );
+        let before = p.raw_positions();
+        ok(p.reverse_line(l, false));
+        assert_still(&before, &p.raw_positions(), 1e-9, &[]);
+        let middle = &p.line(l).unwrap().shots[1];
+        assert_eq!(
+            (middle.azimuth_in.to_bits(), middle.azimuth_out.to_bits()),
+            (azimuth_out.to_bits(), azimuth_in.to_bits()),
+            "the degenerate pair is swapped, both values as typed"
+        );
+        ok(p.reverse_line(l, false));
+        assert_still(&before, &p.raw_positions(), 1e-9, &[]);
+        let middle = &p.line(l).unwrap().shots[1];
+        assert_eq!(
+            (middle.azimuth_in.to_bits(), middle.azimuth_out.to_bits()),
+            (azimuth_in.to_bits(), azimuth_out.to_bits()),
+            "twice is the shot back, to the bit"
+        );
+        assert_valid(&p);
+    }
+}

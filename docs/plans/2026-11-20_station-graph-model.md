@@ -32,6 +32,7 @@ Editing:
 - **History labels are worded when the edit is recorded**, with the names before it, batch rows included; an Update Shot preview lists only the cells that changed (N1). Why: the persisted history holds no forward command to word later.
 - **The delete dialogs name one datum once**: "Both sides are anchored to a zero datum." is listed only when the two sides of the gap reach different datums; a shot in a loop lists only the loop reason, and a range whose sides reach one datum through a loop closure says "Both sides are tied to the same zero datum through a loop closure."; whether Shift Geometry is offered is 0.6.0's (demo finding I-8). Why: in a loop both sides reach the same datum, and 0.6.0's second line read as a second datum.
 - **Smaller editing differences**: an edit that changes nothing keeps the redo branch (Unmerge off a junction too); MoveComment onto its own station is a no-op (0.6.0 deleted the comment); Create Line names only the new line; a range gap-close reports the closures it removes; import tracking and Untrack Import are undo steps behind the read-only gate; Add .stalx and Section creation refuse when ids run out instead of renumbering; with no project open undo says "No project open", and editing a shot on a deleted line says "That line no longer exists." (N2, N4, N5, N6, N14, E5). Why: an empty changeset records nothing, the hash lists are recorded content, ids are never reused.
+- **A reverse turns a shot whose two readings are typed exactly opposite** (`158.1` / `338.1`): Reverse Line, Combine Lines' reversed line and a reversed import line decide the degenerate pair by the bearing `average_azimuth_of` computes instead of a bit-exact difference, so such a shot turns with its line; 0.6.0 left about a fifth of those shots unturned, moving every station past one by twice its horizontal length, and a second reverse turned it the other way (T4-R1). Why: a reverse must not move the cave, and twice must be the identity.
 
 Derived views and Plan mode:
 
@@ -1436,3 +1437,85 @@ themselves. Labels `JP1`...
   returns the `station-comments-not-written` note, a warning toast
   ("Comments on entrance stations were left out - Ariane has no place for
   them").
+
+## Deviations (package T4, the metamorphic farm triage)
+
+- **T4-R1. The reverse decides a degenerate pair by its bearing** (declared
+  fix of 0.6.0 behaviour; amends 4.4 and M1's "today's transform"). Farm
+  job sg-metamorphic, pair reverse-twice-is-identity, 25 dirty seeds. A
+  shot's bearing is `average_azimuth_of(in, out)`, whose `+ 540` wrap
+  rounds a difference one ulp off 180 to exactly 180 and resolves the pair
+  by its tie-break (the first reading minus 90). The reverse took a pair as
+  degenerate only when `(out - in) % 360` is exactly 180 in f64, and the two
+  disagree on readings typed exactly opposite: `338.1 - 158.1` is
+  `180.00000000000003`, so reciprocate-and-swap gave the same tie back
+  (`(158.10000000000002, 338.1)`), the shot kept its bearing while its line
+  turned, and every station past it moved by twice its horizontal length; a
+  second reverse took the now bit-exact pair as degenerate and swapped it,
+  turning it the other way, so the line came back that far off. 832 of the
+  3600 pairs exactly opposite on a 0.1-degree grid are affected (about a
+  fifth on 0.01 and 0.001 grids too). Pre-existing: the frozen 0.6.0 crate
+  (`crates/legacy`, `models/project/reverse.rs`) and master e5e2935a9
+  (`models/project/reverse.rs`) carry the same `readings_are_antipodal` and
+  `average_azimuth_of`; a three-shot line `(0, 0, 4 m)`, `(267.1, 87.1,
+  5.5 m)`, `(90, 90, 3 m)` reversed through each one's `reverse_line` /
+  `reverse_section` moves its first station 11.0 m on the first reverse and
+  leaves the line 11.0 m off after the second, exactly as on this branch
+  before the fix. Now (`models::shot_reverse`): a pair is degenerate exactly
+  when swapping its readings turns its bearing (symmetric, so the swap branch
+  stays an exact involution and keeps both values as typed), and a
+  reciprocated pair that the rounding of the reciprocals left on the tie with
+  its bearing unturned (a pair a few ulps from opposite, never a typed one)
+  is swapped back. Every reverse turns the bearing; twice gives the readings
+  back to the ulp for every pair on a decimal grid down to 0.001 degree (and
+  bit for bit for a degenerate pair); a crafted pair within a few ulps of
+  opposite can come back with its two readings exchanged, its bearing the
+  original one. Non-finite readings reciprocate as before. The import
+  preview's mirror (`reverseTargetShot` in `src/utils/overlapHelpers.ts`)
+  takes the same rule, so preview and commit agree. The frozen crate
+  keeps 0.6.0's test (it only reads files). The compact undo history replays
+  the same transform for its flipped runs; an entry an earlier build of this
+  branch recorded across such a shot no longer hashes to its recorded side
+  and is refused rather than misapplied (no released build writes version
+  2). Tests: `models::shot_reverse_tests` (the tie the difference misses, the
+  farm shot swapped and back to the bit, every 0.1 and 0.01 grid pair at and
+  one step either side of opposite, 4000 random pairs within 6 ulps of
+  opposite, non-finite readings), `survey::edit::reverse_tests` (a line with
+  such a shot moves no station, reversed once or twice), and
+  `metamorphic_undo_tests::a_shot_typed_exactly_opposite_reverses_twice_to_itself`
+  (farm seeds 17003130, 17003411, 17500744, 17519186; the old test fails all
+  four).
+- **T4-O1. A move out and back is compared within its rounding** (oracle
+  only). `MoveLine(+d)` then `MoveLine(-d)` gives a placement coordinate
+  back as `fl(fl(p + d) - d)`, within `2 EPSILON (|p| + |d|)` of `p`, and
+  the stored survey's twelve significant digits straddled that on four farm
+  seeds (a placement at `0.001` back as `0.000999999999999` after a 15 m
+  move). The pair asserts each placement against that bound and compares
+  everything else strictly; undone, the twin is its start to the bit.
+- **T4-O2. The range-shift oracle knows a closure the single deletes promote
+  on the way** (oracle only; 20 farm seeds with closures). A single delete
+  can leave a loop closure with one end on the edited line as the only link
+  between two pieces; its sweep promotes it (5.5), and the next single
+  delete takes the merged station off the edited line again, so the singles
+  keep the merge's traces where the atomic range, which never passes through
+  that state, keeps none: the edited line's end as an alias of the partner's
+  station (or, when that end survived, the junction's first alias as its id,
+  U1), the two ends' comments joined (5.1), and, when the edited line's
+  piece was the one that moved (4.2: neither piece holds a datum by then),
+  that piece dragged and cut loose again where the merge left it. Both
+  routes follow the plan. The oracle now matches such a promotion by the
+  other end's slot on a partner line and asserts the junction positively
+  (every line shows it by the same name in both routes; the singles' ids are
+  the atomic route's plus at most the edited line's end; the singles' comment
+  is the 5.1 join and the atomic route's the partner's own) before giving it
+  the atomic identity, and compares a dragged piece as partners are compared:
+  the atomic route held the edited line's first station still (4.1 (a))
+  unless its own sweep merged the piece or a datum holds it, the singles'
+  slots are the atomic route's moved by one vector, both hold as many
+  placements on it, and a single delete moves that station only by a merge
+  that made a junction on its piece (found by either end's id or alias: U1
+  can give it a third identity in the same step, seed 17504401). Pinned in
+  `a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces`
+  (nine seeds; injections in its docs). Not changed: U1's restore takes the
+  first alias in list order, so a delete after a merge is not its exact
+  inverse in station ids (seed 17517958: the junction's id moves from 6 to 8).

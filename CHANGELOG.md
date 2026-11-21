@@ -33,6 +33,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **Reversing a line no longer moves part of it when a shot's two compass readings are exactly opposite** - when a shot's two azimuth readings were entered exactly 180 degrees apart (for example 158.1 and 338.1), Reverse Line could leave that shot pointing the old way, so every station past it moved by twice the shot's length, and reversing the line again moved them the other way. This affected about one such pair in five, and also Combine Lines when it reverses a line and an import line imported in reverse. The shot now turns with its line, and reversing a line twice gives it back exactly
 - **The Ariane export says when it leaves out comments** - Ariane has no place for a comment on an entrance station (where a line of an entrance starts), so such a comment is not in the exported file, as before; the export now says so instead of leaving it out silently. Put the note on the next station to keep it in the file
 - **Clicking the arrow on Undo or Redo shows the history** - it undid or redid one step, and the history list opened only when you hovered over the button
 - **The Data table starts afresh in each project you open** - it kept the previous project's line, row and column, so it could open on whichever line of the new project had the same number, scrolled sideways
