@@ -96,8 +96,10 @@
 //! those lines and every placement on them is the atomic route's moved by
 //! one vector, and a single delete that moved that station without a datum
 //! in its piece promoted a closure onto that piece (each single delete is
-//! checked against plan 4.1 (a) on its own: the junction the merge made is
-//! on the head's piece afterwards). A loop closure between two partner
+//! checked against plan 4.1 (a) on its own: the junction the merge made,
+//! under either end's id or alias, is on the head's piece afterwards; seed
+//! 17504401, where U1 gives that junction a third identity in the same
+//! step). A loop closure between two partner
 //! pieces the range cuts apart is promoted by the range's own sweep, which moves one of the two
 //! pieces onto the other by the closure's measured gap (plan 5.5; two free
 //! pieces: the piece of the closure's first end moves, plan 4.2), so the
@@ -763,6 +765,17 @@ fn absorbed_promotion(
             atomic_comment,
         }),
     })
+}
+
+/// The station of `p` that is `id` or carries it as an alias.
+fn known_as(p: &Project, id: StationId) -> Option<StationId> {
+    if p.stations.contains_key(&id) {
+        return Some(id);
+    }
+    p.stations
+        .values()
+        .find(|s| s.aliases.iter().any(|alias| alias.id == id))
+        .map(|s| s.id)
 }
 
 /// Whether `other` is a station of `station`'s piece in `p`.
@@ -1746,10 +1759,15 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
             if let (Some(was), Some(is)) = (was, is) {
                 if (was[0] - is[0]).abs().max((was[1] - is[1]).abs()) > POSITION_TOLERANCE_M {
                     // Only a merge of the head's own piece may move it: the
-                    // junction a promotion made is then on the head's piece.
-                    let joined = step
-                        .iter()
-                        .any(|promotion| on_piece_of(&after_step, head, promotion.survivor));
+                    // junction a promotion made is then on the head's piece
+                    // (found by either end's id, its own or an alias: U1 can
+                    // give it back another identity in the same step).
+                    let joined = step.iter().any(|promotion| {
+                        [promotion.survivor, promotion.retired].iter().any(|end| {
+                            known_as(&after_step, *end)
+                                .is_some_and(|junction| on_piece_of(&after_step, head, junction))
+                        })
+                    });
                     if !joined {
                         head_moved.push(format!(
                             "the single delete of shot {target} moved the edited line's first \
@@ -2920,12 +2938,17 @@ fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
 /// its alias identity, so only the singles keep that end's own id.
 /// 17510181: the range promotes the same closure moving only partner lines,
 /// the singles drag the edited line's piece with them, and that piece's
-/// placement names another station. Injections: halving the dragged shift
+/// placement names another station. 17504401: the merge that drags the
+/// edited line's piece gives the junction a third identity in the same step
+/// (U1: an alias the remaining lines knew it by), so the junction on the
+/// head's piece is found by either end's id or alias. Injections: halving
+/// the dragged shift
 /// fails 17505500, 17510181 and 17510437; holding the head still on every
 /// dragged piece fails 17510437; joining the comments retired first fails
 /// 17507685; any other extra id than the edited line's end fails 17505500;
 /// giving the singles' junction no atomic identity fails 17503128,
-/// 17505500, 17515357 and 17517958.
+/// 17505500, 17515357 and 17517958; finding the junction by the survivor's
+/// own id alone fails 17504401.
 #[test]
 fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
     let _config = crate::test_helpers::isolated_config();
@@ -2933,8 +2956,8 @@ fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
     let mut absorbed = 0;
     let mut dragged = 0;
     for seed in [
-        17_503_128, 17_505_500, 17_507_685, 17_509_825, 17_510_181, 17_510_437, 17_515_357,
-        17_517_958,
+        17_503_128, 17_504_401, 17_505_500, 17_507_685, 17_509_825, 17_510_181, 17_510_437,
+        17_515_357, 17_517_958,
     ] {
         let outcomes = run_pairs(seed, 4, true, GATE_PRELUDE);
         let outcome = &outcomes["range-shift-is-n-single-deletes"];
