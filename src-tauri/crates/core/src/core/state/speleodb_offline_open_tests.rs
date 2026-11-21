@@ -30,8 +30,8 @@ const BASE: &str = "abc1234";
 /// How the loopback server loses a reply.
 #[derive(Clone, Copy, Debug)]
 enum Lost {
-    /// Read the request, then close without a word (the fuzzer's
-    /// `DropBeforeForward` on a GET, seed 900366).
+    /// Read the request, then close without a word (the fuzzer's trace, seed
+    /// 900366).
     Closed,
     /// Read the request but its last byte, then close: the unread byte makes the
     /// kernel reset the connection.

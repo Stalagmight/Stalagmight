@@ -43,11 +43,9 @@
 //! [`enforce`] reports it as a `Transport { cause: Dns }` failure, and that typed
 //! cause gets the offline handling (the cached open, sdk#6). An `https://`
 //! request is not resolved here: its DNS failure surfaces from the SDK's send,
-//! which `client::api_error` currently classifies, like a refused or reset
-//! connection, as `TransportCause::Unknown` - and an unknown cause does not fall
-//! back to the cached copy. So today an offline `https://` endpoint falls back
-//! only on a timeout; the DNS and refused cases are the known gap F1, tracked in
-//! #669.
+//! which `client::transport_cause` classifies from the typed error as `Dns`
+//! too, and a refused, reset or dropped connection as `Refused` or `Dropped`
+//! (F1, #669), so an offline `https://` endpoint gets the same offline handling.
 //!
 //! NOTE (#187): this is a guard against accidental plaintext misconfiguration,
 //! NOT an adversarial SSRF / DNS-rebinding defense.

@@ -173,6 +173,38 @@ of the app against a server without version 2 support should expect that
 refusal on every upload of an edited project; a legacy SQLite revision on the
 server still downloads, and is migrated in memory.
 
+### Lost replies and the offline open (F1)
+
+A request whose reply is lost is classified from the typed error, never its text
+(`client::transport_cause`, one classifier for the SDK's send and its body reads;
+see [SpeleoDB.md](SpeleoDB.md)): `Refused` (no connection), `Dropped` (connected,
+then closed or reset before the whole reply), `Timeout`, `Dns`, `Tls`, `Unknown`. An
+open falls back to the cached copy on the first four (`got_no_reply`). Two offline
+suites pin it, each against a loopback listener that loses its replies on purpose:
+
+- `speleodb::client::tests::transport_causes` (the speleodb crate) drives the real
+  SDK client: a connection closed before the reply, a reset before it, a reply head
+  or body cut short, a reset in the body (each on the project, history and both
+  download reads, which are tried three times), a port nothing listens on, an
+  `https://` name under `.invalid` (one DNS lookup, never a server), a reply that is
+  not HTTP (stays `Unknown`), and five writes (acquire, release, create, patch,
+  upload) whose reply is lost: `Dropped`, sent once.
+- `core/state/speleodb_offline_open_tests.rs` runs the whole open path: a clean
+  cached copy opens offline for each way of losing every GET under
+  `/api/v2/projects/` (the fuzzer's seed 900366), untouched and without an owner
+  record written; this account's un-uploaded work opens offline still marked as
+  not uploaded, another account's read-only; a reply that is not HTTP, and a
+  discard, never fall back; and a push whose upload reply is lost stays
+  unconfirmed, dirty at BASE and locked, sent once. The acquire side is
+  `speleodb_acquire_tests.rs` (`an_acquire_whose_reply_was_lost_is_adopted_when_the_lock_is_ours`).
+
+To reproduce by hand, sign a development build in to the development instance
+through a local forwarding proxy you control, open a project once so it is cached,
+then make the proxy accept every connection and close it without forwarding: the
+next open of that project shows "SpeleoDB is unreachable. Opened the last downloaded
+copy; it may be out of date." and the copy opens read-only. Never do this against a
+shared or real SpeleoDB server.
+
 ### The live test
 
 The live test generates synthetic project files in temporary directories (the

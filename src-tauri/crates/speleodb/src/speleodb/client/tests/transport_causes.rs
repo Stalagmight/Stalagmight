@@ -21,7 +21,7 @@ enum Fault {
     /// A 200 whose head promises 1000 bytes, then 10 of them and a close.
     BodyCutShort,
     /// A 200 head promising a body, part of it, then a reset (the request's
-    /// last byte left unread): the fault proxy's `Refuse`.
+    /// last byte left unread).
     ResetInBody,
     /// Bytes that are not an HTTP reply at all, then a close.
     NotHttp,
