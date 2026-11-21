@@ -124,6 +124,25 @@ preferences, preservation during unrelated saves, rollback after a failed settin
 write, owner-only permissions and token-safe diagnostics. Native installation tests
 refuse a failed link write before replacing the cache.
 
+### Lock claims of other accounts
+
+`speleodb_foreign_claim_tests` (core) replays the protocol fuzzer's foreign-claim
+trace (F4) against a loopback SpeleoDB that keeps the project's mutex and tells two
+synthetic accounts apart by their tokens. The owner signs in, opens and locks a
+project; the owner's other session hands the lock back; the collaborator signs in
+without signing out, so the owner's claim stays; the collaborator locks the project
+and then releases it. Every release must reach the server and free the lock: the
+update restart, a close (reported as released, not "not held"), a project switch, a
+delete (with no warning), Start Editing's unwind after a session boundary and the
+stranded-claim cleanup (which must not lose its claim either). A unit case pins the
+rule itself: only a claim of the account the release is for, under any email case,
+stands a release down, whoever is signed in.
+
+```sh
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib speleodb_foreign_claim_tests
+```
+
 ### Version 2 uploads and the server prerequisite
 
 The app uploads the project file in format version 2 (canonical JSON,

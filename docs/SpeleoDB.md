@@ -857,6 +857,18 @@ un-uploaded-work rule above applies to all of them except the explicit discard
 paths, and a claim deliberately kept (an earlier veto, Keep the lock, or the case
 below) is left alone by every automatic release.
 
+The releases that can run after a later session has started (a close, a project
+switch, a quit or the update restart, a delete, Start Editing's unwind after a
+session boundary, the stranded-claim cleanup) send nothing when a later session
+of the same account on the same server has claimed the project meanwhile: SpeleoDB
+treats that account's re-acquire as a no-op, so the later session holds the very
+lock the release would free, and the release counts as settled. The account is the
+one the release is for, not the one signed in when it runs. A claim of another
+account never stands a release down. Claims of other accounts are kept across a
+sign-in (each is the only local pointer to a lock that account may still hold), and
+none of them can hold this account's lock: if that account held the lock, this one
+would not, and the holder check sends nothing anyway.
+
 When Start Editing's fast-forward refuses to overwrite the managed cache copy
 because it holds un-uploaded work the open copy does not show, the lock it just
 took is kept, as before, and now also recorded as a kept claim, so it is no longer
