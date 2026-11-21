@@ -29,6 +29,8 @@ pub mod project_info;
 pub mod section;
 pub mod shot;
 pub mod shot_reverse;
+#[cfg(test)]
+mod shot_reverse_tests;
 pub mod shot_uuid;
 pub mod speleo_link;
 pub mod station;
