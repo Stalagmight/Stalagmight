@@ -95,6 +95,18 @@ pub(super) fn sync_cache_directory(dest: &Path) {
     let _ = dest;
 }
 
+/// The conversion notice of a legacy revision a pull installed, waiting for
+/// the open of that copy (`AppState::pending_download_notice`).
+#[derive(Debug)]
+pub(super) struct PendingDownloadNotice {
+    /// The cache copy the pull installed.
+    pub(super) path: PathBuf,
+    /// The bytes it installed there: an open of other bytes at the path (a
+    /// later install, any rewrite since) is not the open the notice is for.
+    pub(super) installed: Fingerprint,
+    pub(super) notice: ConversionNotice,
+}
+
 /// A downloaded project, read and checked in memory, ready to install.
 #[derive(Debug)]
 pub(super) struct PreparedDownload {
@@ -380,12 +392,20 @@ impl AppState {
         let bytes = prepared.cache_bytes(display)?;
         super::speleodb_reload::install_cache_bytes(dest, &bytes)?;
         // The frontend opens the cache path next; the file is version 2 by
-        // then, so the open has nothing to compare: hand it the notice.
+        // then, so the open has nothing to compare: hand it the notice, for
+        // exactly these bytes (any other copy at the path never shows it).
         *self
             .pending_download_notice
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            prepared.conversion.take().map(|n| (dest.to_path_buf(), n));
+            prepared
+                .conversion
+                .take()
+                .map(|notice| PendingDownloadNotice {
+                    path: dest.to_path_buf(),
+                    installed: Fingerprint::of(&bytes, None),
+                    notice,
+                });
         if replaces_open {
             self.close_open_project_locked(&mut project);
         } else {
