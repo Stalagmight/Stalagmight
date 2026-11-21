@@ -523,11 +523,13 @@ impl Project {
             Some(copy.run_edit(self, |p| p.gap_close(line, range))?)
         };
         let (removed_closures, promoted_closures, swept_closures, across) = match edited {
+            // Named in the state before the delete (I-1: a station the delete
+            // gave back its alias identity by its old id).
             Some(edited) => (
                 edited.value.closures_removed,
-                edited.report.sweep.promoted,
-                edited.report.sweep.removed,
-                edited.report.removed_across_one_shot,
+                edited.report.pre_edit_promotions(),
+                edited.report.pre_edit_swept(),
+                edited.report.pre_edit_across_one_shot(),
             ),
             None => (
                 self.closures

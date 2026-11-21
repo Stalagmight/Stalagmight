@@ -88,7 +88,11 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
 
     // The gate's seeds must reach every conversion rule they are meant to.
     let c = &coverage;
-    let checks: [(&str, usize); 21] = [
+    // Names are not gated here: every slot keeping the name 0.6.0 showed
+    // (I-3) is a property of every seed (`check`), so `names_changed` is 0
+    // by design; what makes a junction's lines show different names is the
+    // aliases, gated below.
+    let checks: [(&str, usize); 20] = [
         ("merges collapsed", c.total(|r| r.merges_collapsed)),
         ("cycle merges demoted", c.total(|r| r.merges_demoted_cycle)),
         (
@@ -102,9 +106,6 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
         ),
         ("aliases", c.total(|r| r.aliases_created)),
         ("comments joined", c.total(|r| r.comments_joined)),
-        // A letter needs a true clash (a member without a usable id); the
-        // usual visible change is the junction's one name on a member's line.
-        ("names changed", c.total(|r| r.names_changed)),
         (
             "aligned closures to Tie",
             c.total(|r| r.aligned_closures_to_tie),

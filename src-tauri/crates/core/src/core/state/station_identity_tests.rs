@@ -61,11 +61,13 @@ fn identities(p: &Project) -> BTreeMap<(LineId, u32), (StationId, String)> {
     out
 }
 
+/// The names `line` shows its stations by (a junction by the name the line
+/// knows it by, plan 5.3 per line).
 fn names(p: &Project, line: LineId) -> Vec<String> {
     p.line(line)
         .unwrap()
         .stations()
-        .map(|s| p.stations[&s].name.clone())
+        .map(|s| p.name_on(s, line).unwrap().to_string())
         .collect()
 }
 
@@ -498,6 +500,9 @@ fn ids_and_names_survive_a_save_and_reopen() {
 
 // === Junction identity (plan 1.2, W identity) ===
 
+/// A merge makes one station with the survivor's id and comment; each line
+/// keeps showing it by its own name (I-3): A by the survivor's "2", B by the
+/// retired station's "0", kept as an alias naming B.
 #[test]
 fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
     let mut p = empty("Junction");
@@ -525,11 +530,12 @@ fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
         survivor
             .aliases
             .iter()
-            .map(|alias| (alias.id, alias.name.clone()))
+            .map(|alias| (alias.id, alias.name.clone(), alias.line))
             .collect::<Vec<_>>(),
-        [(b0, Some("0".to_string()))]
+        [(b0, Some("0".to_string()), Some(b))]
     );
-    // Every slot of the junction shows the one id, name and comment.
+    // Every slot of the junction shows the one id and comment, and the name
+    // its own line knows it by.
     let stations = state.project_state_wire().unwrap().stations;
     let wire: Vec<_> = stations
         .iter()
@@ -540,7 +546,7 @@ fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
         wire,
         [
             (a2, "2".to_string(), Some("sump".to_string())),
-            (a2, "2".to_string(), Some("sump".to_string()))
+            (a2, "0".to_string(), Some("sump".to_string()))
         ]
     );
     assert_round_trip(state, &before, "merge");
@@ -576,10 +582,9 @@ fn a_detach_mints_a_station_named_as_the_junction_and_redo_gives_it_back() {
 #[test]
 fn a_merge_keeps_the_names_the_moving_line_holds() {
     // B's own station 1 is named like A:1, which the survivor B:0 becomes.
-    // B knows the junction by its alias (B's own "0"), so a merge renames
-    // nothing there, as 0.6.0 kept each line's own name for its member
-    // (review findings D-migration-upgrade-8 and UX-3; a true clash is still
-    // lettered, `a_merge_letters_only_a_true_clash`).
+    // B shows the junction by its alias (B's own "0"), so a merge renames
+    // nothing and B still reads 0, 1, 2, as 0.6.0 kept each line's own name
+    // for its member (review findings D-migration-upgrade-8, UX-3 and I-3).
     let mut p = empty("Names");
     let a = line_at(&mut p, "A", [0.0, 0.0], shots(2));
     let b = line_at(&mut p, "B", [50.0, 0.0], shots(2));
@@ -588,8 +593,9 @@ fn a_merge_keeps_the_names_the_moving_line_holds() {
     let before = snapshot(state);
     merge(state, slot(b, 0), slot(a, 1));
     let p = project(state);
-    assert_eq!(names(&p, b), ["1", "1", "2"]);
+    assert_eq!(names(&p, b), ["0", "1", "2"]);
     assert!(p.known_by_alias_on(st(&p, a, 1), b));
+    assert_eq!(p.stations[&st(&p, a, 1)].name, "1");
     assert_eq!(
         names(&p, a),
         ["0", "1", "2"],

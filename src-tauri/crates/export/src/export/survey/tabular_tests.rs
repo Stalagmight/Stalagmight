@@ -46,6 +46,51 @@ fn csv_rows_name_a_junction_once_on_every_line() {
     assert_eq!(rows.len(), 1 + shots);
 }
 
+/// A line merged onto another line's station keeps its own name for it (I-3):
+/// its rows print that name, the other line's rows the station's own, and both
+/// the junction's one Station ID. Injection: print `station.name` on every
+/// line and Side's first row reads `Main`'s "2", next to its own "2".
+#[test]
+fn csv_rows_name_a_junction_by_each_lines_own_name() {
+    use super::super::test_helpers::Survey;
+    let mut s = Survey::new("Merged");
+    let main = s.named(
+        "Main",
+        "#ff0000",
+        vec![super::super::test_helpers::flat(10.0, 90.0); 2],
+    );
+    let side = s.named(
+        "Side",
+        "#00ff00",
+        vec![super::super::test_helpers::flat(5.0, 0.0); 2],
+    );
+    s.merge((side, 0), (main, 2));
+    let project = s.build();
+    let junction = project.line(main).unwrap().station(2).unwrap();
+    assert_eq!(project.line(side).unwrap().start, junction);
+    let text = csv(&project);
+    let rows: Vec<&str> = text.lines().collect();
+    let side1 = project.line(side).unwrap().station(1).unwrap();
+    assert!(
+        rows[2].starts_with(&format!(
+            "Main,1,2,{},{junction},",
+            project.line(main).unwrap().station(1).unwrap()
+        )),
+        "{}",
+        rows[2]
+    );
+    assert!(
+        rows[3].starts_with(&format!("Side,0,1,{junction},{side1},")),
+        "{}",
+        rows[3]
+    );
+    let json =
+        serde_json::to_value(json_export(&project, Utc.timestamp_opt(0, 0).unwrap())).unwrap();
+    let side_shots = &json["lines"][1]["shots"];
+    assert_eq!(side_shots[0]["from"], "0", "{side_shots}");
+    assert_eq!(side_shots[0]["from_id"], junction, "{side_shots}");
+}
+
 /// The legacy layout: fixed decimals, LRUD, the kind label, an escaped
 /// comment, a neutralised hostile station name.
 #[test]

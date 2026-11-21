@@ -666,9 +666,11 @@ impl Project {
             removed_datums: edited.value.datums_removed,
             removed_comment: edited.value.comment_removed,
             removed_closures: edited.value.closures_removed,
-            promoted_closures: edited.report.sweep.promoted,
-            swept_closures: edited.report.sweep.removed,
-            removed_across_one_shot: edited.report.removed_across_one_shot,
+            // Named in the state before the delete (a station the delete
+            // gave back its alias identity, I-1, by its old id).
+            promoted_closures: edited.report.pre_edit_promotions(),
+            swept_closures: edited.report.pre_edit_swept(),
+            removed_across_one_shot: edited.report.pre_edit_across_one_shot(),
             shift_blocked: !reasons.is_empty(),
             shift_blocked_reasons: reasons,
             split_weld: self.split_delete_weld(line, index),

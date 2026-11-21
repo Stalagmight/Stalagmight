@@ -1521,12 +1521,11 @@ fn migration_fuzz_window() {
         "0.5.5 shape",
         "speleodb link",
         "report.merges_demoted_cycle",
+        // Every merged member's line keeps showing the member's name, by an
+        // alias naming it (I-3), so `names_changed` is 0 on every seed
+        // (`test_support::check` fails a seed that changes a name) and the
+        // window gates the aliases that do it instead.
         "report.aliases_created",
-        // A junction keeps its survivor's name wherever a line knows it by
-        // an alias, so a letter (`stations_renamed`) needs a member without
-        // a usable id: rare. What every merge-heavy window shows is a line
-        // whose slot now reads the junction's one name.
-        "report.names_changed",
         "report.comments_joined",
         "report.hand_moves_carried",
         "report.history_rows_dropped",

@@ -112,10 +112,11 @@ impl<'p> NameBook<'p> {
         Some(self.project.line_label_of(line_id))
     }
 
-    /// The station's own name at a slot (`4a`).
+    /// The name the slot's line shows its station by (`4a`; a junction by
+    /// the name that line knows it by).
     pub(crate) fn station_name(&self, slot: StationRef) -> Option<String> {
         let id = self.project.topology().station_at(slot)?;
-        Some(self.project.stations.get(&id)?.name.clone())
+        Some(self.project.name_on(id, slot.line_id)?.to_string())
     }
 
     /// `Line name / station name` of the station at a slot.

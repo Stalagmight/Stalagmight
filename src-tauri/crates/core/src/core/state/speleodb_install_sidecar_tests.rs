@@ -335,13 +335,13 @@ fn set_aside_sidecars_round_trip_and_discard() {
 /// A legacy revision the pull migrates raises the conversion notice a local
 /// upgrade raises, on the open of the cache that follows (review finding
 /// G-speleodb-1): the cache holds version 2 by then, so the open alone has
-/// nothing to compare. A clean revision moves nothing; its notice names only
-/// the merged station's one name (review findings UX-1 and UX-3).
+/// nothing to compare. A clean revision moves nothing and every line keeps
+/// the names it showed (I-3), so it raises none.
 #[test]
 fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
     crate::test_helpers::with_isolated_config(|| {
         crate::app_dirs::init_for_test();
-        for (drift, moved) in [(true, true), (false, false)] {
+        for drift in [true, false] {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             super::project_save_tests::write_legacy_drift(&source, drift);
@@ -351,9 +351,17 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
             install(&state, &source, &dest, LocalEditsPolicy::Discard).expect("install");
             let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
             assert!(opened.success, "{:?}", opened.error);
-            let notice = state.take_conversion_notice().expect("a notice");
-            assert_eq!(notice.contains("2 stations moved"), moved, "{notice}");
-            assert!(notice.contains("1 station name changed"), "{notice}");
+            let notice = state.take_conversion_notice();
+            if !drift {
+                assert_eq!(
+                    notice, None,
+                    "a clean revision changes nothing a line shows"
+                );
+                continue;
+            }
+            let notice = notice.expect("a notice");
+            assert!(notice.contains("2 stations moved"), "{notice}");
+            assert!(!notice.contains("name changed"), "{notice}");
             // The cache is version 2 already and nothing local keeps the
             // original: the notice points at the server's revision, never at a
             // local backup the pull did not make.

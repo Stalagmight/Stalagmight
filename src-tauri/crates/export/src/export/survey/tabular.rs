@@ -27,13 +27,15 @@ fn line_credit_summary(line: &Line) -> LineCreditSummary {
     LineCreditSummary::from_credits(line.shots.iter().map(shot_credit))
 }
 
-/// The `(name, Station ID)` of each station of `line`'s chain, by index.
+/// The `(name, Station ID)` of each station of `line`'s chain, by index: the
+/// name the line shows it by (a junction by the name that line knows it by),
+/// the junction's one Station ID.
 fn station_columns(project: &Project, line: &Line) -> Vec<(String, u32)> {
     line.stations()
         .map(|id| {
             let name = project
-                .station(id)
-                .map(|station| station.name.clone())
+                .name_on(id, line.id)
+                .map(str::to_string)
                 .unwrap_or_default();
             (name, id)
         })

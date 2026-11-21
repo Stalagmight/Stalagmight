@@ -32,8 +32,9 @@
 //!   `every_command_that_removes_one_reports_it_by_its_stations_before_the_edit`,
 //!   `removing_a_zero_datum_reports_the_closure_its_sweep_removes`. Their
 //!   expected warnings are 0.6.0's wording with the station graph's names:
-//!   a junction has one name on all its lines (plan 5.3), so the end 0.6.0
-//!   called `T / 0` is `T / 1` (T starts on S's station 1);
+//!   a line built on another line's station shows it by that station's name
+//!   (plan 5.3), so the end 0.6.0 called `T / 0` is `T / 1` (T starts on S's
+//!   station 1);
 //! - retired: `the_preview_names_a_closure_already_between_merged_stations_apart`
 //!   and `a_closure_that_already_was_between_merged_stations_is_reported_as_such`
 //!   (a closure on one station cannot exist in a valid model, invariant 7,

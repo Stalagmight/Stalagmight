@@ -323,15 +323,16 @@ impl Validator {
     }
 
     /// A shot as the user reads it: `Main Line: 4 \u{2192} 5`, the line's
-    /// label, then the names of the stations the shot runs between (a chain
-    /// index stands in for a station the line does not reach).
+    /// label, then the names the line shows the stations the shot runs
+    /// between by (a chain index stands in for a station the line does not
+    /// reach).
     pub fn shot_label(project: &Project, line: LineId, index: usize) -> String {
         let name = |i: usize| {
             project
                 .line(line)
                 .and_then(|l| l.station(i))
-                .and_then(|s| project.stations.get(&s))
-                .map_or_else(|| i.to_string(), |s| s.name.clone())
+                .and_then(|s| project.name_on(s, line))
+                .map_or_else(|| i.to_string(), str::to_string)
         };
         format!(
             "{}: {} \u{2192} {}",

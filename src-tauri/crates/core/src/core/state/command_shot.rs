@@ -18,7 +18,9 @@ use crate::core::{Command, ValidationWarning, Validator, WarningSeverity};
 use crate::models::survey::{
     ClosureId, EditReport, LoopClosure, Project, ShotEditRun, ShotPlace, SweepReport,
 };
-use crate::models::{LineId, CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS};
+use crate::models::{
+    LineId, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS,
+};
 
 /// The refusal of a delete that would remove a frozen shot (S12).
 pub(super) const FROZEN_DELETE: &str =
@@ -63,13 +65,13 @@ pub(super) fn shot_index(project: &Project, line_id: LineId, shot_id: u32) -> Op
         .position(|s| s.id == shot_id)
 }
 
-/// A station's own name at chain index `index` of `line`, else the index.
+/// The name `line` shows its station at chain index `index` by, else the
+/// index.
 pub(super) fn station_name_at(project: &Project, line: LineId, index: usize) -> String {
-    project
-        .line(line)
-        .and_then(|l| l.station(index))
-        .and_then(|s| project.stations.get(&s))
-        .map_or_else(|| index.to_string(), |s| s.name.clone())
+    u32::try_from(index)
+        .ok()
+        .and_then(|i| project.slot_name(StationRef::new(line, i)))
+        .map_or_else(|| index.to_string(), str::to_string)
 }
 
 /// A shot as the user reads it: `Main Line: 4 \u{2192} 5` (the line's

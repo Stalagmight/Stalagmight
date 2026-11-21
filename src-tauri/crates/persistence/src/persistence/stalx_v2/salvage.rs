@@ -537,8 +537,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if touched_lines.insert(*line) {
                     if let Some(position) = pass.position(*line, 0) {
                         let name = p
-                            .station(*station)
-                            .map_or_else(|| station.to_string(), |s| s.name.clone());
+                            .name_on(*station, *line)
+                            .map_or_else(|| station.to_string(), str::to_string);
                         let to = pass.station(p, name);
                         edits.slots.push((position, *second, to));
                         repairs.push(Repair::ReplacedChainStation {
@@ -560,8 +560,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if touched_lines.insert(*line) {
                     if let Some(position) = pass.position(*line, 0) {
                         let name = p
-                            .station(*to)
-                            .map_or_else(|| to.to_string(), |s| s.name.clone());
+                            .name_on(*to, *line)
+                            .map_or_else(|| to.to_string(), str::to_string);
                         let new_station = pass.station(p, name);
                         edits.slots.push((position, index + 1, new_station));
                         let closure = pass.closure(p);
@@ -593,8 +593,10 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     station: *lowest_station,
                 });
             }
-            Violation::DuplicateStationName { second, .. } => {
-                if let Some(name) = p.uniquify_station_name(*second) {
+            Violation::DuplicateStationName { line, second, .. } => {
+                // The name the line shows the later station by: an alias's on
+                // a line that knows it by one, else its own.
+                if let Some(name) = p.uniquify_name_on(*second, *line) {
                     repairs.push(Repair::RenamedStation { id: *second, name });
                 }
             }

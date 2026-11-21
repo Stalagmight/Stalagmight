@@ -857,8 +857,8 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// its stored offset drifted 5 m, and a merge row that resolves nothing makes
 /// A the cascade's seed) converts with C's two stations moved onto B: the
 /// open offers the conversion notice once. The same survey clean moves
-/// nothing, but C's start now reads B's station's name, so its notice says
-/// that only (review findings UX-1 and UX-3).
+/// nothing, and C still shows its start by its own name (I-3: each line keeps
+/// the names it showed), so it raises no notice.
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     crate::app_dirs::init_for_test();
@@ -884,23 +884,25 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
 
     let path = dir.path().join("clean.stalx");
     write_legacy_drift(&path, false);
-    let notice = open(&path)
-        .take_conversion_notice()
-        .expect("a name changed");
+    let state = open(&path);
     assert_eq!(
-        notice,
-        "Converted from the old file format; 1 station name changed (a merged station has \
-         one name on all its lines): Line 3 0 is now 1. \
-         The new format is written the first time the project is saved, or already \
-         was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
-         original file is kept: to go back to it, right-click the project in Recent \
-         Projects and choose Restore an earlier copy."
+        state.take_conversion_notice(),
+        None,
+        "nothing a line shows changed"
+    );
+    let project = state.get_project_state().unwrap();
+    let c = project.lines()[2].id;
+    let start = project.line(c).unwrap().start;
+    assert_eq!(
+        project.name_on(start, c),
+        Some("0"),
+        "C's start keeps its name"
     );
 }
 
 /// Review finding UX-1: a conversion that moved nothing still says what each
-/// line now shows differently: here C's start reads B's station's name, and
-/// the two members' comments are one station's comment now.
+/// line now shows differently: the two members' comments are one station's
+/// comment now. C's start keeps its own name (I-3), so no name is listed.
 #[test]
 fn a_conversion_that_joined_comments_says_so() {
     use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
@@ -935,7 +937,7 @@ fn a_conversion_that_joined_comments_says_so() {
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
     assert!(!notice.contains("stations moved"), "{notice}");
-    assert!(notice.contains("1 station name changed"), "{notice}");
+    assert!(!notice.contains("name changed"), "{notice}");
     assert!(
         notice.contains("a merged station's two comments were joined"),
         "{notice}"

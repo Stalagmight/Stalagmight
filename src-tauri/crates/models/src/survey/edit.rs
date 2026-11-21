@@ -234,6 +234,54 @@ pub struct EditReport {
     pub removed_across_one_shot: Vec<LoopClosure>,
 }
 
+impl EditReport {
+    /// `station` under its pre-edit id: a station the epilogue re-identified
+    /// ([`Self::reidentified`]) by the id it had before the edit.
+    pub fn pre_edit_id(&self, station: StationId) -> StationId {
+        self.reidentified
+            .iter()
+            .find(|(_, new)| *new == station)
+            .map_or(station, |(old, _)| *old)
+    }
+
+    /// `closure` with its ends under their pre-edit ids, for a preview that
+    /// names them in the state before the edit.
+    pub fn pre_edit_closure(&self, closure: LoopClosure) -> LoopClosure {
+        LoopClosure {
+            a: self.pre_edit_id(closure.a),
+            b: self.pre_edit_id(closure.b),
+            ..closure
+        }
+    }
+
+    /// The sweep's promotions under pre-edit ids (see
+    /// [`Self::pre_edit_closure`]).
+    pub fn pre_edit_promotions(&self) -> Vec<Promotion> {
+        self.sweep
+            .promoted
+            .iter()
+            .map(|p| Promotion {
+                closure: self.pre_edit_closure(p.closure),
+                survivor: self.pre_edit_id(p.survivor),
+                retired: self.pre_edit_id(p.retired),
+                ..p.clone()
+            })
+            .collect()
+    }
+
+    /// The closures the sweep removed, under pre-edit ids.
+    pub fn pre_edit_swept(&self) -> Vec<LoopClosure> {
+        let swept = self.sweep.removed.iter().copied();
+        swept.map(|c| self.pre_edit_closure(c)).collect()
+    }
+
+    /// The closures removed as newly across one shot, under pre-edit ids.
+    pub fn pre_edit_across_one_shot(&self) -> Vec<LoopClosure> {
+        let across = self.removed_across_one_shot.iter().copied();
+        across.map(|c| self.pre_edit_closure(c)).collect()
+    }
+}
+
 /// An operation's result with its epilogue report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edited<T> {

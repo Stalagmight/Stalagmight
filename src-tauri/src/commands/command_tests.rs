@@ -4284,8 +4284,10 @@ fn test_unmerge_stations_removes_merge() {
     assert!(wire.project.station_merges.is_empty());
 }
 
-/// Review finding UX-4: the Detach dialog's preview says what the line gets,
-/// and the detach gives exactly that: the merged line its own station back.
+/// Review finding UX-4 and I-1: the Detach dialog's preview says what the
+/// line gets, and the detach gives exactly that: the merged line its own
+/// station back. Detaching the other line (the junction's own) keeps the
+/// junction on it and gives the merged line its station back all the same.
 #[test]
 fn test_preview_detach_line_names_what_the_detach_gives() {
     let app = app_with_state();
@@ -4304,18 +4306,25 @@ fn test_preview_detach_line_names_what_the_detach_gives() {
         station::preview_detach_line(state(&app), a1, 0).unwrap(),
         station::preview_detach_line(state(&app), a1, 1).unwrap(),
     ];
-    let restored: Vec<_> = previews.iter().filter(|p| p.restored).collect();
+    let restored: Vec<_> = previews.iter().filter(|p| p.restored && !p.kept).collect();
     assert_eq!(
         restored.len(),
         1,
-        "only the retired station's line: {previews:?}"
+        "only the retired station's line gets it back itself: {previews:?}"
     );
-    let (line, slot, was) = if previews[0].restored {
-        (0, a1, &a1_own)
-    } else {
+    let (line, slot, was) = if previews[0].kept {
         (1, b0, &b0_own)
+    } else {
+        (0, a1, &a1_own)
     };
     assert_eq!((restored[0].station_id, &restored[0].name), (was.0, &was.1));
+    let keeping: Vec<_> = previews.iter().filter(|p| p.kept).collect();
+    assert_eq!(
+        keeping.len(),
+        1,
+        "the junction's own line keeps it: {previews:?}"
+    );
+    assert_eq!((keeping[0].station_id, &keeping[0].name), (was.0, &was.1));
     let other = if line == 0 { b0 } else { a1 };
     assert_success(&station::unmerge_station_pair(state(&app), other, slot));
     let after = state(&app).get_project_state().unwrap();
