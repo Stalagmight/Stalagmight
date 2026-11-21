@@ -1212,13 +1212,13 @@ fn each_offered_copy_says_what_it_is_newest_first() {
     let safety = project_file(dir.path(), &format!("{stem}.stalx.pre-restore"), "Kept");
     // Oldest to newest, a minute apart: the original, the repair's copy, the
     // interrupted save, the copy the last restore kept.
-    let base = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
-    for (minutes, path) in [&original, &repair, &temp, &safety].into_iter().enumerate() {
+    let base = UNIX_EPOCH + Duration::from_hours(500_000);
+    for (minutes, path) in [(0, &original), (1, &repair), (2, &temp), (3, &safety)] {
         std::fs::File::options()
             .write(true)
             .open(path)
             .unwrap()
-            .set_modified(base + Duration::from_secs(60 * minutes as u64))
+            .set_modified(base + Duration::from_mins(minutes))
             .unwrap();
     }
 

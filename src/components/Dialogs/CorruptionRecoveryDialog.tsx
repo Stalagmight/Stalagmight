@@ -3,14 +3,13 @@ import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc } from '../../utils/ipc';
-import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { RestoreBackupPicker } from './RestoreBackupPicker';
 import type { RepairResult } from '../../types/ipc/RepairResult';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
 import type { SalvagedData } from '../../types/ipc/SalvagedData';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
-import { recoveryBackupItemTestId } from '../../utils/testId';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
@@ -34,6 +33,8 @@ export default function CorruptionRecoveryDialog() {
 
   const [step, setStep] = useState<Step>(restoreOnly ? 'listing-backups' : 'choose');
   const [backups, setBackups] = useState<BackupInfo[]>([]);
+  // The copy picked in the list. Picking only selects: Restore restores.
+  const [selectedBackup, setSelectedBackup] = useState<string | null>(null);
   const [result, setResult] = useState<ResultInfo | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -73,6 +74,7 @@ export default function CorruptionRecoveryDialog() {
         purpose: 'list backup files',
       });
       setBackups(list);
+      setSelectedBackup(null);
       if (list.length === 0) {
         setResult({
           success: false,
@@ -287,37 +289,36 @@ export default function CorruptionRecoveryDialog() {
       );
     }
 
-    // Step: pick a backup
+    // Step: pick a backup. A row only selects it; the sentence under the list
+    // says what Restore does, and nothing is written until Restore is pressed
+    // (real-app demo I-2: one click on a row used to replace the project). The
+    // damaged-file mode gets the same confirm: a misclick there swaps the
+    // damaged file for the wrong copy just the same.
     if (step === 'pick-backup') {
       return (
         <div className="space-y-4">
-          <p className="text-text-secondary">Select a backup to restore:</p>
-          <div className="space-y-1 max-h-60 overflow-auto">
-            {backups.map((backup, index) => {
-              // sizeBytes comes as bigint from ts-rs but may arrive as number from Tauri IPC
-              const sizeNum = typeof backup.sizeBytes === 'bigint'
-                ? Number(backup.sizeBytes)
-                : Number(backup.sizeBytes);
-              const sizeKb = (sizeNum / 1024).toFixed(1);
-              const filename = extractFilename(backup.path);
-              return (
-                <button
-                  key={backup.path}
-                  type="button"
-                  onClick={() => handleRestoreBackup(backup.path)}
-                  className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors"
-                  data-testid={recoveryBackupItemTestId(index)}
-                >
-                  <div className="font-mono text-sm">{filename}</div>
-                  <div className="text-xs text-text-tertiary mt-0.5">
-                    {sizeKb} KB &middot; {backup.modifiedAt}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
+          <RestoreBackupPicker
+            projectPath={filePath}
+            backups={backups}
+            selectedPath={selectedBackup}
+            onSelect={setSelectedBackup}
+            damaged={!restoreOnly}
+          />
+          <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border">
+            {restoreOnly ? (
+              <Button onClick={handleBackToChoose} data-testid="recovery-backup-cancel">Cancel</Button>
+            ) : (
+              <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
+            )}
+            <Button
+              variant="primary"
+              disabled={!selectedBackup}
+              title={selectedBackup ? undefined : 'Choose a copy first'}
+              onClick={() => { if (selectedBackup) void handleRestoreBackup(selectedBackup); }}
+              data-testid="recovery-backup-restore"
+            >
+              Restore
+            </Button>
           </div>
         </div>
       );
@@ -335,10 +336,9 @@ export default function CorruptionRecoveryDialog() {
             {!result.success && !restoreOnly && (
               <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">Try Another Option</Button>
             )}
-            {result.canReopen ? (
+            <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
+            {result.canReopen && (
               <Button variant="primary" onClick={handleReopen} data-testid="recovery-result-reopen">Open Project</Button>
-            ) : (
-              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
             )}
           </div>
         </div>

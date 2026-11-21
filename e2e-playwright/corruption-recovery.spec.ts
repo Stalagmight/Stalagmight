@@ -8,7 +8,7 @@ import { recoveryBackupItems } from './helpers/testIds';
  * Tests the recovery flow when a project file fails integrity checks:
  * - Dialog renders with three recovery options
  * - "Attempt Repair" triggers repair IPC and shows result
- * - "Restore from Backup" lists backups and allows selection
+ * - "Restore from Backup" lists backups in words; a row only selects, Restore restores
  * - "Export Salvageable Data" triggers salvage export
  * - Cancel closes the dialog
  * - Error states in each recovery path
@@ -43,14 +43,16 @@ function setupRecoveryMocks(page: Page): Promise<void> {
 
     overrides.list_backups = [
       {
-        path: '/mock/corrupt-project.stalx.bak.1',
-        modifiedAt: '2026-02-05 14:30:00',
+        path: '/mock/corrupt-project.stalx.backup.1',
+        modifiedAt: '2026-02-05T14:30:00.000Z',
         sizeBytes: 51200,
+        kind: 'backup',
       },
       {
-        path: '/mock/corrupt-project.stalx.bak.2',
-        modifiedAt: '2026-02-04 10:15:00',
+        path: '/mock/app-data/backups/corrupt-project.0123456789ab.20260204T101500.123456789Z.pre-v2.stalx',
+        modifiedAt: '2026-02-04T10:15:00.000Z',
         sizeBytes: 48000,
+        kind: 'pre_upgrade',
       },
     ];
 
@@ -163,29 +165,38 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Should show backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
 
     // Should show backup items
     const backupItems = recoveryBackupItems(page);
     await expect(backupItems).toHaveCount(2);
 
-    // Should show filenames and dates
-    await expect(dialog).toContainText('.bak.1');
-    await expect(dialog).toContainText('.bak.2');
+    // Each copy in words, its file name in the row's tooltip
+    await expect(page.getByTestId('recovery-backup-row-0')).toContainText('Backup');
+    await expect(page.getByTestId('recovery-backup-row-0')).toHaveAttribute('title', 'corrupt-project.stalx.backup.1');
+    await expect(page.getByTestId('recovery-backup-row-1')).toContainText('Original before the upgrade to the new format');
+    await expect(page.getByTestId('recovery-backup-row-1')).toContainText('Feb 4, 2026');
   });
 
-  test('clicking a backup triggers restore and shows success', async ({ page }) => {
+  test('picking a backup asks first, and Restore restores it', async ({ page }) => {
     await openRecoveryDialog(page);
 
     await page.getByTestId('recovery-restore-backup').click();
 
     // Wait for backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
+    await expect(page.getByTestId('recovery-backup-restore')).toBeDisabled();
 
-    // Click first backup
+    // Click first backup: it is selected, nothing is restored yet
     const firstBackup = recoveryBackupItems(page).first();
     await firstBackup.click();
+    await expect(firstBackup).toBeChecked();
+    await expect(page.getByTestId('recovery-backup-confirm')).toContainText(
+      'Replace the damaged corrupt-project.stalx with this copy? The damaged file is kept as corrupt-project.stalx.pre-restore',
+    );
+    await expect(dialog).not.toContainText('Restore Succeeded');
+    await page.getByTestId('recovery-backup-restore').click();
 
     // Should show restore success
     await expect(dialog).toContainText('Restore Succeeded', { timeout: 5000 });
@@ -198,7 +209,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await page.getByTestId('recovery-restore-backup').click();
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
 
     // Click Back
     await dialog.getByRole('button', { name: /Back/i }).click();
