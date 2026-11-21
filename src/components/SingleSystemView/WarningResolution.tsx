@@ -529,6 +529,17 @@ export function WarningResolution({
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
           ...maybeIgnore,
         ];
+      case 'JUNCTION_DEPTH_SPREAD':
+      case 'JUNCTION_DEPTH_SPREAD_START':
+        // A junction whose depth readings disagree (demo issue I-4): the
+        // station takes their mean. The reading to fix can be on any line
+        // through it, so offer the way to the station; the surveyor may know
+        // the readings are right, so it can be ignored. (`_START` is the same
+        // warning on a leaving shot, its own code so Ignores cannot collide.)
+        return [
+          { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          ...maybeIgnore,
+        ];
       case 'CLOSURE_ADJUSTMENT_FAILED':
         // A part of the survey the closure solve could not adjust (#737). The
         // fix is in that part's closures or datums, so offer the way there. It

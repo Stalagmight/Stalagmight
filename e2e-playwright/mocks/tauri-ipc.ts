@@ -1180,11 +1180,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // - __MOCK_SET_READ_ONLY_REASON__(text): the file was made with a newer
       //   Stalagmight; `project_read_only_reason` answers `text`, saves are
       //   refused with `READ_ONLY_FILE: ...`.
-      // - __MOCK_SET_CONVERSION_NOTICE__(text): the next `take_conversion_notice`
-      //   hands `text` over, once.
+      // - __MOCK_SET_CONVERSION_NOTICE__(view): the next `take_conversion_notice`
+      //   hands `view` (a ConversionNoticeView) over, once.
+      // - __MOCK_SET_LEGACY_ORIGIN__(true): the open project came from a 0.6.0
+      //   file, so its next successful save converts it and says so
+      //   (`legacy_converted`: `saved` to the open file, `saved_as_new_file`
+      //   elsewhere), once, as the backend does.
       let mockExternallyModified = false;
       let mockReadOnlyReason: string | null = null;
-      let mockConversionNotice: string | null = null;
+      let mockConversionNotice: unknown = null;
+      let mockLegacyOrigin = false;
       let mockBackendDirty = false;
       const mockSaveCalls: Array<{ command: string; path: string | null }> = [];
       (window as unknown as Record<string, unknown>).__MOCK_SET_EXTERNALLY_MODIFIED__ = (on: boolean) => {
@@ -1193,8 +1198,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_SET_READ_ONLY_REASON__ = (reason: string | null) => {
         mockReadOnlyReason = reason;
       };
-      (window as unknown as Record<string, unknown>).__MOCK_SET_CONVERSION_NOTICE__ = (notice: string | null) => {
+      (window as unknown as Record<string, unknown>).__MOCK_SET_CONVERSION_NOTICE__ = (notice: unknown) => {
         mockConversionNotice = notice;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_LEGACY_ORIGIN__ = (on: boolean) => {
+        mockLegacyOrigin = !!on;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_SAVE_CALLS__ = () => [...mockSaveCalls];
 
@@ -2200,7 +2208,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
             }
-            return { success: true, saved_path: projectPath, error: null, warnings: [], line_ids: [] };
+            const legacyConverted = mockLegacyOrigin ? (toOpenFile ? 'saved' : 'saved_as_new_file') : undefined;
+            mockLegacyOrigin = false;
+            return {
+              success: true,
+              saved_path: projectPath,
+              error: null,
+              warnings: [],
+              line_ids: [],
+              ...(legacyConverted ? { legacy_converted: legacyConverted } : {}),
+            };
           }
 
           case 'close_project': {

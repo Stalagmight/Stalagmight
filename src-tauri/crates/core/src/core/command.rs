@@ -588,6 +588,15 @@ pub struct CommandResult {
     /// can select it. Same wire contract as the optional fields above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cave_section_id: Option<SectionId>,
+    /// Set when this save wrote the new format for a project opened from a
+    /// 0.6.0 (SQLite) file (demo issue I-5): `saved` over the file itself,
+    /// its original kept in the backups folder; `saved_as_new_file` for a
+    /// Save As elsewhere, the 0.6.0 file left as it was. The frontend turns
+    /// the conversion banner's sentence on saving to say so, or, with no
+    /// banner showing, confirms it with a toast. Same wire contract as the
+    /// optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub legacy_converted: Option<crate::core::state::ConversionFile>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -634,6 +643,7 @@ impl CommandResult {
             import_receipt: None,
             lock_release: None,
             cave_section_id: None,
+            legacy_converted: None,
         }
     }
 
@@ -652,6 +662,7 @@ impl CommandResult {
             import_receipt: None,
             lock_release: None,
             cave_section_id: None,
+            legacy_converted: None,
         }
     }
 

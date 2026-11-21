@@ -104,6 +104,28 @@ pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
 /// string, and `the_not_connected_code_keeps_masters_spelling` pins it.
 pub const LINE_NOT_CONNECTED: &str = "SECTION_NOT_CONNECTED";
 
+/// Warning code for a junction whose depth readings disagree by more than
+/// [`JUNCTION_DEPTH_SPREAD_M`] (demo issue I-4): the station takes the mean
+/// of its readings (as 0.6.0 did), so a reading off by metres, or two lines
+/// surveyed from gauges that disagree, moves it silently. One advisory row
+/// per such station, on the shot that ARRIVES at it on its first line that
+/// has one (station `i` -> shot `i - 1`), else on the shot that LEAVES it
+/// (shot 0) under [`JUNCTION_DEPTH_SPREAD_START`], so two junctions never
+/// share an Ignore key (as [`DATUM_GPS_GAP`] / [`DATUM_GPS_GAP_START`]).
+/// Ignorable: the surveyor may know the readings are right.
+pub const JUNCTION_DEPTH_SPREAD: &str = "JUNCTION_DEPTH_SPREAD";
+
+/// [`JUNCTION_DEPTH_SPREAD`] for a junction where every line starts (no
+/// shot arrives at it). Same check and message; only the Ignore key differs.
+pub const JUNCTION_DEPTH_SPREAD_START: &str = "JUNCTION_DEPTH_SPREAD_START";
+
+/// How far apart (metres) two depth readings at one station may be before
+/// the Merge dialog says what the merge does to the depths and the Warnings
+/// tab lists the junction ([`JUNCTION_DEPTH_SPREAD`]). Readings from
+/// different dives at one tie-off commonly differ by a few decimetres
+/// (gauge, tide); more than half a metre is worth a look.
+pub const JUNCTION_DEPTH_SPREAD_M: f64 = 0.5;
+
 /// `CommandResult` warning code for a loop closure a delete-with-shift removed
 /// because, after the delete, it tied the two ends of one shot together
 /// (#737). The frontend shows each one as a toast.
@@ -133,8 +155,8 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | CLOSURE_ACROSS_ONE_SHOT => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
         // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH, DATUM_GPS_GAP,
-        // DATUM_GPS_GAP_START, CLOSURE_ADJUSTMENT_FAILED and
-        // LINE_NOT_CONNECTED (see their docs) are
+        // DATUM_GPS_GAP_START, CLOSURE_ADJUSTMENT_FAILED,
+        // LINE_NOT_CONNECTED and JUNCTION_DEPTH_SPREAD(_START) (see their docs) are
         // advisory; an unknown code defaults to advisory so a future warning is
         // ignorable until classified.
         _ => WarningSeverity::Warning,
@@ -170,9 +192,10 @@ pub struct ProjectWarning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub shot_uuid: Option<String>,
-    /// For `datum_gps_gap` only: the `station_index` (within `line_id`) of
-    /// the GPS-fix datum this row is about. Lets the Resolve view offer "Go to
-    /// station" without re-deriving the ambiguous station-to-shot mapping.
+    /// For `datum_gps_gap` and `JUNCTION_DEPTH_SPREAD`: the `station_index`
+    /// (within `line_id`) of the GPS-fix datum, or the junction, this row is
+    /// about. Lets the Resolve view offer "Go to station" without re-deriving
+    /// the ambiguous station-to-shot mapping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_station_index: Option<u32>,

@@ -15,6 +15,7 @@ mod command_station;
 mod command_station_name;
 mod commands;
 mod config;
+mod conversion_notice;
 mod display_settings;
 pub mod dive_plan;
 pub mod export_views;
@@ -277,6 +278,13 @@ mod legacy_upgrade_tests;
 mod line_commands_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod merge_depth_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::float_cmp,
@@ -536,6 +544,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use conversion_notice::{ConversionFile, ConversionNoticeView};
 pub use open_file::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
 pub use project_io::set_generator;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

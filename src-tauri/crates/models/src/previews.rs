@@ -217,6 +217,41 @@ pub struct MergeDatumShift {
     pub datum_station: StationRef,
 }
 
+/// What a merge of two unconnected stations does, for the Merge dialog to
+/// say before the user confirms (demo issue I-4): the piece that moves, how
+/// far, onto which station, and the depths when the two disagree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/MergePreview.ts")]
+pub struct MergePreview {
+    /// Every line of the piece that moves, ascending.
+    pub moving_line_ids: Vec<LineId>,
+    /// How far it moves to join, horizontal metres (the largest move of any
+    /// station the merge moves).
+    pub shift_m: f64,
+    /// The picked slot of the station that stays put, which the moving piece
+    /// joins.
+    pub joins: StationRef,
+    /// The two stations' depths (A's, then B's, as picked) and the joined
+    /// station's, when A's and B's differ by more than
+    /// [`crate::JUNCTION_DEPTH_SPREAD_M`]: the joined station takes the mean
+    /// of the depth readings, as 0.6.0 did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub depths: Option<MergeDepths>,
+}
+
+/// The depths [`MergePreview`] reports, metres (+down).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/MergeDepths.ts")]
+pub struct MergeDepths {
+    /// Station A's depth before the merge.
+    pub a_m: f64,
+    /// Station B's depth before the merge.
+    pub b_m: f64,
+    /// The joined station's depth.
+    pub joined_m: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

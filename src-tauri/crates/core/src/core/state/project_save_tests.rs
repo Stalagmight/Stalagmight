@@ -876,10 +876,12 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     write_legacy_drift(&path, true);
     let state = open(&path);
     let notice = state.take_conversion_notice().expect("a conversion notice");
-    assert!(
-        notice.starts_with("Converted from the old file format; 2 stations moved by up to 5.00 m"),
-        "{notice}"
+    assert_eq!(
+        notice.changes.first().map(String::as_str),
+        Some("2 stations moved by up to 5.00 m"),
+        "{notice:?}"
     );
+    assert_eq!(notice.file, super::ConversionFile::NotYetSaved);
     assert_eq!(state.take_conversion_notice(), None, "offered once");
 
     let path = dir.path().join("clean.stalx");
@@ -936,12 +938,12 @@ fn a_conversion_that_joined_comments_says_so() {
     let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
-    assert!(!notice.contains("stations moved"), "{notice}");
-    assert!(!notice.contains("name changed"), "{notice}");
-    assert!(
-        notice.contains("a merged station's two comments were joined"),
-        "{notice}"
+    assert_eq!(
+        notice.changes,
+        ["a merged station's two comments were joined"],
+        "{notice:?}"
     );
+    assert!(notice.details.is_empty(), "{notice:?}");
 }
 
 /// A 0.6.0 file whose merge of C onto B the migration moves (`drift`: C's

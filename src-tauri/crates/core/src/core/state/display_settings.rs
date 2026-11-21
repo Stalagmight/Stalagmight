@@ -20,7 +20,8 @@ impl AppState {
 
     /// Set one display setting. Durable at once on a version 2 file (a
     /// local-only save); a legacy or never-saved project keeps it in memory
-    /// for its first save.
+    /// for its first save, without making the project unsaved (a 0.6.0 file
+    /// is converted only by a save the user asked for, demo issue I-6).
     pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
         let changed = self.with_file(|file| {
             let display = &mut file.extras.local.display;
@@ -31,7 +32,7 @@ impl AppState {
             true
         });
         if changed {
-            self.persist_local_state()
+            self.persist_display_state()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         Ok(())

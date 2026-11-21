@@ -401,6 +401,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
             datumShift: result.datum_shift,
+            mergePreview: result.merge_preview,
           });
         } else if (result.connected) {
           // Connected - merging would make a loop, so redirect to closure dialog

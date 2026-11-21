@@ -360,21 +360,15 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
                 continue;
             }
             let notice = notice.expect("a notice");
-            assert!(notice.contains("2 stations moved"), "{notice}");
-            assert!(!notice.contains("name changed"), "{notice}");
+            assert_eq!(
+                notice.changes,
+                ["2 stations moved by up to 5.00 m"],
+                "only the moves, no name: {notice:?}"
+            );
             // The cache is version 2 already and nothing local keeps the
             // original: the notice points at the server's revision, never at a
             // local backup the pull did not make.
-            assert!(
-                notice.ends_with(
-                    ". This computer's copy is already converted, and the original \
-                     revision is unchanged on SpeleoDB: it stays in the project's Revision \
-                     history."
-                ),
-                "{notice}"
-            );
-            assert!(!notice.contains("Restore an earlier copy"), "{notice}");
-            assert!(!notice.contains("project is saved"), "{notice}");
+            assert_eq!(notice.file, super::ConversionFile::Downloaded, "{notice:?}");
             assert_eq!(state.take_conversion_notice(), None, "offered once");
             // Other tests share the backups folder: look for this path's own.
             let backups = super::project_io::upgrade_backup_dir().expect("backups dir");

@@ -73,12 +73,15 @@ pub fn save_project_overwriting(state: State<AppState>, path: Option<PathBuf>) -
     state.save_project_overwriting(path)
 }
 
-/// The one-line notice a legacy (SQLite) open leaves when the conversion to
+/// The notice a legacy (SQLite) open leaves when the conversion to
 /// the station-graph model moved stations (plan 7.2.10), taken once: the
-/// frontend asks after a load and shows it as a banner. `None` for a version
+/// frontend asks after a load and shows it as a banner (its view: the changes,
+/// a renamed-stations list for Details, the file state). `None` for a version
 /// 2 file and for a conversion that moved nothing.
 #[tauri::command]
-pub fn take_conversion_notice(state: State<'_, AppState>) -> Option<String> {
+pub fn take_conversion_notice(
+    state: State<'_, AppState>,
+) -> Option<crate::core::ConversionNoticeView> {
     let notice = state.take_conversion_notice();
     if notice.is_some() {
         tracing::info!(

@@ -366,3 +366,34 @@ fn a_merge_keeps_every_lines_own_name_for_a_junction_it_retires() {
     assert_eq!((aliases[0].id, aliases[0].line), (a1, Some(a)));
     assert_eq!((aliases[1].id, aliases[1].line), (counter, Some(a2)));
 }
+
+/// The Merge dialog's preview (demo issue I-4) is what the merge then does:
+/// the moving piece, its shift onto the stationary station, the joined
+/// station's depth; and it changes nothing. Injection: measure the shift
+/// from the stationary piece only (`after.xy(s)` against itself) and it
+/// reads 0 m.
+#[test]
+fn the_merge_preview_is_what_the_merge_does() {
+    let (mut p, a, b) = two_free_pieces();
+    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    let before = p.clone();
+    let preview = p.merge_preview(a2, b0).unwrap();
+    assert_eq!(p, before, "read-only");
+    assert_eq!(preview.stationary, b0);
+    assert_eq!(preview.moving_lines, vec![a]);
+    assert!((preview.shift_m - 80.0_f64.hypot(50.0)).abs() < 1e-6);
+    let xy_before = xy_all(&p);
+    ok(p.merge_stations(a2, b0));
+    let moved = xy_all(&p)
+        .iter()
+        .filter_map(|(s, [x, y])| {
+            let [bx, by] = xy_before.get(s)?;
+            Some((x - bx).hypot(y - by))
+        })
+        .fold(0.0, f64::max);
+    assert!((moved - preview.shift_m).abs() < 1e-9);
+    let joined = p.raw_positions().z(b0).unwrap();
+    assert!((joined - preview.joined_depth_m).abs() < TOL);
+    // A refused pair has no preview.
+    assert_eq!(p.merge_preview(b0, b0), None);
+}

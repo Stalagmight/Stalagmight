@@ -68,6 +68,25 @@ pub struct MergeDatumShift {
     pub datum_station: StationId,
 }
 
+/// What merging two unconnected stations does (demo issue I-4), for the
+/// Merge dialog to say before the user confirms ([`Project::merge_preview`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeMove {
+    /// The station that stays put (the survivor).
+    pub stationary: StationId,
+    /// Every line of the piece that moves, ascending.
+    pub moving_lines: Vec<LineId>,
+    /// How far the merge moves anything, horizontal metres: the moving
+    /// piece's shift (the moving station onto the stationary one), or more
+    /// when the sweep the merge runs moves more.
+    pub shift_m: f64,
+    /// The two stations' depths before the merge, `a`'s then `b`'s.
+    pub depths_m: [f64; 2],
+    /// The joined station's depth: the mean of every depth reading at it,
+    /// as 0.6.0 computed a merged station's.
+    pub joined_depth_m: f64,
+}
+
 /// The Merge tool's check of a picked pair (today's
 /// `check_merge_connectivity`): connected pairs go to the closure dialog with
 /// its preview figures, unconnected ones may merge.
@@ -204,6 +223,36 @@ impl Project {
             } else {
                 self.merge_datum_shift(a, b)
             },
+        })
+    }
+
+    /// What merging `a` with `b` would do (demo issue I-4): the merge run on a
+    /// copy, its raw layout compared with this one's (as the Delete Shot
+    /// preview measures a split's weld). `None` when the merge is refused
+    /// (the copy's `merge_stations` checks [`Self::merge_refusal`]).
+    /// Read-only.
+    pub fn merge_preview(&self, a: StationId, b: StationId) -> Option<MergeMove> {
+        let (stationary, moving) = self.merge_direction(a, b);
+        let before = self.raw_positions();
+        let depths_m = [before.z(a)?, before.z(b)?];
+        let [mx, my] = before.xy(moving)?;
+        let mut copy = self.clone();
+        copy.merge_stations(a, b).ok()?;
+        let after = copy.raw_positions();
+        let [sx, sy] = after.xy(stationary)?;
+        let shift_m = before
+            .iter()
+            .filter_map(|(s, [x, y, _])| {
+                let [ax, ay] = after.xy(s)?;
+                Some((ax - x).hypot(ay - y))
+            })
+            .fold((sx - mx).hypot(sy - my), f64::max);
+        Some(MergeMove {
+            stationary,
+            moving_lines: self.piece_lines(moving),
+            shift_m,
+            depths_m,
+            joined_depth_m: after.z(stationary)?,
         })
     }
 

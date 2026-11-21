@@ -39,6 +39,7 @@ import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
+import { ConversionNoticeBanner } from './components/ConversionNoticeBanner';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
@@ -589,31 +590,12 @@ function App() {
         </div>
       )}
 
-      {/* Conversion notice (plan 7.2.10): an old-format (SQLite) file opened
-          with stations in other places than the old version showed them. The
-          backend hands the sentence over once, including where the original
-          is (a local file's backup, or a SpeleoDB revision on the server); the
-          banner stays until dismissed. */}
+      {/* Conversion notice (plan 7.2.10, demo issue I-5): an old-format
+          (SQLite) file whose conversion changed what a line shows. The backend
+          hands it over once; the banner follows the converting save and stays
+          until dismissed (ConversionNoticeBanner). */}
       {conversionNotice !== null && project && !loading.isLoading && (
-        <div
-          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
-          role="status"
-          data-testid="conversion-notice-banner"
-        >
-          <span className="text-warning font-medium flex-1 min-w-0">
-            {t('banners.conversion.lead')}{' '}
-            <span className="text-text-secondary font-normal" data-testid="conversion-notice-text">
-              {conversionNotice}
-            </span>
-          </span>
-          <button
-            onClick={dismissConversionNotice}
-            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
-            data-testid="conversion-notice-dismiss-button"
-          >
-            {t('banners.conversion.dismiss')}
-          </button>
-        </div>
+        <ConversionNoticeBanner notice={conversionNotice} onDismiss={dismissConversionNotice} />
       )}
 
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest

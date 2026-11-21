@@ -7,11 +7,13 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
  *   (`EXTERNALLY_MODIFIED`) asks which version to keep;
  * - a file made with a newer Stalagmight is open read-only, with a banner, and
  *   the editing controls are off;
- * - an old-format file the conversion moved stations in says so once;
+ * - an old-format file the conversion moved stations in says so once, and the
+ *   banner follows the converting save (demo issue I-5);
  * - a warning ignore rides the save, so it dirties the project.
  *
  * The mock answers through `__MOCK_SET_EXTERNALLY_MODIFIED__`,
- * `__MOCK_SET_READ_ONLY_REASON__` and `__MOCK_SET_CONVERSION_NOTICE__`; the
+ * `__MOCK_SET_READ_ONLY_REASON__`, `__MOCK_SET_CONVERSION_NOTICE__` and
+ * `__MOCK_SET_LEGACY_ORIGIN__`; the
  * file status is read once a project is open, so the read-only reason and the
  * notice are seeded before the project is created.
  */
@@ -19,7 +21,8 @@ import { setupMockedPage, createProject, createLineViaStore } from './helpers/ap
 type MockWindow = {
   __MOCK_SET_EXTERNALLY_MODIFIED__: (on: boolean) => void;
   __MOCK_SET_READ_ONLY_REASON__: (reason: string | null) => void;
-  __MOCK_SET_CONVERSION_NOTICE__: (notice: string | null) => void;
+  __MOCK_SET_CONVERSION_NOTICE__: (notice: unknown) => void;
+  __MOCK_SET_LEGACY_ORIGIN__: (on: boolean) => void;
   __MOCK_GET_SAVE_CALLS__: () => Array<{ command: string; path: string | null }>;
   __E2E_TEST__: {
     projectStore: {
@@ -119,19 +122,80 @@ test.describe('.stalx v2 file status', () => {
 
   test('an old-format file the conversion moved says so once, until dismissed', async ({ page }) => {
     await page.evaluate(() =>
-      (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__(
-        // The backend writes the whole sentence, where the original is included.
-        'Converted from the old file format; 4 stations moved by up to 0.42 m. The new format is written the first time the project is saved, or already was if you renamed it in Recent Projects or removed its SpeleoDB link; the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.'
-      )
+      (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        changes: ['4 stations moved by up to 0.42 m', '1 station changed depth by 0.30 m'],
+        details: [],
+        file: 'not_yet_saved',
+      })
     );
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_LEGACY_ORIGIN__(true));
     await createProject(page, 'Old Format');
 
     const banner = page.getByTestId('conversion-notice-banner');
     await expect(banner).toBeVisible();
-    await expect(page.getByTestId('conversion-notice-text')).toContainText('4 stations moved by up to 0.42 m');
-    await expect(banner).toContainText('The new format is written the first time the project is saved');
+    await expect(banner).toContainText(/^Converted from the old file format\. 4 stations moved/);
+    await expect(page.getByTestId('conversion-notice-text')).toHaveText(
+      '4 stations moved by up to 0.42 m; 1 station changed depth by 0.30 m.'
+    );
+    await expect(page.getByTestId('conversion-notice-save')).toContainText('It is saved in the new format the next time you save');
+    await expect(page.getByTestId('conversion-notice-details-button')).toHaveCount(0);
+
+    // The converting save (Ctrl+S with no edits): the banner says it happened.
+    await page.keyboard.press('Control+s');
+    await expect(page.getByTestId('conversion-notice-save')).toHaveText(
+      'Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).'
+    );
+    // One event, one surface: the banner says it, so no toast does.
+    await expect(page.locator('[data-toast-key="legacy-converted"]')).toHaveCount(0);
+
     await page.getByTestId('conversion-notice-dismiss-button').click();
     await expect(banner).toHaveCount(0);
+  });
+
+  test('a long list of renamed stations sits behind Details', async ({ page }) => {
+    const details = Array.from({ length: 30 }, (_, i) => `Branch ${i + 1} / 0 is now shown as ${(i + 1) * 19}`);
+    await page.evaluate(
+      (d) =>
+        (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+          changes: ['30 stations are now shown under another name'],
+          details: d,
+          file: 'not_yet_saved',
+        }),
+      details
+    );
+    await createProject(page, 'Big Old Format');
+
+    await expect(page.getByTestId('conversion-notice-text')).toHaveText('30 stations are now shown under another name.');
+    await expect(page.getByTestId('conversion-notice-details')).toHaveCount(0);
+    await page.getByTestId('conversion-notice-details-button').click();
+    await expect(page.getByTestId('conversion-notice-details').locator('li')).toHaveCount(30);
+    await expect(page.getByTestId('conversion-notice-details')).toContainText('Branch 1 / 0 is now shown as 19');
+  });
+
+  test('the converting save with the banner dismissed confirms with a toast', async ({ page }) => {
+    await page.evaluate(() =>
+      (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        changes: ['1 station moved by 0.40 m'],
+        details: [],
+        file: 'not_yet_saved',
+      })
+    );
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_LEGACY_ORIGIN__(true));
+    await createProject(page, 'Old Format Dismissed');
+    await page.getByTestId('conversion-notice-dismiss-button').click();
+    await expect(page.getByTestId('conversion-notice-banner')).toHaveCount(0);
+
+    await page.keyboard.press('Control+s');
+    const toast = page.locator('[data-toast-key="legacy-converted"]');
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('Saved in the new format; the original is kept in Recent Projects');
+    await toast.getByRole('button').click();
+    await expect(toast).toHaveCount(0);
+    // Converted once: the next save says nothing more.
+    await makeDirty(page);
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => isDirty(page)).toBe(false);
+    await expect(toast).toHaveCount(0);
   });
 
   test('a warning ignore dirties the project: it rides the next save', async ({ page }) => {

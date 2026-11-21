@@ -491,9 +491,10 @@ lines their own station back. Likewise a delete (shot, range or line) that
 leaves a station only on lines that know it by aliases gives it back the
 Station ID and name the first of those aliases records, its comment, datums,
 closure ends, placement and hand moves following (Undo restores it exactly).
-The conversion notice lists a slot whose name the conversion changed, which
-only happens to a name a 0.6.0 line showed twice (the later one is lettered);
-an unnamed line is seeded
+The conversion notice lists a slot whose name the conversion changed
+("Side / 0 is now shown as ..."; more than three are counted and listed behind
+Details), which only happens to a name a 0.6.0 line showed twice (the later
+one is lettered); an unnamed line is seeded
 `Line 1`, `Line 2`, ... (smallest free number, in line order); a repeated line
 name gets ` (2)`, ` (3)`, ... on the later line. Station IDs come from
 `next_station_id` and are never reused within a timeline (an undo leaves the
@@ -775,7 +776,11 @@ with its reason, is the plan's "Status (final)" section:
   A file whose conversion moved stations, changed a depth, could not place
   a station, showed a station under another name or joined comments shows a
   one-time conversion notice (a closed file upgraded by a Recents rename or a
-  link strip shows it at its next open). A file made
+  link strip shows it at its next open), whose last sentence says whether the
+  new format is on disk yet; the converting save turns it to "Saved in the new
+  format", or, with the notice dismissed, says so in a toast. A display toggle
+  before that save is kept for it but is not an unsaved change, so it never
+  starts an autosave that converts the file. A file made
   with a newer Stalagmight opens read-only when it only uses features this
   version does not know, and is refused (update Stalagmight) when it is a
   newer major format or cannot be read correctly without those features. A
@@ -1737,15 +1742,26 @@ Shown when merging two **unconnected** stations (different line groups).
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
-│  Station A: Line "Main Line" #14 (depth: 12.3m)                 │
-│  Station B: Line "Side Passage" #0 (depth: 12.8m)               │
+│  Station A:                                    Upstream / 0      │
+│  Station B:                                    Far Room / 2      │
 │                                                                  │
-│  Distance between: 2.4m                                          │
-│  Depth difference: 0.5m                                          │
+│  Upstream moves 24 m to join Far Room / 2.                       │
+│  Depths 15.0 m and 4.0 m become 9.5 m: the joined station takes  │
+│  the mean of its depth readings.                                 │
 │                                                                  │
 │  [ Cancel ]                                      [ Merge ]       │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+The dialog says what the merge does before it does it, from the merge check
+(`ConnectivityResult.merge_preview`, the merge run on a copy): the lines of the
+piece that moves, how far (not said below 1 cm, nor after a snap-to-merge drag,
+which already moved it; when both pieces are placed by their own GPS the datum
+notice says it instead), and the station it joins; and, when the two stations'
+depths differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), both depths and
+the joined station's, the mean of every depth reading at it (as 0.6.0 computed
+a merged station's depth). Every merge-tool pick that can merge opens this
+dialog, so no merge happens without it.
 
 If the two stations are already connected (same line group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
 
@@ -2974,6 +2990,16 @@ salvage export for a SQLite one.
   station" or Ignore. The Ignore is kept on that shot, so if the piece later gains
   an earlier line the warning moves to that line's first shot and shows again. A
   project with no zero datum at all gets none
+- A junction whose depth readings disagree (`JUNCTION_DEPTH_SPREAD`): a station on
+  two or more lines whose readings (each incoming shot's depth out, each outgoing
+  shot's depth in) span more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`, the threshold
+  the Merge dialog uses to name the depths). The station's depth is their mean, so
+  a reading off by metres moves it silently otherwise. One warning per junction,
+  on the shot arriving at it on its first line that has one, else on a shot
+  leaving it under `JUNCTION_DEPTH_SPREAD_START` (so two junctions never share an
+  Ignore), naming the junction, the spread and the mean. Advisory; it resolves
+  with "Go to station" (the junction) or Ignore. The threshold is fixed, not a
+  `settings.validation` key
 
 ---
 

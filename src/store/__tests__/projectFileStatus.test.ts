@@ -11,6 +11,7 @@ import { useSpeleoStore } from '../speleoStore';
 import { useUIStore } from '../uiStore';
 import { editingBlockedReasonNow, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { FILE_STATUS_CLEARED } from '../projectFileStatusActions';
+import type { ConversionNoticeView } from '../../types/ipc/ConversionNoticeView';
 
 const ipc = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: ipc }));
@@ -43,7 +44,11 @@ describe('checkFileStatus', () => {
   });
 
   it('keeps the conversion notice a second (StrictMode) check cannot take again', async () => {
-    let notice: string | null = 'Converted from the old file format; 3 stations moved by up to 0.42 m. The new format is written the first time the project is saved, or already was if you renamed it in Recent Projects or removed its SpeleoDB link; the original file is kept: to go back to it, right-click the project in Recent Projects and choose Restore an earlier copy.';
+    let notice: ConversionNoticeView | null = {
+      changes: ['3 stations moved by up to 0.42 m'],
+      details: [],
+      file: 'not_yet_saved',
+    };
     ipc.mockImplementation(async (command: string) => {
       if (command !== 'take_conversion_notice') return null;
       const taken = notice;
@@ -54,7 +59,7 @@ describe('checkFileStatus', () => {
     await useProjectStore.getState().checkFileStatus();
     await useProjectStore.getState().checkFileStatus();
 
-    expect(useProjectStore.getState().conversionNotice).toContain('3 stations moved');
+    expect(useProjectStore.getState().conversionNotice?.changes).toEqual(['3 stations moved by up to 0.42 m']);
     useProjectStore.getState().dismissConversionNotice();
     expect(useProjectStore.getState().conversionNotice).toBeNull();
   });
@@ -109,5 +114,65 @@ describe('a warning ignore rides the save', () => {
     await useProjectStore.getState().resolveWarning(1, 100000, 'LONG_SHOT');
 
     expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+});
+
+/**
+ * The save that converts a project opened from a 0.6.0 file (demo issue I-5):
+ * the banner stops promising that the next save will, and says it was saved;
+ * with no banner showing, a toast says so instead (one event, one surface).
+ * Injection: drop the `legacy_converted` branch from the save action and the
+ * banner keeps "the next time you save" after the save, and no toast shows.
+ */
+describe('the converting save', () => {
+  const notice: ConversionNoticeView = {
+    changes: ['1 station moved by 0.40 m'],
+    details: [],
+    file: 'not_yet_saved',
+  };
+  const saving = (legacy_converted?: 'saved' | 'saved_as_new_file') =>
+    ipc.mockImplementation(async (command: string) =>
+      command === 'save_project'
+        ? { success: true, saved_path: '/a.stalx', warnings: [], error: null, line_ids: [], legacy_converted }
+        : null,
+    );
+
+  it('turns the banner to saved, with no toast', async () => {
+    const toast = vi.spyOn(useUIStore.getState(), 'showToast');
+    useProjectStore.setState({ conversionNotice: notice });
+    saving('saved');
+    await useProjectStore.getState().saveProject();
+    expect(useProjectStore.getState().conversionNotice?.file).toBe('saved');
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'legacy-converted', expect.anything());
+  });
+
+  it('says a Save As elsewhere left the original as it was', async () => {
+    useProjectStore.setState({ conversionNotice: notice });
+    saving('saved_as_new_file');
+    await useProjectStore.getState().saveProject('/b.stalx');
+    expect(useProjectStore.getState().conversionNotice?.file).toBe('saved_as_new_file');
+  });
+
+  it('confirms with a toast when no banner shows', async () => {
+    const toast = vi.fn();
+    useUIStore.setState({ showToast: toast } as never);
+    saving('saved');
+    await useProjectStore.getState().saveProject();
+    expect(useProjectStore.getState().conversionNotice).toBeNull();
+    expect(toast).toHaveBeenCalledWith(
+      'Saved in the new format; the original is kept in Recent Projects',
+      'legacy-converted',
+      'success',
+    );
+  });
+
+  it('says nothing for a save that converted nothing', async () => {
+    const toast = vi.fn();
+    useUIStore.setState({ showToast: toast } as never);
+    useProjectStore.setState({ conversionNotice: { ...notice, file: 'saved' } });
+    saving(undefined);
+    await useProjectStore.getState().saveProject();
+    expect(useProjectStore.getState().conversionNotice?.file).toBe('saved');
+    expect(toast).not.toHaveBeenCalled();
   });
 });

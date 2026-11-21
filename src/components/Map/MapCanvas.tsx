@@ -1352,6 +1352,7 @@ function MapCanvas() {
             stationA: originStation,
             stationB: targetStation,
             datumShift: result.datum_shift,
+            mergePreview: result.merge_preview,
             ...extra,
           });
         } else if (result.connected) {

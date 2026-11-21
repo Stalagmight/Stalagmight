@@ -21,6 +21,12 @@
 //! - **Unconnected pieces** (`LINE_NOT_CONNECTED`, #814): one advisory per
 //!   piece that holds no datum, in a project where some piece does, on the
 //!   first shot of its first line.
+//! - **Junction depth readings that disagree** (`JUNCTION_DEPTH_SPREAD` /
+//!   `JUNCTION_DEPTH_SPREAD_START`, demo issue I-4): one advisory per station
+//!   on two or more lines whose depth readings span more than
+//!   [`JUNCTION_DEPTH_SPREAD_M`], on the shot arriving at it (else the one
+//!   leaving it, under the `_START` code), naming the station so "Go to
+//!   station" finds it.
 //!
 //! Ignored warnings are survey content now (plan 6.5): the file's
 //! `ignored_warnings` member, held in memory (`FileState`), keyed by the
@@ -48,7 +54,8 @@ use crate::models::survey::{AdjustmentFailure, Project, RawPositions};
 use crate::models::{
     datum_gap_ignore_code, severity_for_code, warning_is_ignorable, DatumGap, DatumRole, LineId,
     ProjectWarning, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-    DATUM_GPS_GAP, DATUM_GPS_GAP_START, LINE_NOT_CONNECTED,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START, JUNCTION_DEPTH_SPREAD, JUNCTION_DEPTH_SPREAD_M,
+    JUNCTION_DEPTH_SPREAD_START, LINE_NOT_CONNECTED,
 };
 use crate::persistence::stalx_v2::IgnoredWarning;
 use crate::persistence::ResolvedWarning;
@@ -90,6 +97,7 @@ fn project_warnings(
     all.extend(closure_across_one_shot_warnings(project, raw));
     all.extend(adjustment_failure_warnings(project, failures, &ignored));
     all.extend(unconnected_piece_warnings(project, &ignored));
+    all.extend(junction_depth_spread_warnings(project, raw, &ignored));
     // Stable: the rows of one shot keep the order of the kinds above.
     all.sort_by(|a, b| {
         let severity_order = |s: WarningSeverity| match s {
@@ -356,6 +364,82 @@ fn unconnected_piece_warnings(project: &Project, ignored: &Ignored) -> Vec<Proje
             Some(warning)
         })
         .collect()
+}
+
+/// One advisory warning per junction (a station on two or more lines) whose
+/// depth readings span more than [`JUNCTION_DEPTH_SPREAD_M`] (demo issue
+/// I-4): the station's depth is the mean of its readings, so a reading off by
+/// metres, or two lines surveyed with gauges that disagree, moves it without
+/// a word. On the shot arriving at the junction on its first line (slot
+/// order) that has one, under [`JUNCTION_DEPTH_SPREAD`], else on the shot
+/// leaving it, under [`JUNCTION_DEPTH_SPREAD_START`]: a shot arrives at one
+/// station and only shot 0 leaves a line's start, so no two rows share an
+/// Ignore key. `datum_station_index` names the junction's slot on the row's
+/// line for "Go to station". A non-finite reading has its own error
+/// (`NON_FINITE_VALUE`) and raises none here.
+fn junction_depth_spread_warnings(
+    project: &Project,
+    raw: &RawPositions,
+    ignored: &Ignored,
+) -> Vec<ProjectWarning> {
+    let topology = project.topology();
+    let mut out = Vec::new();
+    for &station in topology.stations() {
+        let slots = topology.slots_of(station);
+        if slots.len() < 2 {
+            continue;
+        }
+        let mut slots = slots.to_vec();
+        slots.sort_unstable();
+        let readings = project.depth_readings_at(&slots);
+        let (low, high) = readings
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &d| {
+                (lo.min(d), hi.max(d))
+            });
+        let spread = high - low;
+        if !spread.is_finite() || spread <= JUNCTION_DEPTH_SPREAD_M {
+            continue;
+        }
+        let has_shot = |slot: &StationRef, index: usize| {
+            project
+                .line(slot.line_id)
+                .is_some_and(|line| line.shots.get(index).is_some())
+        };
+        let arriving = slots.iter().find_map(|slot| {
+            let index = (slot.station_index as usize).checked_sub(1)?;
+            has_shot(slot, index).then_some((*slot, index, JUNCTION_DEPTH_SPREAD))
+        });
+        let Some((slot, shot_index, code)) = arriving.or_else(|| {
+            slots
+                .iter()
+                .find(|slot| slot.station_index == 0 && has_shot(slot, 0))
+                .map(|slot| (*slot, 0, JUNCTION_DEPTH_SPREAD_START))
+        }) else {
+            continue;
+        };
+        let name = crate::models::sanitize_display_text(
+            &project.station_text(station, Some(slot.line_id)),
+            crate::core::command::MAX_FILE_NAME_LEN,
+        );
+        let mean = raw.z(station).unwrap_or(f64::NAN);
+        let message = format!(
+            "The depth readings at {name}, where {} lines meet, differ by {spread:.1} m \
+             ({low:.1} m to {high:.1} m). The station's depth is their mean, {mean:.1} m. \
+             Check the depths of the shots that meet here.",
+            slots.len(),
+        );
+        let Some(mut warning) = row(project, slot.line_id, shot_index, code, message) else {
+            continue;
+        };
+        warning.is_resolved = warning
+            .shot_uuid
+            .as_deref()
+            .is_some_and(|uuid| ignored.covers(uuid, code, code));
+        warning.datum_station_index = Some(slot.station_index);
+        out.push(warning);
+    }
+    out
 }
 
 /// The `datum_gps_gap` warning text: the gap in metres, which way the GPS lies

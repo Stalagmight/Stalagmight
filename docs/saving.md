@@ -106,17 +106,25 @@ modification time and SHA-256: the save guard below), and sniffs it
   the global config. The history is always dropped, with the
   "earlier version" banner. When the conversion changed what the user sees, a
   one-time conversion notice is kept (`AppState::take_conversion_notice`,
-  shown as a banner): "Converted from the old file format; N stations moved by
-  up to X m; M stations changed depth by up to Z m; K stations could not be
-  placed", each part only when its count is not zero, then where the original
-  is: "The new format is written the first time the project is saved, or
-  already was if you renamed it in Recent Projects or removed its SpeleoDB
-  link; the original file is kept: to go back to it, right-click the project
-  in Recent Projects and choose Restore an earlier copy." A legacy SpeleoDB
-  revision is converted when it is downloaded into the cache, which is version
-  2 at once and keeps no local original, so its notice ends "This computer's
-  copy is already converted, and the original revision is unchanged on
-  SpeleoDB: it stays in the project's Revision history." A move is a torn
+  `core/state/conversion_notice.rs`, shown as a banner). It hands the banner a
+  `ConversionNoticeView`: one short clause per change, each only when its
+  count is not zero and worded in the right number ("1 station moved by 0.40
+  m", "N stations moved by up to X m", "... changed depth by ...", "... could
+  not be placed"), a renamed station as "Side / 2 is now shown as 2a"
+  (more than three are counted, "30 stations are now shown under another
+  name", and listed behind Details), the joined comments; and the file's
+  state. The banner reads "Converted from the old file format." then the
+  changes, then one sentence on saving that is true now: before the
+  converting save "It is saved in the new format the next time you save; the
+  original file is kept and can be restored from Recent Projects (right-click,
+  Restore an earlier copy)."; once saved (this session's save, or a Recents
+  rename or link strip of the closed file before this open) "Saved in the new
+  format; ..."; after a Save As elsewhere "Saved in the new format as a new
+  file; the original file is unchanged." A legacy SpeleoDB revision is
+  converted when it is downloaded into the cache, which is version 2 at once
+  and keeps no local original, so its notice says "This computer's copy is
+  already converted; the original revision is unchanged on SpeleoDB, in the
+  project's Revision history." A move is a torn
   legacy merge collapsed into one station or an unexplained horizontal
   difference; a depth change is a snap whose derived alignment changed a
   depth tie, or an unexplained one; a slot with no finite position is never
@@ -375,13 +383,21 @@ The Recovery dialog lists the kept originals with the project's own backups
 (`list_project_backups`, as "Original before the upgrade to the new format"),
 and Restore puts one back after the user confirms; the file it replaces is
 kept as `<project>.stalx.pre-restore`, which the dialog lists too, so the
-restore can be undone ([SPEC 14.4](SPEC.md#restore-from-backup)). The save itself is
-silent; the conversion notice (above) was shown at open when the conversion
-moved anything. Until that first save nothing is written to a legacy file
+restore can be undone ([SPEC 14.4](SPEC.md#restore-from-backup)). The
+converting save says so (`CommandResult.legacy_converted`: `saved` over the
+file itself, `saved_as_new_file` for a Save As elsewhere, which leaves the
+0.6.0 file as it was; set once, on the save that wrote the first version 2
+file): the conversion banner, when it shows, turns its sentence on saving to
+"Saved in the new format; ...", and with no banner showing (dismissed, or a
+conversion that changed nothing visible) a success toast says "Saved in the
+new format; the original is kept in Recent Projects". Until that first save
+nothing is written to a legacy file
 (but the hot-journal rollback of [What an open writes](#what-an-open-writes)):
-display toggles and SpeleoDB state changes wait in memory (`local_pending`),
-ride the upgrading save, and count as unsaved changes until then (see
-[Unsaved changes](#unsaved-changes)). One exception is written at once: a
+display toggles and SpeleoDB state changes wait in memory (`local_pending`)
+and ride the upgrading save. SpeleoDB state changes count as unsaved changes
+until then; a display toggle alone does not, so it never arms autosave, which
+would convert a file the user only looked at, and a close without a save
+drops it (see [Unsaved changes](#unsaved-changes)). One exception is written at once: a
 SpeleoDB unlink (`persist_local_state_upgrading`) upgrades the file, with the
 survey it holds on disk (migrated again; the session's unsaved edits stay
 unsaved) and the session's local state, the original kept like any other.
@@ -445,14 +461,18 @@ backend's "changes no save has written": `FileState.dirty`, set by every
 recorded edit, by undo and redo, and by an Ignore or Unignore of a warning
 (ignored warnings are survey content: they ride the next save, and "Don't
 save" discards them); and, on a legacy file not yet upgraded, the local state
-waiting for the upgrading save (`local_pending`: a display toggle, SpeleoDB
-bookkeeping), which 0.6.0 wrote in place at once and which "Don't save" now
-discards. Display toggles and SpeleoDB state changes of a version 2 file are
-durable at once and set nothing. A save clears both. The frontend keeps its
-own `isDirty` for the indicator, autosave and the close, switch and quit
-prompts, and asks the backend after an Ignore and after a display toggle
-(`localStateDirty.ts`), so a toggle on a legacy file makes the close prompt
-ask.
+waiting for the upgrading save that is not view state (`local_pending_asks`:
+SpeleoDB bookkeeping, a project name, a materialized undo mode), which 0.6.0
+wrote in place at once and which "Don't save" now discards. A display toggle
+on a legacy file waits for that save too (`local_pending`, through
+`persist_display_state`) but is not an unsaved change: counting it would arm
+autosave, and autosave would convert the 0.6.0 file the user only looked at
+(demo issue I-6). A close without a save drops it, as it drops any other view
+state. Display toggles and SpeleoDB state changes of a version 2 file are
+durable at once and set nothing. A save clears every flag. The frontend keeps
+its own `isDirty` for the indicator, autosave and the close, switch and quit
+prompts; it asks the backend after an Ignore, and never marks the project
+unsaved for a display toggle.
 
 ## Failure classification
 
@@ -618,7 +638,8 @@ The `save_project` backend command returns the save path as a string in `Command
 | `src-tauri/crates/core/src/core/state/legacy_upgrade.rs` | The first write over a legacy file: settle, keep, write |
 | `src-tauri/crates/persistence/src/persistence/legacy_settle.rs` | A legacy copy's hot journal or WAL folded into the file |
 | `src-tauri/crates/core/src/core/state/project_load.rs` | Open: sniff, decode or migrate, commit |
-| `src-tauri/crates/core/src/core/state/open_file.rs` | `FileState`, the local-only durable save, the conversion notice |
+| `src-tauri/crates/core/src/core/state/open_file.rs` | `FileState`, the local-only durable save, `take_conversion_notice` |
+| `src-tauri/crates/core/src/core/state/conversion_notice.rs` | The conversion notice and the banner's view of it |
 | `src-tauri/crates/persistence/src/persistence/stalx_v2/atomic.rs` | `write_atomic`, `Fingerprint`, `Guard` |
 | `src-tauri/crates/persistence/src/persistence/stalx_v2/encode.rs` | The serializer and its modes (normal, for push, detached copy) |
 | `src-tauri/crates/persistence/src/persistence/migrate/mod.rs` | Legacy open and conversion |

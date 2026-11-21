@@ -157,10 +157,11 @@ pub struct MigratedExtras {
     /// should seed the user's global thresholds instead (as 0.6.0 did).
     pub validation_stored: bool,
     /// Every slot whose station now goes by another name than 0.6.0 gave it
-    /// there, in slot order: a junction has one name on all its lines (its
-    /// survivor's, kept wherever a line knows it by an alias), and a true
-    /// clash is lettered. Survey content for the conversion notice only,
-    /// never logged (review findings D-migration-upgrade-8, UX-3, UX-1).
+    /// there, in slot order. Every line keeps the names 0.6.0 showed on it (a
+    /// merge member is an alias naming its line, I-3), so only a name a 0.6.0
+    /// line showed twice is here, lettered. Survey content for the conversion
+    /// notice only, never logged (review findings D-migration-upgrade-8,
+    /// UX-3, UX-1).
     pub names_changed: Vec<NameChange>,
     /// Record-orientation parity the legacy model kept for `.plnx` dive-plan
     /// pins (a single-neighbour pin reads which end of its shot it sits on).

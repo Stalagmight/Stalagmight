@@ -38,7 +38,8 @@ use stalagmight_lib::core::loading::{
     SpeleoManagedFile,
 };
 use stalagmight_lib::core::state::{
-    SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+    ConversionFile, ConversionNoticeView, SpeleoCacheOwnership, SpeleoCachedProject,
+    SpeleoPurgeReport, VirtualShotMode,
 };
 use stalagmight_lib::export::color_scale::{
     ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
@@ -62,12 +63,13 @@ use stalagmight_lib::models::{
     ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
     ImportLineConfig, ImportPlacement, KeptMovesReason, LineCreditSummary, LineData, LineEnd,
     LineRelationships, LineStats, LineUpdates, LoopClosureWire, MarkedPoint, MergeDatumShift,
-    NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata,
-    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
-    Section, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
-    SplitLineOptions, SplitPreview, SplitSide, Station, StationAliasWire, StationMergeWire,
-    StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie,
-    TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
+    MergeDepths, MergePreview, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode,
+    PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
+    SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
+    StationAliasWire, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
+    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
+    ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -205,6 +207,8 @@ fn main() {
     // Core command/result types
     export::<CommandResult>(&out_dir);
     export::<LockReleaseOutcome>(&out_dir);
+    export::<ConversionFile>(&out_dir);
+    export::<ConversionNoticeView>(&out_dir);
     export::<ReversedLine>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -307,6 +311,8 @@ fn main() {
     export::<DatumGap>(&out_dir);
     export::<ZeroDatumPreview>(&out_dir);
     export::<MergeDatumShift>(&out_dir);
+    export::<MergePreview>(&out_dir);
+    export::<MergeDepths>(&out_dir);
     export::<LoopClosureWire>(&out_dir);
     export::<ClosureRef>(&out_dir);
     export::<ClosureStrategy>(&out_dir);
@@ -539,6 +545,8 @@ fn main() {
     let export_list = [
         "CommandResult",
         "LockReleaseOutcome",
+        "ConversionFile",
+        "ConversionNoticeView",
         "ReversedLine",
         "ImportReceipt",
         "CommentHolder",
@@ -630,6 +638,8 @@ fn main() {
         "DatumGap",
         "ZeroDatumPreview",
         "MergeDatumShift",
+        "MergePreview",
+        "MergeDepths",
         "LoopClosure",
         "ClosureRef",
         "ClosureStrategy",

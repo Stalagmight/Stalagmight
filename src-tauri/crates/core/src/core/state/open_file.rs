@@ -13,9 +13,11 @@
 //!   on read-only projects and unknown `requires`. It is never used on a
 //!   legacy (SQLite) file not yet upgraded, nor on a project never saved:
 //!   there the change waits in memory for the first real save
-//!   (`local_pending`), and on a legacy file it counts as unsaved
-//!   ([`AppState::has_unsaved_changes`]); only a SpeleoDB unlink upgrades a
-//!   legacy file at once ([`AppState::persist_local_state_upgrading`]).
+//!   (`local_pending`). On a legacy file it counts as unsaved
+//!   ([`AppState::has_unsaved_changes`]), except a display toggle alone
+//!   ([`AppState::persist_display_state`]: it never arms autosave, which
+//!   would convert the file); only a SpeleoDB unlink upgrades a legacy file
+//!   at once ([`AppState::persist_local_state_upgrading`]).
 //!
 //! Lock order: `project` -> `file` -> `undo_stack` (`file` takes the place
 //! `database` had). Nothing is taken while `file` is held except
@@ -28,14 +30,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::models::SpeleoLink;
-use crate::persistence::migrate::{
-    LegacyParity, MigratedExtras, MigrationReport, NameChange, Verification,
-};
+use crate::persistence::migrate::{LegacyParity, MigratedExtras, MigrationReport};
 use crate::persistence::stalx_v2::{
     write_atomic, Extras, Fingerprint, Guard, History, IgnoredWarning, LocalSync, SpeleoDbLink,
     WriteError,
 };
 
+use super::conversion_notice::{ConversionNotice, ConversionNoticeView};
 use super::AppState;
 
 /// Coded-failure prefix of a save refused because the file on disk changed
@@ -61,189 +62,6 @@ pub(crate) enum FileOrigin {
     /// writes version 2 over it after moving the original into the backups
     /// folder (plan 7.2.10).
     Legacy,
-}
-
-/// The one-line notice an upgrade shows when the migration changed what the
-/// user sees (plan 7.2.10, G4, C4): stations moved in plan (a torn legacy merge
-/// collapsed, or an unexplained raw difference), stations whose depth changed
-/// (a snap's derived alignment changed a depth tie, or an unexplained one),
-/// stations the conversion could not place, or a name a line showed (review
-/// findings D-migration-upgrade-8, UX-3 and UX-1; since I-3 every line keeps
-/// the names 0.6.0 showed on it, a merged station's included, so only a name
-/// a line showed twice is lettered). Computed View differences never raise it
-/// (C4).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ConversionNotice {
-    pub(crate) slots_moved: usize,
-    pub(crate) max_displacement_m: f64,
-    /// Slots whose depth changed beyond the 1e-9 m tolerance, and by how much
-    /// at most (review finding D-migration-upgrade-6).
-    pub(crate) depth_changed: usize,
-    pub(crate) max_depth_change_m: f64,
-    /// Slots with no finite migrated position.
-    pub(crate) unplaced: usize,
-    pub(crate) unexplained: usize,
-    /// The slots whose name changed, in slot order (survey content: shown,
-    /// never logged).
-    pub(crate) names_changed: Vec<NameChange>,
-    /// Merged stations whose members' different comments were joined into
-    /// one (each line now shows both).
-    pub(crate) comments_joined: usize,
-    /// Where the unconverted original is, which the notice tells the user.
-    pub(crate) original: ConversionOriginal,
-}
-
-/// Where the original of a converted legacy file is kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ConversionOriginal {
-    /// A local file: converted in memory, written as version 2 by its first
-    /// save, which moves the original into the backups folder (Recent
-    /// Projects: Restore an earlier copy).
-    #[default]
-    LocalFile,
-    /// A SpeleoDB revision downloaded into the cache: the cache copy is
-    /// already version 2 when it opens, and no local backup is made; the
-    /// original is the revision itself, unchanged on the server (Revision
-    /// history).
-    SpeleoDbRevision,
-}
-
-/// How many name changes the notice spells out before "and N more".
-const NAMES_LISTED: usize = 5;
-
-impl ConversionNotice {
-    /// [`Self::of`] plus what else a line shows differently: the names the
-    /// conversion changed and the comments it joined. A notice also when
-    /// nothing moved but something visible changed (review finding UX-1).
-    pub(crate) fn of_migration(
-        report: &MigrationReport,
-        names_changed: &[NameChange],
-    ) -> Option<Self> {
-        let names_changed = names_changed.to_vec();
-        let comments_joined = report.comments_joined;
-        match Self::of(&report.verification) {
-            Some(notice) => Some(Self {
-                names_changed,
-                comments_joined,
-                ..notice
-            }),
-            None => (!names_changed.is_empty() || comments_joined > 0).then_some(Self {
-                slots_moved: 0,
-                max_displacement_m: 0.0,
-                depth_changed: 0,
-                max_depth_change_m: 0.0,
-                unplaced: 0,
-                unexplained: 0,
-                names_changed,
-                comments_joined,
-                original: ConversionOriginal::LocalFile,
-            }),
-        }
-    }
-
-    /// The same notice for a SpeleoDB revision the cache got converted.
-    pub(crate) fn downloaded(self) -> Self {
-        Self {
-            original: ConversionOriginal::SpeleoDbRevision,
-            ..self
-        }
-    }
-
-    pub(crate) fn of(verification: &Verification) -> Option<Self> {
-        let moved = verification.moved();
-        let depth = verification.depth_changed();
-        let notice = Self {
-            slots_moved: moved.slots,
-            max_displacement_m: moved.max_displacement_m,
-            depth_changed: depth.slots,
-            max_depth_change_m: depth.max_displacement_m,
-            unplaced: verification.unplaced(),
-            unexplained: verification.mismatches.len(),
-            names_changed: Vec::new(),
-            comments_joined: 0,
-            original: ConversionOriginal::LocalFile,
-        };
-        (notice.slots_moved > 0
-            || notice.depth_changed > 0
-            || notice.unplaced > 0
-            || notice.unexplained > 0)
-            .then_some(notice)
-    }
-
-    pub(crate) fn message(&self) -> String {
-        let mut what = Vec::new();
-        if self.slots_moved > 0 {
-            what.push(format!(
-                "{} stations moved by up to {:.2} m",
-                self.slots_moved, self.max_displacement_m
-            ));
-        }
-        if self.depth_changed > 0 {
-            what.push(format!(
-                "{} stations changed depth by up to {:.2} m",
-                self.depth_changed, self.max_depth_change_m
-            ));
-        }
-        if self.unplaced > 0 {
-            what.push(format!("{} stations could not be placed", self.unplaced));
-        }
-        if !self.names_changed.is_empty() {
-            what.push(self.names_part());
-        }
-        match self.comments_joined {
-            0 => {}
-            1 => what.push("a merged station's two comments were joined".to_string()),
-            n => what.push(format!("the comments of {n} merged stations were joined")),
-        }
-        if what.is_empty() {
-            // `of` and `of_migration` raise no notice without one of the
-            // counts above; never "0 stations moved" all the same.
-            what.push("some positions differ from the old version's".to_owned());
-        }
-        // The second sentence says where the original is: a local file's
-        // upgrade keeps it in the backups folder (written by the first save,
-        // or already by a Recents rename or a link strip of the closed file);
-        // a downloaded revision's cache copy keeps none, the server has it.
-        let original = match self.original {
-            ConversionOriginal::LocalFile => {
-                "The new format is written the first time the project is saved, or already \
-                 was if you renamed it in Recent Projects or removed its SpeleoDB link; the \
-                 original file is kept: to go back to it, right-click the project in Recent \
-                 Projects and choose Restore an earlier copy."
-            }
-            ConversionOriginal::SpeleoDbRevision => {
-                "This computer's copy is already converted, and the original revision is \
-                 unchanged on SpeleoDB: it stays in the project's Revision history."
-            }
-        };
-        format!(
-            "Converted from the old file format; {}. {original}",
-            what.join("; ")
-        )
-    }
-
-    /// "3 station names changed (a merged station has one name on all its
-    /// lines): Side 0 is now 3, Loop 0 is now 1, ..."
-    fn names_part(&self) -> String {
-        let n = self.names_changed.len();
-        let listed: Vec<String> = self
-            .names_changed
-            .iter()
-            .take(NAMES_LISTED)
-            .map(|c| format!("{} {} is now {}", c.line, c.from, c.to))
-            .collect();
-        let more = n.saturating_sub(NAMES_LISTED);
-        let tail = if more > 0 {
-            format!(" and {more} more")
-        } else {
-            String::new()
-        };
-        let noun = if n == 1 { "name" } else { "names" };
-        format!(
-            "{n} station {noun} changed (a line showed one name twice): {}{tail}",
-            listed.join(", ")
-        )
-    }
 }
 
 /// The open project's per-file state (see the module docs).
@@ -283,6 +101,12 @@ pub(crate) struct FileState {
     /// Durable state changed in memory that only the next real save can
     /// write (legacy origin or never saved).
     pub(crate) local_pending: bool,
+    /// Part of that state is something the close prompt must ask about
+    /// (SpeleoDB bookkeeping, a project name, a materialized undo mode). A
+    /// display toggle alone is not (demo issue I-6): on a 0.6.0 file it would
+    /// arm autosave, and autosave would convert the file the user only looked
+    /// at. It waits for the next save, which writes it with the conversion.
+    pub(crate) local_pending_asks: bool,
     /// Shown once after a legacy open that moved stations.
     pub(crate) conversion: Option<ConversionNotice>,
     /// Record parity the legacy model kept for `.plnx` pins (dive-plan
@@ -520,7 +344,15 @@ impl AppState {
     /// for its first real save (`local_pending`). Guarded: a file changed on
     /// disk since it was last read or written is not touched.
     pub(crate) fn persist_local_state(&self) -> Result<(), LocalSaveError> {
-        self.persist_local_state_guarded(false)
+        self.persist_local_state_guarded(false, true)
+    }
+
+    /// [`Self::persist_local_state`] for a display toggle (per-machine view
+    /// state): on a legacy or never-saved project the change waits for the
+    /// next save as any local state does, but it alone does not make the
+    /// project unsaved ([`Self::has_unsaved_changes`], demo issue I-6).
+    pub(crate) fn persist_display_state(&self) -> Result<(), LocalSaveError> {
+        self.persist_local_state_guarded(false, false)
     }
 
     /// [`Self::persist_local_state`] for the write an OPEN makes (a
@@ -528,10 +360,16 @@ impl AppState {
     /// for byte, so an open never changes the history on disk, whatever the
     /// persisted window (review finding J-docs-tests-truth-3).
     pub(super) fn persist_local_state_keeping_history(&self) -> Result<(), LocalSaveError> {
-        self.persist_local_state_guarded(true)
+        self.persist_local_state_guarded(true, true)
     }
 
-    fn persist_local_state_guarded(&self, keep_history: bool) -> Result<(), LocalSaveError> {
+    /// `asks`: a change deferred on a legacy file makes the project unsaved
+    /// (every local state but a display toggle).
+    fn persist_local_state_guarded(
+        &self,
+        keep_history: bool,
+        asks: bool,
+    ) -> Result<(), LocalSaveError> {
         // Under the `project` guard, for the whole save: every change of the
         // survey, of the stacks and of the dirty flag happens under it (an
         // undo pops its entry before it marks the project dirty), so only
@@ -541,7 +379,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = guard.as_ref().and_then(|p| p.file_path.clone());
-        let result = self.persist_local_state_with(path, keep_history);
+        let result = self.persist_local_state_with(path, keep_history, asks);
         drop(guard);
         result
     }
@@ -554,26 +392,27 @@ impl AppState {
         &self,
         path: Option<PathBuf>,
     ) -> Result<(), LocalSaveError> {
-        self.persist_local_state_with(path, false)
+        self.persist_local_state_with(path, false, true)
     }
 
     /// [`Self::persist_local_state_at`]; `keep_history` copies the file's
-    /// `history` member verbatim (the open's write).
+    /// `history` member verbatim (the open's write); `asks` as
+    /// [`Self::persist_local_state_guarded`].
     fn persist_local_state_with(
         &self,
         path: Option<PathBuf>,
         keep_history: bool,
+        asks: bool,
     ) -> Result<(), LocalSaveError> {
         let mut file = self
             .file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (Some(path), true) = (path, file.can_save_locally()) else {
+        let (Some(path), true, Some(expected)) =
+            (path, file.can_save_locally(), file.fingerprint.clone())
+        else {
             file.local_pending = true;
-            return Ok(());
-        };
-        let Some(expected) = file.fingerprint.clone() else {
-            file.local_pending = true;
+            file.local_pending_asks |= asks;
             return Ok(());
         };
         // Read once: the bytes this state last read or wrote, when it kept
@@ -603,6 +442,7 @@ impl AppState {
         file.fingerprint = Some(fingerprint);
         file.saved_history = extras.history;
         file.local_pending = false;
+        file.local_pending_asks = false;
         Ok(())
     }
 
@@ -662,20 +502,30 @@ impl AppState {
         Some(pending.remove(at).1)
     }
 
-    /// The conversion notice of a legacy open, taken once.
-    pub fn take_conversion_notice(&self) -> Option<String> {
-        self.with_file(|file| file.conversion.take().map(|n| n.message()))
+    /// The conversion notice of a legacy open, taken once, as the banner
+    /// shows it: a project opened from a version 2 file (a closed 0.6.0
+    /// file a Recents rename or link strip upgraded) is already saved in the
+    /// new format.
+    pub fn take_conversion_notice(&self) -> Option<ConversionNoticeView> {
+        self.with_file(|file| {
+            let saved = file.origin == FileOrigin::V2;
+            file.conversion.take().map(|n| n.view(saved))
+        })
     }
 
     /// Whether the open project has changes no save has written yet: survey
     /// edits, ignores, and on a legacy (SQLite) file not yet upgraded the
-    /// local state that waits for the upgrading save (display toggles,
-    /// SpeleoDB bookkeeping, `local_pending`). Those were written in place at
-    /// once by 0.6.0; here only a save writes them, so "Don't save" on close
-    /// discards them and the close prompt must ask (review finding
-    /// D-migration-upgrade-5).
+    /// local state that waits for the upgrading save (SpeleoDB bookkeeping,
+    /// `local_pending_asks`). Those were written in place at once by 0.6.0;
+    /// here only a save writes them, so "Don't save" on close discards them
+    /// and the close prompt must ask (review finding D-migration-upgrade-5).
+    /// A display toggle alone does not count (demo issue I-6): it waits for
+    /// the next save too, but asking about it, or letting autosave write it,
+    /// would convert a file the user only looked at.
     pub fn has_unsaved_changes(&self) -> bool {
-        self.with_file(|file| file.dirty || file.origin == FileOrigin::Legacy && file.local_pending)
+        self.with_file(|file| {
+            file.dirty || file.origin == FileOrigin::Legacy && file.local_pending_asks
+        })
     }
 
     /// A local-only save that must be durable at once on a legacy (SQLite)
@@ -697,7 +547,7 @@ impl AppState {
         let legacy = self.with_file(|f| f.origin == FileOrigin::Legacy && f.fingerprint.is_some());
         let result = match (path, legacy) {
             (Some(path), true) => self.upgrade_legacy_on_disk(&path),
-            (path, _) => self.persist_local_state_with(path, false),
+            (path, _) => self.persist_local_state_with(path, false, true),
         };
         drop(guard);
         result
@@ -742,6 +592,7 @@ impl AppState {
                 file.saved_history = History::default();
                 file.history_unread = false;
                 file.local_pending = false;
+                file.local_pending_asks = false;
             }
             Err(failure) => {
                 if let Some(settled) = failure.settled {

@@ -405,6 +405,7 @@ impl AppState {
             if self.materialize_undo_mode(l) {
                 file.set_speleo_link(Some(l));
                 file.local_pending = true;
+                file.local_pending_asks = true;
             }
         }
         let watermark = file.extras.local.speleodb.inherited_through;

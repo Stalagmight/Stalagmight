@@ -12,7 +12,14 @@ import type { StationRef } from '../../types/project';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import type { BatchCommand } from '../../types/commands';
 import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
+import type { MergePreview } from '../../types/ipc/MergePreview';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
+import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+
+/** A move shorter than this (metres) is not worth a sentence: the two
+ *  stations already sit on one point, as after a snap. */
+const MOVE_SAID_FROM_M = 0.01;
 
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
@@ -33,6 +40,9 @@ export default function MergeDialog() {
   // Both pieces placed by their own GPS (#741): the backend's answer to which
   // one moves, from check_merge_connectivity.
   const datumShift = dialogData.datumShift as MergeDatumShift | undefined;
+  // What the merge does (demo issue I-4): the piece that moves, how far, and
+  // the depths when the two stations disagree, from check_merge_connectivity.
+  const mergePreview = dialogData.mergePreview as MergePreview | undefined;
 
   const handleClose = () => {
     onCancel?.();
@@ -105,6 +115,15 @@ export default function MergeDialog() {
           />
         )}
 
+        {mergePreview && (
+          <MergePreviewNotice
+            preview={mergePreview}
+            // The datum notice already says what moves and how far; a snap
+            // drag already moved it (the check measured before the drag).
+            sayMove={!datumShift && preCommands === undefined}
+          />
+        )}
+
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-cancel">
@@ -116,6 +135,47 @@ export default function MergeDialog() {
         </div>
       </div>
     </DialogWrapper>
+  );
+}
+
+/** What the merge does before the user confirms it (demo issue I-4): which
+ *  piece moves, how far and onto which station, and, when the two stations'
+ *  depths differ by more than the backend's threshold, the depth the joined
+ *  station takes (the mean of its readings, as 0.6.0 computed it). */
+function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMove: boolean }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const precision = useDecimalPrecision();
+  const depth = (v: number) => `${formatFixed(v, undefined, precision.depth)} ${t('common.units.meters')}`;
+  const [first, ...rest] = preview.moving_line_ids;
+  const firstName = first === undefined ? '' : labels.lineName(first);
+  const piece = rest.length === 0 ? firstName : t('dialogs.mergeStations.pieceMore', { name: firstName, count: rest.length });
+  const moves = sayMove && preview.shift_m >= MOVE_SAID_FROM_M && first !== undefined;
+  if (!moves && !preview.depths) return null;
+  return (
+    <div className="space-y-2 text-sm">
+      {moves && (
+        <p className="p-2 rounded bg-accent-10 text-text-primary" data-testid="merge-preview-move">
+          {t('dialogs.mergeStations.moves', {
+            // The verb agrees with the piece: "Upstream moves", "Upstream and
+            // 1 more line move".
+            count: preview.moving_line_ids.length,
+            piece,
+            distance: formatDatumMetres(preview.shift_m),
+            station: labels.station(preview.joins, true),
+          })}
+        </p>
+      )}
+      {preview.depths && (
+        <p className="p-2 rounded bg-warning-10 text-warning-text" data-testid="merge-preview-depths">
+          {t('dialogs.mergeStations.depths', {
+            a: depth(preview.depths.a_m),
+            b: depth(preview.depths.b_m),
+            joined: depth(preview.depths.joined_m),
+          })}
+        </p>
+      )}
+    </div>
   );
 }
 

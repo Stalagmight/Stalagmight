@@ -533,7 +533,7 @@ fn unmerges_name_the_stations_they_detach() {
     });
     let item = assert_survives(&o);
     // The menu's words (Detach Line from Station): the pair form detaches
-    // the second slot's line; a junction has one name on every line.
+    // the second slot's line, naming the station as that line shows it.
     assert_eq!(item.description, "Detach line \"Branch\" from station 2");
     assert_eq!(
         rows(&item),

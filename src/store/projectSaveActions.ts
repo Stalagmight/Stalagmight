@@ -83,6 +83,9 @@ export function createSaveProjectAction(
       });
       // The file holds GPS fixes an older version drops on its save (#741).
       noticeOlderVersionsDropFixes(result, issued.project?.created_at);
+      // This save converted a project opened from a 0.6.0 file: the banner
+      // must stop promising that the next save will (demo issue I-5).
+      if (result.legacy_converted) get().noteLegacyConverted(result.legacy_converted);
     } else {
       const permission = isPermissionError(result.error);
       // An autosave failure is an ongoing condition, not a modal moment: feed

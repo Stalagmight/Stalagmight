@@ -1262,7 +1262,10 @@
       "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "pieceMore_one": "{{name}} and 1 more line",
-      "pieceMore_other": "{{name}} and {{count}} more lines"
+      "pieceMore_other": "{{name}} and {{count}} more lines",
+      "moves_one": "{{piece}} moves {{distance}} m to join {{station}}.",
+      "moves_other": "{{piece}} move {{distance}} m to join {{station}}.",
+      "depths": "Depths {{a}} and {{b}} become {{joined}}: the joined station takes the mean of its depth readings."
     },
     "importBlocked": {
       "title": "Importing DMP",
@@ -2816,7 +2819,13 @@
       "reasonLabel": "Why"
     },
     "conversion": {
-      "lead": "This project was converted from the old file format.",
+      "lead": "Converted from the old file format.",
+      "notYetSaved": "It is saved in the new format the next time you save; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
+      "saved": "Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
+      "savedAsNewFile": "Saved in the new format as a new file; the original file is unchanged.",
+      "downloaded": "This computer's copy is already converted; the original revision is unchanged on SpeleoDB, in the project's Revision history.",
+      "details": "Details",
+      "hideDetails": "Hide details",
       "dismiss": "Dismiss"
     },
     "historyDiscarded": {
@@ -2828,7 +2837,9 @@
     }
   },
   "saveNotices": {
-    "olderVersionsDropGpsFixes": "Older app versions drop this file's GPS fixes and accuracies on save"
+    "olderVersionsDropGpsFixes": "Older app versions drop this file's GPS fixes and accuracies on save",
+    "legacyConverted": "Saved in the new format; the original is kept in Recent Projects",
+    "legacyConvertedNewFile": "Saved in the new format as a new file; the original is unchanged"
   },
   "updateBanner": {
     "available": "Stalagmight {{version}} is available",
