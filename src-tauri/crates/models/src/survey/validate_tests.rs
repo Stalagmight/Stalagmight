@@ -692,8 +692,8 @@ fn map_based_reports(p: &Project) -> Vec<Violation> {
             let Some(name) = p.stations.get(&station).map(|s| {
                 s.aliases
                     .iter()
-                    .filter(|a| a.line == Some(line.id))
-                    .last()
+                    .rev()
+                    .find(|a| a.line == Some(line.id))
                     .and_then(|a| a.name.as_deref())
                     .unwrap_or(s.name.as_str())
             }) else {

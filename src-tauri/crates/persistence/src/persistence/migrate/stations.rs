@@ -172,16 +172,15 @@ pub(super) fn plan(
     for claim in &chosen {
         let mut aliases = Vec::with_capacity(claim.aliases.len());
         for &(alias, member) in &claim.aliases {
-            let alias = match alias {
-                Some(id) => id,
-                None => {
-                    if next >= MAX_STATION_ID {
-                        return Err(MigrateError::StationIdsExhausted);
-                    }
-                    report.alias_ids_minted += 1;
-                    next += 1;
-                    next - 1
+            let alias = if let Some(id) = alias {
+                id
+            } else {
+                if next >= MAX_STATION_ID {
+                    return Err(MigrateError::StationIdsExhausted);
                 }
+                report.alias_ids_minted += 1;
+                next += 1;
+                next - 1
             };
             aliases.push(StationAlias {
                 id: alias,
