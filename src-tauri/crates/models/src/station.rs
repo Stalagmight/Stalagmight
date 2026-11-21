@@ -942,4 +942,10 @@ pub struct ConnectivityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_shift: Option<crate::MergeDatumShift>,
+    /// For a pair that may be merged: the piece the merge moves, how far,
+    /// and the depths when the two stations disagree (demo issue I-4). The
+    /// Merge dialog says so before the user confirms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub merge_preview: Option<crate::MergePreview>,
 }

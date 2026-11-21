@@ -1260,7 +1260,9 @@
       "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "pieceMore_one": "{{name}} and 1 more line",
-      "pieceMore_other": "{{name}} and {{count}} more lines"
+      "pieceMore_other": "{{name}} and {{count}} more lines",
+      "moves": "{{piece}} moves {{distance}} m to join {{station}}.",
+      "depths": "Depths {{a}} and {{b}} become {{joined}}: the joined station takes the mean of its depth readings."
     },
     "importBlocked": {
       "title": "Importing DMP",

@@ -278,6 +278,13 @@ mod legacy_upgrade_tests;
 mod line_commands_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod merge_depth_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::float_cmp,

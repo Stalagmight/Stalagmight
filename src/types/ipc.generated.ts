@@ -94,6 +94,8 @@ export * from './ipc/DatumRole';
 export * from './ipc/DatumGap';
 export * from './ipc/ZeroDatumPreview';
 export * from './ipc/MergeDatumShift';
+export * from './ipc/MergePreview';
+export * from './ipc/MergeDepths';
 export * from './ipc/LoopClosure';
 export * from './ipc/ClosureRef';
 export * from './ipc/ClosureStrategy';

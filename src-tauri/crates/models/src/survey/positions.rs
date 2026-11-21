@@ -478,10 +478,21 @@ impl Project {
         z
     }
 
-    /// The mean of the depth readings at `slots` (incoming `depth_out`, then
-    /// outgoing `depth_in`, per slot), summed in the given order; `0.0` with no
-    /// reading. Today's `compute_station_depth`.
+    /// The mean of the depth readings at `slots` ([`Self::depth_readings_at`]),
+    /// summed in the given order; `0.0` with no reading. Today's
+    /// `compute_station_depth`.
     fn mean_depth(&self, slots: &[StationRef]) -> f64 {
+        let depths = self.depth_readings_at(slots);
+        if depths.is_empty() {
+            0.0
+        } else {
+            depths.iter().sum::<f64>() / depths.len() as f64
+        }
+    }
+
+    /// The depth readings at `slots`, in the given order: per slot, the
+    /// incoming shot's `depth_out`, then the outgoing shot's `depth_in`.
+    pub fn depth_readings_at(&self, slots: &[StationRef]) -> Vec<f64> {
         let mut depths: Vec<f64> = Vec::new();
         for slot in slots {
             let Some(line) = self.line(slot.line_id) else {
@@ -497,11 +508,7 @@ impl Project {
                 depths.push(shot.depth_in);
             }
         }
-        if depths.is_empty() {
-            0.0
-        } else {
-            depths.iter().sum::<f64>() / depths.len() as f64
-        }
+        depths
     }
 }
 

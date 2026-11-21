@@ -76,3 +76,25 @@ describe('merge tool, same station', () => {
     expect(invokeIpcMock).toHaveBeenCalledWith('check_merge_connectivity', expect.anything(), expect.anything());
   });
 });
+
+/**
+ * Demo issue I-4: every merge-tool pick that can merge opens the Merge dialog
+ * with the backend's preview of what the merge does (no merge-tool path skips
+ * the dialog). Injection: drop `mergePreview` from the merge tool's
+ * openDialog and the dialog has nothing to say.
+ */
+describe('merge tool, the preview', () => {
+  it('hands the backend preview to the Merge dialog', async () => {
+    const mergePreview = { moving_line_ids: [2], shift_m: 24.3, joins: slot(1, 0), depths: { a_m: 15, b_m: 4, joined_m: 9.5 } };
+    invokeIpcMock.mockResolvedValue({ connected: false, can_merge: true, preview: null, reason: null, merge_preview: mergePreview });
+    const { result } = renderHook(() => useMapTools());
+    act(() => {
+      result.current.onStationClick?.(slot(1, 0), clickEvent);
+    });
+    await act(async () => {
+      result.current.onStationClick?.(slot(2, 1), clickEvent);
+    });
+    expect(useUIStore.getState().activeDialog).toBe('merge');
+    expect(useUIStore.getState().dialogData.mergePreview).toEqual(mergePreview);
+  });
+});

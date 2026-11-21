@@ -149,6 +149,23 @@ impl Project {
             result.preview = self
                 .closure_metrics_via((station_a, Some(a.line_id)), (station_b, Some(b.line_id)));
         }
+        if result.can_merge {
+            result.merge_preview = self.merge_preview(station_a, station_b).map(|m| {
+                let [a_m, b_m] = m.depths_m;
+                crate::MergePreview {
+                    moving_line_ids: m.moving_lines,
+                    shift_m: m.shift_m,
+                    joins: if m.stationary == station_a { a } else { b },
+                    depths: ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then_some(
+                        crate::MergeDepths {
+                            a_m,
+                            b_m,
+                            joined_m: m.joined_depth_m,
+                        },
+                    ),
+                }
+            });
+        }
         Ok(result)
     }
 
@@ -164,6 +181,7 @@ impl Project {
                 .datum_shift
                 .as_ref()
                 .map(|shift| self.merge_datum_shift_wire(shift)),
+            merge_preview: None,
         }
     }
 

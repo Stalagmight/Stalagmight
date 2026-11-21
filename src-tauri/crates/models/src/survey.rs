@@ -283,7 +283,7 @@ pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;
 pub use ops_datums::{DatumChange, DatumSet};
 pub use ops_detach::{DetachNaming, DetachReport};
-pub use ops_merge::{MergeCheck, MergeDatumShift, MergeReport};
+pub use ops_merge::{MergeCheck, MergeDatumShift, MergeMove, MergeReport};
 pub use ops_move::{SegmentMoved, StationMoved};
 pub use sweep::{Promotion, SweepReport};
 
