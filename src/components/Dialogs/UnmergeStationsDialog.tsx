@@ -28,7 +28,9 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
  * place (no comment), and the datums and closures attached through it go
  * along; the other lines stay joined. A line that was merged there gets back
  * the Station ID and name it had (the junction's alias naming it); any other
- * gets the junction's name, made unique. The dialog says which, from the
+ * gets the name it showed the junction by, under a new Station ID. When every
+ * other line knew the junction by an alias, the chosen line keeps it and the
+ * others get back the station they had (I-1). The dialog says which, from the
  * backend's `preview_detach_line` (review finding UX-4). The clicked slot's
  * line is listed first and preselected. Its own line detaches with
  * `unmerge_stations(slot)`; another line with `unmerge_station_pair(slot,
@@ -162,13 +164,23 @@ export default function UnmergeStationsDialog() {
 
         {naming && selected && (
           <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
-            {naming.restored
-              ? t('dialogs.detachLine.restores', {
+            {naming.kept
+              ? t('dialogs.detachLine.keeps', {
                   line: labels.lineName(selected.line_id),
+                  others: slots
+                    .filter((ref) => ref.line_id !== selected.line_id)
+                    .map((ref) => labels.lineName(ref.line_id))
+                    .join(', '),
                   name: naming.name,
                   id: naming.station_id,
                 })
-              : t('dialogs.detachLine.copies', { line: labels.lineName(selected.line_id), name: naming.name })}
+              : naming.restored
+                ? t('dialogs.detachLine.restores', {
+                    line: labels.lineName(selected.line_id),
+                    name: naming.name,
+                    id: naming.station_id,
+                  })
+                : t('dialogs.detachLine.copies', { line: labels.lineName(selected.line_id), name: naming.name })}
           </p>
         )}
 

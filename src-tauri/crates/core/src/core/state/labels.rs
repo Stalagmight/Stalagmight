@@ -180,7 +180,7 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
 }
 
 /// `Detach line "Side" from station 3a`: the line at `slot` leaves the
-/// station there (named once: a junction has one name on every line).
+/// station there, named once, by the name that line shows it by.
 fn detach(names: &NameBook<'_>, slot: StationRef) -> String {
     match (quoted_line(names, slot.line_id), names.station_name(slot)) {
         (Some(line), Some(station)) => format!("Detach line {line} from station {station}"),
