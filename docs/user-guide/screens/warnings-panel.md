@@ -49,7 +49,8 @@ readings disagree.
   Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
-- Four entries are not about a shot's readings. They sit on a nearby shot:
+- Four entries are not about a shot's readings. They sit on a shot near the
+  problem:
   - A [GPS fix](../concepts/zero-datums-and-gps-fixes.md) far from where the
     survey puts its station (a warning, listed on a shot next to the fix).
     The message gives the distance, its bearing and the limit. **Go to

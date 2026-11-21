@@ -22,16 +22,19 @@ did not come in as it was.
 
 ## Details
 
-- It only opens when there is something to read: a warning, nothing imported,
-  a unit conversion, or a zero datum set by the import. Otherwise a short
+- It only opens when there is something to read: a warning, a section left
+  out or not connected, nothing imported, a unit conversion, or a zero datum
+  set by the import. Otherwise a short
   notification appears instead.
-- When the file held a section that could not be imported, or imported without
-  its connection, the report lists each one and why, above the warnings. These
-  lines are never folded away. The rest of the file is imported; the import
-  fails only when no section can be imported. In a project with a zero datum,
-  a section left unconnected is also listed in the
-  [Warnings panel](warnings-panel.md). The MNemo import wizard is the
-  exception: it imports all of its sections or none.
+- When the file held a section that could not be imported, or that was
+  imported without its connection, zero datum or position, the report lists
+  each one and why, above the warnings. These lines are never folded away. The
+  rest of the file is imported: one section that cannot be imported does not
+  stop the import unless no section can be. A section left unconnected can
+  also be found later in the [Warnings panel](warnings-panel.md), in a project
+  with a zero datum. The [MNemo import wizard](dmp-import.md) works
+  differently: there, a section that cannot be imported stops that step, the
+  step is undone, and the wizard says why.
 - The first three warnings are shown. More fold behind **View details**.
 - Everything listed has already happened. Closing the report changes nothing.
 - An Ariane file exported by Stalagmight writes each GPS fix as an extra
