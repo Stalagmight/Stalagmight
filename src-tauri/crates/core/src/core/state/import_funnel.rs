@@ -706,8 +706,8 @@ struct StationNames {
     names: Vec<String>,
     /// The file's own name for the junction station, when it is not the
     /// junction's and a Station ID is left for it: kept as an alias on the
-    /// new line ([`keep_file_name_as_alias`]), so the line's own stations
-    /// were named without the junction's name in the way.
+    /// new line ([`keep_file_name_as_alias`]), which shows the junction by
+    /// it, so the line's own stations were named around it.
     junction_alias: Option<String>,
     /// Stations whose file name is the junction's, `(file name, name now)`.
     renamed: Vec<(String, String)>,
@@ -715,8 +715,10 @@ struct StationNames {
 
 /// The names of the new line's stations, in chain order: the file's names
 /// (mirrored), the rest by the creation rules around them; with none, the
-/// seed rule (each station's index). A junction keeps its own name and a new
-/// station that would repeat it yields (letter suffix).
+/// seed rule (each station's index). The line shows a junction by the
+/// file's own name for it when that differs (an alias), else by the
+/// junction's name, and a new station that would repeat it yields (letter
+/// suffix).
 fn station_names(
     project: &Project,
     config: &ImportLineConfig,
@@ -754,9 +756,10 @@ fn station_names(
     });
     // The file's own different name for the junction, kept as an alias on
     // this line when a Station ID is left for it (minted first, before the
-    // line's stations): the line then knows the junction by it, and the
-    // junction's own name need not be unique on the line (invariant 8).
-    let junction_alias = fixed
+    // line's stations): the line then shows the junction by it (plan 5.3
+    // per line), so the line's own stations are named around it, not around
+    // the junction's own name.
+    let mut junction_alias = fixed
         .as_ref()
         .and_then(|(index, name)| {
             file_names
@@ -768,7 +771,7 @@ fn station_names(
         .filter(|_| project.counters.next_station_id < MAX_STATION_ID);
     if let Some((index, name)) = &fixed {
         if let Some(slot) = names.get_mut(*index) {
-            *slot = Some(name.clone());
+            *slot = Some(junction_alias.clone().unwrap_or_else(|| name.clone()));
         }
     }
     if named {
@@ -779,16 +782,8 @@ fn station_names(
     let mut renamed = Vec::new();
     if let Some((index, name)) = fixed {
         if junction_alias.is_some() {
-            // The line knows the junction by the file's name, so the first
-            // station the file itself names as the junction is named keeps
-            // that name (the seeds and the settle above still avoided it).
-            let first = file_names
-                .iter()
-                .enumerate()
-                .position(|(i, file)| i != index && file.as_deref() == Some(name.as_str()));
-            if let Some(slot) = first.and_then(|i| names.get_mut(i)) {
-                slot.clone_from(&name);
-            }
+            // The name the line shows the junction by, as the settle left it.
+            junction_alias = names.get(index).cloned();
         } else {
             let mut taken: HashSet<String> = names.iter().cloned().collect();
             taken.insert(name.clone());

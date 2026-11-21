@@ -112,10 +112,11 @@ impl<'p> NameBook<'p> {
         Some(self.project.line_label_of(line_id))
     }
 
-    /// The station's own name at a slot (`4a`).
+    /// The name the slot's line shows its station by (`4a`; a junction by
+    /// the name that line knows it by).
     pub(crate) fn station_name(&self, slot: StationRef) -> Option<String> {
         let id = self.project.topology().station_at(slot)?;
-        Some(self.project.stations.get(&id)?.name.clone())
+        Some(self.project.name_on(id, slot.line_id)?.to_string())
     }
 
     /// `Line name / station name` of the station at a slot.
@@ -179,7 +180,7 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
 }
 
 /// `Detach line "Side" from station 3a`: the line at `slot` leaves the
-/// station there (named once: a junction has one name on every line).
+/// station there, named once, by the name that line shows it by.
 fn detach(names: &NameBook<'_>, slot: StationRef) -> String {
     match (quoted_line(names, slot.line_id), names.station_name(slot)) {
         (Some(line), Some(station)) => format!("Detach line {line} from station {station}"),

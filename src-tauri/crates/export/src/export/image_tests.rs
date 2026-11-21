@@ -1699,9 +1699,9 @@ fn junction_project(main_at: u32, branch_first: bool) -> Project {
     project
 }
 
-/// A junction is one station: it is labelled once, with its one name, at
-/// its one position, whatever the line order (0.6.0 had to pick which
-/// merged member spoke for the point).
+/// A junction is one station: it is labelled once, at its one position,
+/// whatever the line order, by the name its representative slot's line shows
+/// (0.6.0 had to pick which merged member spoke for the point).
 #[test]
 fn a_junction_is_labelled_once_by_its_name() {
     for branch_first in [false, true] {

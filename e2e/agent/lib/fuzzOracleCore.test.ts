@@ -239,7 +239,7 @@ describe('checkProjectInvariants', () => {
         ],
       },
       // Line 1's end and line 2's start are one station (Station ID 11):
-      // they share its name and list each other.
+      // with no alias both show its own name, and they list each other.
       stations: [
         { station_ref: { line_id: 1, station_index: 0 }, id: 10, name: '0', merged_with: [] },
         {
@@ -435,11 +435,43 @@ describe('checkProjectInvariants', () => {
       ).toBe(true);
     });
 
-    it('fires when the slots of one station disagree on its name or comment', () => {
+    it('fires when the slots of one station disagree on its comment', () => {
       expect(
         violationsAfter((state) => {
           slots(state)[2]!.comment = 'another';
-        }).some((v) => v.includes('Station ID 11 has a different name or comment at 2/0 than at 1/1')),
+        }).some((v) => v.includes('Station ID 11 has a different comment or aliases at 2/0 than at 1/1')),
+      ).toBe(true);
+    });
+
+    it('fires when two lines show the station by different names with no alias saying so', () => {
+      expect(
+        violationsAfter((state) => {
+          slots(state)[2]!.name = 'K';
+        }).some((v) => v.includes('Station ID 11 has a different name at 2/0 than at 1/1')),
+      ).toBe(true);
+    });
+
+    // I-3: a line merged onto a station keeps its own name for it; the alias
+    // naming that line says so on every slot, and pins that slot's name.
+    it("accepts a line showing a junction by its alias's name, and only that name", () => {
+      const merged = (state: Record<string, unknown>) => {
+        const alias = [{ id: 20, name: '0', line: 2 }];
+        (slots(state)[1] as Record<string, unknown>).aliases = alias;
+        (slots(state)[2] as Record<string, unknown>).aliases = alias;
+        slots(state)[2]!.name = '0';
+      };
+      expect(violationsAfter(merged)).toEqual([]);
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          slots(state)[2]!.name = 'J';
+        }).some((v) => v.includes('2/0 (Station ID 11) shows "J", but its line knows the station as "0"')),
+      ).toBe(true);
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          (slots(state)[1] as Record<string, unknown>).aliases = [];
+        }).some((v) => v.includes('Station ID 11 has a different comment or aliases at 2/0 than at 1/1')),
       ).toBe(true);
     });
 

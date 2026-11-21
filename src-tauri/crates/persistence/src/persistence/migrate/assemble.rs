@@ -174,8 +174,9 @@ pub(super) fn build(
     // 7. Entrance overrides where the new default would differ from 0.6.0's.
     write_entrance_overrides(lp, &datum_sources, &mut project, report);
 
-    // 8. Names unique on every line of each junction, renaming only true
-    //    clashes, then what changed per slot for the conversion notice.
+    // 8. Names unique on every line (each line shows what 0.6.0 showed, so
+    //    only a repeat 0.6.0 already had is lettered), then what changed per
+    //    slot for the conversion notice.
     settle_junction_names(&mut project, report);
     let names_changed = names_changed(lp, &slots, &of_slot, &project);
     report.names_changed = names_changed.len();
@@ -604,52 +605,21 @@ fn write_entrance_overrides(
     }
 }
 
-/// Plan 5.3 with review findings D-migration-upgrade-8 and UX-3. A junction
-/// (a merged group) keeps its survivor's own name. Each other member's line
-/// knows it by that member's alias (the alias names the line), so on that
-/// line the junction's name need not be unique (invariant 8), as 0.6.0 kept
-/// each line's own name for its member: the usual clash (the survivor `3`
-/// on a side line with a station `3` of its own) renames nothing. Only a
-/// true clash, a name another station holds as its own on a line that holds
-/// the junction to its names too (a member that had no usable id, so no
-/// alias), is lettered; the other station takes the letter, so the junction
-/// keeps its name.
+/// Plan 5.3 per line (review findings D-migration-upgrade-8, UX-3 and the
+/// real-app demo's I-3). Every line shows the names 0.6.0 showed on it: a
+/// junction by its survivor's name on the survivor's line and by each
+/// member's alias on that member's line. So nothing repeats on a line unless
+/// the 0.6.0 file already did; such a repeat is lettered, later in chain
+/// order (the letter-suffix rule), on the name that line shows.
 pub(super) fn settle_junction_names(project: &mut Project, report: &mut MigrationReport) {
-    let topology = project.topology_arc();
-    let junctions: Vec<StationId> = topology
-        .stations()
-        .iter()
-        .copied()
-        .filter(|&s| topology.is_junction(s))
-        .collect();
-    for station in junctions {
-        let Some(name) = project.stations.get(&station).map(|s| s.name.clone()) else {
-            continue;
-        };
-        let mut clashing: BTreeSet<StationId> = BTreeSet::new();
-        for line in topology.lines_of(station) {
-            if project.known_by_alias_on(station, line) {
-                continue;
-            }
-            for &other in topology.chain(line).unwrap_or(&[]) {
-                if other != station
-                    && !project.known_by_alias_on(other, line)
-                    && project.stations.get(&other).is_some_and(|s| s.name == name)
-                {
-                    clashing.insert(other);
-                }
-            }
-        }
-        for other in clashing {
-            if project.uniquify_station_name(other).is_some() {
-                report.stations_renamed += 1;
-            }
-        }
+    let lines: Vec<LineId> = project.lines().iter().map(|l| l.id).collect();
+    for line in lines {
+        report.stations_renamed += project.uniquify_line_names(line).len();
     }
 }
 
-/// Every legacy slot whose station's name differs from the name 0.6.0 gave
-/// that slot (the stored name, else its index, as 0.6.0 showed it), in slot
+/// Every legacy slot whose line now shows another name than 0.6.0 gave that
+/// slot (the stored name, else its index, as 0.6.0 showed it), in slot
 /// order.
 fn names_changed(
     lp: &old::Project,
@@ -666,7 +636,7 @@ fn names_changed(
             .get(&dense)
             .cloned()
             .unwrap_or_else(|| slot.station_index.to_string());
-        let Some(to) = project.stations.get(&station).map(|s| s.name.clone()) else {
+        let Some(to) = project.name_on(station, slot.line_id).map(str::to_string) else {
             continue;
         };
         if from != to {

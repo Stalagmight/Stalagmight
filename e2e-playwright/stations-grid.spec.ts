@@ -309,11 +309,13 @@ test.describe('Stations grid', () => {
 });
 
 /**
- * A junction (plan 5.3): Main Line's last station is Side's first - ONE
- * station two lines pass, sharing its Station ID and name. A rename must be
- * free on every line through it, so a name only Side holds is refused inline
- * in Main Line's stations grid (the backend would refuse it too), and a free
- * name renames the station on both lines.
+ * A junction (plan 5.3 per line, I-3): Main Line's last station is Side's
+ * first - ONE station two lines pass, sharing its Station ID, while each line
+ * shows it by its own name (Side was merged onto it and keeps its "0"). A
+ * rename in Main Line's stations grid renames Main Line's name for it: a name
+ * Main Line already shows is refused inline (the backend would refuse it
+ * too), and a name only Side holds is free, since Side does not show Main
+ * Line's name for the junction.
  */
 test.describe('Stations grid at a junction', () => {
   const junctionSeeds: LineSeed[] = [
@@ -336,7 +338,7 @@ test.describe('Stations grid at a junction', () => {
     await waitForNoDialogs(page);
   });
 
-  test('a rename is checked on every line through the junction', async ({ page }) => {
+  test("a rename through one line renames that line's name for the junction", async ({ page }) => {
     const [mainId, sideId] = await page.evaluate(() => {
       const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
       return [lines[0]!.id, lines[1]!.id];
@@ -354,8 +356,9 @@ test.describe('Stations grid at a junction', () => {
       },
       { mainId, sideId },
     );
-    // Both slots are the one station: same Station ID, same name.
-    expect(await getStationName(page, sideId, 0)).toBe('3');
+    // Both slots are the one station, each shown by its own line's name.
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+    expect(await getStationName(page, sideId, 0)).toBe('0');
     expect(await getStationName(page, sideId, 2)).toBe('S2');
 
     await openStationsView(page);
@@ -364,23 +367,25 @@ test.describe('Stations grid at a junction', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('grid-cell-3-name')).toHaveText('3');
 
-    // "S2" is free on Main Line but taken on Side Line, which also passes the
-    // station: refused inline - the editor stays open and nothing is sent.
+    // "1" is a name Main Line shows: refused inline - the editor stays open
+    // and nothing is sent.
     await page.getByTestId('grid-cell-3-name').dblclick();
     const editor = page.getByTestId('grid-cell-editor');
     await expect(editor).toBeVisible();
-    await editor.fill('S2');
+    await editor.fill('1');
     await page.keyboard.press('Enter');
     await expect(editor).toBeVisible();
     await expect(page.getByTestId('grid-invalid-flash')).toBeVisible();
     expect(await getStationName(page, mainId, 3)).toBe('3');
 
-    // A name free on both lines renames the station on both.
-    await editor.fill('J');
+    // "S2" is Side Line's, but Side shows the junction by its own "0", so
+    // Main Line's name for it may be "S2": only Main Line changes.
+    await editor.fill('S2');
     await page.keyboard.press('Enter');
     await expect(editor).toHaveCount(0);
-    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('J');
-    expect(await getStationName(page, mainId, 3)).toBe('J');
-    expect(await getStationName(page, sideId, 0)).toBe('J');
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('S2');
+    expect(await getStationName(page, mainId, 3)).toBe('S2');
+    expect(await getStationName(page, sideId, 0)).toBe('0');
+    expect(await getStationName(page, sideId, 2)).toBe('S2');
   });
 });

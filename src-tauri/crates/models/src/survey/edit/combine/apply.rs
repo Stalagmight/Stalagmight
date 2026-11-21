@@ -310,15 +310,16 @@ impl Project {
         };
         let other = self.lines_mut().remove(position);
         // The other line's stations come onto the kept line: their alias
-        // hints follow (UX-4), so a line that knew a station by an alias
-        // still does. A join merged here is the kept line's own station: its
-        // new alias (the retired join) knew the other line only and is
-        // cleared. A join both lines already shared keeps what the other line
-        // knew it by (Combine undoes a Split Line Here at its join).
-        let arrived: BTreeSet<StationId> = other
-            .stations()
-            .filter(|&s| jo == jk || (s != jk && s != jo))
-            .collect();
+        // hints follow (UX-4), so the combined line shows each by the name
+        // the other line did. A join merged here is the kept line's own
+        // station: its new alias (the retired join) knew the other line only
+        // and is cleared. A join both lines already shared shows the kept
+        // line's name ([`Self::settle_shared_join_aliases`]).
+        let arrived: BTreeSet<StationId> =
+            other.stations().filter(|&s| s != jk && s != jo).collect();
+        if jo == jk {
+            self.settle_shared_join_aliases(jk, k, o);
+        }
         let Some(line) = self.line_mut(k) else {
             return Err(EditError::line_gone());
         };
@@ -601,13 +602,37 @@ impl Project {
         replaced
     }
 
-    /// The prefix plan (`station_naming::plan_combine_prefixes`) on the two
-    /// lines' station names, `jo` being the other line's join station (its
+    /// At a join both lines already pass (`j`), the combined line shows the
+    /// kept line's name. An alias by which the other line knew `j` either
+    /// repeats the kept line's alias there (same name: a Split Line Here's
+    /// copy, removed, the earlier of the two kept for the combined line) or
+    /// records another name, kept as history (no line).
+    fn settle_shared_join_aliases(&mut self, j: StationId, kept: LineId, other: LineId) {
+        let Some(station) = self.stations.get_mut(&j) else {
+            return;
+        };
+        let Some(o) = station.aliases.iter().rposition(|a| a.line == Some(other)) else {
+            return;
+        };
+        let k = station.aliases.iter().rposition(|a| a.line == Some(kept));
+        match k {
+            Some(k) if station.aliases[k].name == station.aliases[o].name => {
+                let (first, second) = (k.min(o), k.max(o));
+                station.aliases[first].line = Some(kept);
+                station.aliases.remove(second);
+            }
+            _ => station.aliases[o].line = None,
+        }
+    }
+
+    /// The prefix plan (`station_naming::plan_combine_prefixes`) on the names
+    /// the two lines show, `jo` being the other line's join station (its
     /// name is retired). At a merged join `jo` is a station of the kept line
-    /// too, and its one name is the kept line's: it is left out of the other
-    /// line's names, as 0.6.0's retired member name was the other line's own,
-    /// so a lettered kept name there does not count as a letter family of the
-    /// other line (which would stop the kept line continuing its scheme).
+    /// too, and the combined line shows it by the kept line's name: it is
+    /// left out of the other line's names, as 0.6.0's retired member name
+    /// was the other line's own, so a lettered kept name there does not count
+    /// as a letter family of the other line (which would stop the kept line
+    /// continuing its scheme).
     fn combine_prefix_plan(
         &self,
         kept: LineId,
@@ -616,13 +641,13 @@ impl Project {
     ) -> crate::station_naming::CombinePrefixes {
         let kept_chain = self.line_stations(kept).unwrap_or(&[]);
         let shared_join = kept_chain.contains(&jo);
-        // A station a line knows by an alias is not held to that line's names
-        // (invariant 8), and keeps that exemption on the combined line.
+        // Each line's names as it shows them (`Project::name_on`): the
+        // combined line shows every station as its line did.
         let names = |line: LineId, chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
             chain
                 .iter()
-                .filter(|s| Some(**s) != skip && !self.known_by_alias_on(**s, line))
-                .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
+                .filter(|s| Some(**s) != skip)
+                .filter_map(|s| self.name_on(*s, line).map(str::to_string))
                 .collect()
         };
         let kept_names = names(kept, kept_chain, None);
@@ -631,7 +656,7 @@ impl Project {
             self.line_stations(other).unwrap_or(&[]),
             shared_join.then_some(jo),
         );
-        let join_name = self.stations.get(&jo).map(|s| s.name.clone());
+        let join_name = self.name_on(jo, other).map(str::to_string);
         plan_combine_prefixes(
             &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
             &other_names.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -654,25 +679,30 @@ impl Project {
             (other, other_chain, &plan.other),
         ] {
             for s in chain {
-                if s == jo && s != jk || self.known_by_alias_on(s, line) || !done.insert(s) {
+                if s == jo && s != jk || !done.insert(s) {
                     continue;
                 }
-                if let Some(station) = self.stations.get_mut(&s) {
-                    if let Some(to) = renames.get(&station.name) {
-                        station.name.clone_from(to);
+                let Some(name) = self.name_on(s, line).map(str::to_string) else {
+                    continue;
+                };
+                if let Some(to) = renames.get(&name) {
+                    // The name this line shows: an alias naming it, or the
+                    // station's own name (which its other lines show too).
+                    if !self.known_by_alias_on(s, line) {
                         renamed.push(s);
                     }
+                    self.set_name_on(s, line, to.clone());
                 }
             }
         }
-        // A renamed junction must stay unique on its other lines too: it takes
-        // the letter suffix there rather than renaming a station the combine
-        // does not touch. (Only junctions with a third line can clash: the
-        // plan keeps the two lines' own names unique.)
-        let topology = self.topology_arc();
+        // A junction whose own name was renamed must stay unique on its other
+        // lines too: it takes the letter suffix there rather than renaming a
+        // station the combine does not touch. (Only junctions with a third
+        // line showing its name can clash: the plan keeps the two lines' own
+        // names unique.)
         for s in renamed {
-            if topology
-                .lines_of(s)
+            if self
+                .lines_showing_name(s)
                 .iter()
                 .any(|l| *l != kept && *l != other)
             {
@@ -700,11 +730,10 @@ impl Project {
             self.line_stations(line)
                 .unwrap_or(&[])
                 .iter()
-                .filter(|s| !self.known_by_alias_on(**s, line))
-                .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
+                .filter_map(|s| self.name_on(*s, line).map(str::to_string))
                 .collect()
         };
-        let retired = self.stations.get(&jo).map(|s| s.name.clone());
+        let retired = self.name_on(jo, other).map(str::to_string);
         let no_suffixes = BTreeSet::new();
         let suffixed_set: BTreeSet<String> = plan.other_suffixed.iter().cloned().collect();
         let summarize = |line: LineId,
@@ -745,7 +774,7 @@ impl Project {
         if kept_renames.is_none() && other_renames.is_none() && suffixed.is_empty() {
             return None;
         }
-        let join = self.stations.get(&jk)?.name.clone();
+        let join = self.name_on(jk, kept)?.to_string();
         let join_name = plan.kept.get(&join).cloned().unwrap_or(join);
         Some(crate::CombineStationRenames {
             reason,

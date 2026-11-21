@@ -649,6 +649,34 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     }
     let at = |sr: StationRef| station_of.get(&(sr.line_id, sr.station_index)).copied();
 
+    // Every line shows each of its stations by the name 0.6.0 showed there
+    // (its stored name, else its index; a merged member's line by the
+    // member's name, I-3): the frozen reader made names unique per line.
+    for line in &lp.lines {
+        for index in 0..=line.shots.len() {
+            let sr = StationRef::new(line.id, index as u32);
+            let Some(station) = at(sr) else {
+                continue;
+            };
+            let was = lp
+                .station_name_at(sr)
+                .map_or_else(|| index.to_string(), str::to_string);
+            let now = p.name_on(station, line.id).unwrap_or_default();
+            if now != was {
+                return Err(format!(
+                    "slot {}:{index} reads {now:?}, 0.6.0 showed {was:?}",
+                    line.id
+                ));
+            }
+        }
+    }
+    if r.names_changed != 0 || r.stations_renamed != 0 {
+        return Err(format!(
+            "names changed: {} slots, {} stations renamed",
+            r.names_changed, r.stations_renamed
+        ));
+    }
+
     // Merged members are one station, or tied by a Tie closure.
     let ties: BTreeSet<(u32, u32)> = p
         .closures

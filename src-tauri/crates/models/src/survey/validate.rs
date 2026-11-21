@@ -290,6 +290,8 @@ pub enum Violation {
         b: StationId,
     },
     // 8. names
+    /// A line shows two stations by one name (each station by the name the
+    /// line knows it by, `Project::name_on`).
     DuplicateStationName {
         line: LineId,
         name: String,
@@ -496,7 +498,7 @@ impl fmt::Display for Violation {
                 second,
             } => write!(
                 f,
-                "stations {first} and {second} on line {line} are both named {name:?}"
+                "stations {first} and {second} on line {line} are both shown as {name:?}"
             ),
             Self::DuplicateSectionName {
                 name,
@@ -902,14 +904,10 @@ impl Project {
             let Some(chain) = topology.chain_at(position) else {
                 continue;
             };
-            // A station the line knows by one of its aliases is not held to
-            // the line's names (`Project::known_by_alias_on`).
-            let named = |s: &StationId| {
-                self.stations
-                    .get(s)
-                    .filter(|st| !st.aliases.iter().any(|a| a.line == Some(line.id)))
-                    .map(|st| (st.name.as_str(), *s))
-            };
+            // Each station by the name this line shows it by
+            // (`Project::name_on`): an alias's name on a line that knows the
+            // station by it, else the station's own name.
+            let named = |s: &StationId| self.name_on(*s, line.id).map(|name| (name, *s));
             // Fast path: no name on two stations of the chain.
             sorted.clear();
             sorted.extend(chain.iter().filter_map(named));

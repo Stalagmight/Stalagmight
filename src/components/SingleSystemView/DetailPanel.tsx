@@ -17,7 +17,6 @@ import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
-import { displayStationName } from '../../utils/formatters';
 import { warningMessageBody } from '../../utils/stationIdentity';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { findStation } from '../../utils/findStation';
@@ -34,6 +33,7 @@ import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
 import { StationAliases } from './StationAliases';
+import { StationNameRows } from './StationNames';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -735,7 +735,7 @@ function StationDetail({ station }: { station: Station }) {
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
       <Panel bare title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
-          <DetailRow label={t('detailPanel.labels.name')} value={displayStationName(labels.stationName(station.station_ref))} testId="station-detail-name" />
+          <StationNameRows station={station} labels={labels} />
           {stationId !== null && (
             <DetailRow label={t('identity.stationId')} value={String(stationId)} testId="station-detail-id" />
           )}
@@ -810,7 +810,7 @@ function StationDetail({ station }: { station: Station }) {
             </div>
           )}
 
-          <StationAliases aliases={station.aliases} />
+          <StationAliases aliases={station.aliases} lineName={labels.lineName} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection

@@ -17,11 +17,12 @@ import type { Station, StationRef } from '../types/project';
 import type { SurveyData } from '../types/survey-data';
 import { displayStationName, formatShotLabel, formatStationLabel } from './formatters';
 
-/** The SurveyData columns identity needs. */
+/** The SurveyData columns identity needs (aliases only for a rename check). */
 export type IdentityData = Pick<
   SurveyData,
   'stationCount' | 'stationLineIds' | 'stationIndices' | 'stationNames' | 'stationIds' | 'lines' | 'shotIds'
->;
+> &
+  Partial<Pick<SurveyData, 'stationAliases'>>;
 
 /** A line as identity needs it: the store's `project.lines` or `SurveyData.lines`. */
 export interface IdentityLine {
@@ -125,8 +126,9 @@ function idIndexOf(data: IdentityData): Map<number, number[]> {
 /**
  * Every slot of the station `ref` is on: the slots that share its Station ID.
  * On the station graph a junction is ONE station that two or more lines pass
- * (plan 9.2), so its slots share one id, name and comment; a station on one
- * line has the one slot. `ref` alone when the station is unknown.
+ * (plan 9.2), so its slots share one id and comment, while each line shows it
+ * by the name that line knows it by (plan 5.3 per line); a station on one line
+ * has the one slot. `ref` alone when the station is unknown.
  */
 export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef[] {
   const data = src.surveyData;
@@ -144,16 +146,39 @@ export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef
   return (src.stations ?? []).filter((s) => s.id === station.id).map((s) => s.station_ref);
 }
 
+/** The lines the aliases of the station at `ref` name: each shows the station by its alias's name. */
+function aliasLinesOf(src: IdentitySource, ref: StationRef): Set<number> {
+  const data = src.surveyData;
+  let aliases: ReadonlyArray<{ line?: number | null }> | undefined;
+  if (data && data.stationCount > 0) {
+    const g = stationGlobalIndexOf(data, ref);
+    aliases = g === null ? undefined : data.stationAliases?.get(g);
+  } else {
+    aliases = findStationIn(src.stations, ref)?.aliases;
+  }
+  const lines = new Set<number>();
+  for (const alias of aliases ?? []) if (alias.line !== undefined && alias.line !== null) lines.add(alias.line);
+  return lines;
+}
+
 /**
- * The first line through the station `ref` on which ANOTHER station is already
- * named `name`, or null when the name is free. A station's name must be unique
- * on every line it is on, so renaming a junction checks all of its lines (plan
- * 5.3); on one line this is the old per-line check.
+ * The first line on which ANOTHER station is already shown as `name`, among
+ * the lines a rename of the station at `ref` renames it on, or null when the
+ * name is free. Each line shows a junction by the name that line knows it by
+ * (plan 5.3 per line): renaming it through a line that knows it by an alias
+ * renames that line's name only, so only that line is checked; otherwise it
+ * renames the station's own name, which every line without an alias of its
+ * own shows, so all of those are checked. On one line this is the old
+ * per-line check.
  */
 export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
   const own = stationSlotsOf(src, ref);
   const ownKeys = new Set(own.map((s) => `${s.line_id}:${s.station_index}`));
-  for (const slot of own) {
+  const aliasLines = aliasLinesOf(src, ref);
+  const sharing = aliasLines.has(ref.line_id)
+    ? own.filter((s) => s.line_id === ref.line_id)
+    : own.filter((s) => !aliasLines.has(s.line_id));
+  for (const slot of sharing) {
     const names = lineStationNamesOf(src, slot.line_id);
     for (let i = 0; i < names.length; i++) {
       if (names[i] === name && !ownKeys.has(`${slot.line_id}:${i}`)) return slot.line_id;

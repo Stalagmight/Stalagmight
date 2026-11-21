@@ -69,6 +69,60 @@ beforeEach(() => {
   useUIStore.getState().setSelection({ type: 'station', stationRef: ref(MAIN, 1) });
 });
 
+/**
+ * I-3: a line merged onto a station keeps its own name for it. Side shows the
+ * junction (Station ID 11) as its own "0" (the alias naming Side), Main as
+ * "3a"; the details say which name is on which line.
+ */
+function perLineStations(): Station[] {
+  const list = stations();
+  const aliases = [{ id: 20, name: '0', line: SIDE }];
+  list[1] = { ...list[1]!, aliases };
+  list[3] = { ...list[3]!, name: '0', aliases };
+  return list;
+}
+
+describe('a junction each line shows by its own name', () => {
+  beforeEach(() => {
+    const { project } = useProjectStore.getState();
+    const list = perLineStations();
+    useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(project!.lines, list) });
+  });
+
+  it("names the slot by its line's name, with the line, and lists the other lines' names", () => {
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 0) });
+    render(<DetailPanel />);
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:0 (on Side)');
+    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:3a on Main');
+    expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
+  });
+
+  it('reads the same from the other line', () => {
+    render(<DetailPanel />);
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent('Name:3a (on Main)');
+    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:0 on Side');
+  });
+
+  it('says which line knew it by an alias', () => {
+    render(<DetailPanel />);
+    expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent('0 on Side (Station ID 20)');
+  });
+
+  it('shows no "(on line)" when every line shows the junction by one name', () => {
+    useProjectStore.setState({ stations: stations(), surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, stations()) });
+    render(<DetailPanel />);
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
+    expect(screen.getByTestId('station-detail-junction')).toHaveTextContent('Junction:3a on Side');
+  });
+
+  it('shows no Junction row for a station on one line', () => {
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(MAIN, 2) });
+    render(<DetailPanel />);
+    expect(screen.queryByTestId('station-detail-junction')).toBeNull();
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:4$/);
+  });
+});
+
 describe('junction station details', () => {
   it('"Merged with" names the other line, never the station itself', () => {
     render(<DetailPanel />);

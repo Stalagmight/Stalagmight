@@ -156,6 +156,43 @@ describe('a junction', () => {
   });
 });
 
+/**
+ * A junction Side was merged onto (I-3): Side's slot 0 is Main Line's "4a"
+ * (Station ID 30), but Side knew it as "A0" and still shows it so (its alias
+ * names Side). Each line shows the junction by its own name.
+ */
+function aliasJunction(): IdentityData {
+  const d = data();
+  d.stationIds[3] = 30;
+  d.stationAliases = new Map([
+    [1, [{ id: 12, name: 'A0', line: 2 }]],
+    [3, [{ id: 12, name: 'A0', line: 2 }]],
+  ]);
+  return d;
+}
+
+describe('a junction a line knows by its own name', () => {
+  const labels = identityLabels({ surveyData: aliasJunction() });
+
+  it('shows each slot by its line\'s name, with one Station ID', () => {
+    expect(labels.station({ line_id: 2, station_index: 0 }, true)).toBe('Side / A0');
+    expect(labels.station({ line_id: 7, station_index: 1 }, true)).toBe('Main Line / 4a');
+    expect(labels.stationId({ line_id: 2, station_index: 0 })).toBe(30);
+    expect(labels.stationId({ line_id: 7, station_index: 1 })).toBe(30);
+  });
+
+  it("checks a rename on the lines that show the renamed name only", () => {
+    // Through Side's slot the rename renames Side's own name for it: only
+    // Side is checked, so Main Line's "5" is free and Side's "A1" is not.
+    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 0 }, '5')).toBeNull();
+    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 0 }, 'A1')).toBe(2);
+    // Through Main Line's slot it renames the station's own name, which Side
+    // does not show: Side's "A1" is free, Main Line's "5" is not.
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 1 }, 'A1')).toBeNull();
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 1 }, '5')).toBe(7);
+  });
+});
+
 describe('onePerStation', () => {
   it("keeps one slot of each station, so a junction's move is sent once", () => {
     const labels = identityLabels({ surveyData: junction() });

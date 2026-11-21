@@ -21,13 +21,13 @@ Everything a user can see that differs from 0.6.0, gathered from 12.2 and the De
 
 Editing:
 
-- **A junction is one station**, with one Station ID, name and comment: a merge records the retired station's id and name as an alias and joins distinct comments (survivor first); renaming a junction checks all its lines (12.2, 5.1, 5.3, G3). Why: a merge makes one station, so merged stations can never drift apart or disagree.
+- **A junction is one station**, with one Station ID and comment, and each line shows it by the name that line knows it by: a merge records the retired station's id and name as an alias naming each line that showed it, which keeps showing that name, and joins distinct comments (survivor first); a rename through a slot renames that line's name, checked on every line that shows it (12.2, 5.1, 5.3, G3, U1). Why: a merge makes one station, so merged stations can never drift apart or disagree, while a surveyor reading a line still sees the names it was surveyed with.
 - **Split Line Here makes a junction**: the halves share the split station, so an edit to one half can move the other, Move Segment on the second half is refused when the first holds a datum, merging the far ends goes to the closure dialog, and the dialog has no comment or datum side (a datum "on both halves" is no longer refused) (12.2, 5.4, S9, N3). Why: no duplicated co-located station.
-- **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (name copied and made unique, no comment); datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach (12.2, 5.2, E6, N13). Why: there is no pairwise merge left to remove.
-- **A delete leaves a junction on its other lines** with its comment and datums, whatever line they were set from; nothing is re-anchored and no replacement merge is made; the delete preview also lists the sweep's promotions beyond the removed member's (M1, S13, W6). Why: the junction is still a station of those lines.
+- **Unmerge is "Detach Line from Station"**: the chosen line gets its own station where the junction was (the name it showed the junction by, no comment; a line merged there its own id and name back); when every other line knew the junction by an alias, the chosen line keeps it and the others get their own station back; datums, closure ends and hand moves set from that line go with it; on a hub of three or more lines only that line leaves; any two slots of one station are a valid pair, and a station on one line has nothing to detach (12.2, 5.2, E6, N13, U1). Why: there is no pairwise merge left to remove.
+- **A delete leaves a junction on its other lines** with its comment and datums, whatever line they were set from; nothing is re-anchored and no replacement merge is made; when the lines left all knew it by an alias, it takes back the id and name the first of them knew it by; the delete preview also lists the sweep's promotions beyond the removed member's (M1, S13, W6, U1). Why: the junction is still a station of those lines, under the identity they know it by.
 - **Set Zero Datum on a junction slot edits the station's datum** when it has one; two datums on one station come only from merging two placed pieces or from a migration (E1). Why: a datum belongs to the station, not to one line's member.
 - **A loop closure from a junction to a station a closure already ties it to is refused** as a duplicate (Q5). Why: 0.6.0's merged twin is the junction itself.
-- **Combine Lines works on junctions**: a torn junction detaches the moving line (closure ids differ from 0.6.0's; positions and misclosures match), and third lines there stay on the fixed side; a gauge both lines pass, or a migrated merge loop at a hand-moved join, can change which line moves; two datums on one merged join are allowed; the depth notice reads the station's averaged depth; a torn junction is named by its two slots and its one name (S1, S3, S5 to S8, S10, N3). Why: one station per junction, and the Computed View's own hold decides what stays.
+- **Combine Lines works on junctions**: a torn junction detaches the moving line (closure ids differ from 0.6.0's; positions and misclosures match), and third lines there stay on the fixed side; a gauge both lines pass, or a migrated merge loop at a hand-moved join, can change which line moves; two datums on one merged join are allowed; the depth notice reads the station's averaged depth; a torn junction is named by its two slots, each by its line's name (S1, S3, S5 to S8, S10, N3, U1). Why: one station per junction, and the Computed View's own hold decides what stays.
 - **Closure figures are recomputed** from the current layout: path length counts shots only (closures and merges are not zero-length edges); between two datum-held pieces it is the first end's piece, as 0.6.0's fallback (12.2, 3.6, D14). Why: nothing derived is stored.
 - **History labels are worded when the edit is recorded**, with the names before it, batch rows included; an Update Shot preview lists only the cells that changed (N1). Why: the persisted history holds no forward command to word later.
 - **Smaller editing differences**: an edit that changes nothing keeps the redo branch (Unmerge off a junction too); MoveComment onto its own station is a no-op (0.6.0 deleted the comment); Create Line names only the new line; a range gap-close reports the closures it removes; import tracking and Untrack Import are undo steps behind the read-only gate; Add .stalx and Section creation refuse when ids run out instead of renumbering; with no project open undo says "No project open", and editing a shot on a deleted line says "That line no longer exists." (N2, N4, N5, N6, N14, E5). Why: an empty changeset records nothing, the hash lists are recorded content, ids are never reused.
@@ -44,7 +44,7 @@ Files:
 
 - **The project file is JSON** (`.stalx` version 2), about half the size of the SQLite file (46% and 51% on the 5,000 and 20,000-shot synthetic surveys); an older Stalagmight cannot open it (section 6). Why: canonical, line-oriented and diffable, with explicit versioning.
 - **An old SQLite file is upgraded silently on its first save**: an unfinished journal or WAL an old build left is first settled into the original (as SQLite would on open), the whole original is copied into the backups folder (Recovery lists it), and its undo history is dropped with the existing banner (7.2.8, 7.2.10, H1). Why: the product decision, with the original kept restorable.
-- **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (a junction's one name; a true clash lettered) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Why: data never moves or changes name silently.
+- **A conversion that changed what a line shows says so once**: stations moved in plan (a torn legacy merge collapsed into one station, or an unexplained raw difference), stations whose depth changed (a snap whose derived alignment changed a depth tie, or an unexplained one) and stations it could not place, each with its count and the largest change; the slots now shown under another name (since U1 only a name 0.6.0 showed twice on a line, lettered: every other slot keeps its 0.6.0 name) and the joined comments; a closed file upgraded by a Recents rename or a link strip shows it at its next open in the session; Computed View differences are logged, not shown (C4, G4, E10, UR1, UR2; review findings UX-1, UX-3). Why: data never moves or changes name silently.
 - **A 0.6.0 file this build cannot convert is not called corrupt**: it opens as "This file needs converting ..., and this version cannot convert it: <reason>", and Attempt Repair never rewrites a file that opens or that only the conversion refuses, nor says it succeeded while the open still fails (UR4). Why: the recovery dialog and its repair are for damage.
 - **A Save As onto another 0.6.0 file upgrades it**: the 0.6.0 file it replaces is kept in Recovery, and no SQLite sidecar is left beside the JSON file (UR5). Why: an old build would roll a journal into the JSON file.
 - **Local state of an open 0.6.0 file counts as unsaved**: a display toggle (or SpeleoDB bookkeeping) waits for the upgrading save and the close prompt asks; a SpeleoDB unlink upgrades the file at once with the survey on disk (UR6). Why: 0.6.0 wrote these in place at once; this build writes a legacy file only by upgrading it.
@@ -65,7 +65,7 @@ Exports, imports and readers:
 - **Ariane export**: ids are Station IDs, stable across exports; every closure, migrated `Tie`s included, is a CLOSURE row (0.6.0 dropped such a merge silently); a station comment is written once; all lines at a hub are adjacent in the walk (X1 to X4). Why: the station graph gives each station one id and one comment.
 - **Image export** draws one comment and one star per station, the Levels histogram counts each station once, and the dive profile has no zero-length point at a junction (X7, X8). Why: one station per junction.
 - **Compass, Walls and Ariane imports store each station's file identity** in `Station.external` (written to the file, not shown); a reversed Origin or Manual import line places the file's first station exactly (Q1, N6). Why: plan 1.2 and 10.5.
-- **An import placed on an existing station keeps the file's name for it as an alias** of the junction, under a retired Station ID minted for it (what Merge Stations keeps of the station it retires); the alias names the new line, which therefore knows the junction by it, so the line's own stations keep the file's names even where one is the junction's (invariant 8's alias exemption, review findings D-migration-upgrade-8 and UX-3): the same names as 0.6.0's per-slot branch and as opening the equivalent 0.6.0 file (the migration). Only a line that keeps no alias (the file gives the junction no name of its own) has a station whose file name is the junction's take a letter suffix (`12` -> `12a`), which the import receipt names (wave D, I-import-export-4; aligned with the alias exemption at integration). Why: one station, one name, and a line keeps the names it was surveyed with.
+- **An import placed on an existing station keeps the file's name for it as an alias** of the junction, under a retired Station ID minted for it (what Merge Stations keeps of the station it retires); the alias names the new line, which therefore shows the junction by it, so the line's own stations are named around that name and keep the file's names even where one is the junction's own (per-line names, review findings D-migration-upgrade-8, UX-3 and U1): the same names as 0.6.0's per-slot branch and as opening the equivalent 0.6.0 file (the migration). Only a line that keeps no alias (the file gives the junction no name of its own) has a station whose file name is the junction's take a letter suffix (`12` -> `12a`), which the import receipt names (wave D, I-import-export-4; aligned with per-line names in U1). Why: one station, and a line keeps the names it was surveyed with.
 - **stalx-reader** reads both formats; its `Survey` gains `format`, `format_version`, `newer_content`, the shared station ids and `LoopClosure::tie`; `ReadError::NewerFormat` is new, and an empty input is `InvalidKind::NotSqlite` (X9). Why: third-party readers see both formats through one API.
 
 ### Open
@@ -1085,3 +1085,82 @@ findings D-migration-upgrade-4 to -12, J-docs-tests-truth-3, -6, -7). Labels
 - **UR8. The staged settled copy carries only Unix mode bits**, as
   `write_atomic`'s temp does: on Windows a read-only staged copy could not be
   removed after its refused rename (not run on Windows).
+
+## Deviations (package U1, per-line junction names and the alias identity)
+
+From the real-app demo's I-1 and I-3 (a line read 3, 1, 2, 3 after a
+conversion and 2, 1, 2, 3 after a merge; a delete at a junction left a line
+under the other line's Station ID and name). Decision taken for the package:
+a line shows a junction by the name that line knows it by. These replace the
+"one name on all lines" wording of 5.1, 5.3, 7.2.1, E10 and W11, and E10's
+alias exemption.
+
+- **U1-1. Per-line names.** `Project::name_on(station, line)` is the name of
+  the latest alias naming the line when it has one, else the station's own
+  name. Invariant 8 holds these per-line names unique on each line, with no
+  exemption (`check_names`, `validate_tests`, the fast-check fuzz oracle with
+  alias corruptions). The wire sends each slot's per-line name (the binary
+  envelope's `station_names` too) and each alias's `line`
+  (`StationAliasWire::line`, TS `line?: number`); a junction's slots share the
+  Station ID, comment and aliases only. History labels, shot labels,
+  warnings, `station_text` and the CSV/JSON exports read the per-line name;
+  Ariane keeps Station IDs and writes no station name; the dive profile names
+  no station; the map image labels a junction once by its representative
+  slot's name.
+- **U1-2. Every path keeps a line's own name.** Merge (`merge_ids`) gives
+  every line that showed the retired station by its own name an alias with
+  that name (the retired id for the first in list order, a fresh id for the
+  others: a Split Line Here junction has two such lines), so a merge renames
+  nothing; its clash lettering and `MergeReport::renamed` are gone. Split Line
+  Here gives the second half a copy of the alias the line knew the split
+  station by, under a fresh id. Combine plans its prefixes on the names each
+  line shows and renames through `set_name_on`; at a join both lines already
+  pass, the combined line shows the kept line's name (the other line's alias
+  there is dropped when it repeats the kept one's name, else kept as history
+  with no line). The migration makes every merged member an alias naming its
+  line with the name 0.6.0 showed there (stored, else the index), a member
+  without a usable id under an id minted after every station's
+  (`MigrationReport::alias_ids_minted`), and names the station after the
+  survivor's own slot, so every slot reads what 0.6.0 showed
+  (`test_support::check` asserts it on every generated seed and fuzz case;
+  `names_changed` is 0 unless 0.6.0 showed a name twice, which the frozen
+  reader heals, so the coverage gates require aliases instead). An import
+  joined onto a station names the new line's stations around the name the
+  line shows the junction by. Detach names the new station as the line showed
+  the junction, so a detach renames nothing either. A rename through a slot
+  renames the alias of its line when it has one, else the station's own name,
+  refused (0.6.0's words, per line) when a line showing the new name already
+  shows it for another station. Salvage letters the per-line name.
+- **U1-3. The alias identity (I-1).** A delete (shot, range shift or split,
+  line) that takes a line off a station and leaves it only on lines whose
+  aliases name it gives it the identity of the first such alias (list order):
+  its id and name, the alias leaving the station; the comment, external id
+  and other aliases stay, and slots, hand moves, datums, closure ends and the
+  placement follow the new id (`restore_alias_identities`, run in the
+  epilogue of `run_edit` and `run_op` after `drop_stale_attachments`, only on
+  stations the edit took a line off). The anchor algorithm treats the pair as
+  one station (`EditContext::reidentified`: datum origins, pre-edit
+  positions and the surviving placement), so nothing moves. The delete
+  previews name a promotion whose end was re-identified by its pre-edit id
+  (`EditReport::pre_edit_promotions`). A detach of the line that shows the
+  junction by its own name, when every other line knows it by an alias, keeps
+  the junction (id, name, comment) on that line and gives the other lines the
+  first alias's identity (`detach_others`, `DetachReport::kept`,
+  `DetachLinePreview::kept`; the dialog says "Main keeps this station. Side
+  gets back the station it had here before the merge"). Combine Lines' torn
+  junctions keep the junction's id on the lines that stay (no restore there:
+  its geometry facts are computed on ids; known limitation). Undo is exact
+  through the generic changeset (`alias_identity_tests`).
+- **U1-4. Station details** show `Name: 0 (on North Passage)` when a
+  junction's lines show it by different names, a Junction row with the other
+  lines' names (`3 on Main Line`), and "Also known as" with the line an alias
+  names (`0 on North Passage (Station ID 9)`). The data table, map labels,
+  dialogs and history previews read the per-slot name from the wire.
+- **U1-5. Oracles changed with the rule.** C21's `checkProjectInvariants`
+  asserted "the slots that share an id share its name"; it now asserts that
+  every slot shows the name of the alias naming its line, else the one name
+  the other slots show, and that the slots share comment and aliases: every
+  name is still determined by the model, and the per-line uniqueness check
+  stays. The e2e IPC mock shows each member slot by its own name, sends the
+  alias lines, and answers `preview_detach_line` with `kept`; its contract
+  checks both. The migration gates stopped requiring `names_changed` (above).

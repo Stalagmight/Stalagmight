@@ -508,10 +508,12 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
       for (const field of required) {
         expect(new RegExp(`\\b${field}\\s*[:,]`).test(literal), `a mock station lacks ${field}`).toBe(true);
       }
-      // A junction's slots share one Station ID, name and merge list (plan
-      // 9.2): the mock derives them from its junctions, never per slot.
+      // A junction's slots share one Station ID and merge list (plan 9.2),
+      // and each shows the name its own line knows it by (plan 5.3 per line):
+      // the mock derives all three from its junctions.
       expect(literal).toMatch(/\bid:\s*identity\.id\b/);
       expect(literal).toMatch(/\bmerged_with:\s*identity\.merged_with\b/);
+      expect(literal).toMatch(/\bname:\s*identity\.name\b/);
     }
   });
 
@@ -539,6 +541,14 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
     }
     // The binary load envelope carries them too, as the backend's does.
     expect(stripComments(mockTsSource)).toMatch(/\bstation_aliases:\s*\w+/);
+    // Each alias names the line that shows the junction by it, as the
+    // generated StationAlias declares; and a slot's name is its own line's,
+    // not the representative's (plan 5.3 per line).
+    const aliasTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/StationAlias.ts'), 'utf8');
+    expect(aliasTs).toMatch(/\bline\?:\s*number\b/);
+    const identity = stripComments(mockTsSource);
+    expect(identity).toMatch(/\bline:\s*m\.line_id\b/);
+    expect(identity).toMatch(/\bname:\s*mockStationName\(ref\.line_id,\s*ref\.station_index\)/);
   });
 
   it('the shape check finds the arguments of a known command', () => {

@@ -38,8 +38,9 @@ fn texts(svg: &str, class: &str) -> Vec<String> {
         .collect()
 }
 
-/// A junction has one Station ID and one name, so it gets one label; every
-/// station on drawn passage is labelled exactly once.
+/// A junction has one Station ID, so it gets one label (its representative
+/// slot's name in names mode); every station on drawn passage is labelled
+/// exactly once.
 #[test]
 fn a_junction_is_labelled_once() {
     let Cave { project, t, .. } = cave();

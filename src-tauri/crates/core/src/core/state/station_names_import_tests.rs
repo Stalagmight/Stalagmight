@@ -178,11 +178,13 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     assert_eq!(branch.start, junction, "the branch starts ON the station");
     let branch_names: Vec<String> = branch
         .stations()
-        .map(|s| project.station(s).unwrap().name.clone())
+        .map(|s| project.name_on(s, branch.id).unwrap().to_string())
         .collect();
-    // The file's name for the junction is not the junction's; the branch's own
-    // stations take the seed rule around it.
-    assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
+    // The file's name for the junction is not the junction's: the branch shows
+    // the junction by it (plan 5.3 per line, I-3), and its own stations take
+    // the seed rule around that, so the branch reads as the file did.
+    assert_eq!(branch_names, named(&["Z9", "1", "2", "3"]));
+    assert_eq!(project.name_on(junction, main), Some("1"));
     let aliases = &project.station(junction).unwrap().aliases;
     assert_eq!(aliases.len(), 1);
     assert_eq!(aliases[0].name.as_deref(), Some("Z9"), "the file's name");

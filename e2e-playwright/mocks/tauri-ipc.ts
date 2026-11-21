@@ -853,10 +853,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // two or more lines pass. The mock keeps its merges as stored pairs, but
       // derives what the backend's wire shows from their union: every slot of
       // a junction lists every other slot of it in `merged_with` (transitively),
-      // they share one Station ID, name and comment (the junction's first slot
-      // in line order then index is its representative), the other members'
-      // own ids and names are its aliases (the ids a merge retired, plan 5.1),
-      // and `station_merges` goes out as star pairs from that first slot.
+      // they share one Station ID and comment (the junction's first slot in
+      // line order then index is its representative), each slot shows the name
+      // its own line knows the junction by (plan 5.3 per line: a merge keeps
+      // every line's name), the other members' own ids and names are its
+      // aliases, each naming its member's line (the ids a merge retired, plan
+      // 5.1), and `station_merges` goes out as star pairs from that first slot.
       const mockSlotKey = (ref: MockStationRef): string => `${ref.line_id}:${ref.station_index}`;
       const mockJunctions = (
         lines: ReadonlyArray<{ id: number }>,
@@ -901,8 +903,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
         return bySlot;
       };
-      /** What a slot shows on the wire: its junction's other slots, and the
-       *  identity the junction shares (the representative's). */
+      /** What a slot shows on the wire: its junction's other slots, the
+       *  identity the junction shares (the representative's id), and the name
+       *  the slot's own line shows it by. */
       const mockSlotIdentity = (
         junctions: Map<string, MockStationRef[]>,
         ref: MockStationRef,
@@ -911,7 +914,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         id: number;
         name: string;
         comment: string | undefined;
-        aliases: Array<{ id: number; name: string | null }> | undefined;
+        aliases: Array<{ id: number; name: string | null; line: number }> | undefined;
       } => {
         const members = junctions.get(mockSlotKey(ref));
         const rep = members?.[0] ?? ref;
@@ -927,11 +930,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return {
           merged_with: others.map((m) => ({ line_id: m.line_id, station_index: m.station_index })),
           id: mockStationId(rep.line_id, rep.station_index),
-          name: mockStationName(rep.line_id, rep.station_index),
+          name: mockStationName(ref.line_id, ref.station_index),
           comment,
           // Absent when none, as the backend omits the key.
           aliases: retired.length > 0
-            ? retired.map((m) => ({ id: mockStationId(m.line_id, m.station_index), name: mockStationName(m.line_id, m.station_index) }))
+            ? retired.map((m) => ({
+                id: mockStationId(m.line_id, m.station_index),
+                name: mockStationName(m.line_id, m.station_index),
+                line: m.line_id,
+              }))
             : undefined,
         };
       };
@@ -1668,7 +1675,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }>;
               id: number;
               name: string;
-              aliases?: Array<{ id: number; name: string | null }>;
+              aliases?: Array<{ id: number; name: string | null; line?: number }>;
             }> = [];
 
             const currentMerges = (currentProject.station_merges ?? []) as Array<{
@@ -1723,8 +1730,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   merged_with: identity.merged_with,
                   ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                   ...(identity.comment !== undefined ? { comment: identity.comment } : {}),
-                  // Station identity: a junction's slots share one Station ID
-                  // and name (the station graph's wire, plan 9.2).
+                  // Station identity: a junction's slots share one Station ID;
+                  // each shows the name its own line knows it by (the station
+                  // graph's wire, plan 9.2 and 5.3 per line).
                   id: identity.id,
                   name: identity.name,
                   ...(identity.aliases !== undefined ? { aliases: identity.aliases } : {}),
@@ -2031,7 +2039,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // line header); 6 to 7 for per-shot survey credit; 7 to 8 for
               // station identity (dense `stations_ids`, every station named);
               // 8 to 9 for the station graph (no `line_offsets`; a junction's
-              // slots share one Station ID, name and comment).
+              // slots share one Station ID and comment, each slot its line's
+              // own name).
               version: 9,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
@@ -2223,7 +2232,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               comment?: string;
               id: number;
               name: string;
-              aliases?: Array<{ id: number; name: string | null }>;
+              aliases?: Array<{ id: number; name: string | null; line?: number }>;
             }> = [];
 
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
@@ -4317,12 +4326,30 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'preview_detach_line': {
-            // What Detach gives the line (UX-4). The mock keeps no aliases, so
-            // the line always gets a new station named like the junction.
+            // What Detach gives the line (UX-4, I-1). Every member of a mock
+            // junction but its representative is an alias naming its line, so
+            // such a line gets its own station back; the representative's
+            // line keeps the junction, and the next member's line gets its
+            // own station back.
             console.log('[Mock IPC] preview_detach_line called with:', args);
             const stationRef = (args?.stationRef ?? args?.station_ref) as MockStationRef | undefined;
-            const name = stationRef ? String(stationRef.station_index) : '0';
-            return { name, station_id: 0, restored: false };
+            const lineId = Number(args?.lineId ?? args?.line_id);
+            const lines = (currentProject?.lines ?? []) as Array<{ id: number }>;
+            const junctions = mockJunctions(
+              lines,
+              (currentProject?.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
+            );
+            const members = stationRef ? junctions.get(mockSlotKey(stationRef)) : undefined;
+            const slot = members?.find((m) => m.line_id === lineId);
+            if (!members || !slot) return { success: false, error: 'Stations are not directly merged' };
+            const kept = slot === members[0];
+            const back = kept ? members[1]! : slot;
+            return {
+              name: mockStationName(back.line_id, back.station_index),
+              station_id: mockStationId(back.line_id, back.station_index),
+              restored: true,
+              kept,
+            };
           }
 
           case 'unmerge_station_pair': {
@@ -4521,31 +4548,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!lines.some((l) => l.id === stationRef.line_id)) {
               return { success: false, error: `Line ${stationRef.line_id} not found`, line_ids: [] };
             }
-            // A junction is ONE station: its name must be free on every line
-            // through it (plan 5.3), and it is stored once, on the junction's
-            // representative slot.
+            // Each line shows a junction by its own name (plan 5.3 per line):
+            // in the mock every member of a junction is shown by its own line
+            // alone (the representative's own name, the others' aliases), so
+            // a rename renames the name the slot's line shows and is checked
+            // on that line only, as the backend checks the lines sharing it.
             const junctions = mockJunctions(
               lines,
               (currentProject?.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
             );
-            const slots = junctions.get(mockSlotKey(stationRef)) ?? [stationRef];
-            const own = new Set(slots.map(mockSlotKey));
-            for (const slot of slots) {
-              const line = lines.find((l) => l.id === slot.line_id);
-              if (!line) continue;
-              for (let i = 0; i <= line.shots.length; i++) {
-                const other = { line_id: line.id, station_index: i };
-                if (own.has(mockSlotKey(other))) continue;
-                if (mockSlotIdentity(junctions, other).name === name) {
-                  return {
-                    success: false,
-                    error: `Line "${line.name ?? ''}" already has a station named "${name}"`,
-                    line_ids: [],
-                  };
-                }
+            const line = lines.find((l) => l.id === stationRef.line_id);
+            for (let i = 0; i <= (line?.shots.length ?? -1); i++) {
+              const other = { line_id: stationRef.line_id, station_index: i };
+              if (i === stationRef.station_index) continue;
+              if (mockSlotIdentity(junctions, other).name === name) {
+                return {
+                  success: false,
+                  error: `Line "${line?.name ?? ''}" already has a station named "${name}"`,
+                  line_ids: [],
+                };
               }
             }
-            const nameKey = mockSlotKey(slots[0]!);
+            const nameKey = mockSlotKey(stationRef);
             mockNameUndo.push({ key: nameKey, before: mockStationNames[nameKey], after: name });
             mockNameRedo.length = 0;
             mockStationNames[nameKey] = name;

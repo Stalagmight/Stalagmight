@@ -381,6 +381,11 @@ pub struct StationAliasWire {
     pub id: StationId,
     /// The name the station had then (`None` when it had none).
     pub name: Option<String>,
+    /// The line that knew the station by this alias and still shows it by
+    /// its name (`None`: no line does any more; the alias is history only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub line: Option<LineId>,
 }
 
 /// A computed station in the cave survey
@@ -427,17 +432,20 @@ pub struct Station {
     /// The station's project-unique Station ID ([`StationId`]).
     #[serde(default)]
     pub id: StationId,
-    /// The station's name, unique within its line (e.g. `"17"`, `"A3"`, or
-    /// the MNemo station number a DMP import recorded). Every station has one
-    /// once the project is normalized;
-    /// empty only for a station the normalization could not key (a shot
-    /// without a uuid), which a loaded project never has.
+    /// The name this slot's line shows the station by, unique within the
+    /// line (e.g. `"17"`, `"A3"`, or the MNemo station number a DMP import
+    /// recorded). A junction's slots may differ: each line shows it by the
+    /// name that line knows it by (its own name before a merge), while the
+    /// `id` is the junction's one Station ID. Every station has one once the
+    /// project is normalized; empty only for a station the normalization
+    /// could not key (a shot without a uuid), which a loaded project never
+    /// has.
     #[serde(default)]
     pub name: String,
     /// The ids and names merged into this station, oldest first; `None` when
     /// it has none (most stations), so the key stays off the wire and costs
     /// nothing per station (the `closures_with` reasoning). Every slot of a
-    /// junction carries them, as it carries the shared id and name.
+    /// junction carries them, as it carries the shared id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub aliases: Option<Vec<StationAliasWire>>,
@@ -712,19 +720,32 @@ mod tests {
             "a station with no aliases must omit the key: {plain}"
         );
         let mut junction = Station::new(StationRef::new(1, 0));
-        junction.aliases = Some(vec![StationAliasWire {
-            id: 7,
-            name: Some("0".into()),
-        }]);
+        junction.aliases = Some(vec![
+            StationAliasWire {
+                id: 7,
+                name: Some("0".into()),
+                line: Some(2),
+            },
+            StationAliasWire {
+                id: 8,
+                name: Some("5".into()),
+                line: None,
+            },
+        ]);
         let junction = serde_json::to_value(junction).unwrap();
         assert_eq!(
             junction["aliases"],
-            serde_json::json!([{ "id": 7, "name": "0" }])
+            serde_json::json!([{ "id": 7, "name": "0", "line": 2 }, { "id": 8, "name": "5" }])
         );
         let decl = Station::decl();
         assert!(
             decl.contains("aliases?: Array<StationAlias>"),
             "aliases leave the wire when absent, so the declaration carries the `?`: {decl}"
+        );
+        let alias = StationAliasWire::decl();
+        assert!(
+            alias.contains("line?: number"),
+            "an alias's line leaves the wire when it has none: {alias}"
         );
     }
 

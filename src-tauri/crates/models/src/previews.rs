@@ -41,12 +41,15 @@ pub struct ClosurePair {
 /// What Detach Line from Station gives the detached line
 /// (`preview_detach_line`, review finding UX-4): the new station's name and
 /// Station ID, and whether they are the ones the line had before it was
-/// merged there (the junction's alias that names the line).
+/// merged there (the junction's alias that names the line). With `kept`, the
+/// line keeps the junction instead and `name` and `station_id` are what the
+/// other lines, which all knew it by aliases, get back (I-1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct DetachLinePreview {
     pub name: String,
     pub station_id: u32,
     pub restored: bool,
+    pub kept: bool,
 }
 
 /// What deleting one shot does to station relationships

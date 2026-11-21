@@ -109,9 +109,10 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 ///
 /// Bumped 8 -> 9 by the station-graph switch: `ProjectHeaderBinary` lost
 /// `line_offsets` (a stale decoder would iterate a missing key), and
-/// `stations_ids`, names and comments are shared by a junction's slots. The
-/// same unreleased version gained the sparse `station_aliases` list (a
-/// junction's retired ids and names).
+/// `stations_ids` and comments are shared by a junction's slots (names are
+/// each slot's line's own). The same unreleased version gained the sparse
+/// `station_aliases` list (a junction's retired ids and names, each with the
+/// line that knew it by it).
 pub const BINARY_FORMAT_VERSION: u32 = 9;
 
 #[derive(Serialize)]
@@ -771,19 +772,26 @@ mod tests {
         let junction = project.line(main).unwrap().station(1).unwrap();
         let side_start = project.line(side).unwrap().start;
         let merged = project.merge_stations(junction, side_start).unwrap().value;
-        let retired_name = Some(if merged.retired == junction { "1" } else { "0" }.to_string());
+        let retired_on_main = merged.retired == junction;
+        let retired_name = Some(if retired_on_main { "1" } else { "0" }.to_string());
+        let retired_line = if retired_on_main { main } else { side };
 
         let decoded = decode(&project);
 
         let expected = vec![StationAliasWire {
             id: merged.retired,
             name: retired_name,
+            line: Some(retired_line),
         }];
         // Slots in line order: Main 0, 1 (junction), 2; Side 0 (junction), 1.
         assert_eq!(
             decoded.station_aliases,
             vec![(1, expected.clone()), (3, expected)]
         );
+        // Each slot carries the name its own line shows the junction by.
+        let names: std::collections::BTreeMap<u32, String> =
+            decoded.station_names.into_iter().collect();
+        assert_eq!((names[&1].as_str(), names[&3].as_str()), ("1", "0"));
     }
 
     #[test]

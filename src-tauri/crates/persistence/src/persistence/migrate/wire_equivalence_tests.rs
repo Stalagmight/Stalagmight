@@ -436,15 +436,18 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
+        // A junction's name is per line (I-3): every slot, a junction's
+        // included, shows the name 0.6.0 showed there, so a different name is
+        // explained only by a letter the migration gave a repeat.
         for (key, class) in [
             (
                 "id",
-                "identity: a junction shares the survivor's Station ID",
+                Some("identity: a junction shares the survivor's Station ID"),
             ),
-            ("name", "identity: a junction shares the survivor's name"),
+            ("name", None),
             (
                 "comment",
-                "identity: a junction shares one (joined) comment",
+                Some("identity: a junction shares one (joined) comment"),
             ),
         ] {
             if o.get(key) != n.get(key) {
@@ -455,7 +458,7 @@ impl<'a> Case<'a> {
                     self.empty_comments.insert(slot);
                     self.tally
                         .note("identity: an empty legacy comment is no comment");
-                } else if junction {
+                } else if let Some(class) = class.filter(|_| junction) {
                     self.tally.note(class);
                 } else if key == "name" && self.migrated.report.stations_renamed > 0 {
                     self.tally.note(
@@ -1743,7 +1746,8 @@ fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
     // Seed 5: line 0's station 0 is a junction with the shot-less line 3,
     // and a 0.6.0 same-line merge on line 0's member there is a `Tie` now.
     // Today the delete took that merge with the member: line 3 stays where
-    // it was. The junction stays for line 3 (S13).
+    // it was. The junction stays for line 3 (S13), and as line 3 knew it by
+    // its member's alias it goes back to that member's id and name (I-1).
     assert_delete_moves_what_today_moves(5, 0, |_| 0);
     let legacy =
         stalagmight_legacy::open_bytes(&random_case(5).write(), &OpenOptions::default()).unwrap();
@@ -1751,10 +1755,13 @@ fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
         .unwrap()
         .project;
     let junction = p.station_at(StationRef::new(0, 0)).unwrap();
+    let member = p.line_alias(junction, 3).cloned().unwrap();
     let shot = p.line(0).unwrap().shots[0].id;
     let done = p.delete_shot(0, shot).unwrap();
     assert!(!done.value.station_deleted);
-    assert_eq!(p.station_at(StationRef::new(3, 0)), Some(junction));
+    assert_eq!(p.station_at(StationRef::new(3, 0)), Some(member.id));
+    assert_eq!(done.report.reidentified, vec![(junction, member.id)]);
+    assert_eq!(p.stations[&member.id].name, member.name.unwrap());
     assert!(done.report.sweep.promoted.is_empty());
     assert_eq!(done.value.closures_removed.len(), 1, "the member's Tie");
 }

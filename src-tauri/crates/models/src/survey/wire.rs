@@ -13,8 +13,9 @@
 //!   slot paired with each of its other slots), datum and closure ends are
 //!   slots, closure metrics and `is_aligned` are derived.
 //! - The per-slot [`crate::Station`] list (`Project::stations_wire`, raw or
-//!   Computed View): a junction's slots share one Station ID, name and
-//!   comment; `merged_with` lists the station's other slots.
+//!   Computed View): a junction's slots share one Station ID and comment,
+//!   and each carries the name its line shows it by (plan 5.3 per line);
+//!   `merged_with` lists the station's other slots.
 //! - Every preview and query that names stations, mapped from the M1/M2/M3
 //!   result structs to today's DTOs (`previews.rs`, `combine.rs`).
 //! - Slot resolution for the command boundary ([`SlotTarget`]).

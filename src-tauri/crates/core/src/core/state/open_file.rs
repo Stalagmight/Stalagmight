@@ -68,9 +68,10 @@ pub(crate) enum FileOrigin {
 /// collapsed, or an unexplained raw difference), stations whose depth changed
 /// (a snap's derived alignment changed a depth tie, or an unexplained one),
 /// stations the conversion could not place, or a name a line showed (review
-/// findings D-migration-upgrade-8, UX-3 and UX-1: a merged station now goes by
-/// one name on all its lines, and a true clash is lettered). Computed View
-/// differences never raise it (C4).
+/// findings D-migration-upgrade-8, UX-3 and UX-1; since I-3 every line keeps
+/// the names 0.6.0 showed on it, a merged station's included, so only a name
+/// a line showed twice is lettered). Computed View differences never raise it
+/// (C4).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConversionNotice {
     pub(crate) slots_moved: usize,
@@ -239,7 +240,7 @@ impl ConversionNotice {
         };
         let noun = if n == 1 { "name" } else { "names" };
         format!(
-            "{n} station {noun} changed (a merged station has one name on all its lines): {}{tail}",
+            "{n} station {noun} changed (a line showed one name twice): {}{tail}",
             listed.join(", ")
         )
     }

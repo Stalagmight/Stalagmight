@@ -46,25 +46,26 @@ pub(super) fn apply(
 }
 
 /// Rename the station at `slot` to `name`, trimmed (0.6.0's
-/// `set_station_name` on the station graph). The name the station already
-/// holds is a no-op before any other check, as 0.6.0's execute answered it
-/// (the pipeline then records nothing and keeps the redo branch). Otherwise
-/// the name must be non-empty, free of control and invisible formatting
-/// characters, and held by no other station on any line the station is on: a
-/// junction is checked on all of its lines (plan 5.3).
+/// `set_station_name` on the station graph, per line): the name the slot's
+/// line shows the station by changes, which is the alias that line knows a
+/// junction by when it has one (that line alone), else the station's own name
+/// (every line without an alias of its own shows it; plan 5.3). The name the
+/// slot already shows is a no-op before any other check, as 0.6.0's execute
+/// answered it (the pipeline then records nothing and keeps the redo branch).
+/// Otherwise the name must be non-empty, free of control and invisible
+/// formatting characters, and shown for no other station on a line that
+/// shows the renamed name.
 fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Result<(), String> {
     let station = named_station(project, slot)?;
     let name = name.trim();
-    let current = project.stations.get(&station).map(|s| s.name.as_str());
+    let current = project.name_on(station, slot.line_id);
     if !name.is_empty() && current == Some(name) {
         return Ok(());
     }
     if let Some(refusal) = station_name_refusal(project, station, slot, name) {
         return Err(refusal);
     }
-    if let Some(s) = project.stations.get_mut(&station) {
-        s.name = name.to_string();
-    }
+    project.set_name_on(station, slot.line_id, name.to_string());
     tracing::info!(
         ?slot,
         station,
@@ -87,7 +88,8 @@ fn named_station(project: &Project, slot: StationRef) -> Result<StationId, Strin
 
 /// Why `station` (addressed at `slot`) cannot be named `name` (trimmed), in
 /// 0.6.0's words. A clash is reported on the slot's own line when the name is
-/// taken there, else on the first other line of the station that holds it.
+/// taken there, else on the first other line showing the renamed name that
+/// holds it.
 fn station_name_refusal(
     project: &Project,
     station: StationId,
@@ -100,7 +102,7 @@ fn station_name_refusal(
     if let Some(refusal) = name_characters_refusal("station", name) {
         return Some(refusal);
     }
-    let conflicts = project.conflicts_with_name(station, name);
+    let conflicts = project.conflicts_with_name_on(station, slot.line_id, name);
     let clash = conflicts
         .iter()
         .find(|c| c.line == slot.line_id)

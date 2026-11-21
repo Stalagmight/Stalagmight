@@ -350,12 +350,15 @@ export function oracleInjectionSource(): string {
  * What is left, and what this suite asserts, is well-formedness nothing else
  * checks: id uniqueness, id-allocator dominance, agreement between the model
  * and the derived arrays computed from it, and the station graph's identity
- * on the wire (plan 9.2): a line passes a Station ID once and names each of
- * its stations once; the slots that share a Station ID share its name and
- * comment and list exactly each other in `merged_with`; and every
- * `station_merges` pair joins two slots of one station. The model enforces
- * the first two (`validate`); the rest is the wire projection's contract,
- * which nothing else checks from the outside.
+ * on the wire (plan 9.2): a line passes a Station ID once and shows each of
+ * its stations by a name no other station of it has; the slots that share a
+ * Station ID share its comment and aliases and list exactly each other in
+ * `merged_with`, and each shows the name its line knows the station by (plan
+ * 5.3 per line, I-3): the name of the alias naming its line when one does,
+ * else the station's own name, which is then the same on every such slot;
+ * and every `station_merges` pair joins two slots of one station. The model
+ * enforces the first two (`validate`); the rest is the wire projection's
+ * contract, which nothing else checks from the outside.
  *
  * Keep this dependency-free - it is injected into the webview verbatim.
  */
@@ -522,13 +525,48 @@ export function checkProjectInvariants(state: unknown): string[] {
       const ref = ((slots[j] as Record<string, unknown>).station_ref ?? {}) as Record<string, unknown>;
       members.push(slotName(Number(ref.line_id), Number(ref.station_index)));
     }
+    // Each line shows the station by the name it knows it by (I-3): a slot
+    // whose line an alias names shows that alias's name (the latest such
+    // alias); every other slot shows the station's own name, so those agree.
+    // This replaces "the slots that share an id share its name": a merge now
+    // keeps each line's own name, and the aliases on the wire say which line
+    // shows which, so every name is still pinned down, never free.
+    const aliasesOf = (slot: Record<string, unknown>): string =>
+      JSON.stringify(Array.isArray(slot.aliases) ? slot.aliases : []);
+    const lineAliasName = (slot: Record<string, unknown>): string | null | undefined => {
+      const ref = (slot.station_ref ?? {}) as Record<string, unknown>;
+      const aliases = Array.isArray(slot.aliases) ? slot.aliases : [];
+      let named: string | null | undefined;
+      for (let a = 0; a < aliases.length; a++) {
+        const alias = (aliases[a] ?? {}) as Record<string, unknown>;
+        if (alias.line !== undefined && alias.line !== null && Number(alias.line) === Number(ref.line_id)) {
+          named = typeof alias.name === 'string' ? alias.name : null;
+        }
+      }
+      return named;
+    };
+    let ownName: unknown;
+    let ownAt = '';
     for (let j = 0; j < slots.length; j++) {
       const slot = slots[j] as Record<string, unknown>;
       const here = members[j] as string;
-      if (slot.name !== first.name || (slot.comment ?? null) !== (first.comment ?? null)) {
+      if ((slot.comment ?? null) !== (first.comment ?? null) || aliasesOf(slot) !== aliasesOf(first)) {
         violations.push(
-          `Station ID ${idKey} has a different name or comment at ${here} than at ${members[0] as string}`,
+          `Station ID ${idKey} has a different comment or aliases at ${here} than at ${members[0] as string}`,
         );
+      }
+      const aliasName = lineAliasName(slot);
+      if (typeof aliasName === 'string') {
+        if (slot.name !== aliasName) {
+          violations.push(
+            `${here} (Station ID ${idKey}) shows ${JSON.stringify(slot.name)}, but its line knows the station as ${JSON.stringify(aliasName)}`,
+          );
+        }
+      } else if (ownAt === '') {
+        ownName = slot.name;
+        ownAt = here;
+      } else if (slot.name !== ownName) {
+        violations.push(`Station ID ${idKey} has a different name at ${here} than at ${ownAt}`);
       }
       const listed: string[] = [];
       const mergedWith = Array.isArray(slot.merged_with) ? slot.merged_with : [];

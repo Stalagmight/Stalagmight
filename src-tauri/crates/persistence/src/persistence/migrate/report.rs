@@ -43,20 +43,22 @@ pub struct MigrationReport {
     pub merges_collapsed_torn_max_m: f64,
 
     // Station identity.
-    /// Retired member ids kept as aliases of their station.
+    /// Merge members kept as aliases of their station (each naming the
+    /// member's line, which keeps showing the member's name).
     pub aliases_created: usize,
     /// Member ids dropped because they were out of range or already used.
     pub station_ids_dropped: usize,
     /// Stations that had no usable id and were given a fresh one.
     pub station_ids_minted: usize,
-    /// Stations renamed (letter suffix) for a true clash: a name another
-    /// station holds as its own on a line that holds the junction to its
-    /// names too (D-migration-upgrade-8: a line that knows a junction by an
-    /// alias does not).
+    /// Aliases whose member had no usable id and were given a fresh one.
+    pub alias_ids_minted: usize,
+    /// Stations renamed (letter suffix) because a line showed one name
+    /// twice: only a 0.6.0 file that already did (every line keeps the names
+    /// 0.6.0 showed on it, a junction's included).
     pub stations_renamed: usize,
-    /// Slots whose station now goes by another name than 0.6.0 showed there
-    /// (a junction's one name, a lettered clash); the names themselves are
-    /// in `MigratedExtras::names_changed`, never here.
+    /// Slots now shown by another name than 0.6.0 showed there (a lettered
+    /// repeat); the names themselves are in `MigratedExtras::names_changed`,
+    /// never here.
     pub names_changed: usize,
     /// Stations whose members' distinct comments were joined.
     pub comments_joined: usize,
@@ -407,6 +409,7 @@ impl MigrationReport {
         put("aliases_created", self.aliases_created);
         put("station_ids_dropped", self.station_ids_dropped);
         put("station_ids_minted", self.station_ids_minted);
+        put("alias_ids_minted", self.alias_ids_minted);
         put("stations_renamed", self.stations_renamed);
         put("names_changed", self.names_changed);
         put("comments_joined", self.comments_joined);

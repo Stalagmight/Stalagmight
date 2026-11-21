@@ -1,7 +1,9 @@
 /**
  * The Detach dialog says which name the detached line gets (review finding
  * UX-4): a line that was merged there gets back the Station ID and name it
- * had, any other line a new station named like the junction. The words come
+ * had; the line the junction is its own keeps it when every other line knew
+ * it by another name, and those lines get theirs back (I-1); otherwise the
+ * line gets a new station named as it showed the junction. The words come
  * from the backend's `preview_detach_line` for the chosen line.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,8 +28,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
     args.lineId === SIDE
-      ? { name: '0', station_id: 7, restored: true }
-      : { name: '3a', station_id: 19, restored: false },
+      ? { name: '0', station_id: 7, restored: true, kept: false }
+      : { name: '0', station_id: 7, restored: true, kept: true },
   );
   useProjectStore.setState({
     project: {
@@ -39,7 +41,7 @@ beforeEach(() => {
     surveyData: null,
     stations: [
       { station_ref: slot(MAIN, 3), id: 3, name: '3a', merged_with: [slot(SIDE, 0)] },
-      { station_ref: slot(SIDE, 0), id: 3, name: '3a', merged_with: [slot(MAIN, 3)] },
+      { station_ref: slot(SIDE, 0), id: 3, name: '0', merged_with: [slot(MAIN, 3)] },
     ],
     unmergeStations: vi.fn(),
     unmergeStationPair: vi.fn(),
@@ -55,6 +57,9 @@ describe('Detach dialog naming', () => {
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
     expect(naming).toHaveTextContent('Side gets back the station it had here before the merge: 0 (Station ID 7).');
+    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+      'The line you detach keeps its shots and gets its own station here, with no comment.',
+    );
     expect(invokeIpc).toHaveBeenCalledWith(
       'preview_detach_line',
       { stationRef: slot(SIDE, 0), lineId: SIDE },
@@ -62,7 +67,23 @@ describe('Detach dialog naming', () => {
     );
   });
 
-  it('follows the chosen line: the other one gets a new station named like the junction', async () => {
+  it('follows the chosen line: the junction stays on its own line and the merged line gets its station back', async () => {
+    render(<UnmergeStationsDialog />);
+    await screen.findByTestId('unmerge-stations-naming');
+    fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
+    await waitFor(() =>
+      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+        'Main keeps this station. Side gets back the station it had here before the merge: 0 (Station ID 7).',
+      ),
+    );
+    // What stays and what goes is said the same way round.
+    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+      'The line you detach keeps its shots and this station, with its comment.',
+    );
+  });
+
+  it('says a line gets a new station named as it showed the junction when another line keeps it', async () => {
+    invokeIpc.mockImplementation(async () => ({ name: '3a', station_id: 19, restored: false, kept: false }));
     render(<UnmergeStationsDialog />);
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));

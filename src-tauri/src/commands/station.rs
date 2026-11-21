@@ -98,7 +98,8 @@ pub(crate) fn unmerge_stations_impl(state: &AppState, station_ref: StationRef) -
 /// What detaching line `line_id` from the station at `station_ref` would give
 /// the line (read-only, NOT a Command): the new station's name and Station
 /// ID, and whether they are the line's own from before the merge (review
-/// finding UX-4). Refused as the detach is.
+/// finding UX-4); or, when the line keeps the junction, what the other lines
+/// get back (I-1). Refused as the detach is.
 #[tauri::command]
 pub fn preview_detach_line(
     state: State<AppState>,
@@ -126,6 +127,7 @@ pub(crate) fn preview_detach_line_impl(
         name: naming.name,
         station_id: naming.id,
         restored: naming.restored_alias,
+        kept: naming.kept,
     })
 }
 
