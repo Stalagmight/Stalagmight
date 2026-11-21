@@ -781,16 +781,16 @@ For context; nothing here changes the format. The app's side is
   Stalagmight records `local.speleodb.base_survey` when it installs a
   downloaded revision and after an upload lands, and counts a marked file
   whose survey has that digest as holding nothing to upload. The digest is
-  SHA-256, written as `sha256:` and lowercase hex, over: the bytes of
-  `stalagmight survey digest 1` and a newline; the `base` revision id; then,
-  sorted by key, every top-level member except `format`, `version`,
-  `solver`, `generator`, `summary`, `local`, `history` and `end`, as its key
-  and its value's text as written, `project` without its `modified` key and
-  `speleodb` without `endpoint` and `name` (each re-joined in file order, no
-  whitespace). Every field is preceded by its length in bytes as an unsigned
-  64-bit little-endian integer. A writer that does not compute it leaves it as
-  it is: it describes the `base` revision, not the file, and it is bound to
-  that revision id.
+  SHA-256, written as `sha256:` and lowercase hex, over the bytes
+  `stalagmight survey digest 1` and a newline, then these fields, each
+  preceded by its length in bytes as an unsigned 64-bit little-endian
+  integer: the `base` revision id; then, for every top-level member except
+  `format`, `version`, `solver`, `generator`, `summary`, `local`, `history`
+  and `end`, sorted by key, its key and its value's text as written, with
+  `project` without its `modified` key and `speleodb` without `endpoint` and
+  `name` (their other members re-joined in file order, no whitespace). A
+  writer that does not compute it leaves it as it is: it describes the `base`
+  revision, not the file, and it is bound to that revision id.
 - **Local-only rewrites.** Changes to the link, the sync state, display
   settings and the history alone rewrite those members and copy every other
   member byte for byte, even when the file is open read-only. When the

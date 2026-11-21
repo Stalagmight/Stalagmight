@@ -107,7 +107,9 @@ pub(super) fn probe_settled(path: &Path) -> std::io::Result<Header> {
     }
     if let Some(local) = whole.local.as_mut() {
         if holds_base_survey(&bytes, &local.speleodb) {
-            tracing::info!(
+            // Debug, not info: a listing reads every cached copy each time it
+            // paints, and this copy answers the same until it is opened.
+            tracing::debug!(
                 path = %path.display(),
                 purpose = "tell a stale un-uploaded mark from un-uploaded work",
                 "speleodb: the copy holds exactly its BASE survey; its un-uploaded mark is stale"

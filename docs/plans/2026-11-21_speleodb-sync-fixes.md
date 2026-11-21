@@ -58,6 +58,13 @@ prompt. 0.6.0 had the same (one UPDATE of `speleo_link` per edit).
   (the survey back at the old BASE) must not leave the copy clean over the new
   BASE it does not hold.
 
+**Cost.** Only a copy marked un-uploaded with a recorded digest is hashed: a
+save, an open, a link read of it. On the format bench (release, one member
+scan and SHA-256) the digest takes about a third of an encode: 1.4 ms for
+5,000 shots (0.6 MB), 6.2 ms for 20,000 (2.4 MB), 29 ms for 100,000 (12 MB),
+against 2.8, 14 and 87 ms to encode. Hashing during the encode instead would
+save the scan; not worth its change of the encoder here.
+
 **Ruled out.** A copy without a digest (a 0.6.0 copy, a version 2 copy
 installed before this) keeps the conservative answer, as does any survey that
 differs in a byte the digest covers (an ignore kept only for a shot the history

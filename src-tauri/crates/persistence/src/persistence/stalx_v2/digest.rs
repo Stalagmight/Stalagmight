@@ -28,6 +28,7 @@
 //! ignores kept for shots only the history can bring back) reads as
 //! different, which is the conservative answer: the copy keeps its mark.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use sha2::{Digest as _, Sha256};
@@ -66,7 +67,9 @@ const DOMAIN: &[u8] = b"stalagmight survey digest 1\n";
 pub fn survey_digest(bytes: &[u8], base: &str) -> Result<String, EncodeError> {
     let text = complete_v2(bytes)?;
     let top = top_members(text)?;
-    let mut members: Vec<(&str, Vec<u8>)> = Vec::with_capacity(top.len());
+    // The body is hashed where it lies; only the two filtered members are
+    // written out again.
+    let mut members: Vec<(&str, Cow<'_, [u8]>)> = Vec::with_capacity(top.len());
     for (key, raw) in &top {
         let key = key.as_ref();
         if NOT_SURVEY.contains(&key) {
@@ -77,9 +80,9 @@ pub fn survey_digest(bytes: &[u8], base: &str) -> Result<String, EncodeError> {
                 let removed: Vec<(&str, Option<&str>)> = drop.iter().map(|k| (*k, None)).collect();
                 let mut out = Vec::new();
                 replace_keys(&mut out, raw, None, &removed)?;
-                out
+                Cow::Owned(out)
             }
-            None => raw.get().as_bytes().to_vec(),
+            None => Cow::Borrowed(raw.get().as_bytes()),
         };
         members.push((key, value));
     }
