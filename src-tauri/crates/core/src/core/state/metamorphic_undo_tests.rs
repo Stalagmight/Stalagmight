@@ -95,7 +95,8 @@
 //! link between two pieces and be promoted too, joining two partner
 //! stations the atomic route keeps apart (seed 17523769: line 2's last
 //! station and line 3's station 19, with no closure left between their
-//! pieces in the atomic route). So the comparison works slot by slot: each
+//! pieces in the atomic route; seed 17522915: a partner station and a
+//! station of the edited line itself). So the comparison works slot by slot: each
 //! slot of the singles' junction (one per line through it) takes the atomic
 //! route's station at that slot, the merges into one junction are folded
 //! into one record, and it asserts that those merges, at their own slots,
@@ -557,6 +558,9 @@ struct Absorbed {
     comment: Option<String>,
     /// Which single delete made that last merge (they run in order).
     step: usize,
+    /// The junction's slots the merges joined: the atomic route's stations
+    /// there are exactly the stations they joined.
+    slots: BTreeSet<(LineId, usize)>,
     /// The atomic route's comment, per slot: the partner end's own, or the
     /// same join when the range promoted the closure too.
     atomic_comments: BTreeMap<(LineId, usize), Option<String>>,
@@ -869,6 +873,7 @@ fn absorbed_promotion(
             edited_ends: BTreeSet::from([edited_end]),
             comment,
             step: single.step,
+            slots: BTreeSet::from([(line, index)]),
             atomic_comments: BTreeMap::from([((line, index), atomic_comment)]),
             carried: false,
         }),
@@ -878,11 +883,15 @@ fn absorbed_promotion(
 /// A CARRIED closure (module docs): one the atomic route deleted with its
 /// end on the edited line, which an earlier single delete's merge moved onto
 /// a partner station, so a later single delete's sweep promoted it between
-/// two stations off the edited line. Its junction in the singles is found by
-/// either end's slot on a line other than the edited one (both must give the
-/// same station), what that merge must have left on it, and, per slot, the
-/// comment the atomic route keeps there: the station's own, as before the
-/// delete (the range touches neither end).
+/// two stations both routes keep (on partner lines, or one on the edited
+/// line itself: seed 17522915). Its junction in the singles is the station
+/// that is, or carries as an alias, each of its two ends (both must give the
+/// same station); the slots it explains are that junction's slots on the
+/// lines either end was on when the merge ran (a slot of the edited line is
+/// read in the result, where both routes have removed the same shots);
+/// what that merge must have left on it; and, per slot, the comment the
+/// atomic route keeps there: its station's own, as before the delete (the
+/// range touches neither end).
 fn carried_promotion(
     single: &SinglePromotion,
     pre: &Project,
@@ -906,51 +915,42 @@ fn carried_promotion(
     if edited_ends.is_empty() || atomic.closures.iter().any(|c| c.id == closure.id) {
         return None;
     }
-    let before = &single.before;
-    let slot_of = |station: StationId, via: Option<LineId>| -> Option<(LineId, usize)> {
-        let line = via.filter(|l| *l != edited).or_else(|| {
-            before
-                .topology()
-                .lines_of(station)
-                .into_iter()
-                .find(|l| *l != edited)
-        })?;
-        let index = before
-            .line_stations(line)?
-            .iter()
-            .position(|s| *s == station)?;
-        Some((line, index))
-    };
-    let slots = [
-        slot_of(closure.a, closure.a_via)?,
-        slot_of(closure.b, closure.b_via)?,
-    ];
-    let singles_id = station_at_slot(singles, slots[0])?;
-    if station_at_slot(singles, slots[1])? != singles_id {
+    let (survivor, retired) = (single.promotion.survivor, single.promotion.retired);
+    let singles_id = known_as(singles, survivor)?;
+    if known_as(singles, retired)? != singles_id {
         return None;
     }
+    let before = &single.before;
+    let lines_then: BTreeSet<LineId> = [survivor, retired]
+        .iter()
+        .flat_map(|end| before.topology().lines_of(*end))
+        .collect();
+    let atomic_at = junction_slots(atomic, singles, singles_id)?;
+    let slots: BTreeSet<(LineId, usize)> = atomic_at
+        .iter()
+        .map(|(slot, _)| *slot)
+        .filter(|(line, _)| lines_then.contains(line))
+        .collect();
+    if slots.is_empty() {
+        return None;
+    }
+    let pre_comment = |s: StationId| pre.stations.get(&s).map(|st| st.comment.clone());
+    let atomic_comments: BTreeMap<(LineId, usize), Option<String>> = atomic_at
+        .iter()
+        .filter(|(slot, _)| slots.contains(slot))
+        .filter_map(|(slot, a)| Some((*slot, pre_comment(a.id)?)))
+        .collect();
     let comment_of = |s: StationId| before.stations.get(&s).and_then(|st| st.comment.clone());
-    let comment = joined_comment(
-        comment_of(single.promotion.survivor),
-        comment_of(single.promotion.retired),
-    );
-    let pre_comment = |slot: (LineId, usize)| {
-        station_at_slot(pre, slot)
-            .and_then(|s| pre.stations.get(&s))
-            .and_then(|s| s.comment.clone())
-    };
     Some(Mirrored {
         closure: closure.id,
         singles_id,
-        atomic_at: junction_slots(atomic, singles, singles_id)?,
+        atomic_at,
         absorbed: Some(Absorbed {
             edited_ends,
-            comment,
+            comment: joined_comment(comment_of(survivor), comment_of(retired)),
             step: single.step,
-            atomic_comments: slots
-                .iter()
-                .map(|slot| (*slot, pre_comment(*slot)))
-                .collect(),
+            slots,
+            atomic_comments,
             carried: true,
         }),
     })
@@ -969,6 +969,7 @@ fn one_per_junction(records: Vec<Mirrored>) -> Vec<Mirrored> {
         match (&mut seen.absorbed, record.absorbed) {
             (Some(kept), Some(new)) => {
                 kept.edited_ends.extend(new.edited_ends);
+                kept.slots.extend(new.slots);
                 for (slot, comment) in new.atomic_comments {
                     kept.atomic_comments.entry(slot).or_insert(comment);
                 }
@@ -1215,7 +1216,7 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
     // Each merge on the way joins the stations at its own slots, so the
     // atomic route's stations at the junction's slots are exactly those.
     let mut explained = BTreeSet::new();
-    for slot in absorbed.atomic_comments.keys() {
+    for slot in &absorbed.slots {
         match m.atomic_at.iter().find(|(at, _)| at == slot) {
             Some((_, a)) => {
                 explained.insert(a.id);
@@ -3246,7 +3247,10 @@ fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
 /// the atomic route keeps apart; leaving the carried kind out reports that
 /// junction ("joins the atomic route's stations {16, 19}, where the merges
 /// on the way join {19}"), and the one-station adoption made the farm's
-/// `DuplicateStationName` panic.
+/// `DuplicateStationName` panic. 17522915: the carried closure's other end
+/// is a station of the edited line both routes keep, so the junction is
+/// found by its ends' ids and its slots by the lines they were on; requiring
+/// both ends on partner lines reports the join of {5, 14}.
 #[test]
 fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
     let _config = crate::test_helpers::isolated_config();
@@ -3256,7 +3260,7 @@ fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
     let mut carried = 0;
     for seed in [
         17_503_128, 17_504_401, 17_505_500, 17_507_685, 17_509_825, 17_510_181, 17_510_437,
-        17_515_357, 17_517_958, 17_523_769,
+        17_515_357, 17_517_958, 17_522_915, 17_523_769,
     ] {
         let outcomes = run_pairs(seed, 4, true, GATE_PRELUDE);
         let outcome = &outcomes["range-shift-is-n-single-deletes"];
@@ -3278,8 +3282,8 @@ fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
         problems.extend(outcome.problems.iter().cloned());
     }
     assert!(
-        carried >= 1,
-        "seed 17523769 no longer reaches a carried closure ({carried}): re-pin it"
+        carried >= 2,
+        "seeds 17522915 and 17523769 no longer reach a carried closure ({carried}): re-pin them"
     );
     assert!(
         absorbed >= 10,

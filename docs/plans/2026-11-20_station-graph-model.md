@@ -1525,8 +1525,10 @@ themselves. Labels `JP1`...
   line's end onto the partner station, so a closure the atomic range deletes
   with that end survives in the singles, and once the next single delete
   takes the junction off the edited line it can be the only link between two
-  pieces and be promoted too, joining two partner stations the atomic route
-  keeps apart. Each line still shows the same names in both routes. The
+  pieces and be promoted too, joining two stations the atomic route keeps
+  apart (two partner stations, seed 17523769, or a partner station and one
+  of the edited line, seed 17522915). Each line still shows the same names
+  in both routes. The
   oracle gave the singles' junction one atomic station record on every line,
   which showed one line two stations named alike, and the encoder's refusal
   was a panic. It now adopts slot by slot (each line's slot takes the atomic
