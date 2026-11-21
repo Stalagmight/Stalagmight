@@ -83,6 +83,6 @@ keeps its mark (0.6.0 and version 2); the digest goes with its BASE and its
 project. Five fail on the code before the fix.
 Injections, each caught: the probe returning the header as read, no digest at
 the install, the open's clear off, the save's clear off, no digest at the
-landing, the landing's `has_unpushed_edits = true` removed. The digest is
-pinned in `persistence/stalx_v2/format_v2_digest_tests.rs`; the frontend
+landing, the landing's `has_unpushed_edits = true` removed, the clear in
+`set_speleo_link` removed. The digest is pinned in `persistence/stalx_v2/format_v2_digest_tests.rs`; the frontend
 mirror in `projectSaveActions.test.ts` and `speleoStore.test.ts`.
