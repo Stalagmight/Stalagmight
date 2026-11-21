@@ -1987,6 +1987,33 @@ fn farm_seeds_project_to_todays_payloads() {
     }
 }
 
+/// Fuzz seed 34277750 (the default draw): a GPS fix sits where the survey
+/// puts its station, 1.8 km from the frame, so its gap is rounding (2.3e-13
+/// m, one ulp there) and its bearing noise: 270 degrees in 0.6.0's payload,
+/// 284 on the wire. The comparison leaves out the bearing of a gap under its
+/// floor (`wire_equivalence_tests::GAP_BEARING_MIN_REL`, 1.9 mm there);
+/// comparing it reports the gap unexplained.
+#[test]
+fn a_gps_fix_gap_of_rounding_has_no_bearing_to_compare() {
+    let seed = 34_277_750;
+    let Some(hostile) = hostile_case(seed, DEFAULT_KNOBS) else {
+        panic!("seed {seed} builds");
+    };
+    let Ok(Ok((legacy, migrated))) = open_and_migrate(&hostile.bytes) else {
+        panic!("seed {seed} migrates");
+    };
+    assert!(
+        migrated
+            .project
+            .gps_fix_gaps()
+            .iter()
+            .any(|(_, gap)| gap.gap_m < 1e-9),
+        "seed {seed}: no GPS fix sits on its station any more"
+    );
+    let tally = wire_compare(format!("seed {seed}"), seed, &legacy, &migrated);
+    assert!(tally.unexplained.is_empty(), "{:?}", tally.unexplained);
+}
+
 /// Farm seeds 34008291 and 34014759: a line's end shot at a junction is
 /// deleted while two closures tie the junction to the same far slot, one via
 /// the line and one via the junction's replacement member (the remaining

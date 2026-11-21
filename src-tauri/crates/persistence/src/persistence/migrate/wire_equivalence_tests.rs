@@ -53,6 +53,30 @@ const Z_TOL: f64 = 1e-9;
 const SAME_POSITION_TOL: f64 = 1e-12;
 /// Closure metrics and gaps are compared within this.
 const METRIC_TOL: f64 = 1e-6;
+/// A GPS fix's gap has a bearing worth comparing (within `METRIC_TOL`
+/// degrees, 1.75e-8 rad) only when it is at least this fraction of `M`, the
+/// largest raw coordinate of its station's component: 1 mm per km.
+///
+/// Both sides measure the gap from the same local GPS position (the same
+/// `gps_to_local` on the same frame, bit for bit) to the station's raw
+/// position, which each derives by its own order of additions from the
+/// component's anchor. Every sum either side rounds there is a position of
+/// that component (to within its hand moves), so each rounding is at most
+/// half an ulp, and an ulp at most `f64::EPSILON x M` (2.2e-16 M): the two
+/// positions differ by about one ulp per shot of the path at most. A
+/// difference of `k` ulps per axis turns the bearing of a gap `g` by up to
+/// `sqrt(2) x k x EPSILON x M / g` rad; at the floor `g = 1e-6 M` that is
+/// `k x 3.1e-10` rad, `k x 1.8e-8` degrees, inside `METRIC_TOL` up to
+/// `k = 55`. Fuzz seed 34277750's two positions differ by one ulp of a 331 m
+/// coordinate (5.7e-14 m, 1.7e-9 degrees at its 1.9 mm floor), and its
+/// 2.3e-13 m gap (one ulp at 1.8 km) read 270 degrees against 284.
+///
+/// A fixed length cannot do this: at `MAX_COORDINATE_M` (1e8 m) one ulp is
+/// 1.5e-8 m, and a gap needs 0.85 m per ulp to hold its bearing to 1e-6
+/// degrees, while at the fuzz's kilometre scale a fix millimetres off must
+/// still be caught. The floor is 1 to 2 mm at the scale of the fuzz's GPS
+/// fixes, 0.1 mm on a 100 m survey, 0.1 m beside a 100 km shot.
+const GAP_BEARING_MIN_REL: f64 = 1e-6;
 
 /// The legacy IPC view of a legacy project (`serialize_project_ipc`).
 struct Ipc<'a>(&'a m::Project);
@@ -72,6 +96,29 @@ fn close(a: &Value, b: &Value, tol: f64) -> bool {
         (Some(x), Some(y)) => (x - y).abs() <= tol || (x.is_nan() && y.is_nan()),
         _ => a == b,
     }
+}
+
+/// Whether 0.6.0's gap of a GPS fix (`old`, a `DatumGap` or null) is the
+/// wire's (`new`) for a station whose component's largest raw coordinate is
+/// `scale_m`: both absent, or every figure within `METRIC_TOL`, the same
+/// verdict, and the bearing only when both gaps reach the floor
+/// [`GAP_BEARING_MIN_REL`] x `scale_m`. Both rather than the larger one:
+/// the gaps agree within `METRIC_TOL` or `gap_m` fails, so the two rules
+/// differ only when the smaller gap lies within `METRIC_TOL` under the
+/// floor, and that one can be noise where the floor itself is under
+/// `METRIC_TOL` (a component within a metre of its frame).
+fn gaps_agree(old: &Value, new: &Value, scale_m: f64) -> bool {
+    if old.is_null() != new.is_null() {
+        return false;
+    }
+    let floor = GAP_BEARING_MIN_REL * scale_m;
+    let has_bearing = |gap: &Value| gap["gap_m"].as_f64().is_some_and(|g| g >= floor);
+    let bearing = has_bearing(old) && has_bearing(new);
+    ["gap_m", "threshold_m", "survey_distance_m"]
+        .iter()
+        .chain(bearing.then_some(&"bearing_deg"))
+        .all(|k| close(&old[*k], &new[*k], METRIC_TOL))
+        && old["exceeds_threshold"] == new["exceeds_threshold"]
 }
 
 fn slot_of(value: &Value) -> StationRef {
@@ -392,6 +439,20 @@ impl<'a> Case<'a> {
             (Some(a), Some(b)) => self.tie_group.get(&a) == self.tie_group.get(&b),
             _ => false,
         }
+    }
+
+    /// The largest coordinate magnitude of the migrated raw layout in the
+    /// component of `slot` (of the whole layout if it has none): the scale
+    /// of the roundings that laid out its positions (`GAP_BEARING_MIN_REL`).
+    fn raw_scale(&self, slot: StationRef) -> f64 {
+        let topology = self.p.topology();
+        let component = self.station(slot).and_then(|s| topology.component_of(s));
+        self.raw
+            .slots(self.p)
+            .iter()
+            .filter(|s| component.is_none() || topology.component_of(s.station) == component)
+            .map(|s| s.x.abs().max(s.y.abs()))
+            .fold(0.0, f64::max)
     }
 
     fn demotions(&self) -> bool {
@@ -781,12 +842,10 @@ impl<'a> Case<'a> {
                 }
             }
             let (og, ng) = (&o["gap"], &n["gap"]);
-            let gap_same = og.is_null() == ng.is_null()
-                && ["gap_m", "bearing_deg", "threshold_m", "survey_distance_m"]
-                    .iter()
-                    .all(|k| close(&og[*k], &ng[*k], METRIC_TOL));
+            let slot = slot_of(&n["station_ref"]);
+            let gap_same =
+                (og.is_null() && ng.is_null()) || gaps_agree(og, ng, self.raw_scale(slot));
             if !gap_same {
-                let slot = slot_of(&n["station_ref"]);
                 if self.demotions() || self.moved_component(slot, false) {
                     self.tally.note(
                         "zero_datums: GPS-fix gap over a demoted merge / in a moved component",
@@ -1899,4 +1958,61 @@ fn a_wire_move_the_migration_did_not_make_fails_even_where_it_moved_positions() 
         a_bent_wire_slot_is_unexplained("torn merge", &bytes, false),
         "the torn merge moves the raw layout"
     );
+}
+
+/// The gap comparison on synthetic gaps, at fuzz seed 34277750's scale (its
+/// component's largest raw coordinate, 1,872 m: a 1.9 mm floor).
+#[test]
+fn a_gap_too_short_for_a_bearing_is_compared_without_one() {
+    let gap = |gap_m: f64, bearing_deg: f64| {
+        serde_json::json!({
+            "bearing_deg": bearing_deg,
+            "exceeds_threshold": false,
+            "gap_m": gap_m,
+            "survey_distance_m": 9.919_974_920_565_501,
+            "threshold_m": 15.198_399_498_411_31,
+        })
+    };
+    let scale = 1_872.281_912_889_702;
+    // The finding: two gaps of one ulp at 1.8 km, 14 degrees apart.
+    let (old, new) = (
+        gap(2.273_736_754_432_320_6e-13, 270.0),
+        gap(2.343_714_200_843_385_6e-13, 284.036_243_467_926_45),
+    );
+    assert!(gaps_agree(&old, &new, scale));
+    // The same pair 5 mm long, above the floor: the bearing counts.
+    assert!(!gaps_agree(
+        &gap(5e-3, 270.0),
+        &gap(5e-3, 284.036_243_467_926_45),
+        scale
+    ));
+    assert!(gaps_agree(&gap(5e-3, 270.0), &gap(5e-3, 270.0), scale));
+    assert!(gaps_agree(
+        &gap(5e-3, 270.0),
+        &gap(5e-3, 270.0 + METRIC_TOL / 2.0),
+        scale
+    ));
+    assert!(!gaps_agree(
+        &gap(5e-3, 270.0),
+        &gap(5e-3, 270.0 + 2.0 * METRIC_TOL),
+        scale
+    ));
+    // The floor scales with the coordinates: 0.1 mm on a 100 m survey, so a
+    // 1 mm gap's bearing counts there.
+    assert!(!gaps_agree(&gap(1e-3, 270.0), &gap(1e-3, 271.0), 100.0));
+    // Under the floor everything but the bearing still counts.
+    let mut flagged = new.clone();
+    flagged["exceeds_threshold"] = Value::Bool(true);
+    assert!(!gaps_agree(&old, &flagged, scale));
+    let mut threshold = new.clone();
+    threshold["threshold_m"] = Value::from(15.2);
+    assert!(!gaps_agree(&old, &threshold, scale));
+    assert!(!gaps_agree(&old, &gap(2.0 * METRIC_TOL, 270.0), scale));
+    assert!(!gaps_agree(&Value::Null, &new, scale));
+    assert!(!gaps_agree(&old, &Value::Null, scale));
+    assert!(gaps_agree(&Value::Null, &Value::Null, scale));
+    // Both gaps must reach the floor: within a metre of the frame the floor
+    // is under `METRIC_TOL`, and a gap of noise next to one just past it
+    // has no bearing to compare with.
+    assert!(gaps_agree(&gap(6e-7, 10.0), &gap(1e-17, 200.0), 0.5));
 }
