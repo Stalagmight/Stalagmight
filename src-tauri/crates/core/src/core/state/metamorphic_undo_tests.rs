@@ -54,7 +54,32 @@
 //! `open_undo_bugs_tests.rs`). So on that shape alone the partner lines'
 //! placements and positions may differ, the ATOMIC route has to be the one
 //! that left them alone, and a partner cut loose entirely has to be exactly
-//! where it was. Everything else is compared strictly.
+//! where it was. Two more consequences of the singles' intermediate states
+//! are allowed. A loop closure from the edited line to a partner can become
+//! the partners' only link after the first single delete; the orphan-closure
+//! sweep then promotes it to a merge (plan 5.5), so on the singles' side the
+//! edited line's end of it survives on the partner line under its own id and
+//! name, with the partner's station as its alias, where the atomic route
+//! deletes that closure with its station and the partner keeps its own
+//! station. The comparison undoes exactly those promotions (the ones the
+//! singles' own previews reported) before it compares the stored surveys
+//! (seed 3063). And a piece cut loose is laid out from the anchor
+//! algorithm's still point (plan 4.1), so it is that station, not the
+//! placement station, that must stay where it was measured: a placement
+//! station past the closed gap moves with the gap-close (seed 3019).
+//! Everything else is compared strictly, with one consequence allowed: where a loop closure ties a partner to the rest of the survey,
+//! the least squares carries the partner's different measured layout into
+//! the Computed View of every station of that solve. Per axis that solve is
+//! a network with positive weights whose sources are its tie gaps, unmet
+//! shots and fix offsets; moving a partner moves only the gaps and fix
+//! offsets it takes part in, by at most its own move, so (the maximum
+//! principle plus superposition, as for `computed_view_within_its_misclosures`
+//! in `migrate_fuzz_tests.rs`) no station's adjusted position changes by more
+//! than the sum, over the partner lines, of how far the routes' measured
+//! layouts of that line differ on that axis. A non-partner station may
+//! differ by up to that bound and no more (farm-style seeds 3019, 3023 and
+//! 3063 with closures: a partner tied by a closure carries the whole solve
+//! 0.8 m).
 //!
 //! # Data
 //!
@@ -269,6 +294,8 @@ fn line_of_key(key: &str) -> Option<LineId> {
 /// A snapshot of everything the twins are compared on, from one side.
 struct Observed {
     stored: serde_json::Value,
+    /// What `stored` was masked with.
+    mask: Mask,
     verdict: Vec<String>,
     adjusted: BTreeMap<String, [f64; 3]>,
     allocators: BTreeMap<String, u64>,
@@ -282,6 +309,7 @@ fn observe(state: &AppState, mask: Mask) -> Observed {
     verdict.sort();
     Observed {
         stored: stored_of(&project, mask),
+        mask,
         verdict,
         adjusted: adjusted_of(state),
         allocators: allocators_of(&project),
@@ -377,20 +405,126 @@ struct Documented {
     /// solved loop leaves the solve, so its adjusted position changes
     /// whichever route ran (it is shown measured from then on).
     before: BTreeMap<String, [f64; 3]>,
+    /// Per axis, the sum over the `allowed` lines of how far the two routes'
+    /// measured layouts of that line differ at most: the largest change the
+    /// solve can carry into any other station's adjusted position (module
+    /// docs).
+    propagation: [f64; 3],
+    /// The closures the singles' sweep promoted on an intermediate state
+    /// (module docs), as `(survivor, retired)`: the survivor is a station the
+    /// atomic route deleted, the retired one its partner-side end, which the
+    /// atomic route kept.
+    singles_promotions: Vec<(StationId, StationId)>,
+}
+
+/// `p` with each promotion `(survivor, retired)` the singles' sweep made
+/// undone: the survivor, which carries `retired` as an alias, becomes
+/// `retired` again under that alias's name, everywhere it is referenced.
+/// Only a promotion whose alias is still there is undone; any other trace of
+/// the merge (a joined comment) is left for the comparison to report.
+fn undo_promotions(p: &Project, promotions: &[(StationId, StationId)]) -> Project {
+    let mut p = p.clone();
+    for &(survivor, retired) in promotions {
+        if p.stations.contains_key(&retired) {
+            continue;
+        }
+        let Some(mut station) = p.stations.remove(&survivor) else {
+            continue;
+        };
+        let Some(at) = station.aliases.iter().position(|a| a.id == retired) else {
+            p.stations.insert(survivor, station);
+            continue;
+        };
+        let alias = station.aliases.remove(at);
+        station.id = retired;
+        if let Some(name) = alias.name {
+            station.name = name;
+        }
+        p.stations.insert(retired, station);
+        let swap = |s: &mut StationId| {
+            if *s == survivor {
+                *s = retired;
+            }
+        };
+        for line in p.lines_mut() {
+            swap(&mut line.start);
+            for shot in &mut line.shots {
+                swap(&mut shot.to);
+            }
+            if let Some(hand) = line.hand_moves.remove(&survivor) {
+                line.hand_moves.insert(retired, hand);
+            }
+        }
+        for datum in &mut p.datums {
+            swap(&mut datum.station);
+        }
+        for placement in &mut p.placements {
+            swap(&mut placement.station);
+        }
+        for closure in &mut p.closures {
+            swap(&mut closure.a);
+            swap(&mut closure.b);
+        }
+    }
+    p
+}
+
+/// [`Documented::propagation`]: per axis, the sum over `lines` of the
+/// largest difference between `left` and `right` at one of that line's
+/// slots.
+fn propagation_bound(
+    lines: &BTreeSet<LineId>,
+    left: &BTreeMap<String, [f64; 3]>,
+    right: &BTreeMap<String, [f64; 3]>,
+) -> [f64; 3] {
+    let mut per_line: BTreeMap<LineId, [f64; 3]> = BTreeMap::new();
+    for (key, a) in left {
+        let Some(line) = line_of_key(key).filter(|line| lines.contains(line)) else {
+            continue;
+        };
+        let Some(b) = right.get(key) else {
+            continue;
+        };
+        let worst = per_line.entry(line).or_insert([0.0; 3]);
+        for axis in 0..3 {
+            worst[axis] = worst[axis].max((a[axis] - b[axis]).abs());
+        }
+    }
+    per_line.values().fold([0.0; 3], |sum, worst| {
+        [sum[0] + worst[0], sum[1] + worst[1], sum[2] + worst[2]]
+    })
 }
 
 impl Documented {
     /// The stored survey without the placements of pieces on partner lines
     /// (a placement names its piece by a station).
     fn without_partner_placements(&self, observed: &Observed) -> serde_json::Value {
+        self.strip_partner_placements(&observed.project, observed.stored.clone())
+    }
+
+    /// The singles' stored survey with their intermediate promotions undone
+    /// ([`undo_promotions`]) and the partner placements left out.
+    fn singles_without_promotions(&self, observed: &Observed) -> serde_json::Value {
+        if self.singles_promotions.is_empty() {
+            return self.without_partner_placements(observed);
+        }
+        let project = undo_promotions(&observed.project, &self.singles_promotions);
+        let stored = stored_of(&project, observed.mask);
+        self.strip_partner_placements(&project, stored)
+    }
+
+    fn strip_partner_placements(
+        &self,
+        project: &Project,
+        mut stored: serde_json::Value,
+    ) -> serde_json::Value {
         let partner_stations: BTreeSet<StationId> = self
             .allowed
             .iter()
-            .filter_map(|line| observed.project.line_stations(*line))
+            .filter_map(|line| project.line_stations(*line))
             .flatten()
             .copied()
             .collect();
-        let mut stored = observed.stored.clone();
         if let Some(serde_json::Value::Array(placements)) = stored.get_mut("placements") {
             placements.retain(|placement| {
                 placement
@@ -434,7 +568,7 @@ fn differences(
     let (mut l, mut r) = match documented {
         Some(doc) => (
             doc.without_partner_placements(left),
-            doc.without_partner_placements(right),
+            doc.singles_without_promotions(right),
         ),
         None => (left.stored.clone(), right.stored.clone()),
     };
@@ -467,8 +601,16 @@ fn differences(
         match (left.adjusted.get(key), right.adjusted.get(key)) {
             (Some(a), Some(b)) => {
                 let worst = (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0_f64, f64::max);
-                if worst > POSITION_TOLERANCE_M && !allowed {
-                    geometry.push(format!("slot {key} {worst:.6} m apart: {a:?} vs {b:?}"));
+                // The partners' different layout, carried by the solve
+                // (module docs): within its bound on every axis.
+                let carried = documented.is_some_and(|doc| {
+                    (0..3).all(|i| (a[i] - b[i]).abs() <= doc.propagation[i] + POSITION_TOLERANCE_M)
+                });
+                if worst > POSITION_TOLERANCE_M && !allowed && !carried {
+                    let bound = documented.map(|doc| doc.propagation);
+                    geometry.push(format!(
+                        "slot {key} {worst:.6} m apart: {a:?} vs {b:?} (partner bound {bound:?})"
+                    ));
                 }
             }
             (a, b) => geometry.push(format!("slot {key} on one side only: {a:?} vs {b:?}")),
@@ -1040,9 +1182,22 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     if !ranged.success {
         return None;
     }
+    let mut promoted = Vec::new();
     for _ in start..=end {
         let live = shot_ids(&twins.right, line_id);
         let &target = live.get(start)?;
+        if let Some(preview) = twins
+            .right
+            .get_project_state()
+            .and_then(|p| p.preview_delete_shot(line_id, target).ok())
+        {
+            promoted.extend(
+                preview
+                    .promoted_closures
+                    .iter()
+                    .map(|pr| (pr.survivor, pr.retired)),
+            );
+        }
         let single = twins.right.execute(Command::DeleteShot {
             line_id,
             shot_id: target,
@@ -1055,16 +1210,31 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     }
     let mut cut_loose = Vec::new();
     let documented = partners.map(|partners| {
-        let (lines, problems) = pieces_cut_loose(&pre, &twins.left);
+        let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id);
         cut_loose = problems;
         let edited_head = lines.contains(&line_id);
         let mut allowed = partners.clone();
         allowed.extend(lines);
+        let propagation = propagation_bound(&allowed, &raw_of(&twins.left), &raw_of(&twins.right));
+        // Only a promotion whose survivor the atomic route deleted and whose
+        // retired end it kept is the intermediate-state kind (module docs).
+        let atomic = twins.left.get_project_state();
+        let singles_promotions = promoted
+            .iter()
+            .copied()
+            .filter(|(survivor, retired)| {
+                atomic.as_ref().is_some_and(|p| {
+                    !p.stations.contains_key(survivor) && p.stations.contains_key(retired)
+                })
+            })
+            .collect();
         (
             Documented {
                 partners,
                 allowed,
                 before,
+                propagation,
+                singles_promotions,
             },
             edited_head,
         )
@@ -1133,36 +1303,71 @@ fn doomed_anchor_partners(
 
 /// The pieces the atomic route cut loose and placed: every placement of
 /// the survey after the route (`now`) on a station that held none before
-/// (`pre`), with the lines of its piece. The positive assertion: a piece cut
-/// loose is placed exactly where its placement station was measured before
-/// the delete (the anchors settled once, after the whole range was gone).
-fn pieces_cut_loose(pre: &Project, now: &AppState) -> (BTreeSet<LineId>, Vec<String>) {
+/// (`pre`), with the lines of its piece. The positive assertion: such a piece
+/// is laid out with its still point exactly where that station was measured
+/// before the delete (the anchors settled once, after the whole range was
+/// gone). The still point is the anchor algorithm's for a piece with no
+/// datum (plan 4.1 rules (a) to (d); the delete is a geometry edit of
+/// `edited`): the edited line's pre-edit first station, else a pre-edit
+/// placement station, else the edited line's first station with a pre-edit
+/// position, else the piece's lowest such station. Not the placement
+/// station: that is the piece's lowest station, which may lie past the
+/// closed gap and move with it (seed 3019).
+fn pieces_cut_loose(
+    pre: &Project,
+    now: &AppState,
+    edited: LineId,
+) -> (BTreeSet<LineId>, Vec<String>) {
     let Some(p) = now.get_project_state() else {
         return (BTreeSet::new(), Vec::new());
     };
     let had: BTreeSet<StationId> = pre.placements.iter().map(|pl| pl.station).collect();
     let raw_before = pre.raw_positions();
+    let raw_now = p.raw_positions();
     let topology = p.topology();
     let mut lines = BTreeSet::new();
     let mut problems = Vec::new();
     for placement in p.placements.iter().filter(|pl| !had.contains(&pl.station)) {
-        if let Some(component) = topology.component_of(placement.station) {
-            for line in p.lines() {
-                if line
-                    .stations()
-                    .any(|s| topology.component_of(s) == Some(component))
-                {
-                    lines.insert(line.id);
-                }
+        let Some(component) = topology.component_of(placement.station) else {
+            continue;
+        };
+        let mut members: BTreeSet<StationId> = BTreeSet::new();
+        for line in p.lines() {
+            if line
+                .stations()
+                .any(|s| topology.component_of(s) == Some(component))
+            {
+                lines.insert(line.id);
+                members.extend(line.stations());
             }
         }
-        if let Some(was) = raw_before.xy(placement.station) {
-            let moved = (placement.x - was[0]).hypot(placement.y - was[1]);
+        let measured = |s: &StationId| members.contains(s) && raw_before.xy(*s).is_some();
+        let still = pre
+            .line(edited)
+            .map(|l| l.start)
+            .filter(|s| measured(s))
+            .or_else(|| {
+                pre.placements
+                    .iter()
+                    .map(|pl| pl.station)
+                    .find(|s| measured(s))
+            })
+            .or_else(|| {
+                p.line(edited)
+                    .and_then(|l| l.stations().find(|s| measured(s)))
+            })
+            .or_else(|| members.iter().copied().find(|s| measured(s)));
+        let Some(still) = still else {
+            continue;
+        };
+        if let (Some(was), Some(is)) = (raw_before.xy(still), raw_now.xy(still)) {
+            let moved = (is[0] - was[0]).hypot(is[1] - was[1]);
             if moved > POSITION_TOLERANCE_M {
                 problems.push(format!(
-                    "the range delete cut a piece loose and placed it {moved:.6} m from where \
-                     station {} was measured: {was:?} -> ({}, {})",
-                    placement.station, placement.x, placement.y
+                    "the range delete cut a piece loose (placed on station {}) and moved its \
+                     still point, station {still}, {moved:.6} m from where it was measured: \
+                     {was:?} -> {is:?}",
+                    placement.station
                 ));
             }
         }
@@ -1892,6 +2097,41 @@ fn metamorphic_gate() {
     assert!(
         problems.is_empty(),
         "{} metamorphic divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// Seeds 3019, 3023 and 3063 with closures, found by the integration sweep
+/// (3001-3200): a range delete that removes a junction whose partner line a
+/// loop closure ties to the rest of the survey. The two routes place the
+/// partner differently (the documented divergence) and the least squares
+/// carries that into the Computed View of every station it solves, 0.8 m on
+/// seed 3023, which the oracle now allows within the partners' bound and no
+/// further (module docs). Injection: a zero `propagation` bound reports a
+/// Computed View difference on each seed.
+#[test]
+fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
+    let _config = crate::test_helpers::isolated_config();
+    let mut problems = Vec::new();
+    let mut doomed = 0;
+    for seed in [3019, 3023, 3063] {
+        let outcomes = run_pairs(seed, 4, true, GATE_PRELUDE);
+        let outcome = &outcomes["range-shift-is-n-single-deletes"];
+        doomed += outcome
+            .shapes
+            .get(DOOMED_ANCHOR_SHAPE)
+            .copied()
+            .unwrap_or(0);
+        problems.extend(outcome.problems.iter().cloned());
+    }
+    assert!(
+        doomed >= 3,
+        "the pinned seeds no longer reach the doomed-anchor shape ({doomed}): re-pin them"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
         problems.len(),
         problems.join("\n\n")
     );
