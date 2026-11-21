@@ -91,13 +91,17 @@ test.describe('Recent Projects - Restore an earlier copy', () => {
     await expect(page.getByTestId('recovery-backup-row-0')).toContainText('The file as it was before the last restore');
     await expect(page.getByTestId('recovery-backup-row-1')).toContainText('Original before the upgrade to the new format');
 
-    // Picking the original again warns that the kept copy is replaced.
+    // Picking the original again warns that the kept copy is overwritten.
     await page.getByTestId('recovery-backup-row-1').click();
-    await expect(page.getByTestId('recovery-backup-confirm')).toContainText(
-      'It takes the place of the copy the last restore kept',
+    await expect(page.getByTestId('recovery-backup-overwrite-warning')).toContainText(
+      'The copy kept by the last restore',
+    );
+    await expect(page.getByTestId('recovery-backup-overwrite-warning')).toContainText(
+      'is overwritten and cannot be restored afterwards.',
     );
 
     await page.getByTestId('recovery-backup-row-0').click();
+    await expect(page.getByTestId('recovery-backup-overwrite-warning')).toHaveCount(0);
     await expect(page.getByTestId('recovery-backup-confirm')).toHaveText(
       'Put cave-alpha.stalx back as it was before the last restore? The two files swap places: the current ' +
         'file is kept as cave-alpha.stalx.pre-restore, so you can switch back.',

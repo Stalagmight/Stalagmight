@@ -17,7 +17,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 }));
 
 import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';
-import { preRestoreName, restoreConfirmText } from '../RestoreBackupPicker';
+import { preRestoreName, restoreConfirmText, restoreOverwriteWarning } from '../RestoreBackupPicker';
 import { useUIStore } from '../../../store/uiStore';
 import type { BackupInfo } from '../../../types/ipc/BackupInfo';
 
@@ -129,14 +129,20 @@ describe('CorruptionRecoveryDialog restore-only', () => {
     expect(restoreCalls()[0]?.[1]).toEqual({ projectPath: PATH, backupPath: SAFETY });
   });
 
-  it('warns that another restore replaces the copy the last restore kept', async () => {
+  it('warns that another restore overwrites the copy the last restore kept', async () => {
     listed = [safety, original];
     render(<CorruptionRecoveryDialog />);
     await waitFor(() => expect(screen.getByTestId('recovery-backup-item-1')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('recovery-backup-item-1'));
-    const confirm = screen.getByTestId('recovery-backup-confirm');
-    expect(confirm).toHaveTextContent('Replace Main Sump.stalx with this copy?');
-    expect(confirm).toHaveTextContent(/It takes the place of the copy the last restore kept \(Nov 21, 2026, .+\)\./);
+    expect(screen.getByTestId('recovery-backup-confirm')).toHaveTextContent('Replace Main Sump.stalx with this copy?');
+    const warning = screen.getByTestId('recovery-backup-overwrite-warning');
+    expect(warning).toHaveTextContent(
+      /^The copy kept by the last restore \(Nov 21, 2026, .+\) is overwritten and cannot be restored afterwards\.$/,
+    );
+    expect(warning).toHaveClass('text-warning-text');
+    // Restoring that copy itself swaps, and loses nothing.
+    fireEvent.click(screen.getByTestId('recovery-backup-item-0'));
+    expect(screen.queryByTestId('recovery-backup-overwrite-warning')).toBeNull();
   });
 
   it('says so when there is no backup, without offering another option', async () => {
@@ -168,7 +174,8 @@ describe('CorruptionRecoveryDialog damaged-file restore', () => {
 
     expect(restoreCalls()).toHaveLength(0);
     expect(screen.getByTestId('recovery-backup-confirm')).toHaveTextContent(
-      'Replace the damaged Main Sump.stalx with this copy? The damaged file is kept as Main Sump.stalx.pre-restore',
+      'Replace the damaged Main Sump.stalx with this copy? The damaged file is kept as Main Sump.stalx.pre-restore ' +
+        'and is listed here.',
     );
     fireEvent.click(screen.getByTestId('recovery-backup-back'));
     expect(screen.getByTestId('recovery-attempt-repair')).toBeInTheDocument();
@@ -184,7 +191,9 @@ describe('restore wording', () => {
     expect(preRestoreName('C:\\caves\\cave.stalx', [safety])).toBe('Main Sump.stalx.pre-restore');
   });
 
-  it('words a restore over a project with no earlier restore copy without mentioning one', () => {
-    expect(restoreConfirmText(PATH, [original], original, false)).not.toContain('last restore kept');
+  it('warns of nothing when no restore copy would be overwritten', () => {
+    expect(restoreConfirmText(PATH, [original], original, false)).not.toContain('last restore');
+    expect(restoreOverwriteWarning([original], original)).toBeNull();
+    expect(restoreOverwriteWarning([safety, original], safety)).toBeNull();
   });
 });

@@ -2855,10 +2855,13 @@ size; the file name is only in the row's tooltip. A click on a row selects
 it and writes nothing. The sentence under the list says what Restore does:
 "Replace `<file>` with this copy? The current file is kept as
 `<file>.pre-restore` and is listed here, so you can switch back." (for the
-damaged file: "Replace the damaged ...? The damaged file is kept as ..."),
-"It takes the place of the copy the last restore kept (`<date>`)." when there
-is one, and for that copy itself "Put `<file>` back as it was before the last
-restore? The two files swap places: ...". Restore is disabled until a copy
+damaged file: "Replace the damaged ...? The damaged file is kept as ... and is
+listed here."), and for the copy the last restore kept "Put `<file>` back as
+it was before the last restore? The two files swap places: ...". Restoring
+any other copy while there is such a copy overwrites it, which a second
+sentence says in the warning colour ("The copy kept by the last restore
+(`<date>`) is overwritten and cannot be restored afterwards."). Restore is
+disabled until a copy
 is chosen; the footer is Cancel (Recent Projects) or Back (damaged file),
 then Restore. The result names a pre-upgrade original in words, never by its
 app-data path, and can be closed without opening the project.

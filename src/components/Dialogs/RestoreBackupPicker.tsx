@@ -53,8 +53,8 @@ export function preRestoreName(projectPath: string, backups: BackupInfo[]): stri
 }
 
 /**
- * What Restore will do with `selected`, in one or two sentences. `damaged`: the
- * project is the damaged file the recovery dialog opened for.
+ * What Restore will do with `selected`. `damaged`: the project is the damaged
+ * file the recovery dialog opened for.
  */
 export function restoreConfirmText(
   projectPath: string,
@@ -70,15 +70,23 @@ export function restoreConfirmText(
       `the current file is kept as ${kept}, so you can switch back.`
     );
   }
-  const current = damaged ? 'The damaged file' : 'The current file';
-  const question = damaged
-    ? `Replace the damaged ${project} with this copy?`
-    : `Replace ${project} with this copy?`;
+  return damaged
+    ? `Replace the damaged ${project} with this copy? The damaged file is kept as ${kept} and is listed here.`
+    : `Replace ${project} with this copy? The current file is kept as ${kept} and is listed here, so you can switch back.`;
+}
+
+/**
+ * When restoring `selected` overwrites the copy the last restore kept (there is
+ * one, and it is not the copy being restored, which swaps instead): what is
+ * lost, said apart from the sentence above, in the warning colour.
+ */
+export function restoreOverwriteWarning(backups: BackupInfo[], selected: BackupInfo): string | null {
   const previous = backups.find((b) => b.kind === 'pre_restore');
-  const replacesPrevious = previous
-    ? ` It takes the place of the copy the last restore kept (${formatBackupDate(previous.modifiedAt)}).`
-    : '';
-  return `${question} ${current} is kept as ${kept} and is listed here, so you can switch back.${replacesPrevious}`;
+  if (!previous || selected.kind === 'pre_restore') return null;
+  return (
+    `The copy kept by the last restore (${formatBackupDate(previous.modifiedAt)}) is overwritten ` +
+    'and cannot be restored afterwards.'
+  );
 }
 
 interface RestoreBackupPickerProps {
@@ -93,6 +101,7 @@ interface RestoreBackupPickerProps {
 export function RestoreBackupPicker({ projectPath, backups, selectedPath, onSelect, damaged }: RestoreBackupPickerProps) {
   const project = extractFilename(projectPath);
   const selected = backups.find((b) => b.path === selectedPath) ?? null;
+  const warning = selected ? restoreOverwriteWarning(backups, selected) : null;
   return (
     <div className="space-y-3">
       <p className="text-text-secondary" id="restore-backup-intro">
@@ -140,6 +149,11 @@ export function RestoreBackupPicker({ projectPath, backups, selectedPath, onSele
       {selected && (
         <p className="text-sm text-text-primary" data-testid="recovery-backup-confirm">
           {restoreConfirmText(projectPath, backups, selected, damaged)}
+        </p>
+      )}
+      {warning && (
+        <p className="text-sm text-warning-text" data-testid="recovery-backup-overwrite-warning">
+          {warning}
         </p>
       )}
     </div>
