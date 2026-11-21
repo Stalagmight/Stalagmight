@@ -471,7 +471,9 @@ fn salvage_of_a_torn_file_reports_what_the_header_says() {
 /// before any size check (Attempt Repair already refused a file over the
 /// cap). A sparse file one byte over it is refused before it is read.
 /// Injection: `std::fs::read` again reads it whole and then refuses it as
-/// "not a Stalagmight project file", a different message.
+/// "not a Stalagmight project file", a different message. Unix only: the
+/// file is sparse there, and NTFS may allocate its whole length.
+#[cfg(unix)]
 #[test]
 fn salvage_refuses_a_file_over_the_size_cap_without_reading_it() {
     let dir = TempDir::new().unwrap();
