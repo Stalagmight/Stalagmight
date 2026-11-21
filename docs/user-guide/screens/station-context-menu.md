@@ -45,7 +45,7 @@ In menu order, with when each one shows:
 |---|---|
 | **Edit Station** | Always |
 | **Merge With...** | Always |
-| **Unmerge Stations** | Station is merged with another |
+| **Detach Line from Station...** | Station is shared by two or more lines |
 | **Remove Closure** | Station is on a loop closure |
 | **Add Shot Before** | First station of the line |
 | **Add Shot After** | Last station of the line |
@@ -60,7 +60,7 @@ In menu order, with when each one shows:
 
 ## Details
 
-- **Unmerge Stations**: see
+- **Detach Line from Station...**: see
   [Unmerging stations](../workflows/merging-stations.md#unmerging-stations).
   **Remove Closure**: see
   [Removing a closure](../workflows/closing-a-loop.md#removing-a-closure).

@@ -531,8 +531,9 @@ export default function ContextMenu() {
       ];
 
       // A junction (plan 5.2): the station is shared by two or more lines, and
-      // any one of them can leave it. The dialog names the lines, says what a
-      // detach does, and preselects the clicked slot's line.
+      // any one of them can leave it. The dialog names the lines and says what
+      // a detach does; where either of two lines gives the same result it
+      // offers no choice and names the line that comes off.
       if (mergedStations.length > 0) {
         items.push({
           label: 'Detach Line from Station...',

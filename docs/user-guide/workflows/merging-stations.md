@@ -55,12 +55,19 @@ go. See the [station context menu](../screens/station-context-menu.md).
 
 ## Unmerging stations
 
-Right-click a merged station and pick **Unmerge Stations**. The unmerge icon
-next to **Merged with** in **Details** does the same.
+Right-click a merged station and pick **Detach Line from Station...**. The
+detach button on a line's row under **Also on** in **Details** does the same
+for that line.
 
-![Unmerge Stations in the station context menu](../images/unmerge-menu.png)
+![Detaching a line in the station context menu](../images/unmerge-menu.png)
 
 1. A merged station, right-clicked.
-2. **Unmerge Stations**
+2. **Detach Line from Station...** (the screenshot shows its earlier name,
+   **Unmerge Stations**)
 
-A station merged with more than one other asks which merge to undo.
+The line you detach gets its own station at the same place: a line that was
+merged there gets back the Station ID and name it had before. On a station
+where three or more lines meet, the dialog asks which line to detach. Where
+two lines meet and either choice gives the same result, it asks nothing and
+says which line comes off, for example "North Passage comes off: it gets back
+0 (Station ID 9); Main Line keeps 3." Undo puts the line back.
