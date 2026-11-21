@@ -565,10 +565,7 @@ fn a_stale_mark_is_no_conflict_when_another_session_of_the_account_pushed() {
             remote.land("From the other session", revision(&endpoint, Some(3.0)))
         };
         let state = signed_in(&endpoint);
-        assert!(
-            state.open_project(dest.clone()).success,
-            "reopened from Recents"
-        );
+        assert!(state.open_project(dest).success, "reopened from Recents");
         resume_editing(&state);
         assert!(!open_link(&state).has_unpushed_edits);
 
