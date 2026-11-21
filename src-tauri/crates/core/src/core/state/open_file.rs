@@ -674,8 +674,7 @@ impl AppState {
             project.settings.validation = config.validation;
         }
         let parity = migrated.extras.legacy_parity.clone();
-        let on_disk =
-            FileState::from_migrated(migrated.extras, None, &migrated.report);
+        let on_disk = FileState::from_migrated(migrated.extras, None, &migrated.report);
         let mut file = self
             .file
             .lock()
