@@ -1303,16 +1303,21 @@ fn doomed_anchor_partners(
 
 /// The pieces the atomic route cut loose and placed: every placement of
 /// the survey after the route (`now`) on a station that held none before
-/// (`pre`), with the lines of its piece. The positive assertion: such a piece
-/// is laid out with its still point exactly where that station was measured
-/// before the delete (the anchors settled once, after the whole range was
-/// gone). The still point is the anchor algorithm's for a piece with no
+/// (`pre`), with the lines of its piece. The positive assertion: the piece
+/// sits where it was measured before the delete (the anchors settled once,
+/// after the whole range was gone): its placement station, or its still
+/// point, is exactly at its pre-delete position, so a piece moved as a whole
+/// fails. The still point is the anchor algorithm's for a piece with no
 /// datum (plan 4.1 rules (a) to (d); the delete is a geometry edit of
 /// `edited`): the edited line's pre-edit first station, else a pre-edit
 /// placement station, else the edited line's first station with a pre-edit
-/// position, else the piece's lowest such station. Not the placement
-/// station: that is the piece's lowest station, which may lie past the
-/// closed gap and move with it (seed 3019).
+/// position, else the piece's lowest such station. Either may be the one
+/// that stays: the placement station (the piece's lowest station) may lie
+/// past the closed gap and move with the gap-close while the still point
+/// stays (seed 3019); and a piece the sweep then promoted a closure onto is
+/// one piece with the moving piece it took in, whose stations, the edited
+/// line's first among them, moved onto it while the placement station
+/// stayed (seeds 168, 219, 3136).
 fn pieces_cut_loose(
     pre: &Project,
     now: &AppState,
@@ -1360,16 +1365,21 @@ fn pieces_cut_loose(
         let Some(still) = still else {
             continue;
         };
-        if let (Some(was), Some(is)) = (raw_before.xy(still), raw_now.xy(still)) {
-            let moved = (is[0] - was[0]).hypot(is[1] - was[1]);
-            if moved > POSITION_TOLERANCE_M {
-                problems.push(format!(
-                    "the range delete cut a piece loose (placed on station {}) and moved its \
-                     still point, station {still}, {moved:.6} m from where it was measured: \
-                     {was:?} -> {is:?}",
-                    placement.station
-                ));
-            }
+        let moved = |station: StationId| -> Option<f64> {
+            let (was, is) = (raw_before.xy(station)?, raw_now.xy(station)?);
+            Some((is[0] - was[0]).hypot(is[1] - was[1]))
+        };
+        let (by_placement, by_still) = (moved(placement.station), moved(still));
+        let stayed = |m: Option<f64>| m.is_none_or(|m| m <= POSITION_TOLERANCE_M);
+        if !stayed(by_placement) && !stayed(by_still) {
+            problems.push(format!(
+                "the range delete cut a piece loose and moved it: its placement station {} \
+                 moved {:.6} m and its still point, station {still}, {:.6} m from where they \
+                 were measured",
+                placement.station,
+                by_placement.unwrap_or(f64::NAN),
+                by_still.unwrap_or(f64::NAN),
+            ));
         }
     }
     (lines, problems)
@@ -2103,19 +2113,23 @@ fn metamorphic_gate() {
 }
 
 /// Seeds 3019, 3023 and 3063 with closures, found by the integration sweep
-/// (3001-3200): a range delete that removes a junction whose partner line a
+/// (3001-3200), and 168 (1-300): a range delete that removes a junction whose partner line a
 /// loop closure ties to the rest of the survey. The two routes place the
 /// partner differently (the documented divergence) and the least squares
 /// carries that into the Computed View of every station it solves, 0.8 m on
 /// seed 3023, which the oracle now allows within the partners' bound and no
-/// further (module docs). Injection: a zero `propagation` bound reports a
-/// Computed View difference on each seed.
+/// further (module docs). Seeds 3063 and 3019 pin the other two allowances
+/// (the singles' intermediate promotions, the cut-loose piece's still point),
+/// and 168 a piece whose placement station stayed while the sweep moved its
+/// still point onto it. Injections: a zero `propagation` bound fails 3023,
+/// no promotion undo fails 3063, the placement station alone fails 3019, the
+/// still point alone fails 168.
 #[test]
 fn a_partner_tied_by_a_closure_moves_the_solve_only_within_its_bound() {
     let _config = crate::test_helpers::isolated_config();
     let mut problems = Vec::new();
     let mut doomed = 0;
-    for seed in [3019, 3023, 3063] {
+    for seed in [168, 3019, 3023, 3063] {
         let outcomes = run_pairs(seed, 4, true, GATE_PRELUDE);
         let outcome = &outcomes["range-shift-is-n-single-deletes"];
         doomed += outcome
