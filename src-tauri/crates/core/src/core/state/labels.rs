@@ -302,7 +302,8 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
 /// entry-level labels said it:
 /// - a frontend batch is summarized from its sub-commands (`summarize`;
 ///   a batch that brings its own `label` keeps it);
-/// - a shot edit names the shot by its stations (`Update shot Main: 2 -> 3`);
+/// - a shot edit or delete names the shot by its stations (`Update shot
+///   Main: 2 -> 3`, `Delete shot Main: 2 -> 3`);
 /// - a credit edit counts the shots it changes (`Edit surveyors (12 shots)`);
 /// - a Section command names its Section (`Rename section "A" to "B"`).
 pub(crate) fn entry_label(project: &Project, cmd: &Command) -> String {
@@ -320,6 +321,11 @@ pub(crate) fn entry_label(project: &Project, cmd: &Command) -> String {
         } => names
             .shot(*line_id, *shot_id)
             .map_or_else(|| describe(cmd, &names), |s| format!("Update shot {s}")),
+        // Named by its stations like an update (demo finding I-9: "Delete
+        // shot in line ..." left the user to guess which shot went).
+        Command::DeleteShot { line_id, shot_id } => names
+            .shot(*line_id, *shot_id)
+            .map_or_else(|| describe(cmd, &names), |s| format!("Delete shot {s}")),
         Command::SetShotKind {
             line_id,
             shot_id,
