@@ -67,7 +67,8 @@ fn read_request(stream: &mut std::net::TcpStream, keep_last: bool) -> String {
 
 /// A loopback listener answering `connections` connections with `fault`, then
 /// closing (so a request past them is refused). `finish` returns the request
-/// lines it saw.
+/// lines it saw; a connection that never comes ends the wait after 30 s, so a
+/// client that tries fewer times fails the count instead of hanging the test.
 struct Faulty {
     base: String,
     worker: Option<std::thread::JoinHandle<Vec<String>>>,
@@ -76,12 +77,25 @@ impl Faulty {
     fn start(fault: Fault, connections: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let base = format!("http://{}", listener.local_addr().expect("address"));
+        listener.set_nonblocking(true).expect("nonblocking");
         let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(30);
             let mut seen = Vec::new();
             for _ in 0..connections {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Some(mut stream) = (loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break Some(stream),
+                        Err(_) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break None,
+                    }
+                }) else {
                     break;
                 };
+                stream
+                    .set_nonblocking(false)
+                    .expect("blocking accepted stream");
                 let keep_last = matches!(fault, Fault::ResetBeforeReply | Fault::ResetInBody);
                 let line = read_request(&mut stream, keep_last);
                 // The type the route answers, so the SDK reads the body it expects.
