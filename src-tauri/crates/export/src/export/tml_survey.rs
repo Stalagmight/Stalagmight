@@ -27,7 +27,7 @@
 //! - **Closures** become CLOSURE rows between their two stations (`Tie`s
 //!   included: a migrated cycle-closing merge is a loop like any other).
 //! - **Station comments** fold into the one row that ends at the station (a
-//!   START drops it, as before).
+//!   START drops it, as before; the export notes say so, demo issue N-14).
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -82,7 +82,7 @@ pub(super) fn build_xml(
             .filter(|line| !line.shots.is_empty())
             .map(|line| project.azimuth_reference_for(line)),
     );
-    let (rows, unwritten_datums) = build_rows(project, profile, azimuth_export);
+    let (rows, left_out) = build_rows(project, profile, azimuth_export);
     write_document(
         &DocumentHead {
             cave_name: &project.name,
@@ -90,21 +90,30 @@ pub(super) fn build_xml(
             azimuth_export,
         },
         &rows,
-        unwritten_datums,
+        left_out,
         n,
         profile,
     )
 }
 
-/// The finished rows, plus how many datums ended up on no START (the
-/// `gps-anchors-not-written` note).
+/// What the rows could not carry, for the export notes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct LeftOut {
+    /// Datums on no START (the `gps-anchors-not-written` note).
+    pub(super) datums: usize,
+    /// Station comments on a station whose only row is a START, which takes
+    /// no station comment (the `station-comments-not-written` note).
+    pub(super) station_comments: usize,
+}
+
+/// The finished rows, plus what they could not carry.
 pub(super) fn build_rows(
     project: &Project,
     profile: TmlProfile,
     azimuth_export: AzimuthExport,
-) -> (Vec<ExportShot>, usize) {
+) -> (Vec<ExportShot>, LeftOut) {
     if project.lines().is_empty() {
-        return (Vec::new(), 0);
+        return (Vec::new(), LeftOut::default());
     }
     let topology = project.topology();
     let frame = project.frame_datum();
@@ -135,7 +144,7 @@ pub(super) fn build_rows(
         line_rows(line, entry, emit, &mut rows);
     }
 
-    fold_station_comments(project, &mut rows);
+    let station_comments = fold_station_comments(project, &mut rows);
 
     // CLOSURE rows (then the GPS-fix pairs) are numbered above every station.
     let mut next_id = project
@@ -167,13 +176,19 @@ pub(super) fn build_rows(
     };
     let datum_gps = stamp_starts_at(nodes, start_xy, &mut rows, profile);
     enforce_ariane_geometry_invariants(&mut rows, profile);
-    let unwritten = datum_gps.append_fix_starts(&mut rows, next_id);
+    let datums = datum_gps.append_fix_starts(&mut rows, next_id);
 
     match profile {
         TmlProfile::SpeleoDbSidecar => harden_for_speleodb(&mut rows),
         TmlProfile::User => remint_duplicate_uuids(&mut rows),
     }
-    (rows, unwritten)
+    (
+        rows,
+        LeftOut {
+            datums,
+            station_comments,
+        },
+    )
 }
 
 /// Where a line is entered.
@@ -432,8 +447,10 @@ fn shot_row(shot: &Shot, line: &str, color: &str, from: StationId, to: StationId
 
 /// Fold each station comment into the one REAL / VIRTUAL row that ends at the
 /// station, and ZWSP-mark every shot comment (`comment_split`), as 0.6.0's
-/// fold did. A station whose node is a START keeps no comment in the file.
-fn fold_station_comments(project: &Project, rows: &mut [ExportShot]) {
+/// fold did. A station whose node is a START keeps no comment in the file, as
+/// in 0.6.0; how many were left out is returned, for the export note 0.6.0
+/// never gave (demo issue N-14).
+fn fold_station_comments(project: &Project, rows: &mut [ExportShot]) -> usize {
     let mut by_row: HashMap<i64, &str> = HashMap::new();
     for station in project.stations.values() {
         let Some(text) = station.comment.as_deref().filter(|t| !t.is_empty()) else {
@@ -450,13 +467,14 @@ fn fold_station_comments(project: &Project, rows: &mut [ExportShot]) {
     }
     let mut dropped: Vec<i64> = by_row.into_keys().collect();
     dropped.sort_unstable();
-    for station in dropped {
+    for &station in &dropped {
         tracing::debug!(
             station,
             "Station comment dropped from .tml export: the Ariane row for this station is a \
              START, which takes no station comment"
         );
     }
+    dropped.len()
 }
 
 /// One CLOSURE row per closure whose two stations have rows, numbered from

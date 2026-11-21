@@ -33,6 +33,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **The Ariane export says when it leaves out comments** - Ariane has no place for a comment on an entrance station (where a line of an entrance starts), so such a comment is not in the exported file, as before; the export now says so instead of leaving it out silently. Put the note on the next station to keep it in the file
 - **Clicking the arrow on Undo or Redo shows the history** - it undid or redid one step, and the history list opened only when you hovered over the button
 - **The Data table starts afresh in each project you open** - it kept the previous project's line, row and column, so it could open on whichever line of the new project had the same number, scrolled sideways
 - **Recent Projects no longer shows a bounds box of one point** - for a project with one zero datum, Project details listed "Bounds" with the same latitude and longitude on every side; it now shows the GPS center only

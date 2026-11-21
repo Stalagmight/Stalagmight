@@ -447,7 +447,10 @@ Comments that survive but move:
   the surveyor wrote it in.
 
 Every drop emits a `tracing::debug!` naming the station id, so a lost comment is
-diagnosable from a debug-level log rather than silent.
+diagnosable from a debug-level log, and an export that dropped any returns the
+`station-comments-not-written` note, which the app shows as a warning
+("Comments on entrance stations were left out"; 0.6.0 said nothing, demo
+issue N-14).
 
 The same split logic is applied in reverse on `.tml` import
 (`models::comment_split::split`) when the import dialog's "comments on

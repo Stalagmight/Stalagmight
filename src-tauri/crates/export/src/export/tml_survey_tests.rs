@@ -162,8 +162,8 @@ fn a_reversed_row_mirrors_its_shot() {
 fn every_datum_is_on_a_start() {
     let cave = cave();
     let decision = AzimuthExport::Magnetic;
-    let (rows, unwritten) = build_rows(&cave.project, TmlProfile::User, decision);
-    assert_eq!(unwritten, 0);
+    let (rows, left_out) = build_rows(&cave.project, TmlProfile::User, decision);
+    assert_eq!(left_out.datums, 0);
     let frame = row(&rows, id(cave.t[0]));
     assert!((frame.latitude - cave.project.datums[0].gps.latitude).abs() < 1e-12);
     let island = row(&rows, id(cave.e[2]));
@@ -193,6 +193,30 @@ fn station_comments_fold_once_per_station() {
     let all: String = rows.iter().filter_map(|r| r.comment.clone()).collect();
     assert_eq!(all.matches("junction comment").count(), 1);
     assert!(!all.contains("entrance comment"));
+}
+
+/// Demo issue N-14: the comment of a station written as a START (an
+/// entrance's station) is left out of the file, as 0.6.0 left it out, but
+/// no longer silently: the export returns the `station-comments-not-written`
+/// note, which the frontend shows as a warning toast. A project whose
+/// entrance stations carry no comment gets no such note. Injection: return
+/// 0 from `fold_station_comments` and the note is missing.
+#[test]
+fn a_left_out_entrance_comment_is_an_export_note() {
+    const NOTE: &str = "station-comments-not-written";
+    let mut cave = cave();
+    for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+        let (_, left_out) = build_rows(&cave.project, profile, AzimuthExport::Magnetic);
+        assert_eq!(left_out.station_comments, 1, "{profile:?}");
+    }
+    let (_, notes) = build_xml(&cave.project, &SHORT, TmlProfile::User).unwrap();
+    assert_eq!(notes.iter().filter(|n| *n == NOTE).count(), 1, "{notes:?}");
+
+    cave.project.station_mut(cave.t[0]).unwrap().comment = None;
+    let (_, left_out) = build_rows(&cave.project, TmlProfile::User, AzimuthExport::Magnetic);
+    assert_eq!(left_out.station_comments, 0);
+    let (_, notes) = build_xml(&cave.project, &SHORT, TmlProfile::User).unwrap();
+    assert!(!notes.iter().any(|n| n == NOTE), "{notes:?}");
 }
 
 /// Same project, same bytes, for both containers and both profiles.
@@ -436,6 +460,14 @@ fn a_second_datum_on_one_station_is_reported_unwritten() {
         .push(ZeroDatum::new(station, gps_at(1.0, 1.0)));
     assert!(cave.project.validate().is_empty());
     let (xml, notes) = build_xml(&cave.project, &SHORT, TmlProfile::User).unwrap();
-    assert_eq!(notes, vec!["gps-anchors-not-written".to_string()]);
+    // The fixture's entrance station carries a comment, which a START cannot
+    // (N-14).
+    assert_eq!(
+        notes,
+        vec![
+            "gps-anchors-not-written".to_string(),
+            "station-comments-not-written".to_string()
+        ]
+    );
     assert!(!xml.is_empty());
 }

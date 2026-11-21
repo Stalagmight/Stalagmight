@@ -73,6 +73,22 @@ describe('exportTml surfaces the backend azimuth notes', () => {
   });
 
   /**
+   * Demo issue N-14: a comment on an entrance station has no place in the
+   * file (its row is a START), so the export says it left it out.
+   */
+  it('translates the left-out station comments note', async () => {
+    invokeIpcMock.mockResolvedValue(['station-comments-not-written']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    const [message, key, kind] = showToastMock.mock.calls[0] as [string, string, string];
+    expect(message).not.toBe('station-comments-not-written');
+    expect(message).toContain('entrance stations');
+    expect(key).toBe(`${TOAST_KEYS.EXPORT_NOTE}:station-comments-not-written`);
+    expect(kind).toBe('warning');
+  });
+
+  /**
    * A backend that grows a third note must not crash the export: an unknown
    * code falls back to itself rather than rendering the i18n key path.
    */
