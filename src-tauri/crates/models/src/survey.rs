@@ -95,6 +95,13 @@ mod test_helpers;
 
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: a failed setup step is a failed run, and the table is the output"
+)]
+mod adjust_bench_tests;
+#[cfg(test)]
+#[expect(
     clippy::panic,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"

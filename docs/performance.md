@@ -84,6 +84,41 @@ long loop and O(n³) for dense LU.
 solve was off by up to 807 m); `adjust_precision_tests` pins the weakly held
 part.
 
+**Against the absolute-coordinate solve** (2026-11-21): the whole Closures
+Computed View (`Project::adjusted_positions_from` on a given raw layout) in the
+profile the app ships with (`opt-level = "s"`, thin LTO), the minimum of three
+interleaved rounds of 15 runs on a 16-core host under load from other builds,
+so the ratios matter more than the milliseconds. "Before" is `lsq.rs` and
+`adjust.rs` of 13523a421, everything else the same; `adjust_bench_tests.rs`
+(ignored) builds the surveys and prints the "after" side:
+
+| Survey | Shots | Before (ms) | After (ms) | After / before |
+|---|---|---|---|---|
+| size gate, 5k (its closures are snaps: no solve) | 5,031 | 0.30 | 0.29 | 0.97 |
+| size gate, 20k (no solve) | 20,031 | 1.49 | 1.44 | 0.97 |
+| size gate, 5k, closures soft | 5,031 | 2.48 | 2.45 | 0.99 |
+| size gate, 20k, closures soft | 20,031 | 10.7 | 11.6 | 1.08 |
+| maze 10 x 10, 28-shot passages (81 loops) | 5,040 | 2.49 | 3.09 | 1.24 |
+| maze 20 x 20, 25-shot passages (361 loops) | 19,000 | 10.4 | 13.1 | 1.27 |
+| maze 40 x 40, 6-shot passages (1,521 loops) | 18,720 | 14.7 | 18.4 | 1.26 |
+| maze 70 x 70, 2-shot passages (4,761 loops) | 19,320 | 36.1 | 41.9 | 1.16 |
+| 5k gate + 800 soft closures between random stations | 5,031 | 3.39 | 4.95 | 1.46 |
+| 20k gate + 3,000 random soft closures | 20,031 | 14.8 | 22.1 | 1.50 |
+| 20k gate + 10,000 random soft closures | 20,031 | 20.9 | 25.3 | 1.21 |
+| maze 40 x 40 with unit mistakes (every 40th line's first shot x 1000) | 18,720 | 14.9 | 20.3 | 1.37 |
+| maze 70 x 70 with unit mistakes | 19,320 | 36.6 | 41.6 | 1.14 |
+| 20k gate + 3,000 random closures, unit mistakes | 20,031 | 17.9 | 21.3 | 1.19 |
+
+At `opt-level = 3` the ratios were 0.89 to 1.23. A maze is a grid of
+junctions joined by passages, each passage into a junction that already exists
+closed onto it by a soft closure. The two solves agree within 6.5e-8 m on every
+one of these surveys. Where the time goes (70 x 70 maze, `opt-level = 3`): the
+elimination leaves a core of 1,789 of 14,559 groups (25,422 edges), factored
+in about 7 ms; each of the three passes takes about 6 ms, nearly all of it the
+conjugate gradient (about 225 iterations per axis); the third pass's
+corrections are below 1e-11 m. A tree-like survey leaves no core at all (the
+20k soft gate: 19,986 groups eliminated, factoring 5 ms, each pass 0.3 ms).
+
 ### Why not a library sparse solver?
 
 A sparse Cholesky (LDL^T) factorization from a library would also work.
