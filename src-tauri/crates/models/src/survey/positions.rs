@@ -493,22 +493,74 @@ impl Project {
     /// The depth readings at `slots`, in the given order: per slot, the
     /// incoming shot's `depth_out`, then the outgoing shot's `depth_in`.
     pub fn depth_readings_at(&self, slots: &[StationRef]) -> Vec<f64> {
-        let mut depths: Vec<f64> = Vec::new();
-        for slot in slots {
+        self.depth_readings_by_slot(slots)
+            .into_iter()
+            .map(|(_, depth)| depth)
+            .collect()
+    }
+
+    /// [`Self::depth_readings_at`], each reading with the slot it is read at.
+    pub fn depth_readings_by_slot(&self, slots: &[StationRef]) -> Vec<(StationRef, f64)> {
+        let mut depths = Vec::new();
+        for &slot in slots {
             let Some(line) = self.line(slot.line_id) else {
                 continue;
             };
             let index = slot.station_index as usize;
             if index > 0 {
                 if let Some(shot) = line.shots.get(index - 1) {
-                    depths.push(shot.depth_out);
+                    depths.push((slot, shot.depth_out));
                 }
             }
             if let Some(shot) = line.shots.get(index) {
-                depths.push(shot.depth_in);
+                depths.push((slot, shot.depth_in));
             }
         }
         depths
+    }
+
+    /// Every depth reading that goes into `station`'s depth in `positions`
+    /// (this state's [`Self::raw_positions`]), with its slot, in the order the
+    /// mean sums them: the readings at the station and at every station tied
+    /// to it transitively by rigid closures ([`Self::closure_is_aligned`]),
+    /// in sorted slot order. Empty for an unknown station.
+    pub fn depth_readings_of(
+        &self,
+        positions: &RawPositions,
+        station: StationId,
+    ) -> Vec<(StationRef, f64)> {
+        let topology = self.topology();
+        if topology.dense(station).is_none() {
+            return Vec::new();
+        }
+        let rigid: Vec<&LoopClosure> = self
+            .closures
+            .iter()
+            .filter(|closure| self.closure_is_aligned(positions, closure))
+            .collect();
+        let mut group = vec![station];
+        let mut next = 0;
+        while let Some(&at) = group.get(next) {
+            next += 1;
+            for closure in &rigid {
+                let other = if closure.a == at {
+                    closure.b
+                } else if closure.b == at {
+                    closure.a
+                } else {
+                    continue;
+                };
+                if !group.contains(&other) && topology.dense(other).is_some() {
+                    group.push(other);
+                }
+            }
+        }
+        let mut slots: Vec<StationRef> = group
+            .iter()
+            .flat_map(|&s| topology.slots_of(s).iter().copied())
+            .collect();
+        slots.sort_unstable();
+        self.depth_readings_by_slot(&slots)
     }
 }
 

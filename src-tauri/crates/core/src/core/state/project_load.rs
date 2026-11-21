@@ -369,21 +369,33 @@ impl AppState {
             unrecognised_shot_kinds: _,
         } = opened;
         // A pull that migrated a legacy revision into this cache path left its
-        // conversion notice for this open (`replace_cache_for_session`). Any
-        // other open drops a pending notice: it described another install.
-        let pending = self
-            .pending_download_notice
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some((path, notice)) = pending {
-            if file.conversion.is_none()
-                && project
+        // conversion notice for the open of the copy it installed
+        // (`replace_cache_for_session`). An open of that path takes it, and
+        // shows it only when it read exactly the installed bytes: a later
+        // install or rewrite at the path (a fast-forward, a revision swap, a
+        // reload of a version 2 revision) describes other content. An open of
+        // another project leaves it for the copy's own open.
+        {
+            let mut pending = self
+                .pending_download_notice
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let here = |p: &super::speleodb_cache_install::PendingDownloadNotice| {
+                project
                     .file_path
                     .as_deref()
-                    .is_some_and(|p| super::project_io::same_file(p, &path))
-            {
-                file.conversion = Some(notice);
+                    .is_some_and(|path| super::project_io::same_file(path, &p.path))
+            };
+            if pending.as_ref().is_some_and(here) {
+                if let Some(p) = pending.take() {
+                    let same_bytes = file
+                        .fingerprint
+                        .as_ref()
+                        .is_some_and(|read| read.same_content(&p.installed));
+                    if same_bytes && file.conversion.is_none() {
+                        file.conversion = Some(p.notice);
+                    }
+                }
             }
         }
         // A legacy file this session upgraded while it was closed (a Recents

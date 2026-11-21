@@ -711,12 +711,15 @@ test.describe('Detail Panel Links', () => {
         `0 (Station ID ${retiredId})`,
       );
       await expect(page.getByTestId('station-detail-aliases')).toHaveCount(0);
-      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3 (on Main Tunnel)');
+      // The line is named once, by the Line row (V-8), not on the Name row too.
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3');
+      await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Main Tunnel');
       await expect(page.getByTestId('station-detail-junction')).toHaveCount(0);
 
       await selectStation(page, sideLineId, 0);
       await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
-      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:0 (on Side Passage)');
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:0');
+      await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Side Passage');
       await expect(page.getByTestId(`station-${mainLineId}-3-link`)).toHaveText('Main Tunnel');
       await expect(page.getByTestId(`station-detail-other-name-${mainLineId}-3`)).toHaveText('3');
       // Side Passage's own former Station ID; its name is on the Name row.
@@ -1208,7 +1211,7 @@ test.describe('Detail Panel Links', () => {
       await selectStation(page, mainLineId, 1);
       // Each line shows the junction by its own name (I-3): Main Tunnel by
       // "8", Side Passage by its own "0".
-      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8 (on Main Tunnel)');
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
       // The merge partner is the SAME station on the other line (the station
       // graph, plan 9.3): the entry names that line, never the station's own
       // name again (UX-7); its accessible name still says which slot it is,

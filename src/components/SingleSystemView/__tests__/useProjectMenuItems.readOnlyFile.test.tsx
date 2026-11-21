@@ -13,8 +13,12 @@
  * save (every edit, ignore, import and undo of the file is refused, and a
  * display toggle is a local-only save), and the save could only be refused.
  *
+ * Demo finding V-4: Save and Close's reason talked about changing the file,
+ * while the user wanted to close it; it now points to Close Project.
+ *
  * Injection: dropping `readOnlyOff` from a row fails the first case; dropping
- * the read-only branch of `saveAndClose` (it saves first) fails the third.
+ * the read-only branch of `saveAndClose` (it saves first) fails the third;
+ * giving Save and Close the shared read-only reason again fails the first.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -69,7 +73,11 @@ describe('the project menu in a file made with a newer Stalagmight', () => {
       const item = row(items, id);
       expect(item, id).toBeDefined();
       expect(item?.disabled, id).toBe(true);
-      expect(item?.disabledReason, id).toBe(i18n.t('editGate.readOnlyFileNotice'));
+      expect(item?.disabledReason, id).toBe(
+        id === 'project-menu-save-and-close'
+          ? 'Nothing to save: use Close Project.'
+          : i18n.t('editGate.readOnlyFileNotice'),
+      );
     }
     for (const id of KEPT_ROWS) {
       expect(row(items, id)?.disabled, id).toBeUndefined();

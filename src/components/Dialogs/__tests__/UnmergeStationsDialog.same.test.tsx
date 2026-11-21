@@ -34,8 +34,8 @@ const NORTH = 1;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
 // Main Line keeps 3; North Passage gets back 0 (Station ID 9), whichever is chosen.
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true };
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [] };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [] };
 
 const unmergeStations = vi.fn();
 const unmergeStationPair = vi.fn();
@@ -64,7 +64,9 @@ function openOn(clicked: ReturnType<typeof slot>, other: ReturnType<typeof slot>
   render(<UnmergeStationsDialog />);
 }
 
-const SENTENCE = 'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps 3.';
+// Demo finding V-9: "Main Line keeps 3." read oddly with a bare name; it
+// reads "keeps station 3". Injection: drop "station" from `comesOff`.
+const SENTENCE = 'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -146,8 +148,9 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     );
     openOn(slot(MAIN, 3), slot(NORTH, 0));
     await screen.findByTestId('unmerge-stations-naming');
-    expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).toBeChecked();
-    expect(screen.getByTestId(`unmerge-station-option-${NORTH}-0`)).toBeInTheDocument();
+    // The line that comes off alone is the likely intent (V-1).
+    expect(screen.getByTestId(`unmerge-station-option-${NORTH}-0`)).toBeChecked();
+    expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).toBeInTheDocument();
   });
 
   it('keeps the choice when both previews fail', async () => {
@@ -173,7 +176,7 @@ describe('sameDetachResult', () => {
     expect(sameDetachResult([a, b], new Map())).toBeNull();
     expect(sameDetachResult([a, b], new Map([[MAIN, KEEPS]]))).toBeNull();
     // A new station for the other line: the keeper does not keep it then.
-    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false };
+    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [] };
     expect(sameDetachResult([a, b], new Map([[MAIN, mints], [NORTH, RESTORES]]))).toBeNull();
     // A hub: the other lines would come off together, so the choice matters.
     const c = slot(2, 0);

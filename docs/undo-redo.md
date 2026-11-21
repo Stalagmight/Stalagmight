@@ -456,13 +456,14 @@ lines, stations and shots are named the way the user reads them -
 `Update shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`,
 `Delete line "Main Line"`. Each line shows a junction by the name that line
 knows it by, and a label names a station by the name its slot's line shows; a
-detach names the line that leaves and the station once, in the menu's words
-(`Detach line "Side" from station 0`, by Side's name for it). The line that
-leaves is the one that comes off the station: when the addressed line keeps
-it (it shows the station by its own name and every other line there knew it
-by an alias, `Project::detach_keeps`), the other lines come off and the label
-names them (`Detach lines "B" and "C" from station 0`), never the line that
-keeps the station (demo finding N-2).
+detach names the line that leaves and the station once, in the menu's words,
+as `Line / name` on a line that stays on it (`Detach line "Side" from Main /
+3`; demo finding V-6: Side's own name for it, `station 0`, could be another
+line's station 0). The line that leaves is the one that comes off the
+station: when the addressed line keeps it (it shows the station by its own
+name and every other line there knew it by an alias, `Project::detach_keeps`),
+the other lines come off and the label names them (`Detach lines "B" and "C"
+from Main / 4`), never the line that keeps the station (demo finding N-2).
 
 The names are worded **at record time**, with the names before the edit
 (`core/state/labels.rs`), and stored in the entry. A metadata edit that renames

@@ -39,6 +39,11 @@ that its zero datum becomes a GPS fix.
   the note says that the piece moves, but not how far.
 - If a loop closure joined the two stations you merge, the merge removes it and
   says so.
+- If a station you picked is already where several lines meet, the dialog
+  says so ("Main Line / 8 is already where Main Line and Far Room meet"). When
+  the two depths differ, it lists every depth reading the joined station
+  averages, each with its line: "Depths 4.0 m (Upstream), 12.5 m (Main Line),
+  12.5 m (Far Room) become 9.7 m".
 - Merged stations keep their own names and
   [Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids):
   `Main Line / 17` and `Side / 0` stay two stations at one point.

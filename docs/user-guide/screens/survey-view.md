@@ -110,7 +110,8 @@ SpeleoDB project**.
   with a newer version of Stalagmight, which this version opens to view,
   measure and export only: **Save**, **Save As**, **Save and Close**,
   **Import** and **Import from MNemo...** are off, and say why when you point
-  at them or click them.
+  at them or click them (**Save and Close**: use **Close Project**). The
+  toolbar's **Import**, **Undo** and **Redo** say why the same way.
 - A project without data opens the map on the default location from Settings.
 - Satellite imagery by Esri.
 - Shortcuts can be changed in Settings. On macOS, use `Cmd` for `Ctrl`.

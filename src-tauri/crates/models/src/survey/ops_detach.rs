@@ -62,7 +62,7 @@ pub struct DetachReport {
 
 /// What detaching a line would give it, for the Detach dialog: the new
 /// station's name and id, and whether they are the ones the line had before
-/// it was merged.
+/// it was merged; and what every line through the junction ends up with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetachNaming {
     pub name: String,
@@ -71,6 +71,32 @@ pub struct DetachNaming {
     /// The line keeps the junction; `name` and `id` are what the other lines
     /// get back.
     pub kept: bool,
+    /// Every line through the junction, in slot order: the station it is on
+    /// there after the detach (demo finding V-1: the dialog says what each
+    /// line ends up with, not one Station ID for all).
+    pub lines: Vec<DetachLineOutcome>,
+}
+
+/// What one line through a junction ends up with after a detach
+/// ([`DetachNaming::lines`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachLineOutcome {
+    pub line: LineId,
+    /// The station the line is on there after the detach.
+    pub station: StationId,
+    /// The name the line shows it by.
+    pub name: String,
+    /// The line comes off the junction (the detached line, or with `kept`
+    /// every other line); otherwise it stays on it.
+    pub comes_off: bool,
+    /// The id of the alias the line knows that station by, when it is not
+    /// the station's own: the Station ID the line had there before a merge,
+    /// which it keeps only as an alias because it shares the station with
+    /// lines that know it by another id (lines that come off together stay
+    /// joined, and one station has one Station ID).
+    pub alias_id: Option<StationId>,
+    /// The other lines on that station after the detach, in slot order.
+    pub joined_with: Vec<LineId>,
 }
 
 impl Project {
@@ -126,20 +152,58 @@ impl Project {
     }
 
     /// The name and id the new station of [`Self::detach_line`] would get,
-    /// from the detach run on a copy. Refused as the detach is.
+    /// and what every line through `station` ends up with there, from the
+    /// whole detach (epilogue included) run on a copy, so the dialog says
+    /// what the command does. Refused as the detach is.
     pub fn detach_naming(&self, station: StationId, line: LineId) -> Result<DetachNaming, OpError> {
+        let before = self.topology_arc();
+        let mut slots: Vec<StationRef> = Vec::new();
+        for &slot in before.slots_of(station) {
+            if slots.iter().all(|s| s.line_id != slot.line_id) {
+                slots.push(slot);
+            }
+        }
         let mut copy = self.clone();
-        let report = copy.detach_ids(station, line, true)?;
-        let name = copy
-            .stations
-            .get(&report.new_station)
-            .map(|s| s.name.clone())
-            .ok_or(OpError::UnknownStation(report.new_station))?;
+        let report = copy.detach_line(station, line)?.value;
+        let after = copy.topology_arc();
+        let mut lines = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let on = after.station_at(slot).ok_or(OpError::UnknownSlot(slot))?;
+            let l = slot.line_id;
+            let name = copy
+                .name_on(on, l)
+                .ok_or(OpError::UnknownStation(on))?
+                .to_string();
+            let alias_id = copy.line_alias(on, l).map(|a| a.id).filter(|&id| id != on);
+            let mut joined_with: Vec<LineId> = Vec::new();
+            for other in after.slots_of(on) {
+                if other.line_id != l && !joined_with.contains(&other.line_id) {
+                    joined_with.push(other.line_id);
+                }
+            }
+            lines.push(DetachLineOutcome {
+                line: l,
+                station: on,
+                name,
+                comes_off: (l == line) != report.kept,
+                alias_id,
+                joined_with,
+            });
+        }
+        // The station the line(s) that come off get, by its own name: the
+        // detached line's, or with `kept` the other lines' (by the one that
+        // knows it by no alias).
+        let off = lines
+            .iter()
+            .find(|o| o.comes_off && o.alias_id.is_none())
+            .or_else(|| lines.iter().find(|o| o.comes_off))
+            .ok_or(OpError::NotDirectlyMerged)?;
         Ok(DetachNaming {
-            name,
-            id: report.new_station,
+            name: off.name.clone(),
+            id: off.station,
             restored_alias: report.restored_alias,
             kept: report.kept,
+            lines,
         })
     }
 

@@ -2,8 +2,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult, CommentHolder};
 use crate::models::{
-    ClosureStrategy, ConnectivityResult, Coordinates, DetachLinePreview, GpsCoordinates, LineId,
-    StationRef, ZeroDatumPreview,
+    ClosureStrategy, ConnectivityResult, Coordinates, DetachLinePreview, DetachLineResult,
+    GpsCoordinates, LineId, StationRef, ZeroDatumPreview,
 };
 
 /// Check merge connectivity between two stations (read-only, NOT a Command):
@@ -128,6 +128,18 @@ pub(crate) fn preview_detach_line_impl(
         station_id: naming.id,
         restored: naming.restored_alias,
         kept: naming.kept,
+        lines: naming
+            .lines
+            .into_iter()
+            .map(|o| DetachLineResult {
+                line_id: o.line,
+                name: o.name,
+                station_id: o.station,
+                comes_off: o.comes_off,
+                alias_id: o.alias_id,
+                joined_with: o.joined_with,
+            })
+            .collect(),
     })
 }
 

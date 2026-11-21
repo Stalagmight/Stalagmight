@@ -7,16 +7,20 @@
  *   Since I-1 the owner gets a new Station ID only while a line that shows
  *   the junction by its own name stays on it (here Main Line B, started from
  *   Main 3); with only merged lines left the owner keeps the junction
- *   (`kept`) and stays selected (on a two-line junction there is then no
- *   choice at all, N-2: `UnmergeStationsDialog.same.test.tsx`);
+ *   (`kept`) while the others come off together. Demo finding V-1: that
+ *   owner is no longer preselected either; a line that comes off alone with
+ *   its own station back is the likely intent (on a two-line junction there
+ *   is no choice at all, N-2: `UnmergeStationsDialog.same.test.tsx`);
  * - a merge (or the 0.6.0 upgrade) joins the two stations' comments and the
  *   alias does not keep the merged line's part, so for a line that gets its
  *   station back while the others keep the junction the dialog says the
  *   comment stays with the other lines; a line that keeps it keeps the
  *   comment, so nothing is said.
  * Injection: preselecting `slots[0]` always (dropping `defaultDetachSlot`)
- * fails the first case; dropping the comment sentence fails the comment case;
- * dropping `!naming.kept` from its condition fails the kept case.
+ * fails the first case; keeping a clicked owner that keeps the junction (the
+ * I-7 rule) fails the V-1 case; dropping the comment sentence fails the
+ * comment case; dropping `!naming.kept` from its condition fails the kept
+ * case.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -38,10 +42,10 @@ const NORTH = 1;
 const SPLIT_B = 2;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false };
-const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [] };
+const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [] };
 // The owner keeps the junction; North Passage gets back 0 (Station ID 9).
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [] };
 
 function project(comment: string) {
   useProjectStore.setState({
@@ -80,7 +84,7 @@ const HUB_OTHERS = [slot(NORTH, 0), slot(SPLIT_B, 0)];
 const KEEPS_HUB = new Map<number, DetachLinePreview>([
   [MAIN, KEEPS],
   [NORTH, RESTORES],
-  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false }],
+  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false, lines: [] }],
 ]);
 
 beforeEach(() => {
@@ -99,22 +103,25 @@ describe('Detach dialog default (I-7)', () => {
     // The clicked line is still named as the one clicked, and listed first.
     expect(screen.getByText('Main Line (the line you clicked)')).toBeInTheDocument();
     expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
-      'North Passage gets back the station it had here before the merge: 0 (Station ID 9).',
+      'North Passage comes off and gets back the station it had here before the merge.',
     );
   });
 
-  it('keeps the clicked owner when it keeps the junction (only merged lines left)', async () => {
-    // A hub of merged lines: Main Line keeps it, and the other two come off
-    // together with North Passage's station, so the choice matters (a
-    // two-line junction offers none, N-2).
+  it('preselects a line that comes off alone, not a clicked owner that keeps the junction (V-1)', async () => {
+    // A hub of merged lines: detaching Main Line keeps it there, and the
+    // other two come off together; the likely intent is one of those lines.
     invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) => KEEPS_HUB.get(args.lineId));
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
-    await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
-        'Main Line keeps this station. North Passage and Main Line B get back the station they had here before the merge: 0 (Station ID 9).',
-      ),
+    await waitFor(() => expect(screen.getByTestId(`unmerge-station-option-${NORTH}-0`)).toBeChecked());
+    expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).not.toBeChecked();
+    // The owner's row says what it does: the others come off together.
+    expect(
+      screen.getByText('North Passage and Main Line B, together (Main Line, the line you clicked, keeps this station)'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
+    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'Main Line keeps this station, and North Passage and Main Line B come off together: they stay joined.',
     );
-    expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).toBeChecked();
   });
 
   it('keeps the clicked slot when it is the merged line', async () => {
@@ -166,8 +173,9 @@ describe('Detach dialog and the joined comment (I-7)', () => {
     invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) => KEEPS_HUB.get(args.lineId));
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await screen.findByTestId('unmerge-stations-naming');
+    fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
-      'The line you detach keeps its shots and this station, with its comment.',
+      'Main Line keeps this station and its comment.',
     );
     expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull();
   });
@@ -196,8 +204,10 @@ describe('defaultDetachSlot', () => {
     // Still asking, or the clicked line's preview failed: the clicked slot.
     expect(defaultDetachSlot([a, b], new Map())).toEqual(a);
     expect(defaultDetachSlot([a, b], new Map([[NORTH, RESTORES]]))).toEqual(a);
-    // A clicked owner that keeps the junction stays selected.
-    expect(defaultDetachSlot([a, b], new Map([[MAIN, KEEPS], [NORTH, RESTORES]]))).toEqual(a);
+    // A clicked owner that keeps the junction gives way to a line that
+    // comes off alone (V-1); with none, it stays selected.
+    expect(defaultDetachSlot([a, b], new Map([[MAIN, KEEPS], [NORTH, RESTORES]]))).toEqual(b);
+    expect(defaultDetachSlot([a, c], new Map([[MAIN, KEEPS], [SPLIT_B, MINTS]]))).toEqual(a);
     expect(defaultDetachSlot([], previews)).toBeUndefined();
   });
 });

@@ -59,16 +59,16 @@ use stalagmight_lib::models::{
     CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
     ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
     CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact,
-    DetachLinePreview, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
-    ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
+    DetachLinePreview, DetachLineResult, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot,
+    Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
     ImportLineConfig, ImportPlacement, KeptMovesReason, LineCreditSummary, LineData, LineEnd,
     LineRelationships, LineStats, LineUpdates, LoopClosureWire, MarkedPoint, MergeDatumShift,
-    MergeDepths, MergePreview, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode,
-    PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
-    RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
-    SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
-    StationAliasWire, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
-    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
+    MergeDepthReading, MergeDepths, MergeJunction, MergePreview, NorthReference, PathShot, Person,
+    PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning,
+    RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind,
+    ShotUpdates, SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide,
+    Station, StationAliasWire, StationMergeWire, StationPair, StationRef, SurveyCredit,
+    SurveyDirection, TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
     ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
@@ -313,6 +313,8 @@ fn main() {
     export::<MergeDatumShift>(&out_dir);
     export::<MergePreview>(&out_dir);
     export::<MergeDepths>(&out_dir);
+    export::<MergeDepthReading>(&out_dir);
+    export::<MergeJunction>(&out_dir);
     export::<LoopClosureWire>(&out_dir);
     export::<ClosureRef>(&out_dir);
     export::<ClosureStrategy>(&out_dir);
@@ -326,6 +328,7 @@ fn main() {
     export::<RangeDeleteKind>(&out_dir);
     export::<DeleteShotRangeImpact>(&out_dir);
     export::<DetachLinePreview>(&out_dir);
+    export::<DetachLineResult>(&out_dir);
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
@@ -640,6 +643,8 @@ fn main() {
         "MergeDatumShift",
         "MergePreview",
         "MergeDepths",
+        "MergeDepthReading",
+        "MergeJunction",
         "LoopClosure",
         "ClosureRef",
         "ClosureStrategy",
@@ -653,6 +658,7 @@ fn main() {
         "RangeDeleteKind",
         "DeleteShotRangeImpact",
         "DetachLinePreview",
+        "DetachLineResult",
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",

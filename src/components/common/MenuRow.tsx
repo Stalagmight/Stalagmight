@@ -11,7 +11,7 @@
  * button attributes in.
  */
 import { forwardRef, useId, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
-import { Tooltip } from './Tooltip';
+import { DisabledReason, DISABLED_REASON_DELAY_MS } from './DisabledReason';
 
 /** The button base classes shared by every menu row. */
 export const MENU_ROW_BASE_CLASS =
@@ -31,10 +31,9 @@ export const MENU_ROW_HINT_WRAP_CLASS = 'text-xs leading-4 line-clamp-3 whitespa
 export const MENU_ROW_HEIGHT_PX = 36;
 export const MENU_ROW_HINT_HEIGHT_PX = 16;
 
-/** How long the pointer rests on a disabled row before its reason shows: the
- *  pointer crosses several rows on its way down a menu, and a bubble that
- *  opened on each would flicker. */
-export const MENU_ROW_REASON_DELAY_MS = 300;
+/** How long the pointer rests on a disabled row before its reason shows
+ *  ({@link DISABLED_REASON_DELAY_MS}). */
+export const MENU_ROW_REASON_DELAY_MS = DISABLED_REASON_DELAY_MS;
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   'data-testid'?: string;
@@ -61,11 +60,12 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   hintWraps?: boolean;
   /**
    * Why a read-only state turned this `disabled` row off (demo finding N-12),
-   * shown in the app's tooltip on hover. Such a row is `aria-disabled`, not
-   * `disabled`: a `disabled` button gets no click (so the menu could not say
-   * why on one), and WebKitGTK drew no native `title` tooltip for one. The
-   * menu must therefore turn a click on it into the notice, never the action.
-   * Ignored on an enabled row.
+   * shown in the app's tooltip on hover (`DisabledReason`: opaque, at the
+   * row's side, V-3). Such a row is `aria-disabled`, not `disabled`: a
+   * `disabled` button gets no click (so the menu could not say why on one),
+   * and WebKitGTK drew no native `title` tooltip for one. The menu must
+   * therefore turn a click on it into the notice, never the action. Ignored
+   * on an enabled row.
    */
   reason?: string | undefined;
 }
@@ -127,15 +127,9 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
   );
   if (!explained) return button;
   return (
-    <Tooltip
-      content={reason}
-      openDelayMs={MENU_ROW_REASON_DELAY_MS}
-      role="none"
-      className="!flex w-full"
-      {...(testId ? { tooltipTestId: `${testId}-reason` } : {})}
-    >
+    <DisabledReason reason={reason} className="!flex w-full" testId={testId ? `${testId}-reason` : undefined}>
       {button}
-    </Tooltip>
+    </DisabledReason>
   );
 });
 

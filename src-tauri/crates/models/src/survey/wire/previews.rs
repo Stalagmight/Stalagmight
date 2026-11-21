@@ -152,21 +152,75 @@ impl Project {
         if result.can_merge {
             result.merge_preview = self.merge_preview(station_a, station_b).map(|m| {
                 let [a_m, b_m] = m.depths_m;
+                let depths = ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then(|| {
+                    crate::MergeDepths {
+                        a_m,
+                        b_m,
+                        joined_m: m.joined_depth_m,
+                        readings: self.merge_readings_in_pick_order(a, station_a, b, &m.readings),
+                    }
+                });
                 crate::MergePreview {
                     moving_line_ids: m.moving_lines,
                     shift_m: m.shift_m,
                     joins: if m.stationary == station_a { a } else { b },
-                    depths: ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then_some(
-                        crate::MergeDepths {
-                            a_m,
-                            b_m,
-                            joined_m: m.joined_depth_m,
-                        },
-                    ),
+                    depths,
+                    junctions: [(a, station_a), (b, station_b)]
+                        .into_iter()
+                        .filter_map(|(slot, station)| self.merge_junction(slot, station))
+                        .collect(),
                 }
             });
         }
         Ok(result)
+    }
+
+    /// The merge's depth readings (`MergeMove::readings`, by slot) by line,
+    /// in the order the dialog lists them: A's line, the other lines of A's
+    /// piece, B's line, the rest; each group in the order the mean sums them.
+    fn merge_readings_in_pick_order(
+        &self,
+        a: StationRef,
+        station_a: StationId,
+        b: StationRef,
+        readings: &[(StationRef, f64)],
+    ) -> Vec<crate::MergeDepthReading> {
+        let a_piece = self.piece_lines(station_a);
+        let rank = |line: LineId| {
+            if line == a.line_id {
+                0
+            } else if a_piece.contains(&line) {
+                1
+            } else if line == b.line_id {
+                2
+            } else {
+                3
+            }
+        };
+        let mut out: Vec<crate::MergeDepthReading> = readings
+            .iter()
+            .map(|&(slot, depth_m)| crate::MergeDepthReading {
+                line_id: slot.line_id,
+                depth_m,
+            })
+            .collect();
+        out.sort_by_key(|reading| rank(reading.line_id));
+        out
+    }
+
+    /// The picked slot's station when it is already a junction, with every
+    /// line through it, the slot's line first.
+    fn merge_junction(&self, slot: StationRef, station: StationId) -> Option<crate::MergeJunction> {
+        let mut line_ids = vec![slot.line_id];
+        for line in self.topology().lines_of(station) {
+            if !line_ids.contains(&line) {
+                line_ids.push(line);
+            }
+        }
+        (line_ids.len() > 1).then_some(crate::MergeJunction {
+            station: slot,
+            line_ids,
+        })
     }
 
     /// Today's `ConnectivityResult` of M2's [`MergeCheck`].

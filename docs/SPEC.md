@@ -1093,9 +1093,10 @@ the test ids) but are never shown:
 
 **A junction** (a station on several lines) is one station: its Station ID
 and comment are the same from every slot, and each slot shows the name its
-line knows it by. The details say each fact once (demo finding N-3). When its
-lines show it by different names, Name says which line this one is on
-(`3 (on Main Line)`). "Also on" lists the other lines through it, one row
+line knows it by. The details say each fact once (demo finding N-3), the
+slot's own line too (V-8): Name is the name on the slot's line alone, the
+Line row under it names that line (a link to it), and "Connected" does not
+repeat it. "Also on" lists the other lines through it, one row
 each, the same for every junction however it was made (a merge, Split Line
 Here, a line started there, an import; I-9): the line by name (a link to its
 slot; never the station's own name again), then the name that line shows the
@@ -1103,7 +1104,7 @@ station by when it is not the Name row's, and the Station ID that line had
 there before a merge when it has one (the alias naming the line, which Detach
 gives back): `North Passage 0 (Station ID 9)`. Each row has a button that
 detaches that line (tooltip "Detach <line> from this station"; the history
-row reads `Detach line "<line>" from station <name>`). "Also known as" lists
+row reads `Detach line "<line>" from <staying line> / <name>`). "Also known as" lists
 the Station IDs and names merged into the station (its aliases: a merge's
 retired station, or a 0.6.0 merge group's other members) that no "Also on"
 row shows: `<name> on <line> (Station ID <id>)` while a line still shows it
@@ -1764,9 +1765,11 @@ Shown when merging two **unconnected** stations (different line groups).
 │  Station A:                                    Upstream / 0      │
 │  Station B:                                    Far Room / 2      │
 │                                                                  │
+│  Far Room / 2 is already where Far Room and Main Line meet.      │
 │  Upstream moves 24 m to join Far Room / 2.                       │
-│  Depths 15.0 m and 4.0 m become 9.5 m: the joined station takes  │
-│  the mean of its depth readings.                                 │
+│  Depths 4.0 m (Upstream), 12.5 m (Far Room), 12.5 m (Main Line)  │
+│  become 9.7 m: the joined station takes the mean of its depth    │
+│  readings.                                                       │
 │                                                                  │
 │  [ Cancel ]                                      [ Merge ]       │
 └──────────────────────────────────────────────────────────────────┘
@@ -1777,11 +1780,16 @@ The dialog says what the merge does before it does it, from the merge check
 piece that moves (named, up to three, then counted: "Upstream and Upstream
 Side move 24 m", "A, B, C and 2 more move"; demo finding N-13), how far (not said below 1 cm, nor after a snap-to-merge drag,
 which already moved it; when both pieces are placed by their own GPS the datum
-notice says it instead), and the station it joins; and, when the two stations'
-depths differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), both depths and
-the joined station's, the mean of every depth reading at it (as 0.6.0 computed
-a merged station's depth). Every merge-tool pick that can merge opens this
-dialog, so no merge happens without it.
+notice says it instead), and the station it joins; that a picked station is
+already a junction, and of which lines (`MergePreview.junctions`, the picked
+slot's line first; demo finding V-2); and, when the two stations' depths
+differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), every depth reading the
+joined station's mean takes, each with its line (`MergeDepths.readings`: A's
+line, the other lines at A, B's line, the other lines at B), and that mean (as
+0.6.0 computed a merged station's depth). At a junction the two stations'
+depths alone do not add up to it: "Depths 4.0 m and 12.5 m become 9.7 m" read
+12.5 m twice, once on each line through the junction. Every merge-tool pick
+that can merge opens this dialog, so no merge happens without it.
 
 If the two stations are already connected (same line group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
 
@@ -1951,14 +1959,24 @@ Station ID, name and comment) and the other lines get their own station back
 instead; the dialog says which. The datums and closure ends that came from that
 line (their `via`) move to the new station with it; the orphan-closure sweep
 then promotes a closure left as the only connection of the detached piece. On a
-hub of three or more lines only the chosen line leaves. The dialog preselects
-the line clicked, except when detaching it would give it a new Station ID (it
-is the junction's owner, a line no alias names, and a line that shows the
-junction by its own name stays on it, so the owner does not keep the
-junction) while another line was merged there: that line, which gets its own
-Station ID and name back, is preselected. A clicked owner that keeps the
-junction stays selected (on a hub, where the other lines then come off
-together). When the chosen line gets its station back and the others keep the
+hub of three or more lines only the chosen line leaves; when the chosen line
+keeps the junction, the other lines come off together and stay joined on ONE
+station (the identity of the first of their aliases), so a line among them
+that had its own Station ID keeps it only as an alias (detaching it from there
+afterwards gives it back). The dialog asks "Choose what comes off" and says,
+under the choice, what every line ends up with there, name and Station ID,
+from the backend's per-line preview (`DetachLinePreview.lines`, the detach run
+on a copy; demo finding V-1): "Far Room: 0, Station ID 19 (comes off with
+Upstream)", "Upstream: 0, Station ID 19 (comes off with Far Room, sharing its
+station; its own Station ID 22 stays only as an alias, and detaching Upstream
+afterwards gives it back)", "Main Line: 8, Station ID 8 (stays)". The row of a
+line that keeps the junction reads as what comes off ("Far Room and Upstream,
+together (Main Line keeps this station)"), so the history row, which names the
+lines that come off, names what the user picked. The dialog preselects the
+line clicked when it is not the junction's owner (a line an alias names, which
+comes off alone with its own Station ID and name back); otherwise the first
+such other line, which is the likely intent (demo findings I-7, V-1); with
+none, the line clicked. When the chosen line gets its station back and the others keep the
 junction, the station's comment stays with them; a merge or the 0.6.0 upgrade
 may have joined the detached line's own comment into it, which no alias
 keeps, so the dialog then says the comment stays and to copy that part over
@@ -1969,14 +1987,16 @@ N-2): on a junction of two lines where one keeps the station when detached
 and the other gets back exactly the station it had, both choices leave the
 same two stations, so the dialog asks for both lines' previews first, then
 says in one sentence what happens ("North Passage comes off: it gets back 0
-(Station ID 9); Main Line keeps 3."), with the comment notice when the
+(Station ID 9); Main Line keeps station 3."), with the comment notice when the
 station has one, and Detach / Cancel. Detach then detaches the line that
 comes off, whichever slot the dialog was opened on. Everywhere else the list
 of lines stays. The history row always names the line that comes off, never
-the one that keeps the station: a detach of the keeping line (the other lines
-come off with the station they had) reads `Detach line "North Passage" from
-station 0`, and on a hub `Detach lines "B" and "C" from station 0`, by the
-first one's name for it.
+the one that keeps the station, and the station as `Line / name` on a line
+that stays on it (demo finding V-6: `station 0` was the detached line's name
+for it, and another line may show its own station 0): a detach of the keeping
+line (the other lines come off with the station they had) reads `Detach line
+"North Passage" from Main Line / 3`, and on a hub `Detach lines "B" and "C"
+from Main / 4`.
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)

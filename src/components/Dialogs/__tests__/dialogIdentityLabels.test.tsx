@@ -124,7 +124,7 @@ describe('dialog identity labels', () => {
   });
 
   it('Detach with no choice to offer names the line that comes off and the one that keeps the station', async () => {
-    const preview = (kept: boolean) => ({ name: 'S1', station_id: 9, restored: true, kept });
+    const preview = (kept: boolean) => ({ name: 'S1', station_id: 9, restored: true, kept, lines: [] });
     vi.mocked(invokeIpc)
       .mockImplementationOnce(async () => preview(true))
       .mockImplementationOnce(async () => preview(false));
@@ -134,7 +134,7 @@ describe('dialog identity labels', () => {
     });
     render(<UnmergeStationsDialog />);
     expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
-      'Side comes off: it gets back S1 (Station ID 9); Main Line keeps M0.',
+      'Side comes off: it gets back S1 (Station ID 9); Main Line keeps station M0.',
     );
     expectNoHandles();
   });

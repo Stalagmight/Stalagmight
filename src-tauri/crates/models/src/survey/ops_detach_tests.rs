@@ -327,3 +327,90 @@ fn the_alias_name_is_held_on_its_line_so_detach_gives_it_back() {
     assert_eq!(out.value.new_station, a2, "the id comes back");
     assert_eq!(p.stations[&a2].name, a2_name, "and the name");
 }
+
+/// Demo finding V-1: on a hub where two lines were merged onto a third line's
+/// station, the preview says what EVERY line ends up with, and the detach then
+/// does exactly that. Keeping the owner's line, the other two come off
+/// together and stay joined on one station, the first one's (19 in the demo);
+/// the second keeps its own Station ID (22) only as an alias, and the preview
+/// says so (`alias_id`) instead of claiming it gets its own station back.
+/// Detaching the second line alone gives it its own station back. Injection:
+/// read every line's station off the junction before the detach and the
+/// owner's preview gives both others the junction's id.
+#[test]
+fn the_detach_preview_says_what_every_line_of_a_hub_ends_up_with() {
+    let mut p = project();
+    let main = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let far = free_line(&mut p, [100.0, 50.0], run(0.0, 1, 5.0));
+    let up = free_line(&mut p, [-100.0, 50.0], run(0.0, 1, 5.0));
+    let (hub, far0, up0) = (at(&p, main, 2), at(&p, far, 0), at(&p, up, 0));
+    ok(p.merge_stations(far0, hub));
+    ok(p.merge_stations(up0, hub));
+    assert_valid(&p);
+    let merged = p.clone();
+    let outcome = |naming: &super::DetachNaming, line| {
+        naming
+            .lines
+            .iter()
+            .find(|o| o.line == line)
+            .cloned()
+            .unwrap()
+    };
+
+    // Keep Main Line: Far Room and Upstream come off together.
+    let naming = p.detach_naming(hub, main).unwrap();
+    assert!(naming.kept);
+    assert_eq!((naming.id, naming.name.as_str()), (far0, "0"));
+    assert_eq!(naming.lines.len(), 3);
+    let m = outcome(&naming, main);
+    assert_eq!((m.station, m.comes_off, m.alias_id), (hub, false, None));
+    assert!(m.joined_with.is_empty());
+    let f = outcome(&naming, far);
+    assert_eq!((f.station, f.comes_off, f.alias_id), (far0, true, None));
+    assert_eq!(f.joined_with, vec![up]);
+    let u = outcome(&naming, up);
+    assert_eq!(
+        (u.station, u.name.as_str(), u.comes_off, u.alias_id),
+        (far0, "0", true, Some(up0)),
+        "Upstream shares Far Room's station and keeps its own id as an alias"
+    );
+    assert_eq!(u.joined_with, vec![far]);
+    ok(p.detach_line(hub, main));
+    assert_valid(&p);
+    for o in &naming.lines {
+        let slot = p.topology().slot_on(o.station, o.line);
+        assert!(
+            slot.is_some(),
+            "{o:?}: the line is on the station the preview names"
+        );
+        assert_eq!(p.name_on(o.station, o.line), Some(o.name.as_str()));
+        assert_eq!(
+            p.line_alias(o.station, o.line)
+                .map(|a| a.id)
+                .filter(|&id| id != o.station),
+            o.alias_id
+        );
+    }
+
+    // Detach Upstream alone: it gets its own station back; the others stay.
+    let mut q = merged;
+    let naming = q.detach_naming(hub, up).unwrap();
+    assert!(!naming.kept && naming.restored_alias);
+    assert_eq!(naming.id, up0);
+    let u = outcome(&naming, up);
+    assert_eq!((u.station, u.comes_off, u.alias_id), (up0, true, None));
+    assert!(u.joined_with.is_empty());
+    let m = outcome(&naming, main);
+    assert_eq!(
+        (m.station, m.comes_off, m.joined_with),
+        (hub, false, vec![far])
+    );
+    let f = outcome(&naming, far);
+    assert_eq!(
+        (f.station, f.comes_off, f.alias_id),
+        (hub, false, Some(far0))
+    );
+    ok(q.detach_line(hub, up));
+    assert_eq!(at(&q, up, 0), up0);
+    assert_eq!((at(&q, main, 2), at(&q, far, 0)), (hub, hub));
+}

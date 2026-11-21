@@ -383,3 +383,66 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
         }
     });
 }
+
+/// The pull's notice is for the copy it installed: an open that reads other
+/// bytes at the cache path (here a later install of a version 2 revision there
+/// before the copy was opened, as a fast-forward, a revision swap or a reload
+/// writes) never shows it. Before the fix, any open of the path took it and
+/// showed it, so the migration's notice reached a version 2 revision's open.
+#[test]
+fn a_pulled_notice_never_reaches_other_bytes_at_its_path() {
+    crate::test_helpers::with_isolated_config(|| {
+        crate::app_dirs::init_for_test();
+        let dir = tempfile::tempdir().expect("temp");
+        let source = dir.path().join("download.stalx");
+        super::project_save_tests::write_legacy_drift(&source, true);
+        let dest = dir.path().join("cache").join("project.stalx");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
+        let state = AppState::new().expect("state");
+        install(&state, &source, &dest, LocalEditsPolicy::Discard).expect("legacy pull");
+        // Another revision lands at the path before the copy is opened.
+        let newer = server_copy(dir.path(), "newer.stalx");
+        install_cache_bytes(&dest, &std::fs::read(&newer).expect("read")).expect("install v2");
+        let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
+        assert!(opened.success, "{:?}", opened.error);
+        assert_eq!(
+            name_at(&dest),
+            SERVER_NAME,
+            "the version 2 revision is open"
+        );
+        assert_eq!(
+            state.take_conversion_notice(),
+            None,
+            "the migration's notice describes other content"
+        );
+    });
+}
+
+/// An open of another project between the pull and the copy's own open leaves
+/// the notice for that open. Before the fix, any open dropped it.
+#[test]
+fn a_pulled_notice_waits_for_its_own_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        crate::app_dirs::init_for_test();
+        let dir = tempfile::tempdir().expect("temp");
+        let source = dir.path().join("download.stalx");
+        super::project_save_tests::write_legacy_drift(&source, true);
+        let dest = dir.path().join("cache").join("project.stalx");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("cache dir");
+        let state = AppState::new().expect("state");
+        install(&state, &source, &dest, LocalEditsPolicy::Discard).expect("legacy pull");
+        let other = server_copy(dir.path(), "other.stalx");
+        let opened = state.execute(crate::core::Command::OpenProject { path: other });
+        assert!(opened.success, "{:?}", opened.error);
+        assert_eq!(
+            state.take_conversion_notice(),
+            None,
+            "the other project has none"
+        );
+        let opened = state.execute(crate::core::Command::OpenProject { path: dest });
+        assert!(opened.success, "{:?}", opened.error);
+        let notice = state.take_conversion_notice().expect("the pull's notice");
+        assert_eq!(notice.file, super::ConversionFile::Downloaded, "{notice:?}");
+        assert_eq!(state.take_conversion_notice(), None, "offered once");
+    });
+}

@@ -67,7 +67,15 @@ for that line.
 
 The line you detach gets its own station at the same place: a line that was
 merged there gets back the Station ID and name it had before. On a station
-where three or more lines meet, the dialog asks which line to detach. Where
-two lines meet and either choice gives the same result, it asks nothing and
-says which line comes off, for example "North Passage comes off: it gets back
-0 (Station ID 9); Main Line keeps 3." Undo puts the line back.
+where three or more lines meet, the dialog asks what comes off: one line, or,
+on the row of the line that keeps the station, the other lines together (for
+example "Far Room and Upstream, together (Main Line keeps this station)").
+Under the choice it lists what every line has there afterwards, with its name
+and Station ID. Lines that come off together stay joined on one station, which
+has one Station ID: a line among them that had its own keeps it only as an
+alias, and the list says so; detach that line afterwards to give it its own
+back. Where two lines meet and either choice gives the same result, it asks
+nothing and says which line comes off, for example "North Passage comes off:
+it gets back 0 (Station ID 9); Main Line keeps station 3." Undo puts the line
+back. The undo history names the line that came off and the station on a line
+that kept it: `Detach line "North Passage" from Main Line / 3`.
