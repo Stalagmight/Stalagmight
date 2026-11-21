@@ -59,12 +59,13 @@ impl DownloadOptions {
     }
 }
 
-/// A download that got no reply at all is the only reason to open a cache instead
-/// of downloading: the connection could not be made, the name did not resolve, the
-/// time ran out, or the connection closed or reset before the whole reply arrived
-/// ([`crate::speleodb::TransportCause::got_no_reply`], F1). Never use cache availability to bypass
-/// access denial or invalid server content: a status, a reply the app cannot read,
-/// a TLS failure and an unclassified transport failure all report the error.
+/// A download that got no complete reply is the only reason to open a cache
+/// instead of downloading: the connection could not be made, the name did not
+/// resolve, the time ran out, or the connection closed or reset before the whole
+/// reply arrived ([`crate::speleodb::TransportCause::got_no_reply`], F1). Never use
+/// cache availability to bypass access denial or invalid server content: a status,
+/// a reply the app cannot read, a TLS failure and an unclassified transport
+/// failure all report the error.
 fn offline_open_result(
     dest: &std::path::Path,
     endpoint: &str,

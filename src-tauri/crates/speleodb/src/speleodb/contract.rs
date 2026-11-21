@@ -77,8 +77,8 @@ pub enum SpeleoDbAction {
 /// treats every transport failure as an outcome it does not know, whatever the
 /// cause: an upload stays unconfirmed and dirty, an acquire asks the server who
 /// holds the lock. A READ that failed with a cause [`Self::got_no_reply`] names
-/// heard nothing from the server, and an open then opens the cached copy
-/// offline.
+/// got no complete reply, so it learnt nothing from the server, and an open then
+/// opens the cached copy offline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
@@ -103,10 +103,10 @@ pub enum TransportCause {
 }
 
 impl TransportCause {
-    /// Whether a request that failed this way got no reply at all from the
+    /// Whether a request that failed this way got no complete reply from the
     /// server: the connection could not be made, the name did not resolve, the
     /// time ran out, or the connection closed or reset before the whole reply
-    /// arrived. A read that got no reply learnt nothing about the project, so an
+    /// arrived. A read without a reply learnt nothing about the project, so an
     /// open may fall back to the cached copy (`offline_open_result`).
     ///
     /// Not [`Self::Tls`]: the peer did not prove it is the server, which the user
