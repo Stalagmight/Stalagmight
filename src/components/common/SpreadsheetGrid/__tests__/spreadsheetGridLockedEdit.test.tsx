@@ -37,7 +37,7 @@ const columns: GridColumn<Row>[] = [
   { key: 'note', header: 'Note', kind: 'text', getValue: (r) => r.note, editable: true },
 ];
 
-const rows: Row[] = [{ id: 1, comment: 'Silt bank', note: '' }];
+const rows: Row[] = [{ id: 1, comment: 'Silt bank', note: 'tie-off' }];
 
 function renderGrid() {
   const onEdit = vi.fn();
@@ -77,6 +77,16 @@ describe('SpreadsheetGrid onLockedEdit', () => {
     fireEvent.doubleClick(screen.getByTestId('grid-cell-0-comment'));
     expect(onLockedEdit).toHaveBeenCalledTimes(3);
     expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it('still clears the writable cells of a range that starts on a locked one', () => {
+    const { onEdit, onLockedEdit } = renderGrid();
+    fireEvent.mouseDown(screen.getByTestId('grid-cell-0-comment'));
+    fireEvent.keyDown(scroller(), { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyDown(scroller(), { key: 'Delete' });
+    expect(onLockedEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledWith(0, 'note', expect.anything());
+    expect(onEdit).not.toHaveBeenCalledWith(0, 'comment', expect.anything());
   });
 
   it('never reports an edit of a cell it writes', () => {

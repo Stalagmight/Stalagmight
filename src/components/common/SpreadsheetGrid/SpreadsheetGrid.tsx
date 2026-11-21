@@ -1341,8 +1341,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
           const activeCol = colAt(colIdx);
           if (onDeleteRows && rowSelectIntent.current && fullRows) deleteRowsCollapsing(rect.r0, rect.r1);
-          else if (onLockedEdit && !(activeCol && cellEditable(row, activeCol))) onLockedEdit();
-          else doClear();
+          else {
+            // Still clears the writable cells of a range whose active cell is locked.
+            if (!(activeCol && cellEditable(row, activeCol))) onLockedEdit?.();
+            doClear();
+          }
           return;
         }
         case 'Escape': {
