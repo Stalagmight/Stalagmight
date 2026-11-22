@@ -3,7 +3,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import type { SpeleoFileAccess } from '../types/ipc.generated';
-import { getErrorMessage, invokeIpc } from './ipc';
+import { invokeIpc } from './ipc';
+import { describeSpeleoError } from './speleoError';
 
 /** Switch to read-only only after all work is saved locally and uploaded. */
 export async function releaseOpenProjectLock(): Promise<void> {
@@ -32,7 +33,7 @@ export async function releaseOpenProjectLock(): Promise<void> {
     await useSpeleoStore.getState().refreshLinkStatus();
   } catch (error) {
     if (current()) useUIStore.getState().openDialog('error', {
-      title: i18n.t('speleodb.release.failed'), message: getErrorMessage(error),
+      title: i18n.t('speleodb.release.failed'), message: describeSpeleoError(error),
     });
   } finally { useSpeleoStore.getState().endBusy(token); }
 }

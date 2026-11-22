@@ -31,7 +31,7 @@ use crate::core::Command;
 use crate::models::{SpeleoLink, UndoMode};
 use crate::persistence::stalx_v2::{self, Mode, PushOptions};
 use crate::speleodb::auth::TokenStore;
-use crate::speleodb::{PushResult, SpeleoDbAction};
+use crate::speleodb::{PushResult, SpeleoDbAction, StartEditingResult};
 
 const ID: &str = "11111111-1111-1111-1111-111111111111";
 const ME: &str = "diver@example.com";
@@ -1036,5 +1036,75 @@ fn a_copy_with_real_work_is_hashed_once_while_it_is_unchanged() {
             assert!(listed_unpushed(&state));
         }
         assert_eq!(whole_reads() - before, 1, "a changed file is read again");
+    });
+}
+
+/// Demo item 5. A copy that is behind SpeleoDB - what an offline open whose
+/// download alone was lost leaves: the copy at BASE, SpeleoDB at NEWER - is
+/// never edited behind. Resume editing downloads the newer revision first and
+/// edits on it; with un-uploaded work it routes to the divergence prompt and
+/// downloads nothing. The SpeleoDB tab says so while the copy is behind.
+///
+/// Pins the reconcile in `speleodb_start_editing_flow` (this held before the
+/// demo; the demo did not check it). Injection: `sync::reconcile_verdict`
+/// answering `UpToDate` for a fast-forward (editing starts on the copy that is
+/// behind) fails the first half.
+#[test]
+fn resume_editing_on_a_copy_behind_downloads_the_newer_revision_first() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        pull(&signed_in(&endpoint), &dest).expect("download BASE");
+        repo.lock()
+            .expect("repo")
+            .push(NEWER, revision(&endpoint, Some(3.0)));
+
+        let state = signed_in(&endpoint);
+        assert!(state.open_project(dest.clone()).success);
+        assert!(!state.edit_enabled(), "opens read-only, behind");
+        let started = state.speleodb_start_editing().expect("resume editing");
+        assert!(
+            matches!(started, StartEditingResult::FastForwarded { .. }),
+            "{started:?}"
+        );
+        let on_disk = link_on_disk(&dest).expect("linked");
+        assert_eq!(on_disk.base_commit_sha.as_deref(), Some(NEWER));
+        assert_eq!(survey_at(&dest), downloaded_survey(NEWER, &repo));
+        assert!(state.edit_enabled(), "editing, on the newer revision");
+    });
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        set_elevation(&state, Some(12.5));
+        save(&state);
+        drop(state);
+        repo.lock()
+            .expect("repo")
+            .push(NEWER, revision(&endpoint, Some(3.0)));
+        let before = survey_at(&dest);
+        let downloads = || {
+            repo.lock()
+                .expect("repo")
+                .lines
+                .iter()
+                .filter(|line| line.contains("/download/"))
+                .count()
+        };
+        let downloaded = downloads();
+
+        let state = signed_in(&endpoint);
+        assert!(state.open_project(dest.clone()).success);
+        assert!(open_link(&state).has_unpushed_edits, "un-uploaded work");
+        let started = state.speleodb_start_editing().expect("resume editing");
+        assert!(
+            matches!(started, StartEditingResult::DivergenceNeeded),
+            "{started:?}"
+        );
+        assert_eq!(downloads(), downloaded, "nothing downloaded");
+        assert_eq!(survey_at(&dest), before, "the work is untouched");
+        assert!(!state.edit_enabled(), "still read-only");
     });
 }

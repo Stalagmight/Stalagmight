@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
-import { getErrorMessage } from '../../utils/ipc';
+import { describeSpeleoError } from '../../utils/speleoError';
 import { abandonUpdateRestart, closeExitStillCurrent, handBackProject, performQuit, readPendingExit } from '../../utils/quit';
 import { landedOverReplacedRevisions } from '../../utils/speleoReplacedRevisions';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -123,7 +123,7 @@ export default function SpeleoUnwoundPushDialog() {
       if (stopIfStale()) return;
       openDialog('error', {
         title: t('speleodb.unwoundPush.discardFailedTitle'),
-        message: getErrorMessage(e, t('speleodb.unwoundPush.discardFailedMessage')),
+        message: describeSpeleoError(e, t('speleodb.unwoundPush.discardFailedMessage')),
       });
       setBusy(false);
     }

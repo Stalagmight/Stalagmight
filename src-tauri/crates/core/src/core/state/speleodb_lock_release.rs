@@ -175,10 +175,23 @@ pub(super) fn release_if_held_by_us(
     Ok(HolderCheckedRelease::Released)
 }
 
-/// The user-facing reason a release of the open project's lock did not happen,
-/// carried as the `error` of a result whose `lock_release` is `Failed`.
-fn release_failure_message(error: &SpeleoDbError) -> String {
-    format!("The SpeleoDB lock could not be handed back: {error}")
+/// The result of a release of the open project's lock that did not happen:
+/// `lock_release: Failed`, the reason as its `error`, and a transport failure's
+/// cause typed (`lock_release_transport`), which the frontend words the "Couldn't
+/// hand back the lock" dialog from. The reason names a transport failure's cause
+/// in plain words, never the raw diagnostic: that is in the log line every
+/// caller writes first (demo item 4).
+fn release_failure(error: &SpeleoDbError) -> CommandResult {
+    let transport = match error {
+        SpeleoDbError::Transport { cause, .. } => Some(*cause),
+        _ => None,
+    };
+    CommandResult::failure(format!(
+        "The SpeleoDB lock could not be handed back: {}",
+        error.user_reason()
+    ))
+    .with_lock_release(Some(LockReleaseOutcome::Failed))
+    .with_lock_release_transport(transport)
 }
 
 impl AppState {
@@ -339,6 +352,19 @@ impl AppState {
         Ok(Some(self.speleodb_claim_is_kept(project_id)))
     }
 
+    /// Whether a close of the open project now would try to hand its lock back:
+    /// the signed-in account holds a claim on it that nobody chose to keep. Such a
+    /// close asks SpeleoDB who holds the lock first, and asks "Couldn't hand back
+    /// the lock" when SpeleoDB cannot answer.
+    pub(super) fn speleodb_close_would_hand_back(&self) -> bool {
+        self.speleodb_open_link().is_ok_and(|link| {
+            matches!(
+                self.speleodb_open_claim_kept(&link.project_id),
+                Ok(Some(false))
+            )
+        })
+    }
+
     /// Record that the open project's lock is being kept on purpose (the exit
     /// prompt's "Keep the lock", and the update restart over un-uploaded work).
     ///
@@ -423,8 +449,7 @@ impl AppState {
             Ok(outcome) => self
                 .execute(Command::CloseProject)
                 .with_lock_release(outcome),
-            Err(error) => CommandResult::failure(release_failure_message(&error))
-                .with_lock_release(Some(LockReleaseOutcome::Failed)),
+            Err(error) => release_failure(&error),
         }
     }
 
@@ -446,8 +471,7 @@ impl AppState {
         }
         match self.speleodb_release_held_lock_on_close() {
             Ok(outcome) => CommandResult::success().with_lock_release(outcome),
-            Err(error) => CommandResult::failure(release_failure_message(&error))
-                .with_lock_release(Some(LockReleaseOutcome::Failed)),
+            Err(error) => release_failure(&error),
         }
     }
 

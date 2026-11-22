@@ -171,17 +171,20 @@ pub(super) fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
 /// failure, a 5xx or an unreadable reply can all arrive after the server committed
 /// the mutex to us - a proxy giving up on a slow reply, a reset after the write, a
 /// body the SDK's strict schema refuses. A 4xx is the server's own verdict about
-/// the request and is never ambiguous.
+/// the request and is never ambiguous, and neither is a connection that could not
+/// be made or a name that did not resolve (`TransportCause::nothing_sent`): the
+/// request never left this computer, so there is no lock to look for and none to
+/// point at (demo item 3: it used to leave a claim, and the next Close asked
+/// "Couldn't hand back the lock" about a request SpeleoDB never saw).
 fn acquire_outcome_unknown(err: &SpeleoDbError) -> bool {
-    matches!(
-        err,
-        SpeleoDbError::Transport { .. }
-            | SpeleoDbError::Parse(_)
-            | SpeleoDbError::Status {
-                status: 500..=599,
-                ..
-            }
-    )
+    match err {
+        SpeleoDbError::Transport { cause, .. } => !cause.nothing_sent(),
+        SpeleoDbError::Parse(_)
+        | SpeleoDbError::Status {
+            status: 500..=599, ..
+        } => true,
+        _ => false,
+    }
 }
 
 /// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
@@ -879,7 +882,25 @@ impl AppState {
         super::speleodb_local_state::validated_cache_path_in(&root, project_id)
     }
 
+    /// Start Editing: take the write lock and reconcile the copy with SpeleoDB.
+    ///
+    /// A refusal after which this account may hold the lock without editing
+    /// under it - a lock request whose outcome nothing could confirm, so this
+    /// process keeps a pointer to it - says so (`lock_may_be_held`), and the
+    /// read-only notice tells the user the next close will see to it (demo item
+    /// 3). Read from the claim the flow left, so every path that leaves one (the
+    /// acquire whose holder check failed, the unwind whose release could not
+    /// tell) is covered, and no path that leaves none is.
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_flow().map_err(|mut refusal| {
+            if !self.edit_enabled() && self.speleodb_close_would_hand_back() {
+                refusal.lock_may_be_held = Some(true);
+            }
+            refusal
+        })
+    }
+
+    fn speleodb_start_editing_flow(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
         // token, the mutex holder) that another lock operation could invalidate,
@@ -2979,6 +3000,43 @@ mod tests {
     }
 
     #[test]
+    fn an_acquire_that_never_left_this_computer_is_no_unknown_outcome() {
+        // Demo item 3: a refused connection or an unresolved name sent nothing, so
+        // the acquire cannot have landed and there is no lock to look for or point
+        // at; every other transport failure, a 5xx and an unreadable reply may
+        // follow a landed acquire. A 4xx is the server's verdict.
+        for cause in [
+            TransportCause::Refused,
+            TransportCause::Dropped,
+            TransportCause::Timeout,
+            TransportCause::Dns,
+            TransportCause::Tls,
+            TransportCause::Unknown,
+        ] {
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "synthetic".to_owned(),
+            };
+            assert_eq!(
+                super::acquire_outcome_unknown(&error),
+                !matches!(cause, TransportCause::Refused | TransportCause::Dns),
+                "{cause:?}"
+            );
+        }
+        assert!(super::acquire_outcome_unknown(&SpeleoDbError::Status {
+            status: 502,
+            message: "synthetic".to_owned(),
+        }));
+        assert!(super::acquire_outcome_unknown(&SpeleoDbError::Parse(
+            "synthetic".to_owned()
+        )));
+        assert!(!super::acquire_outcome_unknown(&SpeleoDbError::Status {
+            status: 403,
+            message: "synthetic".to_owned(),
+        }));
+    }
+
+    #[test]
     fn push_and_done_report_not_editing_when_the_gate_is_closed_over_clean_work() {
         // Same arm even with nothing to push: "there was no edit session" is a fact
         // about the session, not about the dirty bit, and the frontend needs it to
@@ -3991,10 +4049,10 @@ mod tests {
         // took" and mint a record on it. Unknown provenance must answer like a failed
         // probe: no claim.
         let start_editing = prod_source()
-            .split_once("fn speleodb_start_editing")
+            .split_once("fn speleodb_start_editing_flow")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_start_editing body precedes the next method");
+            .expect("speleodb_start_editing_flow body precedes the next method");
         let probe = start_editing
             .split_once("match self.speleodb_lock_holder_checked(")
             .map(|(_, rest)| rest)
@@ -4557,10 +4615,10 @@ mod tests {
         // binary. The sibling above reaches the arm behaviourally and pins the release
         // half; this pins which failures skip it.
         let start_editing = prod_source()
-            .split_once("fn speleodb_start_editing")
+            .split_once("fn speleodb_start_editing_flow")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_start_editing body precedes the next method");
+            .expect("speleodb_start_editing_flow body precedes the next method");
         let fast_forward = start_editing
             .split_once("ReconcileVerdict::FastForward => {")
             .map(|(_, rest)| rest)
@@ -4941,6 +4999,16 @@ mod tests {
                     .any(|w| w.code == "delete_project_lock_release_failed"),
                 "the stub never answers, so the release failed - which must surface as \
                  a non-fatal warning, not a failed delete, got {:?}",
+                result.warnings
+            );
+            // Demo item 4: the warning names the cause in plain words, never the
+            // raw diagnostic. Injection: `{e}` back in the message fails this.
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .all(|w| !w.message.contains("Network error talking to SpeleoDB")),
+                "{:?}",
                 result.warnings
             );
         });

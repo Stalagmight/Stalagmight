@@ -584,6 +584,14 @@ pub struct CommandResult {
     /// optional fields above (`skip_serializing_if` + `default`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub lock_release: Option<LockReleaseOutcome>,
+    /// With `lock_release: Failed`, when the release got no answer it could use
+    /// because of a transport failure: why, as a typed cause. The frontend words
+    /// "Couldn't hand back the lock" from it (`humanizeSpeleoError`'s line, which
+    /// names the server and what to do) instead of showing `error`, whose raw
+    /// diagnostic is for the log. Absent otherwise; same wire contract as the
+    /// optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lock_release_transport: Option<crate::speleodb::TransportCause>,
     /// The Section a `create_cave_section` created (#327), so the frontend
     /// can select it. Same wire contract as the optional fields above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -651,6 +659,7 @@ impl CommandResult {
             reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            lock_release_transport: None,
             cave_section_id: None,
             legacy_converted: None,
             speleodb_unpushed_cleared: None,
@@ -671,6 +680,7 @@ impl CommandResult {
             reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            lock_release_transport: None,
             cave_section_id: None,
             legacy_converted: None,
             speleodb_unpushed_cleared: None,
@@ -753,6 +763,17 @@ impl CommandResult {
     #[must_use]
     pub fn with_lock_release(mut self, outcome: Option<LockReleaseOutcome>) -> Self {
         self.lock_release = outcome;
+        self
+    }
+
+    /// Attach the transport cause of a failed lock release (see
+    /// [`CommandResult::lock_release_transport`]); `None` leaves the key off.
+    #[must_use]
+    pub fn with_lock_release_transport(
+        mut self,
+        cause: Option<crate::speleodb::TransportCause>,
+    ) -> Self {
+        self.lock_release_transport = cause;
         self
     }
 

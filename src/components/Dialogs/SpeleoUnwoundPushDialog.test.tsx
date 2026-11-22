@@ -200,6 +200,35 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     expect(useProjectStore.getState().isDirty).toBe(false);
   });
 
+  // Demo item 4: a discard whose call got no reply is reported in the words every
+  // read-only notice uses for that cause, naming the server, never the raw
+  // diagnostic the backend keeps for the log. Both discard surfaces.
+  it.each(['unwound', 'explicit'] as const)('a %s discard that got no reply is worded by its cause', async (surface) => {
+    useSpeleoStore.setState({
+      session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+      link: { unwound: surface === 'unwound', hasUnpushedEdits: true, editState: 'editing' } as never,
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Dropped',
+    });
+    if (surface === 'unwound') {
+      open();
+      render(<SpeleoUnwoundPushDialog />);
+      await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
+    } else {
+      const { default: SpeleoDiscardChangesDialog } = await import('./SpeleoDiscardChangesDialog');
+      useUIStore.setState({ activeDialog: 'speleodb-discard-changes', dialogData: {} });
+      render(<SpeleoDiscardChangesDialog />);
+      await userEvent.click(screen.getByTestId('speleodb-discard-changes-keep'));
+    }
+    await waitFor(() => expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('error', {
+      title: 'Could not get the latest version',
+      message: 'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. '
+        + 'Check your network connection and try again.',
+    }));
+  });
+
   it('does nothing at all on cancel', async () => {
     open();
     render(<SpeleoUnwoundPushDialog />);

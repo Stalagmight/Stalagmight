@@ -237,6 +237,22 @@ regions). Read the comment blocks in those two files plus
 
 - Lead with what happened, then what to do: "Export failed - choose a folder with
   write access", not "An error occurred".
+- **A SpeleoDB failure is worded by its cause, never shown raw.** A rejected
+  SpeleoDB call carries its transport cause typed (`SpeleoErrorDto.transport`;
+  a failed lock release `CommandResult.lock_release_transport`), and every surface
+  words it from that: `humanizeSpeleoError` with an operation prefix,
+  `describeSpeleoError` where the surface frames the failure itself (a dialog with
+  its own title, an error line under a prompt), `describeTransportCause` for a
+  cause alone. The line names the server and says what to check. The backend's
+  "Network error talking to SpeleoDB: <raw cause>" is for the log only: no
+  details line shows it. Sentences the backend builds itself (a lock left held
+  after a delete) name the cause in plain words (`SpeleoDbError::user_reason`).
+- **A notice is titled for what happened.** The SpeleoDB read-only notice says
+  "Project opened read-only" only after an open; after Resume editing or Start
+  editing on a project already open it says "Still read-only". When the lock
+  request may have reached SpeleoDB without anything confirming it, the notice
+  says so in one sentence, so the close that later hands the lock back (or asks
+  "Couldn't hand back the lock") is no surprise.
 - Name things the user recognizes (project, line, shot), active voice, no
   internal jargon or error-code prefixes in the message body.
 - Sentence case, ASCII hyphens only (repo-wide rule), tone per

@@ -49,3 +49,20 @@ it('preserves work and editing state when release fails', async () => {
   expect(errorDialog).toHaveBeenCalledWith('error', expect.objectContaining({ message: 'Release failed' }));
   expect(useSpeleoStore.getState().link?.editState).toBe('editing');
 });
+// Demo item 4: Switch to Read Only Mode whose release got no reply says why in
+// the words every read-only notice uses for that cause, naming the server, never
+// the raw diagnostic the backend keeps for the log.
+it('words a release that got no reply by its cause, not the raw diagnostic', async () => {
+  useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' } });
+  ipc.mockImplementation(async (cmd) => {
+    if (cmd === 'speleodb_project_access_at') return { release_context: context };
+    throw { message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Refused' };
+  });
+  await releaseOpenProjectLock();
+  expect(errorDialog).toHaveBeenCalledWith('error', {
+    title: 'Could not release editing lock',
+    message: 'Could not connect to SpeleoDB at https://synthetic.example. Check your network connection, the server '
+      + 'address, and whether the server is running.',
+  });
+});

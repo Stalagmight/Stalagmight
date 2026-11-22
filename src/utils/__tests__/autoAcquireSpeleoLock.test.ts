@@ -84,6 +84,33 @@ it.each([
   expect(useSpeleoStore.getState().session?.loggedIn).toBe(true);
 });
 
+// Demo item 3. A lock request that may have reached SpeleoDB, which nothing could
+// confirm, leaves the app a pointer to a lock that may be this account's; the next
+// close hands it back or asks "Couldn't hand back the lock". The notice says so in
+// one sentence, so that question is no surprise - only when the backend says so
+// (`lock_may_be_held`), never from the cause alone. An automatic Start Editing
+// runs after an open, so its notice keeps the open's title (demo item 7).
+const LOCK_SENTENCE = 'The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock back '
+  + 'when you close the project, or you can try again.';
+it.each([
+  ['Dropped', true, true],
+  ['Timeout', true, true],
+  ['Dropped', undefined, false],
+  ['Refused', undefined, false],
+] as const)('an automatic Start Editing that failed (%s, lock_may_be_held %s) says the lock may be held: %s',
+  async (transport, flag, said) => {
+    useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' } });
+    ipc.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null, transport,
+      ...(flag ? { lock_may_be_held: flag } : {}),
+    });
+    await autoAcquireSpeleoLock('/remote.stalx', () => true);
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('opened');
+    expect(notice?.message.endsWith(` ${LOCK_SENTENCE}`)).toBe(said);
+    expect(notice?.message).not.toMatch(/network error|error sending request/i);
+  });
+
 it('ignores a late response after switching projects', async () => {
   let resolve!: (value: unknown) => void;
   ipc.mockReturnValue(new Promise(r => { resolve = r; }));

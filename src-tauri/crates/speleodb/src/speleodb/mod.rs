@@ -188,6 +188,32 @@ pub enum SpeleoDbError {
     },
 }
 
+impl SpeleoDbError {
+    /// The reason for a sentence the backend shows the user: a transport failure
+    /// by its cause ([`TransportCause::plain_reason`]), never "Network error
+    /// talking to SpeleoDB: <the raw cause>", which is for the log; any other
+    /// error as it displays.
+    #[must_use]
+    pub fn user_reason(&self) -> String {
+        match self {
+            Self::Transport { cause, .. } => cause.plain_reason().to_owned(),
+            other => other.to_string(),
+        }
+    }
+}
+
+impl SpeleoErrorDto {
+    /// [`SpeleoDbError::user_reason`] for an error already turned into its IPC
+    /// shape: the cause when it is a transport failure, else its message.
+    #[must_use]
+    pub fn user_reason(&self) -> String {
+        self.transport.map_or_else(
+            || self.message.clone(),
+            |cause| cause.plain_reason().to_owned(),
+        )
+    }
+}
+
 /// A byte count as decimal megabytes with one decimal, for user-facing text
 /// (`5_242_880` -> `5.2`).
 fn megabytes(bytes: &u64) -> String {

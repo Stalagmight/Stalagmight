@@ -579,6 +579,11 @@ fn a_start_editing_whose_acquire_landed_leaves_a_pointer_to_the_lock() {
             !state.speleodb_lock_acquired_here(ID),
             "a pointer, not an edit session"
         );
+        assert_eq!(
+            refused.lock_may_be_held,
+            Some(true),
+            "the refusal says the lock may be held, for the read-only notice (demo item 3)"
+        );
 
         server.answer_again();
         let closed = state.speleodb_release_held_lock_on_close();
@@ -664,5 +669,147 @@ fn an_open_whose_download_alone_was_lost_says_what_the_history_told_it() {
         sign_in(&state, &url);
         let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
         assert_eq!(opened.newer_on_server, None, "nothing answered");
+    });
+}
+
+#[test]
+fn a_start_editing_that_never_connected_leaves_no_pointer_to_a_lock() {
+    // Demo item 3. A refused connection sends nothing, so the lock request cannot
+    // have reached SpeleoDB. Every transport failure of the acquire used to read as
+    // "may have landed": the holder read was refused the same way, an unbound
+    // claim was left, and the next Close asked "Couldn't hand back the lock" about
+    // a lock request that never left this computer, after a notice that said only
+    // "Could not connect". Now an acquire that never connected leaves nothing.
+    // Injection: `acquire_outcome_unknown` matching every `Transport` again fails
+    // the claim and the close assertions.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let url = format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().expect("addr").port()
+        );
+        drop(listener);
+        let copy = seed(temp.path(), &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url);
+        state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
+        let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+        assert_eq!(opened.offline, Some(true));
+        assert!(state.open_project(copy).success);
+
+        let refused = state
+            .speleodb_start_editing()
+            .expect_err("nothing listens, no edit session");
+        assert_eq!(
+            refused.transport,
+            Some(TransportCause::Refused),
+            "{refused:?}"
+        );
+        assert!(
+            !state.speleodb_holds_claim(ID),
+            "nothing was sent, so there is no lock to point at"
+        );
+        assert_eq!(
+            refused.lock_may_be_held, None,
+            "and nothing to say about one"
+        );
+        let closed = state.speleodb_release_held_lock_on_close();
+        assert!(
+            matches!(closed, Ok(None)),
+            "the close has nothing to hand back, so it asks nothing: {closed:?}"
+        );
+    });
+}
+
+/// A loopback SpeleoDB on which nobody holds the lock and every acquire loses its
+/// reply without landing: the acquire never takes the lock, and the project read
+/// says so.
+fn server_losing_unlanded_acquires() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let line = read_request(&mut stream, false);
+            if line.contains("/acquire/") {
+                lose_reply(stream, Lost::Closed, &line);
+            } else if line.contains("/user/") {
+                let me = super::tests_support::sdk_fixture(&format!(r#"{{"email":"{ME}"}}"#));
+                answer(&mut stream, 200, &me);
+            } else if line.contains("/revisions/") {
+                let history = super::tests_support::sdk_fixture(&format!(
+                    r#"{{"commits":[{{"id":"{BASE}","parent_ids":[]}}]}}"#
+                ));
+                answer(&mut stream, 200, &history);
+            } else {
+                let project = super::tests_support::sdk_fixture(&format!(
+                    r#"{{"id":"{ID}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":null}}"#
+                ));
+                answer(&mut stream, 200, &project);
+            }
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+#[test]
+fn a_lost_lock_request_says_the_lock_may_be_held_only_while_nothing_can_tell() {
+    // Demo item 3. The read-only notice after a failed Start Editing says the
+    // lock may be held exactly when this process keeps a pointer to a lock that
+    // may be ours, which the next close will hand back or ask about. An acquire
+    // whose reply was lost and whose holder nobody could read leaves one; an
+    // acquire whose reply was lost but which SpeleoDB says did not land (nobody
+    // holds the lock) leaves none, and the refusal says nothing about a lock.
+    // Injection: the flag set from the transport cause alone (`Dropped`) fails
+    // the second case; the flag never set fails the first.
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, _) = server(Lost::Closed, |line| {
+            line.contains("/acquire/") || project_reads(line)
+        });
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let copy = seed(temp.path(), &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url);
+        state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
+        open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+        assert!(state.open_project(copy).success);
+        let refused = state.speleodb_start_editing().expect_err("no reply");
+        assert_eq!(
+            refused.transport,
+            Some(TransportCause::Dropped),
+            "{refused:?}"
+        );
+        assert!(
+            state.speleodb_holds_claim(ID),
+            "a pointer to a lock that may be ours"
+        );
+        assert_eq!(refused.lock_may_be_held, Some(true), "{refused:?}");
+    });
+    crate::test_helpers::with_isolated_config(|| {
+        let url = server_losing_unlanded_acquires();
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let copy = seed(temp.path(), &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url);
+        state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
+        assert!(state.open_project(copy).success);
+        let refused = state.speleodb_start_editing().expect_err("no reply");
+        assert_eq!(
+            refused.transport,
+            Some(TransportCause::Dropped),
+            "{refused:?}"
+        );
+        assert!(
+            !state.speleodb_holds_claim(ID),
+            "SpeleoDB says nobody holds it"
+        );
+        assert_eq!(refused.lock_may_be_held, None, "{refused:?}");
+        assert!(matches!(
+            state.speleodb_release_held_lock_on_close(),
+            Ok(None)
+        ));
     });
 }

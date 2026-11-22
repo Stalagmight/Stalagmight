@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { selectPushFailure, useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useScreenOccupant } from '../../hooks/useScreenOccupant';
-import { getErrorMessage } from '../../utils/ipc';
+import { describeSpeleoError } from '../../utils/speleoError';
 import { closeDiscardingLocal } from '../../utils/speleoExit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
@@ -89,7 +89,7 @@ function SignOutPrompt({ kind, initial, settle }: {
       setStep('choose');
       setPhase('review');
     } catch (e) {
-      setError(getErrorMessage(e));
+      setError(describeSpeleoError(e));
       setPhase('checkFailed');
     }
   };
@@ -172,7 +172,7 @@ function SignOutPrompt({ kind, initial, settle }: {
         const closed = await closeDiscardingLocal();
         outcome = closed.ok ? { ok: true, warning: closed.warning } : { ok: false, error: closed.error };
       } catch (e) {
-        outcome = { ok: false, error: getErrorMessage(e) };
+        outcome = { ok: false, error: describeSpeleoError(e) };
       }
     }
     if (!outcome.ok) {

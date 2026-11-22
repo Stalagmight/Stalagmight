@@ -106,8 +106,54 @@ export function humanizeSpeleoError(
   contextPrefix?: string,
   opts: { endpoint?: string | null } = {},
 ): string {
+  const framed = selfFramedLine(e, opts.endpoint);
+  if (framed !== null) return framed;
+  // Strip a trailing period so "…credentials." reads cleanly after our prefix.
+  const msg = getErrorMessage(e).replace(/\.\s*$/, '');
+  if (!contextPrefix) return msg;
+  return `${contextPrefix}: ${msg}`;
+}
+
+/**
+ * The line for a rejected SpeleoDB call on a surface that frames it itself (a
+ * dialog with its own title, an error line under a prompt): the same self-framed
+ * line {@link humanizeSpeleoError} gives a transport failure, a refused format or
+ * address, or a newer file, and otherwise the error's own message as it is
+ * (`fallback` when it has none), with no prefix and no trimming.
+ *
+ * Demo item 4: these surfaces used `getErrorMessage`, which shows a transport
+ * failure as the raw diagnostic ("Network error talking to SpeleoDB: error
+ * sending request") where every read-only notice for the same failure names
+ * its cause. The raw text stays on the error, for whoever logs it.
+ */
+export function describeSpeleoError(e: unknown, fallback?: string): string {
+  return selfFramedLine(e) ?? getErrorMessage(e, fallback);
+}
+
+/**
+ * The cause-worded line for a transport failure known only by its cause: a
+ * lock release a `CommandResult` reports as failed carries it as
+ * `lock_release_transport`, not as a rejected call.
+ */
+export function describeTransportCause(cause: TransportCause): string {
+  return transportMessage(cause);
+}
+
+/**
+ * Demo item 3: a Start Editing refusal after which this account may hold the
+ * lock without editing under it (`SpeleoErrorDto.lock_may_be_held`, set only
+ * while the app keeps a pointer to that lock). The next close hands it back or
+ * asks, so the read-only notice says so first. Read structurally, never from
+ * the message.
+ */
+export function lockMayBeHeld(e: unknown): boolean {
+  return !!e && typeof e === 'object' && (e as Partial<SpeleoErrorDto>).lock_may_be_held === true;
+}
+
+/** The self-framed line for the errors that carry their own words, or `null`. */
+function selfFramedLine(e: unknown, endpoint?: string | null): string | null {
   const cause = transportCause(e);
-  if (cause) return transportMessage(cause, opts.endpoint);
+  if (cause) return transportMessage(cause, endpoint);
   // Plan 12.1: one self-framed line wherever a push ran (Save Changes, Done, the
   // close and quit prompts), not "Could not upload: <the server's text>".
   if (isFormatRefused(e)) return i18n.t('speleodb.formatRefused');
@@ -115,16 +161,13 @@ export function humanizeSpeleoError(
   if (refusal) {
     return i18n.t(refusal === 'PlainHttp'
       ? 'speleodb.endpointRefused.plainHttp'
-      : 'speleodb.endpointRefused.invalidAddress', { endpoint: serverName(opts.endpoint) });
+      : 'speleodb.endpointRefused.invalidAddress', { endpoint: serverName(endpoint) });
   }
   // #649: a download a newer Stalagmight saved. Self-framed like the transport
   // line, and worded exactly as the open dialog words it.
   const newer = newerSchemaOf(e);
   if (newer) return newerSchemaMessage(newer, getErrorMessage(e));
-  // Strip a trailing period so "…credentials." reads cleanly after our prefix.
-  const msg = getErrorMessage(e).replace(/\.\s*$/, '');
-  if (!contextPrefix) return msg;
-  return `${contextPrefix}: ${msg}`;
+  return null;
 }
 
 /**

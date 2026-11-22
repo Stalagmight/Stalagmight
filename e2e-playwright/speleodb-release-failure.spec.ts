@@ -129,6 +129,20 @@ test.describe('Close Project with a failing lock release', () => {
     expect((await calls(page, 'close_project')).map((c) => c.args)).toEqual([{ releaseLock: true, discardLocal: false }]);
   });
 
+  // Demo item 4 (screenshot 06): "What went wrong" showed the raw diagnostic. A
+  // release that got no reply carries its cause, and the reason is the line every
+  // read-only notice uses for that cause, naming the server and what to do.
+  test('a release that got no reply says why in words, not the raw diagnostic', async ({ page }) => {
+    await setIpcOverrides(page, { close_project: { ...FAILED, lock_release_transport: 'Timeout' } });
+    await closeFromMenu(page);
+    const reason = page.getByTestId('speleodb-release-failed-reason');
+    await expect(reason).toHaveText('What went wrong: SpeleoDB at https://synthetic.example did not respond in '
+      + 'time. Check your network connection and that the server is running.');
+    await expect(reason).not.toContainText('Network error');
+    await page.getByTestId('speleodb-release-failed-cancel').click();
+    await expect(page.getByTestId('speleodb-release-failed-dialog')).toHaveCount(0);
+  });
+
   test('Retry closes once the release goes through', async ({ page }) => {
     await closeFromMenu(page);
     await expect(page.getByTestId('speleodb-release-failed-dialog')).toBeVisible();
