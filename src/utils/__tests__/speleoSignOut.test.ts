@@ -40,7 +40,7 @@ function serve(listed: SpeleoProjectSummary[], local: Record<string, SpeleoLocal
 beforeEach(() => {
   invokeIpcMock.mockReset();
   useSpeleoSignOut.setState({ request: null });
-  useProjectStore.setState({ project: null, isDirty: false });
+  useProjectStore.setState({ project: null, isDirty: false, recentProjects: [] });
   useSpeleoStore.setState({
     session: { loggedIn: true, userEmail: ME, endpoint: 'https://sdb.example' },
     link: null,
@@ -74,6 +74,29 @@ describe('surveySignOut', () => {
     expect(survey.openProject).toBeNull();
     expect(survey.releasable.map((p) => p.summary.id)).toEqual(['a', 'b']);
     expect(survey.unuploaded).toEqual([]);
+  });
+
+  // Demo item 1: SpeleoDB's lock is the account's. A lock this computer never took
+  // (no claim of this run, no copy, no recent file linked) is another session's of
+  // the account, maybe editing under it now: the sign-out leaves it alone.
+  // Injection: drop the `lockNotTakenHere` test and "elsewhere" is handed back too.
+  it('leaves a lock this computer never took to the session that holds it', async () => {
+    const nothingHere = { has_local_copy: false };
+    useProjectStore.setState({
+      recentProjects: [{ file_path: '/elsewhere/r.stalx', speleodb_project_id: 'linked' } as never],
+    });
+    serve([summary('copy', ME), summary('elsewhere', ME), summary('claimed', ME), summary('linked', ME)], {
+      copy: localState(),
+      elsewhere: localState(nothingHere),
+      claimed: localState({ ...nothingHere, lock_claimed_here: true }),
+      linked: localState(nothingHere),
+    });
+    const survey = await surveySignOut();
+    expect(survey.releasable.map((p) => p.summary.id)).toEqual(['copy', 'claimed', 'linked']);
+
+    // Held only elsewhere: nothing to do, the sign-out goes straight through.
+    serve([summary('elsewhere', ME)], { elsewhere: localState(nothingHere) });
+    expect(signOutHasWork(await surveySignOut())).toBe(false);
   });
 
   it('other cached projects with un-uploaded work are listed, locked or not; unreadable ones too', async () => {
