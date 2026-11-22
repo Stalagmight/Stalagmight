@@ -549,16 +549,20 @@ fn an_edit_during_take_remotes_history_read_refuses_it() {
 
     std::thread::scope(|scope| {
         let state = &state;
-        let pending = scope.spawn(move || state.speleodb_take_remote());
+        let pending = scope.spawn(move || {
+            state
+                .speleodb_take_remote()
+                .map_err(|e| (e.action, e.message))
+        });
         seen.recv().expect("history read in flight");
         let edited = state.set_surface_elevation(Some(12.5));
         assert!(edited.success, "the session is still editing: {edited:?}");
         release.send(()).expect("release the history read");
-        let refused = pending
+        let (action, message) = pending
             .join()
             .expect("join")
             .expect_err("an edit made meanwhile refuses the take");
-        assert_eq!(refused.action, SpeleoDbAction::Retry, "{}", refused.message);
+        assert_eq!(action, SpeleoDbAction::Retry, "{message}");
     });
     let open = state.get_project_state().expect("P");
     assert_eq!(
