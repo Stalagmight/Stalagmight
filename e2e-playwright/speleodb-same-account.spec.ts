@@ -13,11 +13,13 @@
  *   un-uploaded on this computer.
  * - An upload that replaced a revision pushed meanwhile names it on the banner,
  *   instead of the plain success toast.
+ * - Save and Close whose upload replaced one stops there, so the banner is read;
+ *   the next close asks nothing and closes.
  *
  * Parallel-safe: all state is per-page (mocked IPC + `window.__E2E_TEST__` stores).
  */
 import { test, expect, type Page } from './fixtures/coverage';
-import { createProject, setupMockedPage } from './helpers/app';
+import { createProject, openAppMenu, setupMockedPage } from './helpers/app';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
 type TestWindow = Window & {
@@ -93,4 +95,46 @@ test('an upload that replaced a revision pushed meanwhile names it on the banner
   await expect(page.locator('[data-testid="toast"][data-toast-key="speleodb-pushed"]')).toHaveCount(0);
   await page.getByTestId('speleo-banner-dismiss').click();
   await expect(banner).toHaveCount(0);
+});
+
+test('Save and Close stops on an upload that replaced a revision pushed meanwhile, and the next close proceeds', async ({ page }) => {
+  await editingRemoteProject(page, 'replaced');
+  await page.evaluate(({ linkStatus, theirs }) => {
+    const w = window as unknown as TestWindow;
+    // Finish editing lands on top of the other session's revision and hands the lock back.
+    Object.defineProperty(w.__MOCK_IPC_OVERRIDES__, 'speleodb_done', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        w.__MOCK_IPC_OVERRIDES__.speleodb_link_status = {
+          ...linkStatus, edit_enabled: false, has_unpushed_edits: false, lock_holder: null,
+        };
+        return { kind: 'released', replaced_revisions: [theirs] };
+      },
+    });
+  }, { linkStatus: LINK_STATUS, theirs: THEIRS });
+  const closes = () => page.evaluate(() =>
+    ((window as unknown as { __MOCK_EXIT_CALLS__?: Array<{ cmd: string }> }).__MOCK_EXIT_CALLS__ ?? [])
+      .filter((call) => call.cmd === 'close_project').length);
+
+  await openAppMenu(page);
+  await page.getByTestId('project-menu-save-and-close').click();
+  await expect(page.getByTestId('speleodb-done-dialog')).toBeVisible();
+  await page.getByTestId('speleodb-done-message').fill('Synthetic survey update');
+  await page.getByTestId('speleodb-done-confirm').click();
+
+  // The upload landed, but the project stays open with the banner on screen.
+  await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
+  const banner = page.getByTestId('speleo-banner');
+  await expect(banner).toHaveAttribute('data-kind', 'replaced_revision');
+  await expect(banner).toContainText('Your upload replaced "Surveyed the sump" (01234567), uploaded by test@example.com');
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  expect(await closes()).toBe(0);
+
+  // The lock is back and nothing is left to upload: the next close asks nothing.
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  await expect(page.getByTestId('speleodb-exit-dialog')).toHaveCount(0);
+  expect(await closes()).toBe(1);
 });
