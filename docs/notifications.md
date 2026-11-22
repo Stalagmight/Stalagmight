@@ -188,10 +188,15 @@ regions). Read the comment blocks in those two files plus
   When a SpeleoDB upload lands on top of a revision another session uploaded
   between the push's check and the upload (R3), the upload succeeded but that
   revision's work is no longer the latest: data at risk of being overlooked, so
-  never a toast. The `replaced_revision` kind of `SpeleoBanner` names the revision
-  (description, short id, author), says its changes are not in the upload and
-  that it is still in the Revision History to view or restore, and stays until
-  dismissed; it replaces the success toast (one event, one surface). Every close
+  never a toast. The replaced-revision banner (`speleo-replaced-banner`, its own
+  slot, `speleoStore.replacedRevisions`) names the revision (description, short
+  id, author), says its changes are not in the upload and that it is still in the
+  Revision History to view or restore, and stays until dismissed: no later push,
+  release, Start editing, failure or notice takes its place; those show in the
+  ordinary banner beside it. It replaces the success toast (one event, one
+  surface); an upload that also left its undo history out still says so in its
+  warning toast, a separate fact. A failure after the landing (the release that
+  followed failed, or a late edit is still to upload) carries the report too. Every close
   that ran the upload stops instead of closing, so the banner is read first: the
   exit and sign-out prompts, Save and Close, and the older-version confirmation
   finishing a close or a quit. The next close asks nothing. An upload refused

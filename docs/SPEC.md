@@ -74,7 +74,10 @@ transient disconnection after acquisition permits local editing. An open opens t
 cached copy offline only when its download got no reply at all: the connection could
 not be made, the name did not resolve, the time ran out, or the connection was lost
 before the whole reply arrived. A reply from the server (a refusal, an invalid
-download, one that is not HTTP) and a TLS failure never open it (F1). Confirmed lock
+download, one that is not HTTP) and a TLS failure never open it (F1); a refusal of
+a JSON read whose body was cut short has lost its status and counts as a lost
+reply. Such an offline copy opens read-only and takes no lock by itself; Start
+editing does that once the user asks. Confirmed lock
 loss, permission loss or sign-out closes the editing gate. Backend direct mutation
 and upload calls enforce the same ownership requirements.
 
@@ -84,17 +87,21 @@ without the lock. Upload needs a description, local save and fresh server owners
 verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Unuploaded changes are decided by content: a copy holding exactly the
 survey of the revision it is based on has none, whatever its mark says (an edit lost
-in a crash or closed with Don't save, or taken back and saved), and opens, updates
-and closes as a clean copy; after an upload whose answer was lost (it may have
-landed) the mark stands until an upload is confirmed. Every upload (Save Changes, Done and the close, quit and
+in a crash or closed with Don't save, or taken back and saved), and from its next
+open on opens, updates and closes as a clean copy (the Don't-save close itself
+still keeps the write lock, since the session was dirty when it closed; the next
+open resumes it). After an upload whose answer was lost (it may have landed) the
+mark stands until an upload is confirmed, and so it does after any edit by a
+program that does not keep the digest of the base's survey. Every upload (Save Changes, Done and the close, quit and
 sign-out uploads) first checks that SpeleoDB's latest revision is still the copy's
 base, or moved only by this session's own upload whose answer was lost; any other
 revision there - including one from another session of the same account, which
 holds the same per-account lock - uploads nothing and raises the divergence prompt.
 An upload that landed on top of a revision pushed between that check and the upload
-names it on a banner (it stays in the Revision History), and every close that ran
-the upload (the exit and sign-out prompts, Save and Close, the older-version
-confirmation) stops so the banner is read. Autosave and autosave retry remain local-only. Save and Close continues
+names it on a banner of its own that stays until dismissed (it stays in the
+Revision History), and every close that ran the upload (the exit and sign-out
+prompts, Save and Close, the older-version confirmation) stops so the banner is
+read. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never

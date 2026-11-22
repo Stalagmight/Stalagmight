@@ -558,12 +558,23 @@ So whether a copy has un-uploaded work is decided by the survey it holds
   revision's survey (`stalx_v2::survey_digest`: every member an upload carries
   that is survey content, without `project.modified` and the link's endpoint
   and name, bound to the BASE id; [file-format.md section 12](file-format.md#12-how-stalagmight-saves)).
-  It is written at every install of a revision under a clean link
-  (`PreparedDownload::cache_bytes`: a pull, a fast-forward, Take remote, a
-  View) and at every confirmed upload, from the bytes that went up (the 200
-  arm when it names the new revision, the 304 arm). A change of BASE or of
-  project drops it (`FileState::set_speleo_link`). A Restore marks the copy
-  over a BASE it does not hold and records none.
+  It is written at every install of bytes known to be the BASE revision's
+  (`PreparedDownload::cache_bytes`, which records it only when the caller named
+  the revision it downloaded and that revision is the link's BASE: a pull and a
+  fast-forward name their pinned tip, a View or Restore the revision it fetched)
+  and at every confirmed upload, from the bytes that went up (the 200 arm when it
+  names the new revision, the 304 arm). A change of BASE or of project drops it
+  (`FileState::set_speleo_link`). A Restore of an older revision rides on the tip
+  and records none, whatever its mark says; a Restore of the tip records the
+  tip's (F2-digest-1).
+- **Vouched for.** `local.speleodb.base_survey_edit` is the `last_edit_at` this
+  build vouched for: every edit it records (`mark_remote_dirty`) sets it to the
+  new edit time, when it still equalled the old one; otherwise the digest goes.
+  The digest counts only while the two are equal. A writer that does not know
+  the digest keeps both keys as unknown keys, and an edit it records moves
+  `last_edit_at` alone: that writer may have uploaded without dropping the
+  digest (an older build, a third-party tool), so from there the mark is taken
+  at its word (F2-digest-2).
 - **Dropped at every upload.** The digest holds only while SpeleoDB holds
   nothing of this copy past BASE. An upload whose answer is lost may have
   landed (#193), and a survey taken back to BASE's is then a change to upload,
@@ -575,7 +586,11 @@ So whether a copy has un-uploaded work is decided by the survey it holds
   to upload. The shared link probe (`probe_link`, `read_cache_file`) reads
   such a file whole and reports it clean, writing nothing: the listing behind
   the sign-out and held-lock prompts, the replace guard, the fast-forward arm
-  and the offline open agree. Only a marked file with a digest is read whole.
+  and the offline open agree. Only a marked file with a vouched digest is read
+  whole, and a copy found to hold real work is remembered by its length,
+  modification time, digest and edit time, so the listing fetches that follow
+  do not read and hash it again while it is unchanged (F2-digest-5). Only that
+  answer is remembered: a stale entry can keep a mark, never clear one.
 - **Cleared.** An open clears the stale mark and writes it with the open's
   local-only save; a save whose survey is BASE's again (an edit taken back,
   by hand or by Undo) clears it in the file it writes and tells the frontend

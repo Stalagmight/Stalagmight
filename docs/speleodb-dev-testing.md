@@ -206,15 +206,24 @@ suites pin it, each against a loopback listener that loses its replies on purpos
   or body cut short, a reset in the body (each on the project, history and both
   download reads, which are tried three times), a port nothing listens on, an
   `https://` name under `.invalid` (one DNS lookup, never a server), a reply that is
-  not HTTP (stays `Unknown`), and five writes (acquire, release, create, patch,
-  upload) whose reply is lost: `Dropped`, sent once.
+  not HTTP (stays `Unknown`), a 403 whose body is cut short (`Dropped` on a JSON
+  read, a reply on the download), and five writes (acquire, release, create, patch,
+  upload) whose reply is lost: `Dropped`, sent once. The listener keeps accepting
+  after the connections it expects, so a second send is counted
+  (`a_write_sent_twice_is_counted_twice`). The TLS close (an early end of file from
+  rustls) and an unreachable error on an established connection are pinned on
+  hand-built error trees (`cause_of_tree`); no test here serves TLS.
 - `core/state/speleodb_offline_open_tests.rs` runs the whole open path: a clean
   cached copy opens offline for each way of losing every GET under
   `/api/v2/projects/` (the fuzzer's seed 900366), untouched and without an owner
   record written; this account's un-uploaded work opens offline still marked as
   not uploaded, another account's read-only; a reply that is not HTTP, and a
   discard, never fall back; and a push whose upload reply is lost stays
-  unconfirmed, dirty at BASE and locked, sent once. The acquire side is
+  unconfirmed, dirty at BASE and locked, sent once; a Start Editing whose acquire
+  landed while every read around it was lost leaves an unbound claim, which the
+  close hands back once SpeleoDB answers; and an open whose history read answered
+  but whose download was cut says whether SpeleoDB has a newer revision
+  (`newer_on_server`). The acquire side is
   `speleodb_acquire_tests.rs` (`an_acquire_whose_reply_was_lost_is_adopted_when_the_lock_is_ours`).
 
 To reproduce by hand, sign a development build in to the development instance

@@ -48,10 +48,12 @@ only on a timeout (the docs carried it as "Known gap F1, #669").
 
 - One typed classifier, `client::transport_cause(&reqwest::Error)`, for the send
   (`Middleware(Reqwest(e))`) and the body reads alike, in this order: a timeout
-  anywhere; DNS; TLS (`rustls::Error`); the connector failed or an I/O error says
-  refused or unreachable (`Refused`); hyper's incomplete message, canceled
-  request, closed channel or aborted body write, or an I/O reset, abort, broken
-  pipe, not-connected or early end of file (`Dropped`); else `Unknown`. Typed
+  anywhere; DNS; TLS (`rustls::Error`); the connector failed (`Refused`); hyper's
+  incomplete message, canceled request, closed channel or aborted body write, or
+  an I/O reset, abort, broken pipe, not-connected, early end of file, or a refused
+  or unreachable error on a connection already made (`Dropped`); else `Unknown`.
+  (Review F1-transport-6: the refused and unreachable kinds used to read as
+  `Refused` anywhere in the tree, against "nothing was sent".) Typed
   throughout, never the error's text: `hyper` and `reqwest-middleware` are named
   as dependencies only for their error types, the way `rustls` already was.
 - A new `TransportCause::Dropped`: the connection was made, then closed or reset
@@ -61,7 +63,13 @@ only on a timeout (the docs carried it as "Known gap F1, #669").
   `Refused` and is `Dropped` now.
 - `TransportCause::got_no_reply()` = `Refused | Dropped | Timeout | Dns`, the one
   definition of "a read that heard nothing from the server", and
-  `offline_open_result` falls back exactly then. `Tls` (the peer did not prove it
+  `offline_open_result` falls back exactly then. A refusal whose body is cut short
+  is `Dropped` on a JSON read (the SDK reads the body before the status, so the
+  status is lost) and a reply (`Unknown`) on the download, whose request step reads
+  a body only for a status that is not 200 (review F1-transport-2). The offline
+  copy opens read-only and the open runs no automatic Start Editing (review
+  F1-transport-1); when the history read answered, the result says whether
+  SpeleoDB has a newer revision (`newer_on_server`, review F1-transport-5). `Tls` (the peer did not prove it
   is the server) and `Unknown` (for instance a reply that is not HTTP: the server
   was reached) still report the error.
 - Writes are unchanged on purpose: every write treats every transport failure as
@@ -152,11 +160,13 @@ of `speleo_link` per edit).
   kept over another BASE never matches. Byte-level, so a link reader answers
   without decoding the survey.
 - *Recorded where the copy is known to hold BASE*, as
-  `local.speleodb.base_survey`: every install under a clean link
-  (`PreparedDownload::cache_bytes`: pull, fast-forward, Take remote, View, a
-  Restore of the tip) and every confirmed upload, from the bytes that went up
-  (the 200 arm when it names the new revision, the 304 arm). `set_speleo_link`
-  drops it when BASE or the project changes. A dirty Restore records none.
+  `local.speleodb.base_survey`: every install of bytes named as the BASE
+  revision's (`PreparedDownload::holding_revision` then `cache_bytes`: pull,
+  fast-forward, Take remote, View, a Restore of the tip) and every confirmed
+  upload, from the bytes that went up (the 200 arm when it names the new
+  revision, the 304 arm). `set_speleo_link` drops it when BASE or the project
+  changes. A Restore of an older revision records none (review F2-digest-1: this
+  used to rest on the dirty bit alone).
   [How the fixes meet](#how-the-fixes-meet) adds the one place it is dropped
   besides: every upload.
 - *Read everywhere the app asks.* The shared link probe (`probe_link` and
@@ -178,13 +188,20 @@ of `speleo_link` per edit).
   digest existed keep the conservative answer, as does any survey that differs
   in a byte the digest covers: an ignore kept only for a shot the history can
   bring back, another writer's layout, a project name the server-name fold (#216)
-  changed on a clean copy, until its next download or upload.
+  changed inside an upload that then failed before it dropped the digest (the
+  fold runs only in an upload, so only over a marked copy), until its next
+  download or upload.
 - *Rejected:* trusting a digest the file states for its own body. A writer that
   keeps unknown `local` keys verbatim while changing the body (an older build, a
-  third-party tool) would make it lie, so the body is always re-hashed.
+  third-party tool) would make it lie, so the body is always re-hashed. Such a
+  writer also keeps the digest through its own upload, so `base_survey_edit`
+  binds the digest to the edits this build recorded (review F2-digest-2).
 
 **Cost.** Only a copy marked un-uploaded with a recorded digest is hashed: a save,
-an open, a link read of it. On the format bench (release) the digest takes about a
+an open, a link read of it. A copy with real saved work keeps both for as long as
+the work stays un-uploaded, so its link reads (every listing fetch) were each a
+whole read and a hash; the probe now remembers "real work" per unchanged file and
+hashes it once (review F2-digest-5). On the format bench (release) the digest takes about a
 third of an encode: 1.4 ms for 5,000 shots (0.6 MB), 6.2 ms for 20,000 (2.4 MB), 29
 ms for 100,000 (12 MB), against 2.8, 14 and 87 ms to encode.
 
@@ -330,10 +347,12 @@ lock first overwrite the one that inherited it.
 
 - The authorship test is what THIS session uploaded, never the email:
   `sync::OwnUploads` holds the revisions this session's uploads were answered
-  with (the 200 envelope's `hexsha`), and the one upload whose answer never came,
-  with the BASE it sat on and its description. `classify_ancestry` takes a gap
-  commit as ours only when it is one of those, or the single revision directly on
-  the unanswered upload's BASE, by our account, whose stored description matches
+  with (the 200 envelope's `hexsha`), and every upload whose answer never came
+  (until a landing or an adoption settles them; a retry sent while an earlier
+  one's fate is unknown keeps both, review F4R3-locks-push-5), each with the BASE
+  it sat on and its description. `classify_ancestry` takes a gap commit as ours
+  only when it is one of those, or a revision directly on an unanswered upload's
+  BASE (each accounts for one), by our account, whose stored description matches
   ours (`normalize_like_server`; a history without descriptions matches on BASE
   and account). Anything else between BASE and HEAD is `Diverged`: nothing is
   uploaded and the existing divergence prompt opens (`DivergenceNeeded`, already
@@ -344,8 +363,9 @@ lock first overwrite the one that inherited it.
   to the prompt. Process-local and never persisted: a restart reopens through
   Start editing, whose reconcile has no authorship recovery.
 - It is set right before the upload is sent and answered on every definite
-  outcome: a 200 that names its revision (kept as landed), a 304 or a refusal
-  (nothing landed), an ancestry adoption. It stays unanswered on a dropped
+  outcome: a 200 that names its revision (kept as landed; settles every
+  unanswered upload), a 304 or a refusal (nothing landed from this upload, which
+  alone is settled), an ancestry adoption. It stays unanswered on a dropped
   connection, an exhausted 5xx, a 200 that names no revision and an answer body
   that cannot be read: exactly the cases the next push must still recover.
 - The status verdict uses the same record, so the SpeleoDB tab shows the conflict
@@ -400,12 +420,14 @@ or in the older-version confirmation (its close and quit cases).
 - Our unanswered upload and another session's revision with the same description
   on the same BASE are told apart by nothing.
 - A quit that waits for an upload started elsewhere (Save Changes, then Quit)
-  quits after it; a replaced report from that upload is only in the log. The
-  frontend's `released`-with-newer-edits arm replaces the banner with its
-  push-failure line.
+  quits after it; a replaced report from that upload is only in the log. (The
+  `released`-with-newer-edits arm no longer replaces the report: it has its own
+  banner slot since review F4R3-locks-push-4.)
 - The divergence prompt's "Keep my local version" re-runs the push, which is
   refused again while the other session's revision is HEAD; the ways through are
-  Take the SpeleoDB version and Save my version as a separate file.
+  Take the SpeleoDB version and Save my version as a separate file. Its help now
+  says so (review F4R3-locks-push-7); an explicit "upload on top of the latest
+  revision" is a product decision, not taken here.
 
 ## How the fixes meet
 
@@ -475,7 +497,9 @@ server that keeps a real history and lock holder and can lose its replies.
 
 - A SpeleoDB project with a copy on this computer opens offline (read-only, "SpeleoDB
   is unreachable") when the connection is refused, the server's name cannot be
-  found or the connection drops before the reply, not only after a timeout. A
+  found or the connection drops before the reply, not only after a timeout. It
+  takes no lock by itself; Start editing does. When SpeleoDB answered and only the
+  download was cut, the notice says whether SpeleoDB has a newer revision. A
   connection lost mid-reply now reads "The connection to SpeleoDB at <server> was
   lost before it finished answering", never "Could not connect".
 - An edit lost in a crash or closed with Don't save, or an edit taken back and
@@ -490,5 +514,135 @@ server that keeps a real history and lock holder and can lose its replies.
   other computer's newer revision: the conflict prompt opens and nothing is
   uploaded. If the other revision lands in the moment between the check and the
   upload, a banner names the revision that was replaced and says it is still in
-  the Revision History, and closing, quitting or signing out waits until it has
-  been seen.
+  the Revision History, stays until dismissed, and closing, quitting or signing
+  out waits until it has been seen.
+
+## Review
+
+An adversarial review of the four fixes raised the findings below; a verifier
+reproduced each one (CONFIRMED) or found it plausible from the code (PLAUSIBLE).
+Each was fixed with a regression test that fails without the fix (the injection
+is named in the test). Nothing here contacted a SpeleoDB server.
+
+### F1: the offline open and the transport causes
+
+- **F1-transport-1 (P2, CONFIRMED): an offline open ran Start Editing at once,
+  and an acquire that landed while every read around it was lost left the lock
+  held with nothing pointing at it.** Two fixes. Start Editing's unwind runs only
+  after an acquire that landed, so when its holder-checked release cannot tell
+  (the holder read or the POST failed) and there was no claim to put back, it
+  now leaves an unbound claim (`speleodb_unwind_release`), as the acquire-unknown
+  arm already did; the next close or the janitor hands the lock back once
+  SpeleoDB answers. This hole predated F1 and was reachable from a manual Start
+  Editing too. And an open the backend fell back to the cached copy for no longer
+  runs the automatic Start Editing (`finishOpen`'s `takeLock: false`): the copy
+  opens read-only, as the CHANGELOG said; "Open my local copy" still takes the
+  lock. Tests: `a_start_editing_whose_acquire_landed_leaves_a_pointer_to_the_lock`
+  (lost GETs, answered POSTs, a server that keeps the lock), the vitest offline
+  case, and the offline case of `speleodb-home-cache.spec.ts`.
+- **F1-transport-2 (P3, CONFIRMED): a refusal whose body was cut short opened the
+  cached copy offline.** The SDK reads a JSON reply's body before it looks at the
+  status, so there the status is lost with the body and nothing can tell a cut
+  403 from a cut 200: documented (SpeleoDB.md, SPEC.md, `TransportCause::Dropped`),
+  and a request to the SDK to return the status with a body-read error is left
+  open. The download can tell: the SDK reads a body in its request step only for
+  a status that is not 200, so a body cut there is a reply (`Unknown`, no
+  fallback; `client::download_head_error`). Test:
+  `a_refusal_cut_short_is_a_reply_to_the_download_only`.
+- **F1-transport-3 (P3, CONFIRMED): "sent once" could not fail.** The fault
+  listener keeps accepting for a grace after the expected connections, so a
+  second send is counted: `a_write_sent_twice_is_counted_twice` (two sends, one
+  still in flight, both seen).
+- **F1-transport-4 (P3, CONFIRMED): the TLS shape of `Dropped` was untested.** No
+  test here can serve TLS without key material, so the classifier is
+  `cause_of_tree` over any error tree, and the TLS close (rustls's early end of
+  file without `close_notify`, wrapped as hyper wraps it) and a TLS failure
+  inside an I/O error are pinned on hand-built trees:
+  `a_tls_connection_closed_before_the_reply_is_dropped`.
+- **F1-transport-5 (P3, CONFIRMED): an open whose history read answered and whose
+  download was cut said "SpeleoDB is unreachable".** The tip the history named
+  goes into `offline_open_result`, the result carries `newer_on_server`, and the
+  toast says whether SpeleoDB has a newer revision than the copy that opened:
+  `an_open_whose_download_alone_was_lost_says_what_the_history_told_it` and the
+  vitest toast cases.
+- **F1-transport-6 (P3, PLAUSIBLE): `Refused` said "nothing was sent" but also
+  matched a refused or unreachable error anywhere in the tree.** `Refused` is now
+  only a connector failure; the same kinds on a connection already made are
+  `Dropped`, and `Tls` joins the causes after which the request may have reached
+  the server. `refused_is_only_a_connection_that_was_never_made`.
+- **F1-transport-7 (P3, CONFIRMED): `tokio ={`** in the workspace manifest:
+  restored, and the hyper comment there now says it holds over plain HTTP only.
+
+### F2: the BASE survey digest
+
+- **F2-digest-1 (P2, CONFIRMED): nothing pinned that a Restore records no
+  digest.** Structural now: `PreparedDownload::holding_revision` names the
+  revision the bytes are (the pull and the fast-forward their pinned tip, a View
+  or a Restore the revision it fetched), and `cache_bytes` records the digest
+  only when that revision is the link's BASE, never from the dirty bit.
+  `a_restore_of_an_older_revision_records_no_digest_and_stays_un_uploaded` (the
+  mark survives a save, a crash and the reopen, and the push uploads it) and
+  `a_restore_of_the_tip_records_its_digest`.
+- **F2-digest-2 (P3, CONFIRMED): a writer that keeps unknown keys carried BASE's
+  digest past its own upload.** `local.speleodb.base_survey_edit` is the
+  `last_edit` this build vouched for: each edit it records moves both while they
+  were equal, and drops the digest otherwise. The digest counts only while the
+  two are equal, so an edit by a writer that does not know the digest ends it.
+  The spec now says a writer that uploads without computing it should remove it.
+  `a_digest_another_writer_carried_past_its_edit_is_not_trusted` and
+  `the_digest_counts_only_while_this_build_recorded_every_edit_since`.
+- **F2-digest-3 (P3, CONFIRMED): the 304 arm's digest was untested.** The
+  loopback server answers 304 on request:
+  `a_304_landing_records_the_digest_and_keeps_a_late_edit_marked`. Its late-edit
+  mark is defence in depth (the digest goes when the upload starts), pinned by
+  the combined injection the test names.
+- **F2-digest-4 (P3, PLAUSIBLE): the docs said a Don't-save close closes clean,
+  and gave a fold case that cannot happen on a clean copy.** SPEC.md now says the
+  Don't-save close keeps the lock and the copy reads clean from its next open;
+  the fold example says the fold runs only inside an upload.
+- **F2-digest-5 (P3, CONFIRMED): a copy with real un-uploaded work was read whole
+  and hashed on every link read.** `probe_settled` remembers the answer "real
+  work" per file (length, modification time, digest, vouched edit time); only
+  that answer, so a stale entry can keep a mark, never clear one.
+  `a_copy_with_real_work_is_hashed_once_while_it_is_unchanged`.
+
+### R3 and the locks
+
+- **F4R3-locks-push-1 (P2, CONFIRMED): Save and Close closed over a replacing
+  upload.** Fixed before this review section was written (branch `sdbc/S5-gaps`,
+  merged): Save and Close and the older-version confirmation stop on
+  `landedOverReplacedRevisions`, like the exit and sign-out prompts.
+- **F4R3-locks-push-2 (P3, CONFIRMED): the frontend's downgrade of a push dropped
+  the report.** The `push_unconfirmed` it reports keeps `replaced_revisions`.
+  vitest `a push downgraded for an edit during the reply keeps what it replaced`.
+  (A reply that arrives after the user left the project is still dropped by the
+  frontend; the project's banner is gone with it.)
+- **F4R3-locks-push-3 (P3, CONFIRMED): a report waited for a result the session
+  might never reach.** Every result built after a landing carries it:
+  `PushUnconfirmed` (a late edit) and Done's release failure
+  (`SpeleoErrorDto.replaced_revisions`). The frontend raises it from a failure,
+  and the exit and sign-out prompts stop on it (`'replaced'`).
+  `a_release_that_fails_after_a_landed_race_still_names_the_replaced_revision`,
+  and the vitest failure and exit cases.
+- **F4R3-locks-push-4 (P3, CONFIRMED): the replaced banner was overwritten by the
+  next outcome.** It has a slot of its own (`speleoStore.replacedRevisions`,
+  `speleo-replaced-banner`), cleared only by its Dismiss or by leaving the
+  project; later reports fold in. `SpeleoBanner.test.tsx` (stays through a clean
+  push and release, Start editing, an unconfirmed or failed push, a notice).
+- **F4R3-locks-push-5 (P3, PLAUSIBLE): one unanswered upload was remembered.**
+  `OwnUploads.unanswered` keeps every one until a landing or an adoption settles
+  them (a 304 or a refusal settles only the upload just sent), and a revision one
+  of them made is not reported as replaced (`sync::not_our_own`).
+  `a_retry_does_not_report_our_own_late_upload_as_replaced`,
+  `a_retry_answered_304_over_our_own_late_upload_leaves_it_adoptable` and the
+  `sync` unit tests. Whether SpeleoDB ever lands an upload after the client gave
+  up on it was not checked against a server.
+- **F4R3-locks-push-7 (P3, CONFIRMED): "Keep my local version" promised an upload
+  that is refused again.** Its help now says it comes back to the prompt while
+  SpeleoDB has a revision the copy does not contain, and points at Save as an
+  unmanaged file (`SpeleoDivergenceDialog.test.tsx`). An explicit "upload on top
+  of the latest revision" is left as a product decision.
+- **F4R3-locks-push-8 (P3, CONFIRMED): the undo-history notice was lost beside a
+  replaced report.** Its warning toast is shown beside the banner (a separate
+  fact): vitest `... that replaced a revision and left its undo history out says
+  both`.

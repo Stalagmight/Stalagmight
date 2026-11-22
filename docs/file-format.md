@@ -297,7 +297,7 @@ not know (another build's per-machine or sync state, at `local` or inside
 | Key | Type | Meaning |
 |---|---|---|
 | `display` | object of booleans and strings, opt | View settings by key: a toggle is a boolean (`"showGrid":true`), any other setting its stored text (`"gridSpacing":"10"`, `"geometryMode":"measured"`). A reader reads `"true"` and `"false"` strings, which earlier version 2 writers wrote, as the booleans. |
-| `speleodb` | object, opt | Sync state: `base` (string, the server revision this copy is based on), `base_survey` (string, `sha256:` and 64 hex digits: the digest of that revision's survey, [section 12](#12-how-stalagmight-saves)), `unpushed` (`true` when there are edits not yet uploaded), `last_edit` and `last_verify` (times), `unwound_from` (string, the revision an Unwind started from), `inherited_through` (time: undo entries at or before it came with a downloaded revision). Every key optional. |
+| `speleodb` | object, opt | Sync state: `base` (string, the server revision this copy is based on), `base_survey` (string, `sha256:` and 64 hex digits: the digest of that revision's survey, [section 12](#12-how-stalagmight-saves)), `base_survey_edit` (time: the `last_edit` the digest's writer vouched for), `unpushed` (`true` when there are edits not yet uploaded), `last_edit` and `last_verify` (times), `unwound_from` (string, the revision an Unwind started from), `inherited_through` (time: undo entries at or before it came with a downloaded revision). Every key optional. |
 
 ### 5.7 `sections`
 
@@ -788,9 +788,17 @@ For context; nothing here changes the format. The app's side is
   `format`, `version`, `solver`, `generator`, `summary`, `local`, `history`
   and `end`, sorted by key, its key and its value's text as written, with
   `project` without its `modified` key and `speleodb` without `endpoint` and
-  `name` (their other members re-joined in file order, no whitespace). A
-  writer that does not compute it leaves it as it is: it describes the `base`
-  revision, not the file, and it is bound to that revision id.
+  `name` (their other members re-joined in file order, no whitespace). It
+  describes the `base` revision, not the file, and it is bound to that revision
+  id. It is recorded only for bytes known to be that revision's (an install of
+  that very revision, never a Restore of an older one over a newer base), and it
+  counts only while `last_edit` equals `local.speleodb.base_survey_edit`: a writer
+  that keeps the digest sets both to the same time with every edit it records,
+  as long as they were equal before the edit (else it removes the digest). A
+  writer that does not compute the digest leaves both keys as they are; an edit
+  it records moves `last_edit` alone, so the digest stops counting from there
+  (that writer may also have uploaded, which the digest cannot know of). A writer
+  that uploads without computing it should remove both.
 - **Local-only rewrites.** Changes to the link, the sync state, display
   settings and the history alone rewrite those members and copy every other
   member byte for byte, even when the file is open read-only. When the

@@ -35,10 +35,23 @@ stored project ID and endpoint must match: the connection could not be made
 (refused, or the network or host unreachable), the name did not resolve, the time
 ran out, or the connection was closed or reset before the whole reply arrived (no
 reply, a reply head cut short, or a body shorter than its length). The UI announces
-that offline fallback and preserves the cached unsynced-edit state. Authentication,
+that offline fallback and preserves the cached unsynced-edit state. The copy opens
+read-only, and the open does not run its automatic Start Editing: SpeleoDB has just
+lost the open's replies, and a lock request sent into that can land while every
+read around it is lost (F1-transport-1). Start editing takes the lock when the user
+asks. When the history read before the download did answer, SpeleoDB was reached
+and only the download was lost: the result says whether SpeleoDB's latest revision
+is the copy's BASE (`SpeleoOpenResult.newer_on_server`), and the toast says that
+instead of "SpeleoDB is unreachable" (F1-transport-5). Authentication,
 permission, missing remote project, TLS and invalid-download errors do not fall
 back to the cache (but see the no-session rules below), and neither does a reply
-the app cannot read as HTTP or any other unclassified transport failure. An
+the app cannot read as HTTP or any other unclassified transport failure. One
+limit: the SDK reads a JSON reply's whole body before it looks at the status, so a
+refusal (a 401, 403 or 404) whose body a proxy cut short reaches the app as a
+connection lost mid-reply, with its status gone, and an open of a cached copy falls
+back as for any lost reply. The download can tell (the SDK reads a body in its
+request step only for a status that is not 200), so a cut refusal there is a reply
+and never falls back (F1-transport-2). An
 `http://` endpoint the transport policy allows (see Authentication and transport)
 falls back exactly as an `https://` endpoint does; one it refuses is refused before
 any request, without DNS. If a successful download would
@@ -47,10 +60,14 @@ them; the prompt offers no online local-copy shortcut.
 
 How a failure is classified (F1, #669; `TransportCause`, from the typed error, never
 its text): one classifier (`client::transport_cause`) reads both the SDK's send
-failures and its body reads. `Refused` means the connection could not be made, so
-nothing was sent; `Dropped` means it was made and then lost before the whole reply,
-so the request may have reached the server; then `Timeout`, `Dns`, `Tls` and
-`Unknown`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
+failures and its body reads. `Refused` means the connection could not be made (the
+connector failed), so nothing was sent; `Dropped` means it was made and then
+closed, reset or reported unreachable before the whole reply, so the request may
+have reached the server; then `Timeout`, `Dns`, `Tls` and `Unknown`. After
+`Timeout`, `Dropped`, `Tls` (a TLS error after the handshake can follow a request
+already sent) or `Unknown` the request may have reached the server. Over TLS a
+connection closed before the reply is an early end of file from rustls, not
+hyper's incomplete message; both are `Dropped`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
 (`TransportCause::got_no_reply`) got nothing from the server, which is what lets an
 open fall back. Writes ignore the cause: after any transport failure an upload stays
 unconfirmed and dirty, an acquire asks the server who holds the lock, and no mutation
@@ -596,19 +613,25 @@ author says which session uploaded a revision. The one revision the check lets
 stand between the base and the latest is this session's own upload whose answer
 was lost (the #193 recovery), recognised by what this session recorded when it
 sent it (`core/state/speleodb_own_uploads.rs`: the revisions its uploads were
-answered with, and the one unanswered upload's base and description), never by
-the email. Anything else there uploads nothing: Save Changes, Finish editing and
+answered with, and every upload whose answer never came, with its base and
+description, until an answer or an adoption settles it), never by the email. A
+retry sent while an earlier upload's fate was unknown keeps both: the earlier one
+may land late, under the retry, and is still this session's (F4R3-locks-push-5). Anything else there uploads nothing: Save Changes, Finish editing and
 the exit and sign-out uploads get `divergence_needed`, the divergence prompt
 opens, and the work, the lock and the base stay as they were. The status
 refresh uses the same rule, so the SpeleoDB tab shows the conflict before Save
 Changes is pressed. SpeleoDB has no conditional upload, so a revision landing
 between that check and the upload still goes under ours; the history read right
-after the upload finds it, and the landed result names it (`replaced_revisions`):
-a banner says which revision the upload replaced and that it is still in the
-Revision History (view or restore it there), and every close that ran the upload
-(the exit and sign-out prompts, Save and Close, the older-version confirmation
-finishing a close or a quit) stops so the banner is read; the next close asks
-nothing. Publish's first upload goes through
+after the upload finds it, and the result names it (`replaced_revisions`), whatever
+the result: the landing, a landing with a late edit still to upload
+(`push_unconfirmed`), or the failure of the release after it (on the error). A
+banner of its own says which revision the upload replaced and that it is still in
+the Revision History (view or restore it there); it stays until dismissed, beside
+whatever later push, release or Start editing reports (F4R3-locks-push-4). Every
+close that ran the upload (the exit and sign-out prompts, Save and Close, the
+older-version confirmation finishing a close or a quit) stops so the banner is
+read; the next close asks nothing. A revision one of this session's own unanswered
+uploads made is never reported as replaced. Publish's first upload goes through
 the same post-upload check; a project created a moment earlier cannot have been
 raced, so there it would only be logged.
 
