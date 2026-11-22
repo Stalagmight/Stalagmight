@@ -749,6 +749,37 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
 
     expect(held).toBe(true);
   });
+
+  // The Start editing buttons (the map's read-only pill, the SpeleoDB tab, the held-lock
+  // prompt) after an offline open (F1): the backend's DTO keeps the raw diagnostic in
+  // `message` and the cause in `transport`. The notice is the worded line for the cause,
+  // and no toast repeats it.
+  it('a Start editing whose reply was lost is worded for the lost connection, not the raw error', async () => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({
+      session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Dropped',
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    const message = useSpeleoReadOnlyNotice.getState().notice?.message ?? '';
+    expect(message).toBe(
+      'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. ' +
+        'Check your network connection and try again.',
+    );
+    expect(message).not.toMatch(/network error|error sending request|could not connect/i);
+    expect(useUIStore.getState().showToast).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().clearSession).not.toHaveBeenCalled();
+  });
 });
 
 /**

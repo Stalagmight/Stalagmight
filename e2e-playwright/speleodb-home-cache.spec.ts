@@ -166,6 +166,39 @@ test('an expired session opens the cached copy read-only and signs the app out',
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
 });
 
+test('an offline open\'s Start Editing that lost its reply is worded, never the raw network error', async ({ page }) => {
+  // F1: SpeleoDB lost every reply, so the open fell back to the cached copy; the
+  // automatic Start Editing then lost its reply too. The backend keeps the raw
+  // diagnostic in `message` and the cause in `transport`.
+  const commands = await seed(page, {
+    signedIn: true,
+    copies: [copy(MINE, 'Synthetic mine', 'mine')],
+    open: { local_path: PROJECT_PATH, offline: true, has_unpushed_edits: false },
+  });
+  await page.evaluate(() => {
+    const overrides = (window as unknown as { __MOCK_IPC_OVERRIDES__: Record<string, unknown> }).__MOCK_IPC_OVERRIDES__;
+    Object.defineProperty(overrides, 'speleodb_start_editing', {
+      enumerable: true,
+      get: () => Promise.reject({
+        message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+        transport: 'Dropped', unpushed_local: null, newer_schema: null,
+      }),
+    });
+  });
+  await page.getByTestId(`system-card-remote-${MINE}`).click();
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  const notice = page.getByTestId('speleodb-read-only-dialog');
+  await expect(notice).toContainText(
+    'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering.',
+  );
+  await expect(notice).not.toContainText('Network error');
+  await expect(notice).not.toContainText('error sending request');
+  await expect(page.getByTestId('toast')).toContainText('SpeleoDB is unreachable');
+  expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(1);
+  await page.getByTestId('speleodb-read-only-continue').click();
+  await expect(notice).toHaveCount(0);
+});
+
 test('signed in: only this account\'s copies and unknown-owner copies are listed', async ({ page }) => {
   await seed(page, {
     signedIn: true,

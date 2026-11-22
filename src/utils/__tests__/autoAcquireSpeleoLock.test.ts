@@ -60,6 +60,30 @@ it('does not invent an editor when acquisition fails offline', async () => {
   expect(useSpeleoStore.getState().busy).toBe(false);
 });
 
+// After an offline open (F1) the automatic Start Editing loses its reply the same
+// way the open did. The backend keeps its raw diagnostic in `message` and the
+// cause in `transport` (pinned by the core test
+// `the_automatic_start_editing_after_an_offline_open_names_the_lost_reply`): the
+// notice is the worded line for that cause, naming the server, never the raw text.
+it.each([
+  ['Dropped', /^The connection to SpeleoDB at https:\/\/synthetic\.example was lost before it finished answering\./],
+  ['Refused', /^Could not connect to SpeleoDB at https:\/\/synthetic\.example\./],
+  ['Timeout', /^SpeleoDB at https:\/\/synthetic\.example did not respond in time\./],
+  ['Dns', /^Could not find the SpeleoDB server at https:\/\/synthetic\.example\./],
+] as const)('an automatic Start Editing that got no reply (%s) is worded for its cause, not the raw error', async (transport, line) => {
+  useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' } });
+  ipc.mockRejectedValue({
+    message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null, transport,
+  });
+  await autoAcquireSpeleoLock('/remote.stalx', () => true);
+  const message = useSpeleoReadOnlyNotice.getState().notice?.message ?? '';
+  expect(message).toMatch(line);
+  expect(message).not.toMatch(/network error|error sending request/i);
+  expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+  // A lost reply is no reason to sign out.
+  expect(useSpeleoStore.getState().session?.loggedIn).toBe(true);
+});
+
 it('ignores a late response after switching projects', async () => {
   let resolve!: (value: unknown) => void;
   ipc.mockReturnValue(new Promise(r => { resolve = r; }));
