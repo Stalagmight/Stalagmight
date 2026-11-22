@@ -74,7 +74,8 @@ export interface SpeleoActions {
     opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
-      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
+      tip, keeping the lock (an edit session goes on editing the server version).
+      Returns `true` once the tree is reloaded, `false` if the call threw.
       The caller must gate this behind a destroy-confirmation. */
   takeRemote: () => Promise<boolean>;
 }

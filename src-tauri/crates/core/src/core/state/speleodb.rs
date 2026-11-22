@@ -1535,8 +1535,8 @@ impl AppState {
         params: &super::speleodb_lock_release::LockReleaseParams,
     ) -> bool {
         // The shared sink for start-editing's abort arms, the publish push and -
-        // through `speleodb_release_held_lock_*` - logout / unlink / take-remote /
-        // the instance switch, so this project's claim ends here: a lock the server
+        // through `speleodb_release_held_lock_*` - logout / unlink / the instance
+        // switch, so this project's claim ends here: a lock the server
         // confirms released, or confirms is not ours, is no longer this process's
         // to account for.
         //
@@ -3175,8 +3175,8 @@ mod tests {
         );
         assert!(
             state.speleodb_abandon_lock_release_params().is_some(),
-            "the abandon variant (unlink / take-remote) is NOT vetoed - both verbs \
-             are only ever reached with un-pushed edits"
+            "the abandon variant (unlink) is NOT vetoed - the verb walks away from \
+             the un-pushed edits on purpose"
         );
     }
 
@@ -4639,8 +4639,8 @@ mod tests {
 
     #[test]
     fn logout_does_not_release_a_lock_over_unpushed_edits() {
-        // Logging out is not the same act as surrendering the lock. Unlike unlink /
-        // take-remote - the verbs that legitimately bypass the veto - a logout
+        // Logging out is not the same act as surrendering the lock. Unlike unlink -
+        // the verb that legitimately bypasses the veto - a logout
         // neither deletes the link row nor discards the edits, so releasing here
         // leaves the project free for a colleague to lock and push while the work
         // is still only on this machine. The lock left held is recoverable: the
