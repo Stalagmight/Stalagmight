@@ -435,6 +435,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         newer_schema,
         endpoint_refusal,
         format_refused,
+        replaced_revisions: None,
     }
 }
 

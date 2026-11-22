@@ -325,7 +325,12 @@ impl AppState {
                         "speleodb done: the push landed, but an edit recorded after it \
                          started is still un-pushed; keeping the lock so a retry uploads it"
                     );
-                    return Ok(DoneResult::PushUnconfirmed);
+                    // The landing is reported with this result: a revision it
+                    // replaced (R3) must not wait for a later one the session may
+                    // never reach (F4R3-locks-push-3).
+                    return Ok(DoneResult::PushUnconfirmed {
+                        replaced_revisions: self.speleodb_take_replaced(&link.project_id),
+                    });
                 }
                 // Edits are safely on the server; release the lock and go
                 // read-only. Drop the edit gate only after the release is settled -
@@ -351,7 +356,14 @@ impl AppState {
                             },
                         ),
                     )
-                    .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+                    .map_err(|e| {
+                        // The upload may have landed and replaced a revision (R3):
+                        // that rides the failure, the only result this Done gives
+                        // (F4R3-locks-push-3).
+                        let mut dto = dto_for_error(Endpoint::Release, &e);
+                        dto.replaced_revisions = self.speleodb_take_replaced(&link.project_id);
+                        dto
+                    })?;
                 let _project = self.speleodb_push_project_guard(generation)?;
                 if released == super::speleodb_lock_release::HolderCheckedRelease::NotHeldByUs {
                     tracing::info!(
@@ -373,7 +385,9 @@ impl AppState {
             }
             // Stay locked + dirty so the user can reconcile / a retry can recover.
             PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
-            PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed),
+            PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed {
+                replaced_revisions: self.speleodb_take_replaced(&link.project_id),
+            }),
         }
     }
 
@@ -437,9 +451,11 @@ impl AppState {
                     .map_err(local_dto)?
                     .has_unpushed_edits;
                 if still_dirty {
-                    // A revision this landing replaced (R3) stays recorded: the
-                    // result that reports the late edit's upload names it.
-                    Ok(PushResult::PushUnconfirmed)
+                    // A revision this landing replaced (R3) is reported now, with
+                    // the late edit's result (F4R3-locks-push-3).
+                    Ok(PushResult::PushUnconfirmed {
+                        replaced_revisions: self.speleodb_take_replaced(&link.project_id),
+                    })
                 } else {
                     Ok(PushResult::Pushed {
                         undo_history_omitted: undo_history_omitted.then_some(true),
@@ -448,7 +464,9 @@ impl AppState {
                 }
             }
             PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
-            PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed),
+            PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed {
+                replaced_revisions: self.speleodb_take_replaced(&link.project_id),
+            }),
         }
     }
 
@@ -994,7 +1012,7 @@ impl AppState {
 
         // R3: the BASE this upload sits on is the open link's NOW (an ancestry
         // adoption just before it moved it), and until the answer says what the
-        // upload made it is this session's one unanswered upload - the only thing
+        // upload made it is one of this session's unanswered uploads - the only thing
         // the next push may adopt as its own if the answer is lost.
         let upload_base = {
             let _project = self.speleodb_push_project_guard(generation)?;
@@ -1042,6 +1060,9 @@ impl AppState {
                 // from now on (a status refresh that read BASE before this landing
                 // meets it). A 200 that names nothing leaves the upload unanswered,
                 // so the next push still recovers it by ancestry.
+                // What was unanswered before this answer: one of those landing
+                // under this upload is ours, not a revision this one replaced.
+                let unanswered = self.speleodb_own_uploads(project_id).unanswered;
                 if let Some(head) = new_base.as_deref() {
                     self.speleodb_note_upload_answered(generation, project_id, Some(head));
                 }
@@ -1105,6 +1126,7 @@ impl AppState {
                         (endpoint, token, insecure_http),
                         generation,
                         project_id,
+                        &unanswered,
                         upload_base.as_deref(),
                         head,
                     );

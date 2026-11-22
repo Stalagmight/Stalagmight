@@ -50,6 +50,9 @@ enum Next {
     /// Drop the connection before landing anything: an unanswered upload that
     /// made no revision.
     DropUnlanded,
+    /// Land nothing of this upload and answer 304 (its content is HEAD's), after
+    /// landing `meanwhile` if it is set.
+    NotModified,
 }
 
 /// The server's state, shared with the test.
@@ -66,6 +69,8 @@ struct Remote {
     /// revision, pushed while that upload was on its way (the lost race).
     meanwhile: Option<String>,
     minted: u32,
+    /// Answer a release with this status instead of releasing.
+    release_status: Option<u16>,
 }
 
 impl Remote {
@@ -165,6 +170,14 @@ fn server() -> (String, Shared) {
                 if let Some(message) = remote.meanwhile.take() {
                     remote.land(&message);
                 }
+                if next == Next::NotModified {
+                    drop(remote);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    let _ = stream.flush();
+                    continue;
+                }
                 let landed = remote.land(&upload_message(&request));
                 if next == Next::LandSilently {
                     continue;
@@ -175,6 +188,9 @@ fn server() -> (String, Shared) {
                         r#"{{"project":{project},"hexsha":"{landed}","files":["project.stalx"],"message":"Saved","browser_url":null}}"#
                     ),
                 )
+            } else if let (true, Some(status)) = (line.contains("/release/"), remote.release_status)
+            {
+                (status, r#"{"detail":"Synthetic failure."}"#.to_owned())
             } else if line.contains("/release/") {
                 remote.holder = None;
                 (
@@ -413,7 +429,10 @@ fn our_own_unanswered_upload_is_adopted_on_the_retry() {
 
     remote.lock().expect("remote").next = Next::LandSilently;
     let lost = a.run(push("From A"));
-    assert!(matches!(lost, PushResult::PushUnconfirmed), "{lost:?}");
+    assert!(
+        matches!(lost, PushResult::PushUnconfirmed { .. }),
+        "{lost:?}"
+    );
     let first = remote.lock().expect("remote").tip();
     assert_ne!(first.as_deref(), Some(BASE), "the unanswered upload landed");
 
@@ -454,7 +473,7 @@ fn an_unanswered_upload_is_no_licence_to_adopt_another_sessions_revision() {
     remote.lock().expect("remote").next = Next::DropUnlanded;
     let dropped = b.run(push("From B"));
     assert!(
-        matches!(dropped, PushResult::PushUnconfirmed),
+        matches!(dropped, PushResult::PushUnconfirmed { .. }),
         "{dropped:?}"
     );
     assert_eq!(remote.lock().expect("remote").tip().as_deref(), Some(BASE));
@@ -623,5 +642,121 @@ fn the_status_shows_the_conflict_that_save_changes_will_report() {
         own.remote_state,
         crate::speleodb::RemoteState::UpToDate,
         "A's own revision is not a conflict for A: {own:?}"
+    );
+}
+
+#[test]
+fn a_release_that_fails_after_a_landed_race_still_names_the_replaced_revision() {
+    // F4R3-locks-push-3. Done's upload lands over A's revision (the lost race)
+    // and the history read after it records that; then the holder-checked
+    // release fails. Done answers with that failure, its only result, so the
+    // replaced revision rides it: it used to wait in a record that the end of
+    // the session (Keep the lock, Discard, a close) threw away, and the user
+    // was only told the upload had failed.
+    // Injection: the release failure carrying no `replaced_revisions` fails it.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    {
+        let mut remote = remote.lock().expect("remote");
+        remote.meanwhile = Some("From A, meanwhile".to_owned());
+        remote.release_status = Some(500);
+    }
+    let (done, after) = b.run(|state| {
+        edit(state);
+        let done = state.speleodb_done(Some("From B".to_owned()));
+        (done, state.speleodb_take_replaced(ID))
+    });
+    let failure = done.expect_err("the release failed");
+    let replaced = failure
+        .replaced_revisions
+        .clone()
+        .unwrap_or_else(|| panic!("the failure names the replaced revision: {failure:?}"));
+    assert_eq!(replaced.len(), 1);
+    assert_eq!(replaced[0].message.as_deref(), Some("From A, meanwhile"));
+    assert!(after.is_none(), "reported once");
+    assert_eq!(remote.lock().expect("remote").uploads.len(), 1);
+}
+
+#[test]
+fn a_retry_does_not_report_our_own_late_upload_as_replaced() {
+    // F4R3-locks-push-5. B's upload U1 is cut before the server landed it, so
+    // the retry's HEAD check reads HEAD == BASE and sends U2. The server then
+    // lands U1 late, just before U2. U1 is B's own earlier snapshot, not
+    // another session's work: the retry must not name it as replaced (which
+    // would stop the exit over B's own upload).
+    // Injection: `not_our_own` not applied to the history read after the 200
+    // names U1. (U2 carries U1's description on U1's BASE, so this case alone
+    // cannot tell the record of U2 from the record of U1; the 304 case can.)
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    remote.lock().expect("remote").next = Next::DropUnlanded;
+    let lost = b.run(push("From B"));
+    assert!(
+        matches!(lost, PushResult::PushUnconfirmed { .. }),
+        "{lost:?}"
+    );
+    remote.lock().expect("remote").meanwhile = Some("From B".to_owned());
+    let retried = b.run(|state| {
+        state
+            .speleodb_push_only(Some("From B".to_owned()))
+            .expect("the retry answers")
+    });
+    assert!(
+        matches!(
+            retried,
+            PushResult::Pushed {
+                replaced_revisions: None,
+                ..
+            }
+        ),
+        "our own late upload is not another session's: {retried:?}"
+    );
+}
+
+#[test]
+fn a_retry_answered_304_over_our_own_late_upload_leaves_it_adoptable() {
+    // F4R3-locks-push-5, the 304 variant. U1 is cut before landing; the retry
+    // U2 carries the same content; the server lands U1 late and answers U2 with
+    // 304 (U2 equals HEAD). BASE stays BASE while HEAD is U1, ours. The next
+    // edit's push must adopt U1 as our own upload and upload on top, not call
+    // it a conflict.
+    // Injection: the 304 settling every unanswered upload (or the record
+    // keeping only the last one) turns the next push into DivergenceNeeded.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    remote.lock().expect("remote").next = Next::DropUnlanded;
+    let lost = b.run(push("From B"));
+    assert!(
+        matches!(lost, PushResult::PushUnconfirmed { .. }),
+        "{lost:?}"
+    );
+    {
+        let mut remote = remote.lock().expect("remote");
+        remote.meanwhile = Some("From B".to_owned());
+        remote.next = Next::NotModified;
+    }
+    let retried = b.run(|state| {
+        state
+            .speleodb_push_only(Some("From B".to_owned()))
+            .expect("the retry answers")
+    });
+    assert!(matches!(retried, PushResult::Pushed { .. }), "{retried:?}");
+    assert_eq!(b.link_on_disk().base_commit_sha.as_deref(), Some(BASE));
+
+    let next = b.run(push("From B, next edit"));
+    assert!(
+        matches!(next, PushResult::Pushed { .. }),
+        "our own late upload is adopted: {next:?}"
+    );
+    let remote = remote.lock().expect("remote");
+    let top = remote.history.last().expect("history");
+    assert_eq!(top.message, "From B, next edit");
+    assert_eq!(
+        top.parent.as_deref(),
+        Some("rev0001"),
+        "on top of our own U1"
     );
 }

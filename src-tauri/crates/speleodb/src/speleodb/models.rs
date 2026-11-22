@@ -458,10 +458,19 @@ pub enum DoneResult {
     /// account, R3): nothing was pushed, the lock + dirty bit are retained for
     /// the user to reconcile (#198).
     DivergenceNeeded,
-    /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
-    /// AND the lock are retained so a later retry recovers via ancestry (#193) -
-    /// no edits are lost.
-    PushUnconfirmed,
+    /// The push outcome was ambiguous (no confirmed server commit), or the upload
+    /// landed and an edit made after it started is not in it: the dirty bit AND
+    /// the lock are retained so a later retry recovers via ancestry (#193) or
+    /// uploads the late edit - no edits are lost.
+    PushUnconfirmed {
+        /// As on [`Self::Released`]: the revisions an upload that DID land took
+        /// HEAD from (R3), reported here rather than held back for a later
+        /// result the session may never reach (F4R3-locks-push-3). Absent in the
+        /// ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
+    },
 }
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
@@ -610,9 +619,15 @@ pub enum PushResult {
     NotEditing,
     /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
     DivergenceNeeded,
-    /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a
-    /// retry recovers via ancestry (#193).
-    PushUnconfirmed,
+    /// Ambiguous push (no confirmed server commit), or a landed one with a late
+    /// edit not in it: dirty bit + lock retained so a retry recovers via
+    /// ancestry (#193) or uploads the late edit.
+    PushUnconfirmed {
+        /// As on [`DoneResult::PushUnconfirmed`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
+    },
 }
 
 /// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
@@ -655,6 +670,15 @@ pub struct SpeleoErrorDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub format_refused: Option<bool>,
+    /// R3, the lost race, on a failure that came AFTER an upload landed (the
+    /// holder-checked release of Done failed): the revisions that upload took
+    /// HEAD from, newest first, as on [`DoneResult::Released`]. The landing is
+    /// reported with the failure that followed it instead of waiting in a
+    /// record the session's end throws away (F4R3-locks-push-3). Absent on every
+    /// other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaced_revisions: Option<Vec<SpeleoRevision>>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -744,6 +768,7 @@ mod tests {
             newer_schema: None,
             endpoint_refusal: None,
             format_refused: None,
+            replaced_revisions: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
@@ -781,7 +806,10 @@ mod tests {
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })
         .expect("serialize link status");
-        let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");
+        let push = serde_json::to_string(&PushResult::PushUnconfirmed {
+            replaced_revisions: None,
+        })
+        .expect("serialize push");
 
         for json in [
             &login,

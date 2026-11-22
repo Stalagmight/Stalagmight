@@ -29,6 +29,10 @@ use crate::speleodb::client;
 use crate::speleodb::models::SpeleoRevision;
 use crate::speleodb::sync::{self, OwnUploads, UnansweredUpload};
 
+/// How many unanswered uploads the record remembers: retries sent while an
+/// earlier upload's fate is unknown. A handful is plenty.
+const UNANSWERED_KEPT: usize = 8;
+
 /// How many landed revisions the record remembers. Only the ones a status
 /// refresh can still meet in BASE..HEAD matter (the push advances BASE to each
 /// as it lands), so a handful is plenty.
@@ -114,8 +118,10 @@ impl AppState {
     }
 
     /// An upload is about to be sent: until its answer says what it made, it is
-    /// the one unanswered upload (a later one replaces it - the push adopts or
-    /// refuses whatever the earlier one made before it sends again).
+    /// an unanswered upload. An earlier one still unanswered stays recorded too:
+    /// the retry's HEAD check can read HEAD == BASE while the server has yet to
+    /// land the earlier upload, which can then land under the retry, and it is
+    /// still ours (F4R3-locks-push-5). The oldest go past [`UNANSWERED_KEPT`].
     pub(super) fn speleodb_note_upload_sent(
         &self,
         generation: u64,
@@ -124,16 +130,22 @@ impl AppState {
         message: &str,
     ) {
         self.speleodb_own_uploads_edit(generation, project_id, |record| {
-            record.uploads.unanswered = Some(UnansweredUpload {
+            let unanswered = &mut record.uploads.unanswered;
+            unanswered.push(UnansweredUpload {
                 base,
                 message: message.to_owned(),
             });
+            let excess = unanswered.len().saturating_sub(UNANSWERED_KEPT);
+            unanswered.drain(..excess);
         });
     }
 
-    /// The unanswered upload's outcome is known: it made `landed` (a 200 that
-    /// named it, or a revision the push adopted as its landing), or nothing (a
-    /// 304, a refusal).
+    /// The outcome of the upload just sent is known: it made `landed` (a 200
+    /// that named it, or a revision the push adopted as its landing), or nothing
+    /// (a 304, a refusal). A landing settles every unanswered upload: BASE moves
+    /// to it, and whatever an earlier one made is below it now. Nothing landed
+    /// settles only the upload just sent (the last one recorded): an earlier
+    /// one may still land, or may be what a 304 matched.
     pub(super) fn speleodb_note_upload_answered(
         &self,
         generation: u64,
@@ -141,7 +153,11 @@ impl AppState {
         landed: Option<&str>,
     ) {
         self.speleodb_own_uploads_edit(generation, project_id, |record| {
-            record.uploads.unanswered = None;
+            if landed.is_some() {
+                record.uploads.unanswered.clear();
+            } else {
+                record.uploads.unanswered.pop();
+            }
             if let Some(landed) = landed {
                 let kept = &mut record.uploads.landed;
                 if !kept.iter().any(|id| id.eq_ignore_ascii_case(landed)) {
@@ -173,7 +189,10 @@ impl AppState {
     /// After an upload landed as `landed` on the BASE `upload_base`: did it take
     /// HEAD from revisions another session landed meanwhile (R3, the lost
     /// race)? Reads the history once and records what it finds for the push
-    /// result to report ([`Self::speleodb_take_replaced`]).
+    /// result to report ([`Self::speleodb_take_replaced`]). `unanswered` is what
+    /// the record held as unanswered when the upload was answered: a revision
+    /// one of those made is our own upload landing late, not another session's
+    /// ([`sync::not_our_own`], F4R3-locks-push-5).
     ///
     /// A direct GET, NOT through the auth handler, like the pre-push name fold:
     /// the upload already landed, and a spurious 401 on this follow-up must not
@@ -184,6 +203,7 @@ impl AppState {
         (endpoint, token, insecure_http): (&str, &str, bool),
         generation: u64,
         project_id: &str,
+        unanswered: &[UnansweredUpload],
         upload_base: Option<&str>,
         landed: &str,
     ) {
@@ -214,7 +234,15 @@ impl AppState {
             );
             return;
         }
-        let replaced = sync::replaced_by_upload(upload_base, landed, &history.commits);
+        let my_email = self
+            .speleodb_own_uploads_account()
+            .map(|(_, email)| email)
+            .unwrap_or_default();
+        let replaced = sync::not_our_own(
+            sync::replaced_by_upload(upload_base, landed, &history.commits),
+            unanswered,
+            &my_email,
+        );
         if replaced.is_empty() {
             return;
         }

@@ -390,7 +390,7 @@ fn an_upload_whose_reply_is_lost_stays_unconfirmed_and_is_sent_once() {
                 .speleodb_push_only(Some("Synthetic push".to_owned()))
                 .expect("a push whose reply is lost is not an error");
             assert!(
-                matches!(pushed, PushResult::PushUnconfirmed),
+                matches!(pushed, PushResult::PushUnconfirmed { .. }),
                 "{lost:?}: {pushed:?}"
             );
             let on_disk = link_on_disk(&path).expect("linked");

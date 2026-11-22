@@ -101,7 +101,7 @@ pub(crate) enum AncestryOutcome {
 }
 
 /// What THIS session knows it uploaded of the open project (R3): the revisions
-/// its uploads' answers named, and the one upload whose answer never came.
+/// its uploads' answers named, and the uploads whose answer never came.
 ///
 /// The revision history names each revision's author by email, but SpeleoDB
 /// locks are per ACCOUNT: a second session of the same account (another
@@ -117,10 +117,14 @@ pub struct OwnUploads {
     /// The revisions this session's uploads made, as the server's 200 answers
     /// named them (the envelope's `hexsha`).
     pub landed: Vec<String>,
-    /// The upload whose answer was lost (a dropped connection, a 5xx retried to
-    /// exhaustion, a 200 that named no revision): it made at most one revision,
-    /// directly on [`UnansweredUpload::base`], with its description.
-    pub unanswered: Option<UnansweredUpload>,
+    /// The uploads whose answer was lost (a dropped connection, a 5xx retried to
+    /// exhaustion, a 200 that named no revision), oldest first, until an answer
+    /// or an adoption settles them: each made at most one revision, directly on
+    /// [`UnansweredUpload::base`], with its description. More than one when a
+    /// retry was sent while an earlier upload's fate was still unknown: the
+    /// server may yet land the earlier one, and the retry must not take it for
+    /// another session's (F4R3-locks-push-5).
+    pub unanswered: Vec<UnansweredUpload>,
 }
 
 /// An upload this session sent whose answer did not say what it made.
@@ -144,7 +148,7 @@ impl UnansweredUpload {
     /// session's revision in the one place they can both be: on our BASE,
     /// authored by our account. It cannot tell two sessions that wrote the same
     /// words, which is the residue.
-    fn made(&self, commit: &RevisionCommit, my_email: &str) -> bool {
+    pub fn made(&self, commit: &RevisionCommit, my_email: &str) -> bool {
         let on_base = match (&self.base, commit.parent_ids.as_slice()) {
             (None, []) => true,
             (Some(base), [parent]) => parent.eq_ignore_ascii_case(base),
@@ -255,18 +259,23 @@ pub(crate) fn classify_ancestry(
         return AncestryOutcome::Diverged;
     }
     // Every new commit must be one this session can account for (R3): a revision
-    // an upload's answer named, or the one revision the unanswered upload may have
-    // made. Anything else is somebody else's push - a stranger's, or another
-    // session of our own account, which holds the same per-account lock and
-    // signs with our email.
-    let mut unanswered = own.unanswered.as_ref();
+    // an upload's answer named, or the one revision an unanswered upload may have
+    // made (each accounts for one at most). Anything else is somebody else's push
+    // - a stranger's, or another session of our own account, which holds the same
+    // per-account lock and signs with our email.
+    let mut unanswered: Vec<&UnansweredUpload> = own.unanswered.iter().collect();
     for c in &new_commits {
         if own.landed.iter().any(|id| id.eq_ignore_ascii_case(&c.id)) {
             continue;
         }
-        match unanswered {
-            Some(upload) if upload.made(c, my_email) => unanswered = None,
-            _ => return AncestryOutcome::Diverged,
+        match unanswered
+            .iter()
+            .position(|upload| upload.made(c, my_email))
+        {
+            Some(at) => {
+                unanswered.remove(at);
+            }
+            None => return AncestryOutcome::Diverged,
         }
     }
     // All new commits are ours and linear back to BASE/root → our push landed.
@@ -443,6 +452,28 @@ pub fn replaced_by_upload(
     }
     replaced.retain(|c| !is_project_creation_commit(c));
     replaced
+}
+
+/// `replaced` ([`replaced_by_upload`]) without the revisions one of this
+/// session's own unanswered uploads may have made ([`UnansweredUpload::made`]):
+/// an upload whose answer was lost, retried before the server had landed it,
+/// can land late, under the retry. That revision is this copy's own earlier
+/// snapshot, not another session's work, and reporting it as replaced would
+/// stop the exit over our own upload (F4R3-locks-push-5).
+#[must_use]
+pub fn not_our_own(
+    replaced: Vec<RevisionCommit>,
+    unanswered: &[UnansweredUpload],
+    my_email: &str,
+) -> Vec<RevisionCommit> {
+    replaced
+        .into_iter()
+        .filter(|commit| {
+            !unanswered
+                .iter()
+                .any(|upload| upload.made(commit, my_email))
+        })
+        .collect()
 }
 
 /// Whether a confirmed-landed push captured all our local edits - i.e. no edit
@@ -886,9 +917,9 @@ pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, display_history, edits_captured_by_push, fence,
-        plan_push, reconcile_verdict, replaced_by_upload, rewind_target, status_verdict, tip_of,
-        unwind_target, AncestryOutcome, FenceOutcome, OwnUploads, PushPlan, ReconcileVerdict,
-        RemoteState, RevisionCommit, UnansweredUpload,
+        not_our_own, plan_push, reconcile_verdict, replaced_by_upload, rewind_target,
+        status_verdict, tip_of, unwind_target, AncestryOutcome, FenceOutcome, OwnUploads, PushPlan,
+        ReconcileVerdict, RemoteState, RevisionCommit, UnansweredUpload,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -1090,10 +1121,10 @@ mod tests {
     fn unanswered(base: Option<&str>, message: &str) -> OwnUploads {
         OwnUploads {
             landed: Vec::new(),
-            unanswered: Some(UnansweredUpload {
+            unanswered: vec![UnansweredUpload {
                 base: base.map(str::to_owned),
                 message: message.to_owned(),
-            }),
+            }],
         }
     }
 
@@ -1101,7 +1132,7 @@ mod tests {
     fn landed(ids: &[&str]) -> OwnUploads {
         OwnUploads {
             landed: ids.iter().map(|id| (*id).to_owned()).collect(),
-            unanswered: None,
+            unanswered: Vec::new(),
         }
     }
 
@@ -1844,6 +1875,58 @@ mod tests {
 
     fn ids(commits: &[RevisionCommit]) -> Vec<&str> {
         commits.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn ancestry_every_unanswered_upload_is_kept_until_settled() {
+        // F4R3-locks-push-5: U1's answer was lost before the server landed it, so
+        // the retry U2 was sent on the same BASE with the same description, and
+        // both are unanswered. The server then landed U1 late: it is ours.
+        let mut own = unanswered(Some("b"), "From B");
+        own.unanswered.push(UnansweredUpload {
+            base: Some("b".to_owned()),
+            message: "From B".to_owned(),
+        });
+        let late = [described("u1", &["b"], ME, "From B"), commit("b", &[], ME)];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("u1"), &late, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Landed { clear_dirty: true }
+        );
+        // Each unanswered upload accounts for one revision at most.
+        let two = [
+            described("u2", &["u1"], ME, "From B"),
+            described("u1", &["b"], ME, "From B"),
+            commit("b", &[], ME),
+        ];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("u2"), &two, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Diverged
+        );
+    }
+
+    #[test]
+    fn our_own_late_upload_is_not_reported_as_replaced() {
+        // F4R3-locks-push-5: U1 (unanswered) landed late, under the retry U2. The
+        // history after U2's 200 shows U1 between U2's BASE and U2, which is our
+        // own earlier snapshot, not another session's work. Another session's
+        // revision in that place is still reported.
+        // Injection: report `replaced_by_upload` as it is and U1 is named.
+        let own = unanswered(Some("b0"), "From B");
+        let history = [
+            commit("u2", &["u1"], ME),
+            described("u1", &["b0"], ME, "From B"),
+            commit("b0", &[], ME),
+        ];
+        let replaced = replaced_by_upload(Some("b0"), "u2", &history);
+        assert_eq!(ids(&replaced), ["u1"]);
+        assert!(not_our_own(replaced, &own.unanswered, ME).is_empty());
+        let theirs = [
+            commit("u2", &["m1"], ME),
+            described("m1", &["b0"], ME, "From A"),
+            commit("b0", &[], ME),
+        ];
+        let replaced = replaced_by_upload(Some("b0"), "u2", &theirs);
+        assert_eq!(ids(&not_our_own(replaced, &own.unanswered, ME)), ["m1"]);
     }
 
     #[test]

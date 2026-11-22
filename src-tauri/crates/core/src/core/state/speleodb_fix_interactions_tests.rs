@@ -492,7 +492,10 @@ fn an_edit_taken_back_after_an_unconfirmed_upload_is_still_uploaded() {
         let pushed = state
             .speleodb_push_only(Some("Synthetic push".to_owned()))
             .expect("a lost answer is no error");
-        assert!(matches!(pushed, PushResult::PushUnconfirmed), "{pushed:?}");
+        assert!(
+            matches!(pushed, PushResult::PushUnconfirmed { .. }),
+            "{pushed:?}"
+        );
         let first = {
             let remote = remote.lock().expect("remote");
             assert_eq!(remote.uploads, 1);

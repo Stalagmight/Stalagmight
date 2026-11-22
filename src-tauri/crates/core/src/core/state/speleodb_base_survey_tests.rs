@@ -586,7 +586,10 @@ fn an_edit_taken_back_during_an_upload_stays_un_uploaded() {
             .expect("push");
         // The upload landed, but an edit came after it started: not all of the
         // work is on the server, which the push reports as unconfirmed.
-        assert!(matches!(pushed, PushResult::PushUnconfirmed), "{pushed:?}");
+        assert!(
+            matches!(pushed, PushResult::PushUnconfirmed { .. }),
+            "{pushed:?}"
+        );
         *shared.lock().expect("state slot") = None;
         assert_eq!(
             *cleared.lock().expect("slot"),
