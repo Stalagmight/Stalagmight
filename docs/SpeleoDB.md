@@ -42,7 +42,17 @@ read around it is lost (F1-transport-1). Start editing takes the lock when the u
 asks. When the history read before the download did answer, SpeleoDB was reached
 and only the download was lost: the result says whether SpeleoDB's latest revision
 is the copy's BASE (`SpeleoOpenResult.newer_on_server`), and the toast says that
-instead of "SpeleoDB is unreachable" (F1-transport-5). Authentication,
+instead of "SpeleoDB is unreachable" (F1-transport-5). The toast fades; when the
+copy is behind (and clean), the SpeleoDB tab says so too, "SpeleoDB has a newer
+revision than this copy", seeded from that answer (`remote_ahead`) and kept by every
+status that reaches SpeleoDB, with "Resume editing downloads it first" where Resume
+editing is offered: Start Editing downloads the newer revision before it opens the
+edit gate, and over un-uploaded work it opens the divergence prompt and downloads
+nothing (demo item 5). While a status cannot reach SpeleoDB the tab's lock line
+says the project is offline and what the last lock scan saw ("Offline - the lock was
+free when last checked"), never "Ready for editing" beside the read-only badge: an
+offline status reads no lock holder, which is "not known", not "free" (demo item
+6). Authentication,
 permission, missing remote project, TLS and invalid-download errors do not fall
 back to the cache (but see the no-session rules below), and neither does a reply
 the app cannot read as HTTP or any other unclassified transport failure. One
@@ -69,10 +79,24 @@ already sent) or `Unknown` the request may have reached the server. Over TLS a
 connection closed before the reply is an early end of file from rustls, not
 hyper's incomplete message; both are `Dropped`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
 (`TransportCause::got_no_reply`) got nothing from the server, which is what lets an
-open fall back. Writes ignore the cause: after any transport failure an upload stays
-unconfirmed and dirty, an acquire asks the server who holds the lock, and no mutation
-is sent twice. A lost connection is worded "The connection to SpeleoDB at <server> was
-lost before it finished answering", never "Could not connect". Before this, a send
+open fall back. Writes ignore the cause, with one exception: after any transport
+failure an upload stays unconfirmed and dirty, an acquire asks the server who holds
+the lock, and no mutation is sent twice. The exception is an acquire whose
+connection could not be made or whose server name did not resolve
+(`TransportCause::nothing_sent`): that request never left this computer, so it is a
+plain failure with nothing to look for and nothing to point at (demo item 3: it used
+to leave a claim, and the next Close asked "Couldn't hand back the lock" about a lock
+request SpeleoDB never saw). When an acquire's outcome is unknown and the holder
+cannot be read either, the app keeps an unbound claim to the lock that may be this
+account's, and the Start Editing refusal says so (`SpeleoErrorDto.lock_may_be_held`,
+set whenever a refused Start Editing leaves such a claim): the read-only notice adds
+"The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock
+back when you close the project, or you can try again.", so the close that hands it
+back, or asks, is no surprise. The notice after Resume editing or Start editing on a
+project already open is titled "Still read-only"; only the automatic Start Editing
+after an open says "Project opened read-only" (demo item 7). A lost connection is
+worded "The connection to SpeleoDB at <server> was lost before it finished
+answering", never "Could not connect". Before this, a send
 failure knew only timeouts and TLS, so a refused, reset or dropped connection and the
 DNS failure of an `https://` host were all `Unknown`, and an open fell back only on a
 timeout.
@@ -692,7 +716,14 @@ nothing: the claim stays, unbound, so editing is already paused, and the in-app
 dialog "Couldn't hand back the lock" (`utils/speleoReleaseFailure`) asks. Like every
 other dialog, its body says what went wrong (with the reason of the last attempt)
 and what each answer does, and its buttons are in the one footer row: Cancel /
-Close and keep the lock / Retry (primary).
+Close and keep the lock / Retry (primary). A release that got no answer because of
+a transport failure carries its cause (`CommandResult.lock_release_transport`), and
+the reason is the line every read-only notice uses for that cause, naming the
+server and what to do ("Could not connect to SpeleoDB at <server>. ..."); the
+backend's `error` is shown only for any other failure, and names a transport
+failure in plain words too. The raw diagnostic ("Network error talking to SpeleoDB:
+..."), there and on every other SpeleoDB failure surface (`describeSpeleoError`), is
+only in the log (demo item 4).
 
 - Retry - the holder-checked release again. The dialog stays up, with the new
   reason, while it keeps failing; a lock SpeleoDB now says is someone else's (a

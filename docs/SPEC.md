@@ -77,7 +77,16 @@ before the whole reply arrived. A reply from the server (a refusal, an invalid
 download, one that is not HTTP) and a TLS failure never open it (F1); a refusal of
 a JSON read whose body was cut short has lost its status and counts as a lost
 reply. Such an offline copy opens read-only and takes no lock by itself; Start
-editing does that once the user asks. Confirmed lock
+editing does that once the user asks. While SpeleoDB cannot be reached the
+SpeleoDB tab says the project is offline and what the last lock scan saw, not
+"Ready for editing"; a copy SpeleoDB has a newer revision of says so in the tab
+for as long as that is known, and Start Editing downloads that revision before it
+starts editing (or, over un-uploaded work, raises the divergence prompt). A Start
+Editing that fails says why in the words of its cause, and, when its lock request
+may have reached SpeleoDB without anything confirming it, that the lock is handed
+back at Close; on a project already open its notice is titled "Still read-only".
+A lock request whose connection could not be made, or whose server name did not
+resolve, never left the computer and leaves nothing behind. Confirmed lock
 loss, permission loss or sign-out closes the editing gate. Backend direct mutation
 and upload calls enforce the same ownership requirements.
 
@@ -106,7 +115,8 @@ only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never
 leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
-back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
+back the lock" (Retry / Close and keep the lock / Cancel), saying what went wrong in
+the words of its cause, never the raw network diagnostic. Dirtiness is independent of validity.
 Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
 Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
 and never acquires a lock. Historical checkouts return to the live server version.

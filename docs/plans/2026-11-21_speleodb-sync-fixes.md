@@ -77,7 +77,9 @@ only on a timeout (the docs carried it as "Known gap F1, #669").
   holder check), and no mutation is replayed. The cause matters to a write only
   for its wording, which is why `Dropped` has its own line ("The connection to
   SpeleoDB at <server> was lost before it finished answering") instead of
-  `Refused`'s "Could not connect".
+  `Refused`'s "Could not connect". (Amended after the real-app demo, item 3: an
+  acquire that could not connect or resolve the name never left the computer, so
+  it is no unknown outcome; see [Review](#real-app-demo-items-3-to-7).)
 - The offline-open rules stay: only the cached copy of this project on this
   instance; this account's un-uploaded edits open still marked as not uploaded;
   another account's open read-only, naming whose they are; a discard never falls
@@ -646,3 +648,80 @@ is named in the test). Nothing here contacted a SpeleoDB server.
   replaced report.** Its warning toast is shown beside the banner (a separate
   fact): vitest `... that replaced a revision and left its undo history out says
   both`.
+
+### Real-app demo, items 3 to 7
+
+A demo of the four fixes in the real app against an internal test server (two
+sessions, a fault proxy; never speleodb.org) found no P0 or P1. Items 3 to 7 of
+its list, and the review's leftover (every SpeleoDB failure surface worded by
+cause), are fixed here; each was reproduced first by a test that fails on the
+code before the fix. Items 1, 2, 8 and 9 are not in this change.
+
+- **Item 4 (P2) and the leftover: the release-failure dialog showed the raw
+  diagnostic** ("What went wrong: The SpeleoDB lock could not be handed back:
+  Network error talking to SpeleoDB: error sending request"), and so did
+  Discard changes, the older-version prompt's discard, Switch to Read Only
+  Mode, the sign-out prompt's re-check and discard (each `getErrorMessage` of a
+  rejected SpeleoDB call), the cache purge and the delete's and the cached-copy
+  removal's lock warnings. A failed release now carries its cause
+  (`CommandResult.lock_release_transport`), which the dialog words with the
+  line every read-only notice uses (`describeTransportCause`); the other
+  surfaces use `describeSpeleoError` (the self-framed line, else the error as
+  it came); the backend's own sentences name the cause in plain words
+  (`SpeleoDbError::user_reason`). The style guide has no details-line pattern,
+  so the raw text is only in the log. Tests:
+  `a_release_that_got_no_reply_carries_its_cause_not_the_raw_diagnostic`, the
+  raw-free assertions of `deleting_the_open_remote_project_releases_its_held_lock`
+  and `an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay`,
+  `a_transport_failure_reads_in_plain_words_and_only_a_failed_connection_sent_nothing`,
+  and vitest (`speleoReleaseFailure.routes`, `releaseOpenProjectLock`, both
+  discards in `SpeleoUnwoundPushDialog`, `SpeleoSignOutDialog`, `speleoError`),
+  plus `speleodb-release-failure.spec.ts`. Injection: `release_failure` without
+  the cause, or `{e}` back in a warning, fails them.
+- **Item 3 (P2): a lost acquire was explained only at Close.** Two parts. An
+  acquire whose connection could not be made or whose server name did not
+  resolve (`TransportCause::nothing_sent`) sent nothing, but read as an unknown
+  outcome: its holder check failed the same way, it left an unbound claim, and
+  Close asked "Couldn't hand back the lock" about a request SpeleoDB never saw.
+  It is a plain failure now (`acquire_outcome_unknown`). And a Start Editing
+  refusal after which the process keeps a claim to a lock that may be this
+  account's says so (`SpeleoErrorDto.lock_may_be_held`, read from the claim the
+  flow left, so the acquire-unknown arm and the unwind that could not tell are
+  both covered, and an acquire SpeleoDB says did not land is not); the notice
+  adds "The lock request may have reached SpeleoDB; if it did, Stalagmight hands
+  the lock back when you close the project, or you can try again." The flag is
+  read from the claim rather than the cause the task proposed (`Dropped`,
+  `Timeout`, `Unknown`), since a 5xx or an unreadable reply leaves the same
+  claim and a lost reply that SpeleoDB says did not land leaves none; `Tls`
+  counts as may-have-landed, as `TransportCause` documents. Tests:
+  `a_start_editing_that_never_connected_leaves_no_pointer_to_a_lock` (injection:
+  every `Transport` an unknown outcome again),
+  `a_lost_lock_request_says_the_lock_may_be_held_only_while_nothing_can_tell`
+  (injection: the flag set from the cause alone),
+  `an_acquire_that_never_left_this_computer_is_no_unknown_outcome`, the flag
+  assertion in `a_start_editing_whose_acquire_landed_leaves_a_pointer_to_the_lock`,
+  vitest (`autoAcquireSpeleoLock`, `useSpeleoActions`, `speleoError`) and
+  `speleodb-home-cache.spec.ts`.
+- **Item 7 (P3): the notice after Resume editing was titled "Project opened
+  read-only".** The notice has a kind: the automatic Start Editing after an
+  open keeps that title; Resume editing and Start editing on an open project
+  (and a discard that re-takes the lock) say "Still read-only". Vitest
+  `SpeleoReadOnlyNotice`, `useSpeleoActions`, and the e2e above.
+- **Item 6 (P3): "Ready for editing" beside the read-only badge offline.** A
+  status that cannot reach SpeleoDB reads no lock holder, which the line took
+  for "free". While the connection is unavailable it says "Offline - ..." with
+  what the last lock scan saw (`remoteLocks`: free, someone, this account, or not
+  known). Vitest `SpeleoWorkspaceHeader` and the e2e above.
+- **Item 5 (P3): nothing persistent said the copy was behind.** The tab says
+  "SpeleoDB has a newer revision than this copy" whenever the status knows it
+  (`remote_ahead`), seeded at an offline open whose history named a newer
+  revision (`setLinkOnOpen`'s `newerOnServer`), and where Resume editing is
+  offered adds "Resume editing downloads it first". Checked, not changed: Start
+  Editing on a clean copy behind SpeleoDB fast-forwards (downloads the newer
+  revision) before it opens the edit gate, and over un-uploaded work returns
+  the divergence prompt and downloads nothing:
+  `resume_editing_on_a_copy_behind_downloads_the_newer_revision_first`
+  (injection: `reconcile_verdict` answering `UpToDate` for a fast-forward). A
+  status that then cannot reach SpeleoDB says "Connection unavailable" and drops
+  the line, which is what is known. Vitest `SpeleoWorkspaceHeader`,
+  `speleoStore`, `useOpenRemoteProject`, and `speleodb-home-cache.spec.ts`.
