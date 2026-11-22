@@ -427,7 +427,7 @@ fn the_automatic_start_editing_after_an_offline_open_names_the_lost_reply() {
             state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
             let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
             assert_eq!(opened.offline, Some(true), "{lost:?}");
-            assert!(state.open_project(copy.clone()).success, "{lost:?}");
+            assert!(state.open_project(copy).success, "{lost:?}");
 
             let refused = state
                 .speleodb_start_editing()
