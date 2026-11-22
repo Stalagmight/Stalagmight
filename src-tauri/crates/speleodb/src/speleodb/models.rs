@@ -679,6 +679,16 @@ pub struct SpeleoErrorDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub replaced_revisions: Option<Vec<SpeleoRevision>>,
+    /// `Some(true)` ONLY on a Start Editing failure after which this account may
+    /// hold the project's lock on SpeleoDB without editing under it: a lock
+    /// request that may have landed and that nothing could confirm either way.
+    /// This process keeps a pointer to it, so the next close asks SpeleoDB and
+    /// hands the lock back if it is this account's, or asks "Couldn't hand back
+    /// the lock" while SpeleoDB cannot answer. The read-only notice says so, so
+    /// that question is not a surprise. Absent on every other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lock_may_be_held: Option<bool>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -769,6 +779,7 @@ mod tests {
             endpoint_refusal: None,
             format_refused: None,
             replaced_revisions: None,
+            lock_may_be_held: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

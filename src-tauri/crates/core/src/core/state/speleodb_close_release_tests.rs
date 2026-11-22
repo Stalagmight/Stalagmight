@@ -23,6 +23,7 @@ use super::AppState;
 use crate::core::LockReleaseOutcome;
 use crate::models::SpeleoLink;
 use crate::speleodb::auth::TokenStore;
+use crate::speleodb::TransportCause;
 
 const ID: &str = "77777777-7777-7777-7777-777777777777";
 const ME: &str = "u@x";
@@ -290,6 +291,11 @@ fn a_failed_or_uncertain_release_keeps_the_project_open_until_retry() {
 
             let first = state.speleodb_close_releasing_lock();
             assert_still_open_for_the_user(&state, &first, &label);
+            let expected = matches!(case, Case::LostReply).then_some(TransportCause::Dropped);
+            assert_eq!(
+                first.lock_release_transport, expected,
+                "{label}: a cause only for a transport failure"
+            );
 
             let retry = state.speleodb_close_releasing_lock();
             assert!(
@@ -508,4 +514,47 @@ fn an_unreadable_session_refuses_the_close_but_still_lets_the_user_keep_the_lock
         state.close_project().success,
         "Close and keep the lock closes"
     );
+}
+
+/// A server address nothing listens on: every connection is refused, so nothing
+/// is ever sent.
+fn refused_server() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}")
+}
+
+#[test]
+fn a_release_that_got_no_reply_carries_its_cause_not_the_raw_diagnostic() {
+    // Demo item 4 (screenshot 06): "Couldn't hand back the lock" showed "What went
+    // wrong: The SpeleoDB lock could not be handed back: Network error talking to
+    // SpeleoDB: error sending request", the raw diagnostic, where every read-only
+    // notice for the same failures is worded by its cause. The result now carries
+    // the cause (`lock_release_transport`), which the dialog words, and its
+    // `error` names the cause in plain words; the raw text stays in the log.
+    // Injection: `release_failure` back to `format!("...: {error}")` with no
+    // cause fails both assertions below.
+    for (expected, server) in [
+        (TransportCause::Dropped, scripted(|_, _| Reply::Drop).0),
+        (TransportCause::Refused, refused_server()),
+    ] {
+        for settle in [false, true] {
+            let label = format!("{expected:?}, settle={settle}");
+            let temp = tempfile::TempDir::new().expect("temp");
+            let (state, _path) = editing(temp.path(), &server, true);
+            let failed = if settle {
+                state.speleodb_settle_open_lock(true)
+            } else {
+                state.speleodb_close_releasing_lock()
+            };
+            assert_still_open_for_the_user(&state, &failed, &label);
+            assert_eq!(failed.lock_release_transport, Some(expected), "{label}");
+            let error = failed.error.as_deref().unwrap_or_default();
+            assert!(
+                !error.contains("Network error talking to SpeleoDB"),
+                "{label}: no raw diagnostic: {error:?}"
+            );
+        }
+    }
 }

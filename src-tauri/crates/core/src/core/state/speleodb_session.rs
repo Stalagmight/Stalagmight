@@ -1742,7 +1742,7 @@ mod tests {
     fn start_editing_holds_the_guards_in_the_right_order() {
         let src = state_source("speleodb.rs");
         let start = src
-            .find("fn speleodb_start_editing")
+            .find("fn speleodb_start_editing_flow")
             .expect("start editing is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];

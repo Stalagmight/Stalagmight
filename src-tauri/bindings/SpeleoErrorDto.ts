@@ -6,4 +6,4 @@ import type { SpeleoRevision } from "./SpeleoRevision";
 import type { TransportCause } from "./TransportCause";
 import type { UnpushedLocalEdits } from "./UnpushedLocalEdits";
 
-export interface SpeleoErrorDto { message: string, action: SpeleoDbAction, status: number | null, transport: TransportCause | null, unpushed_local: UnpushedLocalEdits | null, newer_schema: NewerSchema | null, endpoint_refusal?: EndpointRefusal, format_refused?: boolean, replaced_revisions?: Array<SpeleoRevision>, }
+export interface SpeleoErrorDto { message: string, action: SpeleoDbAction, status: number | null, transport: TransportCause | null, unpushed_local: UnpushedLocalEdits | null, newer_schema: NewerSchema | null, endpoint_refusal?: EndpointRefusal, format_refused?: boolean, replaced_revisions?: Array<SpeleoRevision>, lock_may_be_held?: boolean, }

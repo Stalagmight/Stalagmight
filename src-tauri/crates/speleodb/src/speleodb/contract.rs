@@ -128,6 +128,32 @@ impl TransportCause {
             Self::Refused | Self::Dropped | Self::Timeout | Self::Dns
         )
     }
+
+    /// Whether a request that failed this way never left this computer: the
+    /// connection could not be made, or the server's name did not resolve. A
+    /// WRITE that failed this way did not happen, so it leaves nothing to check
+    /// or hand back; after every other cause it may have reached the server.
+    #[must_use]
+    pub const fn nothing_sent(self) -> bool {
+        matches!(self, Self::Refused | Self::Dns)
+    }
+
+    /// The cause in plain words, for a sentence the backend builds itself (a
+    /// warning that a lock could not be handed back). Never the raw diagnostic,
+    /// which stays in the error's `detail` and the log. The frontend words a
+    /// failure it holds the cause of from its own translated lines instead
+    /// (`humanizeSpeleoError`).
+    #[must_use]
+    pub const fn plain_reason(self) -> &'static str {
+        match self {
+            Self::Refused => "could not connect to SpeleoDB",
+            Self::Dropped => "the connection to SpeleoDB was lost before it finished answering",
+            Self::Timeout => "SpeleoDB did not respond in time",
+            Self::Dns => "could not find the SpeleoDB server",
+            Self::Tls => "could not set up a secure connection to SpeleoDB",
+            Self::Unknown => "could not reach SpeleoDB",
+        }
+    }
 }
 
 /// Why the endpoint policy (`tls::validate_endpoint`) refused a server address
@@ -436,6 +462,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         endpoint_refusal,
         format_refused,
         replaced_revisions: None,
+        lock_may_be_held: None,
     }
 }
 
@@ -446,6 +473,50 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
 )]
 mod tests {
     use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, SpeleoDbError};
+
+    #[test]
+    fn a_transport_failure_reads_in_plain_words_and_only_a_failed_connection_sent_nothing() {
+        // Demo items 3 and 4: the backend's own sentences name a transport failure
+        // by its cause, never "Network error talking to SpeleoDB: <raw>", and only
+        // a connection that could not be made or a name that did not resolve
+        // means the request never left this computer.
+        use super::TransportCause::{Dns, Dropped, Refused, Timeout, Tls, Unknown};
+        let mut reasons = Vec::new();
+        for cause in [Refused, Dropped, Timeout, Dns, Tls, Unknown] {
+            assert_eq!(
+                cause.nothing_sent(),
+                matches!(cause, Refused | Dns),
+                "{cause:?}"
+            );
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "error sending request".to_owned(),
+            };
+            let reason = error.user_reason();
+            assert_eq!(reason, cause.plain_reason(), "{cause:?}");
+            assert!(
+                !reason.contains("Network error") && !reason.contains("error sending request"),
+                "{cause:?}: {reason}"
+            );
+            let dto = dto_for_error(Endpoint::Release, &error);
+            assert_eq!(dto.user_reason(), reason, "{cause:?}: the IPC shape agrees");
+            reasons.push(reason);
+        }
+        reasons.sort();
+        reasons.dedup();
+        assert_eq!(reasons.len(), 6, "each cause has its own words");
+        let other = SpeleoDbError::Status {
+            status: 503,
+            message: "Synthetic".to_owned(),
+        };
+        assert_eq!(other.user_reason(), other.to_string());
+        let dto = dto_for_error(Endpoint::Release, &other);
+        assert_eq!(
+            dto.user_reason(),
+            dto.message,
+            "anything else is its message"
+        );
+    }
 
     #[test]
     fn map_status_per_row() {
