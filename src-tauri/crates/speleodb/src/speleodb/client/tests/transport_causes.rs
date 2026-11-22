@@ -25,6 +25,9 @@ enum Fault {
     ResetInBody,
     /// Bytes that are not an HTTP reply at all, then a close.
     NotHttp,
+    /// A 403 whose head promises a 120-byte body, then 40 of them and a close:
+    /// a refusal whose body a proxy cut short.
+    RefusalCutShort,
 }
 
 /// The head of one request, and its `Content-Length` body unless `keep_last`
@@ -65,15 +68,24 @@ fn read_request(stream: &mut std::net::TcpStream, keep_last: bool) -> String {
         .to_owned()
 }
 
-/// A loopback listener answering `connections` connections with `fault`, then
-/// closing (so a request past them is refused). `finish` returns the request
-/// lines it saw; a connection that never comes ends the wait after 30 s, so a
-/// client that tries fewer times fails the count instead of hanging the test.
+/// A loopback listener answering `connections` connections with `fault`, and
+/// then any more that come within [`Faulty::GRACE`] of the last one, the same
+/// way, before it closes (so a request after that is refused). `finish` returns
+/// the request lines it saw, the extra ones too: a request sent once more than
+/// expected (a replayed write, a fourth read) is counted, not hidden in the
+/// listen queue (F1-transport-3). A connection that never comes ends the wait
+/// after 30 s, so a client that tries fewer times fails the count instead of
+/// hanging the test.
 struct Faulty {
     base: String,
     worker: Option<std::thread::JoinHandle<Vec<String>>>,
 }
 impl Faulty {
+    /// How long the listener keeps accepting after the expected connections:
+    /// longer than the client's longest retry backoff (500 ms), so a request
+    /// sent once more than expected is seen.
+    const GRACE: Duration = Duration::from_millis(800);
+
     fn start(fault: Fault, connections: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let base = format!("http://{}", listener.local_addr().expect("address"));
@@ -81,11 +93,19 @@ impl Faulty {
         let worker = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(30);
             let mut seen = Vec::new();
-            for _ in 0..connections {
+            let mut last = Instant::now();
+            loop {
+                // Wait for the expected ones until the deadline, then for any
+                // extra one until the grace after the last connection runs out.
+                let until = if seen.len() < connections {
+                    deadline
+                } else {
+                    last + Self::GRACE
+                };
                 let Some(mut stream) = (loop {
                     match listener.accept() {
                         Ok((stream, _)) => break Some(stream),
-                        Err(_) if Instant::now() < deadline => {
+                        Err(_) if Instant::now() < until => {
                             std::thread::sleep(Duration::from_millis(5));
                         }
                         Err(_) => break None,
@@ -114,12 +134,18 @@ impl Faulty {
                          Connection: close\r\n\r\n{{\"id\": \"1"
                     ),
                     Fault::NotHttp => "SSH-2.0-OpenSSH_9.6\r\nProtocol mismatch.\r\n".to_owned(),
+                    Fault::RefusalCutShort => format!(
+                        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\
+                         Content-Length: 120\r\nConnection: close\r\n\r\n\
+                         {{\"detail\": \"You do not have permission"
+                    ),
                 };
                 seen.push(line);
                 let _ = stream.write_all(reply.as_bytes());
                 let _ = stream.flush();
                 // Give the client the bytes before the close (or the reset).
                 std::thread::sleep(Duration::from_millis(50));
+                last = Instant::now();
             }
             seen
         });
@@ -316,4 +342,131 @@ fn a_write_whose_reply_is_lost_is_dropped_and_never_sent_again() {
             );
         }
     }
+}
+
+#[test]
+fn a_write_sent_twice_is_counted_twice() {
+    // The count behind "sent once" must be able to fail. The listener used to
+    // accept exactly the connections it expected and drop the rest from its
+    // queue, so a second send of a write came back `Dropped` too and the count
+    // still read 1 (F1-transport-3). Two sends, the second while the first is
+    // in flight: both are seen.
+    let server = Faulty::start(Fault::CloseBeforeReply, 1);
+    let base = server.base.clone();
+    let second = std::thread::spawn(move || acquire_lock(&base, "t", false, ID));
+    std::thread::sleep(Duration::from_millis(10));
+    let first = acquire_lock(&server.base, "t", false, ID).expect_err("lost");
+    let other = second.join().expect("second send").expect_err("lost too");
+    assert_eq!(server.finish().len(), 2, "both sends are seen");
+    assert_eq!(cause_of(&first), Some(TransportCause::Dropped));
+    assert_eq!(cause_of(&other), Some(TransportCause::Dropped));
+}
+
+#[test]
+fn a_refusal_cut_short_is_a_reply_to_the_download_only() {
+    // A 403 whose body is cut short. The SDK reads the body of every status
+    // before it branches on the status, so the status is lost with the body.
+    // The download's request step can still tell: the SDK reads a body there
+    // only for a status that is not 200, so the server answered, and an open
+    // must not fall back over it. A JSON read cannot tell a cut refusal from
+    // a cut 200 and stays `Dropped` (F1-transport-2, documented in
+    // SpeleoDB.md). Injection: the download mapped through `api_error` again
+    // makes both downloads `Dropped`.
+    for (read, cause) in reads_under(Fault::RefusalCutShort) {
+        let expected = if read.starts_with("download") {
+            TransportCause::Unknown
+        } else {
+            TransportCause::Dropped
+        };
+        assert_eq!(cause, Some(expected), "{read}");
+    }
+    assert!(!TransportCause::Unknown.got_no_reply());
+}
+
+/// An error that wraps another, standing in for the layers between reqwest and
+/// the error under them (hyper-util's client error, hyper's `Io` error), which
+/// no test can construct.
+#[derive(Debug)]
+struct Layer(
+    &'static str,
+    Box<dyn std::error::Error + Send + Sync + 'static>,
+);
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for Layer {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.1.as_ref())
+    }
+}
+fn layered(inner: impl std::error::Error + Send + Sync + 'static) -> Layer {
+    Layer(
+        "client error (SendRequest)",
+        Box::new(Layer("connection error", Box::new(inner))),
+    )
+}
+
+#[test]
+fn a_tls_connection_closed_before_the_reply_is_dropped() {
+    // Every production SpeleoDB is https, and there a close before the reply is
+    // not hyper's incomplete message: rustls reports an early end of file with
+    // no `close_notify`, tokio-rustls passes it on, and hyper wraps it as an
+    // I/O error (F1-transport-4; rustls 0.23 `Reader::check_no_bytes_state`).
+    // No loopback test here serves TLS, so the shape is built by hand.
+    // Injection: `UnexpectedEof` taken out of the dropped kinds fails it.
+    let closed = layered(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "peer closed connection without sending TLS close_notify",
+    ));
+    assert_eq!(
+        cause_of_tree(&closed, TransportFlags::default()),
+        TransportCause::Dropped
+    );
+    // A TLS failure tokio-rustls wraps in an I/O error is still TLS.
+    let alert = layered(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        rustls::Error::General("synthetic alert".to_owned()),
+    ));
+    assert_eq!(
+        cause_of_tree(&alert, TransportFlags::default()),
+        TransportCause::Tls
+    );
+}
+
+#[test]
+fn refused_is_only_a_connection_that_was_never_made() {
+    // `Refused` says nothing was sent. An unreachable or refused error the
+    // network reports on a connection already made (an ICMP error surfaced on
+    // a read or write) followed a request that may have reached the server, so
+    // it is `Dropped` (F1-transport-6). Injection: the refused and unreachable
+    // kinds read anywhere in the tree as `Refused` again fails it.
+    for kind in [
+        std::io::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::NetworkUnreachable,
+        std::io::ErrorKind::HostUnreachable,
+    ] {
+        let established = layered(std::io::Error::new(kind, "synthetic"));
+        assert_eq!(
+            cause_of_tree(&established, TransportFlags::default()),
+            TransportCause::Dropped,
+            "{kind:?} after the connection was made"
+        );
+        let connecting = TransportFlags {
+            connect: true,
+            ..TransportFlags::default()
+        };
+        assert_eq!(
+            cause_of_tree(&established, connecting),
+            TransportCause::Refused,
+            "{kind:?} while connecting"
+        );
+    }
+    // A timeout still wins over everything, as on a real request.
+    let timed_out = layered(std::io::Error::new(std::io::ErrorKind::TimedOut, "t"));
+    assert_eq!(
+        cause_of_tree(&timed_out, TransportFlags::default()),
+        TransportCause::Timeout
+    );
 }

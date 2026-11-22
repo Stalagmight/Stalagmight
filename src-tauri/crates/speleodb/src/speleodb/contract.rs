@@ -72,7 +72,9 @@ pub enum SpeleoDbAction {
 ///
 /// What each cause says about the request (F1): after [`Self::Refused`] or
 /// [`Self::Dns`] nothing reached the server; after [`Self::Timeout`],
-/// [`Self::Dropped`] or [`Self::Unknown`] the request may have reached it. So
+/// [`Self::Dropped`], [`Self::Tls`] (a TLS error after the handshake can follow
+/// a request already sent) or [`Self::Unknown`] the request may have reached it.
+/// So
 /// every WRITE (upload, lock acquire and release, publish, project create)
 /// treats every transport failure as an outcome it does not know, whatever the
 /// cause: an upload stays unconfirmed and dirty, an acquire asks the server who
@@ -82,19 +84,25 @@ pub enum SpeleoDbAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
-    /// The connection could not be made: refused, the network or host
-    /// unreachable, or any other failure to connect (a blackholed address's
-    /// EINVAL, the case #270 was found through). Nothing was sent.
+    /// The connection could not be made: the connector failed, refused, the
+    /// network or host unreachable, or any other failure to connect (a
+    /// blackholed address's EINVAL, the case #270 was found through). Nothing
+    /// was sent.
     Refused,
-    /// The connection was made, then closed or reset before the whole reply
-    /// arrived: closed before any reply, a reply head cut short, or a body
-    /// shorter than its length (F1). The request may have reached the server.
+    /// The connection was made, then closed, reset or reported unreachable
+    /// before the whole reply arrived: closed before any reply, a reply head cut
+    /// short, or a body shorter than its length (F1). The request may have
+    /// reached the server. A JSON reply whose body was cut short is this whatever
+    /// its status said, since the SDK reads the body before the status (a
+    /// download's refusal cut short is [`Self::Unknown`]: the SDK reads that
+    /// body only for a status that is not 200).
     Dropped,
     /// A configured timeout elapsed (dial, response, or body read).
     Timeout,
     /// The hostname could not be resolved.
     Dns,
-    /// The TLS handshake / certificate validation failed.
+    /// The TLS handshake / certificate validation failed, or a TLS error ended
+    /// the connection after it.
     Tls,
     /// Anything else: an unclassified transport failure, such as a reply that is
     /// not HTTP at all. Fails to the generic "could not reach the server" line

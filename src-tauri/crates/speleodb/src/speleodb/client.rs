@@ -244,7 +244,7 @@ impl SdkClient {
                                 None,
                             )
                             .await
-                            .map_err(api_error)?,
+                            .map_err(download_head_error)?,
                     ),
                     None => Box::pin(
                         self.http
@@ -254,7 +254,7 @@ impl SdkClient {
                                 None,
                             )
                             .await
-                            .map_err(api_error)?,
+                            .map_err(download_head_error)?,
                     ),
                 };
                 Ok::<_, SpeleoDbError>(chunks)
@@ -348,9 +348,12 @@ fn is_tls_failure(error: &(dyn std::error::Error + 'static)) -> bool {
 }
 /// `true` when `link` says the connection closed or reset after it was made and
 /// before the whole reply arrived: hyper's incomplete message (closed before any
-/// reply, or in the middle of the reply head), a request canceled or a channel
-/// closed by the connection going away, an aborted body write, or an I/O reset,
-/// abort, broken pipe or early end of file (a body shorter than its length).
+/// reply, or in the middle of the reply head, over plain HTTP), a request
+/// canceled or a channel closed by the connection going away, an aborted body
+/// write, or an I/O reset, abort, broken pipe, early end of file (a body shorter
+/// than its length; over TLS, also a close before any reply, which rustls
+/// reports as an early end of file without `close_notify`), or a refused or
+/// unreachable error the network reported on a connection already made.
 fn is_dropped_link(link: &(dyn std::error::Error + 'static)) -> bool {
     if let Some(hyper) = link.downcast_ref::<hyper::Error>() {
         if hyper.is_incomplete_message()
@@ -369,8 +372,22 @@ fn is_dropped_link(link: &(dyn std::error::Error + 'static)) -> bool {
                 | std::io::ErrorKind::BrokenPipe
                 | std::io::ErrorKind::NotConnected
                 | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::NetworkUnreachable
+                | std::io::ErrorKind::HostUnreachable
         )
     )
+}
+/// What a `reqwest::Error` says about itself, besides its error tree: the
+/// flags [`cause_of_tree`] reads first.
+#[derive(Debug, Clone, Copy, Default)]
+struct TransportFlags {
+    /// The client's own timeout (or one reqwest reports as such).
+    timeout: bool,
+    /// The name did not resolve.
+    dns: bool,
+    /// The connector failed: the connection was never made.
+    connect: bool,
 }
 /// The typed cause of a failed request (#270, F1), the one classifier of both the
 /// SDK's send failures and its body reads. Read off the error tree, never its
@@ -379,34 +396,39 @@ fn is_dropped_link(link: &(dyn std::error::Error + 'static)) -> bool {
 /// 1. a timeout anywhere (the client's own, hyper's, or an I/O `TimedOut`);
 /// 2. a name that did not resolve;
 /// 3. a TLS handshake or certificate failure;
-/// 4. a connection that could not be made (`Refused`): the connector failed, or
-///    an I/O error says refused or unreachable;
-/// 5. a connection closed or reset before the whole reply arrived (`Dropped`,
-///    [`is_dropped_link`]);
+/// 4. a connection that could not be made (`Refused`): the connector failed,
+///    so nothing was sent;
+/// 5. a connection closed, reset or reported unreachable after it was made and
+///    before the whole reply arrived (`Dropped`, [`is_dropped_link`]);
 /// 6. anything else (`Unknown`), such as a reply that is not HTTP.
 fn transport_cause(error: &reqwest::Error) -> TransportCause {
-    if error.is_timeout()
+    cause_of_tree(
+        error,
+        TransportFlags {
+            timeout: error.is_timeout(),
+            dns: error.is_dns(),
+            connect: error.is_connect(),
+        },
+    )
+}
+/// [`transport_cause`] over any error tree, with the request's own `flags`: the
+/// classifier itself, apart so a tree no loopback test can produce (a TLS
+/// close, an unreachable error on an established connection) is still pinned.
+fn cause_of_tree(
+    error: &(dyn std::error::Error + 'static),
+    flags: TransportFlags,
+) -> TransportCause {
+    if flags.timeout
         || any_in_tree(error, |link| {
             io_kind(link) == Some(std::io::ErrorKind::TimedOut)
         })
     {
         TransportCause::Timeout
-    } else if error.is_dns() {
+    } else if flags.dns {
         TransportCause::Dns
     } else if is_tls_failure(error) {
         TransportCause::Tls
-    } else if error.is_connect()
-        || any_in_tree(error, |link| {
-            matches!(
-                io_kind(link),
-                Some(
-                    std::io::ErrorKind::ConnectionRefused
-                        | std::io::ErrorKind::NetworkUnreachable
-                        | std::io::ErrorKind::HostUnreachable
-                )
-            )
-        })
-    {
+    } else if flags.connect {
         TransportCause::Refused
     } else if any_in_tree(error, is_dropped_link) {
         TransportCause::Dropped
@@ -557,6 +579,27 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
         ApiOpError::Transport(_) => {
             SpeleoDbError::Parse("SpeleoDB request could not be processed".into())
         }
+    }
+}
+/// [`api_error`] for the download's request step, which knows one thing more.
+/// The SDK hands a 200's body to the caller unread and reads the body of every
+/// other status itself, before it branches on the status. So a body read that
+/// fails inside this step (`HttpError::Network`; a send failure is the
+/// middleware error) is the body of a refusal or an error status, cut short:
+/// the server answered, and the status went with the body. That is a reply,
+/// never "no reply" (`TransportCause::got_no_reply`), so an open does not fall
+/// back to the cached copy over it (F1). A JSON read cannot tell: it reads the
+/// body of every status the same way, so its cut body stays `Dropped`.
+fn download_head_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
+    match error {
+        ApiOpError::Transport(HttpError::Network(error)) => SpeleoDbError::Transport {
+            cause: TransportCause::Unknown,
+            detail: format!(
+                "the reply to the download was not a 200 and was cut short: {}",
+                error.without_url()
+            ),
+        },
+        other => api_error(other),
     }
 }
 /// The reply of an SDK call that decodes a project or a revision list. A 2xx reply
