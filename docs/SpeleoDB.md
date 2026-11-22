@@ -605,8 +605,10 @@ Changes is pressed. SpeleoDB has no conditional upload, so a revision landing
 between that check and the upload still goes under ours; the history read right
 after the upload finds it, and the landed result names it (`replaced_revisions`):
 a banner says which revision the upload replaced and that it is still in the
-Revision History (view or restore it there), and an exit or sign-out prompt that
-ran the upload stops so the banner is read. Publish's first upload goes through
+Revision History (view or restore it there), and every close that ran the upload
+(the exit and sign-out prompts, Save and Close, the older-version confirmation
+finishing a close or a quit) stops so the banner is read; the next close asks
+nothing. Publish's first upload goes through
 the same post-upload check; a project created a moment earlier cannot have been
 raced, so there it would only be logged.
 
@@ -640,7 +642,8 @@ any work) and in `client::upload_stalx`, so no caller can send one
 (`speleodb/commit_message.rs`, mirrored by `src/utils/commitMessage.ts`).
 
 Save and Close carries its close intent through recovery and closes only after a
-confirmed upload and successful release, with no newer local changes. Cancellation,
+confirmed upload and successful release, with no newer local changes and no
+replaced revision to report (that upload stops on its banner). Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
 including Hamburger Menu -> Close Project, project switching and Quit hand a
 clean session's lock back without a question, through the holder check (only a

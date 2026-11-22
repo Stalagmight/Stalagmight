@@ -92,8 +92,9 @@ base, or moved only by this session's own upload whose answer was lost; any othe
 revision there - including one from another session of the same account, which
 holds the same per-account lock - uploads nothing and raises the divergence prompt.
 An upload that landed on top of a revision pushed between that check and the upload
-names it on a banner (it stays in the Revision History), and the exit or sign-out
-that ran the upload stops so the banner is read. Autosave and autosave retry remain local-only. Save and Close continues
+names it on a banner (it stays in the Revision History), and every close that ran
+the upload (the exit and sign-out prompts, Save and Close, the older-version
+confirmation) stops so the banner is read. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never

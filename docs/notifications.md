@@ -191,9 +191,11 @@ regions). Read the comment blocks in those two files plus
   never a toast. The `replaced_revision` kind of `SpeleoBanner` names the revision
   (description, short id, author), says its changes are not in the upload and
   that it is still in the Revision History to view or restore, and stays until
-  dismissed; it replaces the success toast (one event, one surface). The exit and
-  sign-out prompts that ran the upload stop instead of closing, so the banner is
-  read first. An upload refused because another session uploaded first is the
+  dismissed; it replaces the success toast (one event, one surface). Every close
+  that ran the upload stops instead of closing, so the banner is read first: the
+  exit and sign-out prompts, Save and Close, and the older-version confirmation
+  finishing a close or a quit. The next close asks nothing. An upload refused
+  because another session uploaded first is the
   divergence prompt, like any divergence.
 
 ## Command-failure contract
