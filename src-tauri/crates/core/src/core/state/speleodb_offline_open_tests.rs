@@ -554,7 +554,7 @@ fn a_start_editing_whose_acquire_landed_leaves_a_pointer_to_the_lock() {
         state.speleodb_record_cache_owner(&copy, &server.url, ME, "Remote");
         let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
         assert_eq!(opened.offline, Some(true));
-        assert!(state.open_project(copy.clone()).success);
+        assert!(state.open_project(copy).success);
 
         let refused = state
             .speleodb_start_editing()

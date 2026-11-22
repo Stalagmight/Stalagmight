@@ -134,11 +134,10 @@ impl Faulty {
                          Connection: close\r\n\r\n{{\"id\": \"1"
                     ),
                     Fault::NotHttp => "SSH-2.0-OpenSSH_9.6\r\nProtocol mismatch.\r\n".to_owned(),
-                    Fault::RefusalCutShort => format!(
-                        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\
-                         Content-Length: 120\r\nConnection: close\r\n\r\n\
-                         {{\"detail\": \"You do not have permission"
-                    ),
+                    Fault::RefusalCutShort => "HTTP/1.1 403 Forbidden\r\n\
+                        Content-Type: application/json\r\nContent-Length: 120\r\n\
+                        Connection: close\r\n\r\n{\"detail\": \"You do not have permission"
+                        .to_owned(),
                 };
                 seen.push(line);
                 let _ = stream.write_all(reply.as_bytes());

@@ -770,7 +770,7 @@ fn a_restore_of_an_older_revision_records_no_digest_and_stays_un_uploaded() {
 
         let state = signed_in(&endpoint);
         assert!(listed_unpushed(&state), "after a crash it is still listed");
-        assert!(state.open_project(dest.clone()).success);
+        assert!(state.open_project(dest).success);
         assert!(open_link(&state).has_unpushed_edits, "and reopens marked");
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(ID));
@@ -848,7 +848,7 @@ fn a_304_landing_records_the_digest_and_keeps_a_late_edit_marked() {
             !listed_unpushed(&state),
             "the lost edit leaves nothing to upload"
         );
-        assert!(state.open_project(dest.clone()).success);
+        assert!(state.open_project(dest).success);
         assert!(!open_link(&state).has_unpushed_edits);
     });
     crate::test_helpers::with_isolated_config(|| {
@@ -939,7 +939,7 @@ fn a_digest_another_writer_carried_past_its_edit_is_not_trusted() {
             downloaded_survey(BASE, &repo),
             "untouched"
         );
-        assert!(state.open_project(dest.clone()).success);
+        assert!(state.open_project(dest).success);
         assert!(open_link(&state).has_unpushed_edits, "and opens marked");
     });
 }
@@ -989,5 +989,49 @@ fn the_digest_counts_only_while_this_build_recorded_every_edit_since() {
         );
         assert_eq!(digest_on_disk(&dest), None, "and is gone");
         assert!(open_link(&state).has_unpushed_edits);
+    });
+}
+
+/// F2-digest-5. A copy with real saved work keeps its mark and its digest for
+/// as long as the work stays un-uploaded, so the link probe read it whole and
+/// hashed it on every listing fetch. The answer "real work" is remembered while
+/// the file is unchanged; a changed file is read again, and a remembered answer
+/// can only keep a mark.
+///
+/// Injection: `probe_settled` never consulting what it remembered reads the copy
+/// whole on every listing.
+#[test]
+fn a_copy_with_real_work_is_hashed_once_while_it_is_unchanged() {
+    use super::speleodb_base_survey::whole_reads;
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, _repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        set_elevation(&state, Some(12.5));
+        save(&state);
+        drop(state);
+        let state = signed_in(&endpoint);
+        let before = whole_reads();
+        for _ in 0..3 {
+            assert!(listed_unpushed(&state), "real work stays listed");
+        }
+        assert_eq!(
+            whole_reads() - before,
+            1,
+            "read whole once, not per listing"
+        );
+
+        // The file changes (another save of more work): read again, once.
+        assert!(state.open_project(dest).success);
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(ID));
+        set_elevation(&state, Some(14.0));
+        save(&state);
+        let before = whole_reads();
+        for _ in 0..3 {
+            assert!(listed_unpushed(&state));
+        }
+        assert_eq!(whole_reads() - before, 1, "a changed file is read again");
     });
 }
