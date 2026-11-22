@@ -190,8 +190,16 @@ test('an offline open\'s Start Editing that lost its reply is worded, never the 
   await page.getByTestId(`system-card-remote-${MINE}`).click();
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   await expect(page.getByTestId('toast')).toContainText('SpeleoDB is unreachable');
-  await expect(page.getByTestId('speleodb-readonly-resume')).toBeVisible();
+  await expect(page.getByTestId('speleodb-readonly-banner')).toBeVisible();
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
+  // A status refresh that reached SpeleoDB again knows the permission, which is
+  // what offers Resume editing; the Start editing it runs then loses its reply.
+  await page.evaluate(() => {
+    const store = (window as unknown as {
+      __E2E_TEST__: { speleoStore: { getState: () => { link: Record<string, unknown> }; setState: (s: unknown) => void } };
+    }).__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link, permission: 'READ_AND_WRITE' } });
+  });
   await page.getByTestId('speleodb-readonly-resume').click();
   const notice = page.getByTestId('speleodb-read-only-dialog');
   await expect(notice).toContainText(
