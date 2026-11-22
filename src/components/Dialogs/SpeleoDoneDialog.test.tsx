@@ -28,6 +28,7 @@ vi.mock('../../utils/ipc', () => ({
 
 import SpeleoDoneDialog from './SpeleoDoneDialog';
 import { getUploadContinuation } from '../../utils/uploadContinuation';
+import { openProjectNeedsSpeleoExitPrompt } from '../../utils/speleoExit';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -245,6 +246,38 @@ it.each(['released', 'push_unconfirmed', 'release_failed', 'newer-edits'] as con
   }
 });
 
+
+// R3: Save and Close ran an upload that landed on top of a revision another
+// session pushed meanwhile. The banner behind this dialog names it; closing the
+// project would close that report unread, so Save and Close stops as the exit
+// prompt and the sign-out do. Synthetic revision.
+it('R3: Save and Close stops on an upload that replaced a revision pushed meanwhile, so its banner is read', async () => {
+  const replaced = {
+    id: '0123456789abcdef0123456789abcdef01234567', parent_ids: [], author_email: 'diver@example.com',
+    authored_date: null, message: 'Surveyed the sump',
+  };
+  const close = vi.fn(async () => ({ success: true }) as never);
+  useProjectStore.setState({
+    project: { file_path: '/replaced.stalx', zero_datums: [{}] } as never, isDirty: false, closeProject: close,
+  });
+  useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true } });
+  invokeIpcMock.mockImplementation(async (command: string) =>
+    command === 'speleodb_done' ? { kind: 'released', replaced_revisions: [replaced] } : null);
+  // Mounted the way the app mounts it: only while it is the active dialog.
+  const Host = () => (useUIStore((s) => s.activeDialog) === 'speleodb-done' ? <SpeleoDoneDialog /> : null);
+  render(<Host />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  // The dialog gets out of the banner's way; the project stays open.
+  await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+  expect(close).not.toHaveBeenCalled();
+  expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [replaced] });
+  // Nothing is left pending for a later upload dialog to resume.
+  expect(getUploadContinuation('/replaced.stalx')).toBeNull();
+  // The lock is back and nothing is left to upload, so the next close asks nothing.
+  expect(useSpeleoStore.getState().link).toMatchObject({ editState: 'read-only', hasUnpushedEdits: false });
+  expect(openProjectNeedsSpeleoExitPrompt()).toBe(false);
+});
 
 it('Save progress blocks the app only during upload after the local save completes', async () => {
   useUIStore.setState({ dialogData: { mode: 'push' } });
