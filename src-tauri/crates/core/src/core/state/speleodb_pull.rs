@@ -66,11 +66,18 @@ impl DownloadOptions {
 /// cache availability to bypass access denial or invalid server content: a status,
 /// a reply the app cannot read, a TLS failure and an unclassified transport
 /// failure all report the error.
+///
+/// `tip` is the latest revision the history read before the download named, when
+/// it answered. Then SpeleoDB was reached and the download alone was lost, so the
+/// open says what it knows (`newer_on_server`) instead of calling SpeleoDB
+/// unreachable: whether the copy holds that revision or is behind it
+/// (F1-transport-5).
 fn offline_open_result(
     dest: &std::path::Path,
     endpoint: &str,
     project_id: &str,
     error: &SpeleoDbError,
+    tip: Option<&str>,
 ) -> Option<SpeleoOpenResult> {
     let SpeleoDbError::Transport { cause, .. } = error else {
         return None;
@@ -87,9 +94,16 @@ fn offline_open_result(
     if link.project_id != project_id || link.endpoint != endpoint {
         return None;
     }
+    let newer_on_server = tip.map(|tip| {
+        !link
+            .base_commit_sha
+            .as_deref()
+            .is_some_and(|base| base.eq_ignore_ascii_case(tip))
+    });
     Some(SpeleoOpenResult {
         local_path: dest.to_string_lossy().into_owned(),
         offline: Some(true),
+        newer_on_server,
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: None,
         other_owner: None,
@@ -155,6 +169,7 @@ fn signed_out_open_result(
     Some(SpeleoOpenResult {
         local_path: dest.to_string_lossy().into_owned(),
         offline: None,
+        newer_on_server: None,
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: Some(reason),
         other_owner: None,
@@ -307,7 +322,8 @@ impl AppState {
             Ok(native) => native,
             Err(error) => {
                 if policy == LocalEditsPolicy::Protect {
-                    if let Some(cached) = offline_open_result(&dest, &endpoint, &project_id, &error)
+                    if let Some(cached) =
+                        offline_open_result(&dest, &endpoint, &project_id, &error, tip.as_deref())
                     {
                         return Ok(other_accounts_work_read_only(
                             cached, &dest, &endpoint, &email,
@@ -348,6 +364,7 @@ impl AppState {
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: None,
             other_owner: None,
@@ -776,6 +793,7 @@ mod tests {
                 &cached_link.endpoint,
                 &cached_link.project_id,
                 &error,
+                None,
             )
             .expect("matching cache opens offline");
             assert_eq!(result.offline, Some(true));
@@ -784,18 +802,24 @@ mod tests {
                 &dest,
                 "https://other.example",
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
-            assert!(
-                offline_open_result(&dest, &cached_link.endpoint, "another-project", &error)
-                    .is_none()
-            );
+            assert!(offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                "another-project",
+                &error,
+                None
+            )
+            .is_none());
             assert!(offline_open_result(
                 &dir.path().join("missing.stalx"),
                 &cached_link.endpoint,
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
         }
@@ -832,7 +856,8 @@ mod tests {
                 &dest,
                 &cached_link.endpoint,
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
         }
@@ -848,7 +873,8 @@ mod tests {
             &SpeleoDbError::Transport {
                 cause: TransportCause::Refused,
                 detail: "offline".into()
-            }
+            },
+            None
         )
         .is_none());
     }
@@ -876,7 +902,7 @@ mod tests {
             "{refused:?}"
         );
         assert!(
-            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused).is_none(),
+            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused, None).is_none(),
             "a refused endpoint is not offline"
         );
 
@@ -892,7 +918,7 @@ mod tests {
             ),
             "an unresolvable http host must be an offline DNS failure, got {error:?}"
         );
-        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error)
+        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error, None)
             .expect("the cached copy opens offline");
         assert_eq!(opened.offline, Some(true));
         assert_eq!(opened.local_path, dest.to_string_lossy());

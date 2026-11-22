@@ -4007,7 +4007,9 @@
       "lockedByYou": "You are editing",
       "unlocked": "Ready for editing",
       "lockUnknown": "Editing status unknown",
-      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date."
+      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date.",
+      "offlineCopyBehind": "SpeleoDB has a newer revision of this project, but its download did not finish. Opened the copy on this computer, which is older.",
+      "offlineCopyCurrent": "The download from SpeleoDB did not finish. Opened the copy on this computer, which is based on SpeleoDB's latest revision."
     },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",

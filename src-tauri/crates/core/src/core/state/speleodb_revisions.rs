@@ -546,6 +546,7 @@ impl AppState {
         Ok(SpeleoOpenResult {
             local_path,
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: None,
             other_owner: None,

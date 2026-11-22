@@ -603,6 +603,7 @@ impl AppState {
         Some(crate::speleodb::SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: Some(true),
             read_only: None,
             other_owner: None,

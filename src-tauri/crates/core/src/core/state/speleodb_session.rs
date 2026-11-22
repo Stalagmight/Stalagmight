@@ -387,9 +387,19 @@ impl AppState {
     }
 
     /// The release half of [`Self::speleodb_unwind_unless_kept`].
+    ///
+    /// Every unwind runs after an acquire that landed, so the lock may be ours
+    /// whoever's claim there is. When the release cannot tell (the holder read
+    /// failed, or the POST did) and no claim was there to put back, it leaves an
+    /// UNBOUND claim, the pointer the acquire-unknown arm leaves too: the next
+    /// close or the janitor hands the lock back, holder-checked, once SpeleoDB
+    /// answers. Without one the lock stayed held with nothing in this process
+    /// pointing at it (F1-transport-1: every read lost, the acquire answered).
     pub(super) fn speleodb_unwind_release(&self, params: &LockReleaseParams, entry_gen: u64) {
         if self.speleodb_session_generation() == entry_gen {
-            self.speleodb_release_best_effort(params);
+            if !self.speleodb_release_best_effort(params) {
+                self.speleodb_record_unbound_claim(&params.project_id);
+            }
             return;
         }
         if let Err(e) = self.speleodb_release_unless_reclaimed_locked(params) {

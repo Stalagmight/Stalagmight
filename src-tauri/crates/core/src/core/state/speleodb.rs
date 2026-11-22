@@ -1521,10 +1521,15 @@ impl AppState {
     /// Holder-checked like every automatic release (lock#4): the POST is sent only
     /// when SpeleoDB names this account as the holder
     /// ([`super::speleodb_lock_release::release_if_held_by_us`]).
+    ///
+    /// `false` when the outcome is unknown (the holder could not be read, or the
+    /// POST failed): the lock may still be ours. A claim this ended is back as a
+    /// pointer then; a caller that knows it took the lock without one leaves its
+    /// own (Start Editing's unwind, `speleodb_unwind_release`).
     pub(super) fn speleodb_release_best_effort(
         &self,
         params: &super::speleodb_lock_release::LockReleaseParams,
-    ) {
+    ) -> bool {
         // The shared sink for start-editing's abort arms, the publish push and -
         // through `speleodb_release_held_lock_*` - logout / unlink / take-remote /
         // the instance switch, so this project's claim ends here: a lock the server
@@ -1551,7 +1556,9 @@ impl AppState {
             // to it, so it goes back - as a pointer, never as an edit session - for
             // the next close or the no-project janitor to retry.
             self.speleodb_restore_lock_claim(claim);
+            return false;
         }
+        true
     }
 
     /// [#303] Drop the in-memory undo/redo stacks when an edit session starts over a

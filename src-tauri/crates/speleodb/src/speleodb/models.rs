@@ -342,6 +342,14 @@ pub struct SpeleoOpenResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub offline: Option<bool>,
+    /// With [`Self::offline`], when SpeleoDB answered the history read and only
+    /// the download was lost: `true` when its latest revision is not the copy's
+    /// BASE (SpeleoDB has a newer revision than the copy that opened), `false`
+    /// when it is. Absent when nothing answered, so whether the copy is behind
+    /// is unknown (F1-transport-5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub newer_on_server: Option<bool>,
     /// Preserve unsynced work when seeding the frontend's offline link state.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -717,6 +725,7 @@ mod tests {
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: Some(SpeleoReadOnlyOpen::SessionExpired),
             other_owner: None,

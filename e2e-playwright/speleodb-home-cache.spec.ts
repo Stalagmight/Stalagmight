@@ -167,8 +167,10 @@ test('an expired session opens the cached copy read-only and signs the app out',
 });
 
 test('an offline open\'s Start Editing that lost its reply is worded, never the raw network error', async ({ page }) => {
-  // F1: SpeleoDB lost every reply, so the open fell back to the cached copy; the
-  // automatic Start Editing then lost its reply too. The backend keeps the raw
+  // F1: SpeleoDB lost every reply, so the open fell back to the cached copy. The
+  // copy opens read-only with no automatic Start Editing (F1-transport-1: an
+  // acquire sent into that fault can land while every read around it is lost).
+  // Start editing pressed then loses its reply too: the backend keeps the raw
   // diagnostic in `message` and the cause in `transport`.
   const commands = await seed(page, {
     signedIn: true,
@@ -187,13 +189,16 @@ test('an offline open\'s Start Editing that lost its reply is worded, never the 
   });
   await page.getByTestId(`system-card-remote-${MINE}`).click();
   await expect(page.getByTestId('single-system-view')).toBeVisible();
+  await expect(page.getByTestId('toast')).toContainText('SpeleoDB is unreachable');
+  await expect(page.getByTestId('speleodb-readonly-resume')).toBeVisible();
+  expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
+  await page.getByTestId('speleodb-readonly-resume').click();
   const notice = page.getByTestId('speleodb-read-only-dialog');
   await expect(notice).toContainText(
     'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering.',
   );
   await expect(notice).not.toContainText('Network error');
   await expect(notice).not.toContainText('error sending request');
-  await expect(page.getByTestId('toast')).toContainText('SpeleoDB is unreachable');
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(1);
   await page.getByTestId('speleodb-read-only-continue').click();
   await expect(notice).toHaveCount(0);

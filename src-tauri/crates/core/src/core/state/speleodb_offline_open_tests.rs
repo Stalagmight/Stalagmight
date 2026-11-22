@@ -452,3 +452,217 @@ fn the_automatic_start_editing_after_an_offline_open_names_the_lost_reply() {
         });
     }
 }
+
+/// A loopback SpeleoDB that keeps the project's lock: an acquire takes it for
+/// [`ME`], a release frees it, and the project read names its holder. While
+/// `lose_gets` is set it loses the reply to every GET under `/api/v2/projects/`
+/// (closed before any reply) and still answers every POST: the fault under which
+/// an acquire lands while every read around it is lost.
+struct LockServer {
+    url: String,
+    seen: Arc<Mutex<Vec<String>>>,
+    held: Arc<std::sync::atomic::AtomicBool>,
+    lose_gets: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl LockServer {
+    fn start() -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::new(AtomicBool::new(false));
+        let lose_gets = Arc::new(AtomicBool::new(true));
+        let (log, lock, lossy) = (Arc::clone(&seen), Arc::clone(&held), Arc::clone(&lose_gets));
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let line = read_request(&mut stream, false);
+                log.lock().expect("log").push(line.clone());
+                let project = |held: bool| {
+                    let mutex = if held {
+                        format!(r#"{{"user":"{ME}"}}"#)
+                    } else {
+                        "null".to_owned()
+                    };
+                    super::tests_support::sdk_fixture(&format!(
+                        r#"{{"id":"{ID}","name":"Remote","permission":"READ_AND_WRITE",
+                            "active_mutex":{mutex}}}"#
+                    ))
+                };
+                if line.starts_with("GET /api/v2/projects/") && lossy.load(SeqCst) {
+                    lose_reply(stream, Lost::Closed, &line);
+                } else if line.contains("/acquire/") {
+                    lock.store(true, SeqCst);
+                    answer(&mut stream, 200, &project(true));
+                } else if line.contains("/release/") {
+                    lock.store(false, SeqCst);
+                    answer(&mut stream, 200, &project(false));
+                } else if line.contains("/user/") {
+                    let me = super::tests_support::sdk_fixture(&format!(r#"{{"email":"{ME}"}}"#));
+                    answer(&mut stream, 200, &me);
+                } else if line.contains("/revisions/") {
+                    let history = super::tests_support::sdk_fixture(&format!(
+                        r#"{{"commits":[{{"id":"{BASE}","parent_ids":[]}}]}}"#
+                    ));
+                    answer(&mut stream, 200, &history);
+                } else {
+                    answer(&mut stream, 200, &project(lock.load(SeqCst)));
+                }
+            }
+        });
+        Self {
+            url: format!("http://127.0.0.1:{port}"),
+            seen,
+            held,
+            lose_gets,
+        }
+    }
+    fn held(&self) -> bool {
+        self.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn answer_again(&self) {
+        self.lose_gets
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn releases(&self) -> usize {
+        let seen = self.seen.lock().expect("log");
+        seen.iter()
+            .filter(|line| line.contains("/release/"))
+            .count()
+    }
+}
+
+#[test]
+fn a_start_editing_whose_acquire_landed_leaves_a_pointer_to_the_lock() {
+    // F1-transport-1. Start Editing over a clean copy while every GET loses its
+    // reply and POSTs are answered: the holder probe fails, the acquire lands,
+    // the HEAD read fails, and the unwind's holder-checked release cannot read
+    // the holder, so it sends nothing. The lock was then held on SpeleoDB with
+    // nothing in this process pointing at it: no close or cleanup could ever
+    // hand it back, and collaborators were locked out until the next sign-in
+    // scan or a release on the website. Now the unwind leaves an unbound claim,
+    // and the close hands the lock back once SpeleoDB answers again.
+    // Injection: the unwind leaving no claim when its release cannot tell
+    // (`speleodb_unwind_release`) fails the claim and the release assertions.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let server = LockServer::start();
+        let copy = seed(temp.path(), &server.url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &server.url);
+        state.speleodb_record_cache_owner(&copy, &server.url, ME, "Remote");
+        let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+        assert_eq!(opened.offline, Some(true));
+        assert!(state.open_project(copy.clone()).success);
+
+        let refused = state
+            .speleodb_start_editing()
+            .expect_err("no reply, no edit session");
+        assert_eq!(
+            refused.transport,
+            Some(TransportCause::Dropped),
+            "{refused:?}"
+        );
+        assert!(server.held(), "the acquire landed");
+        assert_eq!(
+            server.releases(),
+            0,
+            "the unwind could not tell, so sent nothing"
+        );
+        assert!(!state.edit_enabled(), "still read-only");
+        assert!(
+            state.speleodb_holds_claim(ID),
+            "the lock this call took has a local pointer"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(ID),
+            "a pointer, not an edit session"
+        );
+
+        server.answer_again();
+        let closed = state.speleodb_release_held_lock_on_close();
+        assert!(closed.is_ok(), "{closed:?}");
+        assert!(!server.held(), "the close handed the lock back");
+        assert_eq!(server.releases(), 1);
+        assert!(!state.speleodb_holds_claim(ID), "and ended the claim");
+    });
+}
+
+/// A loopback SpeleoDB whose history read answers with `tip` on top of [`BASE`]
+/// (or `tip` alone when it is BASE) and that cuts every download short: a 200
+/// promising 4 MB, a few bytes, then a close.
+fn server_with_tip_and_cut_downloads(tip: &'static str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let line = read_request(&mut stream, false);
+            if line.contains("/revisions/") {
+                let commits = if tip == BASE {
+                    format!(r#"[{{"id":"{BASE}","parent_ids":[]}}]"#)
+                } else {
+                    format!(
+                        r#"[{{"id":"{tip}","parent_ids":["{BASE}"]}},{{"id":"{BASE}","parent_ids":[]}}]"#
+                    )
+                };
+                let history =
+                    super::tests_support::sdk_fixture(&format!(r#"{{"commits":{commits}}}"#));
+                answer(&mut stream, 200, &history);
+            } else if line.contains("/download/") {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                     Content-Length: 4000000\r\nConnection: close\r\n\r\nPK\x03\x04partial"
+                );
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            } else if line.contains("/user/") {
+                let me = super::tests_support::sdk_fixture(&format!(r#"{{"email":"{ME}"}}"#));
+                answer(&mut stream, 200, &me);
+            } else {
+                answer(&mut stream, 404, r#"{"detail":"Not found."}"#);
+            }
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+#[test]
+fn an_open_whose_download_alone_was_lost_says_what_the_history_told_it() {
+    // F1-transport-5. The history read answered, so SpeleoDB was reached and
+    // the app knows its latest revision; only the download was cut. The open
+    // still falls back to the copy, but says whether SpeleoDB has a newer
+    // revision than the copy, instead of calling SpeleoDB unreachable. When
+    // every read lost its reply the answer stays unknown (the tests above).
+    // Injection: `offline_open_result` given no tip fails both cases.
+    const NEWER: &str = "def5678";
+    for (tip, newer) in [(NEWER, true), (BASE, false)] {
+        crate::test_helpers::with_isolated_config(|| {
+            let url = server_with_tip_and_cut_downloads(tip);
+            let temp = tempfile::tempdir().expect("temp");
+            let copy = seed(temp.path(), &url, false);
+            let state = AppState::new().expect("state");
+            sign_in(&state, &url);
+            state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
+            let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+            assert_eq!(opened.offline, Some(true), "{tip}");
+            assert_eq!(opened.newer_on_server, Some(newer), "{tip}");
+            let link = link_on_disk(&copy).expect("linked");
+            assert_eq!(
+                link.base_commit_sha.as_deref(),
+                Some(BASE),
+                "{tip}: the copy is untouched"
+            );
+        });
+    }
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, _) = server(Lost::Closed, project_reads);
+        let temp = tempfile::tempdir().expect("temp");
+        let copy = seed(temp.path(), &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url);
+        let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+        assert_eq!(opened.newer_on_server, None, "nothing answered");
+    });
+}

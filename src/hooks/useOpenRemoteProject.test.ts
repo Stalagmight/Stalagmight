@@ -279,8 +279,39 @@ describe('useOpenRemoteProject (#218)', () => {
   it('offline fallback opens the cached path only after the remote open command', async () => {
     const outcome = await openOfflineCopy();
     expect(outcome).toEqual({ status: 'opened' });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', {
+      accessConfirmed: true, request: expect.any(Number), acquireLock: false,
+    });
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_open_project', expect.objectContaining({ projectId: SUMMARY.id }));
+  });
+
+  // F1-transport-1: SpeleoDB just lost the open's replies, and an automatic
+  // acquire sent into that can land while every read around it is lost - the
+  // lock then held with nothing pointing at it. The offline copy opens read-only;
+  // Start editing is the user's. Injection: `acquireLock: false` only on
+  // `read_only` again fails it.
+  it('an offline open never takes the lock by itself, clean copy or not', async () => {
+    for (const has_unpushed_edits of [false, true]) {
+      loadProjectMock.mockClear();
+      invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', offline: true, has_unpushed_edits });
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', expect.objectContaining({ acquireLock: false }));
+    }
+  });
+
+  // F1-transport-5: the history read answered and only the download was lost, so
+  // SpeleoDB was reached. Say whether it has a newer revision, not "unreachable".
+  it.each([
+    [undefined, 'SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date.'],
+    [true, 'SpeleoDB has a newer revision of this project, but its download did not finish. Opened the copy on this computer, which is older.'],
+    [false, "The download from SpeleoDB did not finish. Opened the copy on this computer, which is based on SpeleoDB's latest revision."],
+  ])('an offline open with newer_on_server %s says so', async (newer_on_server, message) => {
+    invokeIpcMock.mockResolvedValue({
+      local_path: '/cache/p1.stalx', offline: true, has_unpushed_edits: false,
+      ...(newer_on_server === undefined ? {} : { newer_on_server }),
+    });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(message, 'speleodb-offline-open', 'warning');
   });
 
   // Offline opening must preserve edits that never reached the server.
@@ -306,7 +337,9 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await openOfflineCopy();
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', {
+      accessConfirmed: true, request: expect.any(Number), acquireLock: false,
+    });
   });
 
   it('does not touch the live link when the already-open offline fallback load fails', async () => {

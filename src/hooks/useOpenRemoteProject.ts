@@ -106,6 +106,18 @@ function readOnlyOpenToast(t: TFunction, result: SpeleoOpenResult): { message: s
   return { message: t('speleodb.cachedCopies.openedSignedOut'), key, kind: 'info' };
 }
 
+/**
+ * The toast for a copy that opened offline. When SpeleoDB answered the history
+ * read and only the download was lost, it was reached: say whether it has a
+ * newer revision than the copy instead of calling it unreachable
+ * (`newer_on_server`, F1-transport-5).
+ */
+function offlineOpenMessage(t: TFunction, result: SpeleoOpenResult): string {
+  if (result.newer_on_server === true) return t('speleodb.projectListing.offlineCopyBehind');
+  if (result.newer_on_server === false) return t('speleodb.projectListing.offlineCopyCurrent');
+  return t('speleodb.projectListing.offlineCopy');
+}
+
 /** Pull a native project, seed its access state, load it, and roll back a failed load. */
 export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const { t } = useTranslation();
@@ -134,9 +146,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         successToast?: { message: string; key: string; kind: ToastKind };
         /** Preserve the cached dirty bit when opening offline. */
         hasUnpushedEdits?: boolean;
+        /**
+         * `false`: load without the automatic Start Editing. Set for an open the
+         * backend fell back to the cached copy for (F1-transport-1, see below).
+         */
+        takeLock?: boolean;
       } = {},
     ): Promise<OpenRemoteOutcome> => {
-      const { successToast, hasUnpushedEdits } = opts;
+      const { successToast, hasUnpushedEdits, takeLock } = opts;
       if (!ownership.current()) return { status: 'cancelled' };
       // #270: what to put back if the load fails. Captured BEFORE the seed, so the
       // rollback below is a true undo rather than a clear-and-hope. `priorPath` is
@@ -173,10 +190,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       onBeforeLoad?.();
       // Without a session (signed out, or the token was just rejected) there is no
       // lock to take: the copy stays read-only and nothing is sent to SpeleoDB.
+      // Nor after the backend fell back to the cached copy (`takeLock: false`):
+      // SpeleoDB just lost the open's replies, and an automatic acquire sent into
+      // that can land while every read around it is lost (F1-transport-1). The
+      // copy opens read-only; Start editing takes the lock when the user asks,
+      // once SpeleoDB answers again.
       const loaded = await loadProject(result.local_path, {
         accessConfirmed: true,
         request: ownership.request,
-        ...(result.read_only ? { acquireLock: false } : {}),
+        ...(result.read_only || takeLock === false ? { acquireLock: false } : {}),
       });
       if (!ownership.current()) return { status: 'load_failed', localPath: result.local_path };
       if (!loaded.success) {
@@ -351,8 +373,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission, summary.id, ownership, {
         hasUnpushedEdits: result.has_unpushed_edits === true,
-        ...(result.offline ? { successToast: {
-          message: t('speleodb.projectListing.offlineCopy'),
+        ...(result.offline ? { takeLock: false, successToast: {
+          message: offlineOpenMessage(t, result),
           key: 'speleodb-offline-open',
           kind: 'warning' as const,
         } } : {}),
