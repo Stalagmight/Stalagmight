@@ -97,6 +97,14 @@ sign-out uploads) first checks that SpeleoDB's latest revision is still the copy
 base, or moved only by this session's own upload whose answer was lost; any other
 revision there - including one from another session of the same account, which
 holds the same per-account lock - uploads nothing and raises the divergence prompt.
+Its "Take the SpeleoDB version" replaces the copy with SpeleoDB's latest revision
+and releases nothing (the lock is the account's, and the other session may be
+editing under it): an editing session goes on editing that revision, a read-only
+one stays read-only. The held-lock prompt at sign-in says that a lock this account
+holds may be Stalagmight open on another computer with this account, keeps Not now
+as its default and offers "Release anyway"; a lock this computer cannot have taken
+(no claim of this run, no copy, no recent file linked) is labelled "Held by this
+account, not by this computer", and signing out leaves such a lock alone.
 An upload that landed on top of a revision pushed between that check and the upload
 names it on a banner of its own that stays until dismissed (it stays in the
 Revision History), and every close that ran the upload (the exit and sign-out

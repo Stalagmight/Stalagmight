@@ -184,6 +184,17 @@ regions). Read the comment blocks in those two files plus
   you save", not "Saved", banner or not (N-6). The history-discarded banner
   (`history-discarded-banner`) is unchanged: it also covers an old file's
   history, which the conversion drops.
+- **A choice that may free someone else's lock is worded, and never the default.**
+  SpeleoDB's lock belongs to the account, so a lock the held-lock prompt
+  (`HeldLockResumeDialog`) lists may be the one the same account is editing under on
+  another computer right now; the app cannot tell that from a lock a crashed session
+  left. The prompt says both are possible and what releasing does (others can then
+  change the project under the session still editing), offers the release as
+  "Release anyway" rather than hiding it (a crashed session's lock must stay
+  releasable), and focuses Not now, so Enter keeps every lock. A row it can prove is
+  not this computer's says "Held by this account, not by this computer". The same
+  goes for any confirmation whose action reaches past this computer: say what
+  happens to the lock (Take the SpeleoDB version: "You keep the write lock").
 - **An upload that replaced someone's revision is a banner, and stops an exit.**
   When a SpeleoDB upload lands on top of a revision another session uploaded
   between the push's check and the upload (R3), the upload succeeded but that
