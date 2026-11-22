@@ -17,7 +17,9 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { humanizeSpeleoError, unpushedLocalEdits } from './speleoError';
+import {
+  describeSpeleoError, describeTransportCause, humanizeSpeleoError, lockMayBeHeld, unpushedLocalEdits,
+} from './speleoError';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoErrorDto } from '../types/ipc.generated';
 
@@ -198,6 +200,36 @@ describe('humanizeSpeleoError - an endpoint the policy refused', () => {
  * generic error path rather than raise a prompt with blanks in it. These pin the
  * malformed-payload guards, which the reader would otherwise be free to "simplify".
  */
+// Demo item 4: the surfaces that frame a failure themselves (a dialog with its own
+// title, an error line under a prompt) show a transport failure by its cause too,
+// and anything else exactly as it came, never the raw "Network error ..." text.
+describe('describeSpeleoError - a surface with its own frame', () => {
+  it('words a transport failure by its cause, naming the server', () => {
+    expect(describeSpeleoError(dto({ transport: 'Dropped' }))).toBe(
+      'The connection to SpeleoDB at https://cave.example.internal:8443/ was lost before it finished answering. '
+        + 'Check your network connection and try again.',
+    );
+  });
+  it('shows any other error as it came, with no prefix and no trimming, else the fallback', () => {
+    expect(describeSpeleoError(dto({ transport: null, message: 'Synthetic refusal.' }))).toBe('Synthetic refusal.');
+    expect(describeSpeleoError(new Error('Synthetic local failure.'))).toBe('Synthetic local failure.');
+    expect(describeSpeleoError({}, 'Synthetic fallback.')).toBe('Synthetic fallback.');
+  });
+  it('words a cause a CommandResult carries the same way', () => {
+    expect(describeTransportCause('Refused')).toBe(describeSpeleoError(dto({ transport: 'Refused' })));
+  });
+});
+
+// Demo item 3: read structurally, only when the backend says so.
+describe('lockMayBeHeld', () => {
+  it('is true only for a refusal that says the lock may be held', () => {
+    expect(lockMayBeHeld(dto({ lock_may_be_held: true }))).toBe(true);
+    expect(lockMayBeHeld(dto({ transport: 'Dropped' }))).toBe(false);
+    expect(lockMayBeHeld(new Error('lock_may_be_held'))).toBe(false);
+    expect(lockMayBeHeld(null)).toBe(false);
+  });
+});
+
 describe('unpushedLocalEdits payload guards (#270)', () => {
   const refusal = (unpushed_local: unknown) =>
     ({

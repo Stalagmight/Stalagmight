@@ -400,6 +400,26 @@ describe('SpeleoSignOutDialog', () => {
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects', undefined, expect.anything());
   });
 
+  // Demo item 4: a re-check that got no reply says why in the words every
+  // read-only notice uses for that cause, naming the server, never the raw
+  // diagnostic the backend keeps for the log.
+  it('a re-check that got no reply is worded by its cause, not the raw diagnostic', async () => {
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'speleodb_list_projects') {
+        throw { message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+          transport: 'Refused' };
+      }
+      return null;
+    });
+    void show(null);
+    await userEvent.click(screen.getByTestId('speleodb-signout-retry'));
+    expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent(
+      'Could not connect to SpeleoDB at https://sdb.example. Check your network connection, the server address, '
+        + 'and whether the server is running.',
+    );
+    expect(screen.getByTestId('speleodb-signout-error')).not.toHaveTextContent(/network error/i);
+  });
+
   it('Cancel aborts the sign-out and releases nothing', async () => {
     const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [] }, 'switch');
     expect(screen.getByTestId('speleodb-signout-go')).toHaveTextContent('Switch account');

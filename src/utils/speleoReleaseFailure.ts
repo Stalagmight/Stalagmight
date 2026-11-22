@@ -31,7 +31,8 @@
 import { create } from 'zustand';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { CommandResult } from '../types/commands';
-import { getErrorMessage, invokeIpc } from './ipc';
+import { invokeIpc } from './ipc';
+import { describeSpeleoError, describeTransportCause } from './speleoError';
 
 /** What the user is leaving the project for. Picks the wording only. */
 export type ReleaseFailureReason = 'close' | 'switch' | 'quit';
@@ -97,6 +98,20 @@ export function releaseFailed(result: CommandResult | null | undefined): boolean
   return result?.lock_release === 'failed';
 }
 
+/**
+ * What the dialog says went wrong with a failed release. A transport failure is
+ * worded by its cause (`lock_release_transport`), as every read-only notice
+ * words the same failure, naming the server and what to do; the backend's
+ * `error` is shown only for any other failure (a 5xx, a release SpeleoDB
+ * answered without letting go), and its raw diagnostic stays in the log (demo
+ * item 4).
+ */
+export function releaseFailureDetail(result: CommandResult): string {
+  return result.lock_release_transport
+    ? describeTransportCause(result.lock_release_transport)
+    : result.error ?? '';
+}
+
 /** The error the callers of a close already treat as "the user backed out". */
 export const RELEASE_CANCELLED = 'Cancelled';
 
@@ -118,14 +133,14 @@ export async function resolveReleaseFailure(
   attempt: (releaseLock: boolean) => Promise<CommandResult>,
 ): Promise<CommandResult> {
   let settled: CommandResult = failed;
-  const answer = await askReleaseFailure(reason, failed.error ?? '', async () => {
+  const answer = await askReleaseFailure(reason, releaseFailureDetail(failed), async () => {
     let next: CommandResult;
     try {
       next = await attempt(true);
     } catch (error) {
-      return { ok: false, detail: getErrorMessage(error) };
+      return { ok: false, detail: describeSpeleoError(error) };
     }
-    if (releaseFailed(next)) return { ok: false, detail: next.error ?? '' };
+    if (releaseFailed(next)) return { ok: false, detail: releaseFailureDetail(next) };
     settled = next;
     return { ok: true };
   });
@@ -134,7 +149,7 @@ export async function resolveReleaseFailure(
   try {
     return await attempt(false);
   } catch (error) {
-    return failure(getErrorMessage(error));
+    return failure(describeSpeleoError(error));
   }
 }
 
@@ -178,7 +193,7 @@ export async function settleOpenLockBeforeLeaving(
     result = (await settle(true)) ?? { ...failure(''), lock_release: 'failed' };
   } catch (error) {
     // The reply never arrived: whether the lock went back is unknown.
-    result = { ...failure(getErrorMessage(error)), lock_release: 'failed' };
+    result = { ...failure(describeSpeleoError(error)), lock_release: 'failed' };
   }
   if (result.lock_release) pauseOpenEditing();
   if (!releaseFailed(result)) return result.success === true;
