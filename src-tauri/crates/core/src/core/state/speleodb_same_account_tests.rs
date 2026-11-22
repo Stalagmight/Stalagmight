@@ -71,6 +71,9 @@ struct Remote {
     minted: u32,
     /// Answer a release with this status instead of releasing.
     release_status: Option<u16>,
+    /// The `.stalx` each accepted upload carried, by the revision it made: what
+    /// a download of that revision serves (Take the SpeleoDB version).
+    files: std::collections::HashMap<String, String>,
 }
 
 impl Remote {
@@ -80,7 +83,9 @@ impl Remote {
 
     fn land(&mut self, message: &str) -> String {
         self.minted += 1;
-        let id = format!("rev{:04}", self.minted);
+        // Hex, as SpeleoDB's are: a download names its revision, and the client
+        // refuses an id that is not one.
+        let id = format!("fed{:04}", self.minted);
         let parent = self.tip();
         self.history.push(Rev {
             id: id.clone(),
@@ -121,6 +126,17 @@ fn upload_message(request: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The `.stalx` an upload carries: its file part, from the first member to the
+/// end marker.
+fn upload_file(request: &str) -> String {
+    let start = request.find("{\"format\":\"stalx\"").unwrap_or(0);
+    let marker = "\"end\":true}\n";
+    let end = request
+        .find(marker)
+        .map_or(request.len(), |at| at + marker.len());
+    request.get(start..end).unwrap_or_default().to_owned()
+}
+
 /// A loopback SpeleoDB whose history starts at [`BASE`] and whose lock the
 /// account [`ME`] holds.
 fn server() -> (String, Shared) {
@@ -151,6 +167,7 @@ fn server() -> (String, Shared) {
             let project = super::tests_support::sdk_fixture(&format!(
                 r#"{{"id":"{ID}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{mutex}}}"#
             ));
+            let mut kind = "application/json";
             let (status, body) = if line.contains("/user/") {
                 (
                     200,
@@ -161,6 +178,20 @@ fn server() -> (String, Shared) {
                     200,
                     super::tests_support::sdk_fixture(&remote.commits_json()),
                 )
+            } else if line.contains("/download/") {
+                // The revision the download names, as its upload carried it.
+                let named = remote
+                    .files
+                    .iter()
+                    .find(|(id, _)| line.contains(id.as_str()))
+                    .map(|(_, file)| file.clone());
+                match named {
+                    Some(file) => {
+                        kind = "application/octet-stream";
+                        (200, file)
+                    }
+                    None => (404, r#"{"detail":"No such revision."}"#.to_owned()),
+                }
             } else if line.contains("/upload/") {
                 remote.uploads.push(request.clone());
                 let next = std::mem::take(&mut remote.next);
@@ -179,6 +210,7 @@ fn server() -> (String, Shared) {
                     continue;
                 }
                 let landed = remote.land(&upload_message(&request));
+                remote.files.insert(landed.clone(), upload_file(&request));
                 if next == Next::LandSilently {
                     continue;
                 }
@@ -207,7 +239,7 @@ fn server() -> (String, Shared) {
             };
             drop(remote);
             let reply = format!(
-                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                "HTTP/1.1 {status} Test\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\
                  Connection: close\r\n\r\n{body}",
                 body.len()
             );
@@ -756,7 +788,112 @@ fn a_retry_answered_304_over_our_own_late_upload_leaves_it_adoptable() {
     assert_eq!(top.message, "From B, next edit");
     assert_eq!(
         top.parent.as_deref(),
-        Some("rev0001"),
+        Some("fed0001"),
         "on top of our own U1"
     );
+}
+
+/// B, refused because A's revision is SpeleoDB's latest, takes the SpeleoDB
+/// version: what the server's lock and both sessions are left with.
+fn b_takes_the_speleodb_version_over_a(
+    a: &Session,
+    b: &Session,
+    remote: &Shared,
+    b_edits_first: bool,
+) -> Option<String> {
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    let a_head = remote.lock().expect("remote").tip();
+    if b_edits_first {
+        let refused = b.run(push("From B"));
+        assert!(
+            matches!(refused, PushResult::DivergenceNeeded),
+            "{refused:?}"
+        );
+    }
+    let took = b.run(|state| state.speleodb_take_remote().map_err(|e| e.message));
+    assert_eq!(
+        took.as_deref().map(Path::new),
+        Ok(b.path.as_path()),
+        "B reloads its copy"
+    );
+    let on_disk = b.link_on_disk();
+    assert_eq!(on_disk.base_commit_sha, a_head, "B now holds A's revision");
+    assert!(!on_disk.has_unpushed_edits, "B's own edit is discarded");
+    a_head
+}
+
+#[test]
+fn taking_the_speleodb_version_keeps_the_lock_another_session_edits_under() {
+    // Demo item 2 (R3, screenshot 19): the account's two sessions both edit
+    // under its one lock. B is refused (A's revision is SpeleoDB's latest) and
+    // takes the SpeleoDB version. That used to hand the lock back: the server
+    // showed no lock while A still said "You are editing", so anyone else could
+    // lock the project and change it under A. Taking SpeleoDB's version needs
+    // no release: B keeps the lock and goes on editing A's revision, and A's
+    // session keeps the lock it edits under.
+    // Injection: put the release back into `speleodb_take_remote` (before the
+    // reload) and one release reaches the server, the lock is free, and B comes
+    // back read-only.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+
+    b_takes_the_speleodb_version_over_a(&a, &b, &remote, true);
+
+    {
+        let remote = remote.lock().expect("remote");
+        assert!(
+            !remote.lines.iter().any(|l| l.contains("/release/")),
+            "nothing was handed back: {:?}",
+            remote.lines
+        );
+        assert_eq!(
+            remote.holder.as_deref(),
+            Some(ME),
+            "the account still holds the lock"
+        );
+    }
+    let (editing, claimed, can_undo) = b.run(|state| {
+        (
+            state.edit_enabled(),
+            state.speleodb_holds_claim(ID),
+            state.can_undo(),
+        )
+    });
+    assert!(editing && claimed, "B goes on editing under its lock");
+    assert!(!can_undo, "the reload starts a fresh history");
+    let (a_editing, a_claimed) =
+        a.run(|state| (state.edit_enabled(), state.speleodb_holds_claim(ID)));
+    assert!(a_editing && a_claimed, "A is untouched");
+}
+
+#[test]
+fn taking_the_speleodb_version_read_only_leaves_the_lock_as_it_was() {
+    // The same choice from a read-only session that still points at the lock
+    // (its gate shut, its claim unbound: a lost-lock signal, a failed Switch to
+    // Read Only). Nothing about the lock changes: no release, the claim stays,
+    // and the reload stays read-only (an unbound claim opens nothing).
+    // Injection: the release put back sends one release and drops the claim.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    b.run(AppState::speleodb_shut_edit_gate);
+
+    b_takes_the_speleodb_version_over_a(&a, &b, &remote, false);
+
+    {
+        let remote = remote.lock().expect("remote");
+        assert!(
+            !remote.lines.iter().any(|l| l.contains("/release/")),
+            "nothing was handed back: {:?}",
+            remote.lines
+        );
+        assert_eq!(remote.holder.as_deref(), Some(ME));
+    }
+    let (editing, claimed) = b.run(|state| (state.edit_enabled(), state.speleodb_holds_claim(ID)));
+    assert!(!editing, "B stays read-only");
+    assert!(claimed, "B still points at the lock");
 }

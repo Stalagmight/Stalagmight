@@ -980,11 +980,15 @@ it('manual refresh waits for fresh lock and permission status even when the revi
   expect(useSpeleoStore.getState().busy).toBe(false);
 });
 
-describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => {
-  it('reopens the server version without taking the lock back', async () => {
+// The backend hands no lock back on Take remote (demo item 2): an edit session
+// carries over the reload, a read-only one stays read-only. The frontend reopens
+// without acquiring (data#3) and takes the edit state from the re-read status.
+describe('useSpeleoActions - Take remote reloads without taking the lock (data#3)', () => {
+  it('reopens the server version without acquiring, then re-reads the edit state', async () => {
     const loadProject = vi.fn(async () => ({ success: true }));
+    const refreshLinkStatus = vi.fn(async () => {});
     useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}) });
-    useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus: vi.fn(async () => {}) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus });
     invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
     const { result } = renderHook(() => useSpeleoActions());
 
@@ -995,6 +999,7 @@ describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => 
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
     expect(loadProject).toHaveBeenCalledWith('/remote.stalx', { acquireLock: false });
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
+    expect(refreshLinkStatus).toHaveBeenCalled();
   });
 });
 

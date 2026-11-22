@@ -3700,6 +3700,8 @@
         "confirm": {
           "title": "Discard your local changes?",
           "warning": "This permanently destroys your unpushed local edits since the last sync. They are not saved anywhere else and this cannot be undone.",
+          "lockKept": "You keep the write lock and go on editing the SpeleoDB version.",
+          "lockUnchanged": "The write lock is left as it is, and the project stays read-only.",
           "hint": "To keep your work instead, go Back and choose \"Save my version as an unmanaged file\".",
           "back": "Back",
           "destroy": "Destroy and continue",

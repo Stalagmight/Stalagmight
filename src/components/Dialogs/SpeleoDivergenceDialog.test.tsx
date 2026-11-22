@@ -4,6 +4,9 @@
  * revision is SpeleoDB's latest - another account's, or, since R3, another session
  * of this one. Its help used to promise an upload that resolves the conflict; it
  * now says it comes back here and points at the way out that keeps the edits.
+ *
+ * Demo item 2: Take the SpeleoDB version keeps the lock, and its confirmation says
+ * what happens to it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -41,6 +44,30 @@ describe('SpeleoDivergenceDialog', () => {
     expect(keep).toHaveTextContent('this comes back here');
     expect(keep).toHaveTextContent('save them as an unmanaged file');
     expect(keep).not.toHaveTextContent('to resolve the conflict');
+  });
+
+  // Demo item 2: taking the SpeleoDB version used to hand the account's lock back,
+  // leaving another session of the account editing with no lock on the server.
+  // It now releases nothing, and the confirmation says what happens to the lock.
+  // Injection: drop the lock line from the confirmation and both cases fail.
+  it('says an editing session keeps the lock and goes on editing the SpeleoDB version', async () => {
+    render(<SpeleoDivergenceDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-divergence-take-remote'));
+    const lock = screen.getByTestId('speleodb-take-remote-lock');
+    expect(lock).toHaveTextContent('You keep the write lock');
+    expect(lock).toHaveTextContent('go on editing');
+    expect(lock).not.toHaveTextContent('read-only');
+  });
+
+  it('says a read-only session stays read-only with the lock left as it is', async () => {
+    useSpeleoStore.setState({
+      link: { ...useSpeleoStore.getState().link!, editState: 'read-only' },
+    });
+    render(<SpeleoDivergenceDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-divergence-take-remote'));
+    const lock = screen.getByTestId('speleodb-take-remote-lock');
+    expect(lock).toHaveTextContent('write lock is left as it is');
+    expect(lock).toHaveTextContent('read-only');
   });
 
   it('still routes an editing session to the upload dialog', async () => {
