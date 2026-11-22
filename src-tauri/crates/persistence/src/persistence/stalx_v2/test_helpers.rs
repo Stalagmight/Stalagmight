@@ -505,6 +505,7 @@ fn extras_for(p: &Project, rng: &mut Rng, rich: bool) -> Extras {
                 .as_ref()
                 .map(|base| format!("sha256:{:0>64}", &base[..8])),
             base_commit,
+            base_survey_edit: None,
             unpushed_edits: rng.chance(0.5),
             last_edit_at: rng.chance(0.5).then(|| instant(rng)),
             last_verify_at: rng.chance(0.5).then(|| instant(rng)),
@@ -512,6 +513,9 @@ fn extras_for(p: &Project, rng: &mut Rng, rich: bool) -> Extras {
             inherited_through: rng.chance(0.3).then(|| instant(rng)),
             preserved: Vec::new(),
         };
+        // No draw either: the digest's vouched edit time, where there is both.
+        let sync = &mut extras.local.speleodb;
+        sync.base_survey_edit = sync.base_survey.as_ref().and(sync.last_edit_at);
     }
     if rng.chance(0.7) {
         let mut display = BTreeMap::new();

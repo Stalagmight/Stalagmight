@@ -53,6 +53,9 @@ struct Repo {
     files: HashMap<String, Vec<u8>>,
     lines: Vec<String>,
     uploads: usize,
+    /// Answer uploads with 304 (the server already holds what went up), landing
+    /// nothing.
+    upload_304: bool,
 }
 
 impl Repo {
@@ -118,6 +121,12 @@ fn server(repo: Arc<Mutex<Repo>>, during_upload: Option<DuringUpload>) -> String
                     "application/octet-stream",
                     named.or(tip).unwrap_or_default(),
                 )
+            } else if line.contains("/upload/") && repo.lock().expect("repo").upload_304 {
+                if let Some(during) = &during_upload {
+                    during();
+                }
+                repo.lock().expect("repo").uploads += 1;
+                (304, "application/json", Vec::new())
             } else if line.contains("/upload/") {
                 if let Some(during) = &during_upload {
                     during();
@@ -688,4 +697,297 @@ fn the_digest_goes_with_its_base() {
         file.extras.local.speleodb.base_survey, None,
         "an unlink drops it"
     );
+}
+
+/// The BASE survey digest as the file at `path` holds it.
+fn digest_on_disk(path: &Path) -> Option<String> {
+    stalx_v2::probe_path(path)
+        .expect("probe")
+        .local
+        .and_then(|local| local.speleodb.base_survey)
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "the restore's own error type, returned as the restore returns it"
+)]
+fn restore(
+    state: &AppState,
+    hexsha: &str,
+) -> Result<crate::speleodb::SpeleoOpenResult, crate::speleodb::SpeleoErrorDto> {
+    state.speleodb_restore_revision(
+        ID.to_owned(),
+        NAME.to_owned(),
+        hexsha.to_owned(),
+        true,
+        false,
+        false,
+        false,
+        false,
+    )
+}
+
+/// F2-digest-1. A Restore of an older revision installs that revision's bytes
+/// on top of the server tip, marked un-uploaded: it holds another revision than
+/// its BASE, so it records no digest. With one, the first save would clear the
+/// Restore's mark (its survey is the recorded "BASE" survey), Done would hand
+/// the lock back without uploading, and the Restore would never reach SpeleoDB.
+/// The mark survives a save, a crash and the reopen, and Done uploads it.
+///
+/// Injection: `PreparedDownload::cache_bytes` recording the digest whatever
+/// revision it holds (or the swap naming the tip as the revision it fetched)
+/// records digest(R, tip) and the save clears the mark.
+#[test]
+fn a_restore_of_an_older_revision_records_no_digest_and_stays_un_uploaded() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        repo.lock()
+            .expect("repo")
+            .push(NEWER, revision(&endpoint, Some(3.0)));
+        let state = open_for_editing(&endpoint, &dest);
+        assert_eq!(open_link(&state).base_commit_sha.as_deref(), Some(NEWER));
+
+        restore(&state, BASE).expect("restore BASE over the tip");
+        let link = open_link(&state);
+        assert_eq!(
+            link.base_commit_sha.as_deref(),
+            Some(NEWER),
+            "it rides on the tip"
+        );
+        assert!(link.has_unpushed_edits, "and is un-uploaded");
+        assert_eq!(survey_at(&dest), downloaded_survey(BASE, &repo));
+        assert_eq!(digest_on_disk(&dest), None, "a Restore records no digest");
+
+        let saved = save(&state);
+        assert_eq!(
+            saved.speleodb_unpushed_cleared, None,
+            "the save clears nothing"
+        );
+        assert!(open_link(&state).has_unpushed_edits);
+        drop(state);
+
+        let state = signed_in(&endpoint);
+        assert!(listed_unpushed(&state), "after a crash it is still listed");
+        assert!(state.open_project(dest.clone()).success);
+        assert!(open_link(&state).has_unpushed_edits, "and reopens marked");
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(ID));
+        let pushed = state
+            .speleodb_push_only(Some("Restore".to_owned()))
+            .expect("push");
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+        assert_eq!(repo.lock().expect("repo").uploads, 1, "the Restore went up");
+    });
+}
+
+/// F2-digest-1, the other half: a Restore of the tip itself is the tip's bytes
+/// under the tip, clean, so it records the tip's digest like any install.
+#[test]
+fn a_restore_of_the_tip_records_its_digest() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, _repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        restore(&state, BASE).expect("restore the tip");
+        let link = open_link(&state);
+        assert_eq!(link.base_commit_sha.as_deref(), Some(BASE));
+        assert!(!link.has_unpushed_edits, "nothing to upload");
+        assert!(
+            digest_on_disk(&dest).is_some(),
+            "the tip's digest is recorded"
+        );
+        // A crash after an edit then leaves nothing un-uploaded, as after a pull.
+        set_elevation(&state, Some(12.5));
+        drop(state);
+        let state = signed_in(&endpoint);
+        assert!(!listed_unpushed(&state));
+    });
+}
+
+/// F2-digest-3. A 304 says SpeleoDB already holds what went up, at BASE: the
+/// landing records that digest (so a lost edit afterwards leaves nothing to
+/// upload), and an edit made while the upload was in flight (here: the edit
+/// taken back to BASE's survey and saved) keeps the mark.
+///
+/// Injection: the 304 arm passing no bytes to `speleodb_record_landing` fails
+/// the first half. The late-edit branch's mark is defence in depth (the digest
+/// goes when the upload starts, so the save during it has nothing to clear the
+/// mark with): keeping the digest at the upload AND the 304 arm leaving the mark
+/// as that save left it fails the second half; either alone does not.
+#[test]
+fn a_304_landing_records_the_digest_and_keeps_a_late_edit_marked() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        set_elevation(&state, Some(12.5));
+        repo.lock().expect("repo").upload_304 = true;
+        let pushed = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("push");
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+        let link = link_on_disk(&dest).expect("linked");
+        assert_eq!(
+            link.base_commit_sha.as_deref(),
+            Some(BASE),
+            "a 304 lands nothing new"
+        );
+        assert!(!link.has_unpushed_edits);
+        assert!(
+            digest_on_disk(&dest).is_some(),
+            "the 304 arm records what went up"
+        );
+        set_elevation(&state, Some(20.0));
+        drop(state);
+        let state = signed_in(&endpoint);
+        assert!(
+            !listed_unpushed(&state),
+            "the lost edit leaves nothing to upload"
+        );
+        assert!(state.open_project(dest.clone()).success);
+        assert!(!open_link(&state).has_unpushed_edits);
+    });
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let shared: Arc<Mutex<Option<Arc<AppState>>>> = Arc::new(Mutex::new(None));
+        let during = Arc::clone(&shared);
+        let (endpoint, repo, dest) = setup(
+            temp.path(),
+            Some(Box::new(move || {
+                if let Some(state) = during.lock().expect("state slot").clone() {
+                    assert!(state.set_surface_elevation(None).success);
+                    assert!(state.execute(Command::SaveProject { path: None }).success);
+                }
+            })),
+        );
+        let state = Arc::new(open_for_editing(&endpoint, &dest));
+        set_elevation(&state, Some(12.5));
+        repo.lock().expect("repo").upload_304 = true;
+        *shared.lock().expect("state slot") = Some(Arc::clone(&state));
+        let pushed = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("push");
+        *shared.lock().expect("state slot") = None;
+        assert!(
+            matches!(pushed, PushResult::PushUnconfirmed { .. }),
+            "{pushed:?}"
+        );
+        assert!(
+            open_link(&state).has_unpushed_edits,
+            "the late edit is not up"
+        );
+        assert!(link_on_disk(&dest).expect("linked").has_unpushed_edits);
+        drop(state);
+        let state = signed_in(&endpoint);
+        assert!(
+            listed_unpushed(&state),
+            "and stays marked for the next open"
+        );
+    });
+}
+
+/// F2-digest-2. A writer that does not know the digest keeps it as it is,
+/// through its own upload. When that upload's answer is lost, SpeleoDB may hold
+/// the edit past BASE; taking the edit back then leaves the copy holding BASE's
+/// survey, marked, with BASE's digest still on it. That digest must not clear
+/// the mark: the edit time it was vouched for is not the copy's any more, so
+/// the copy stays un-uploaded and the open asks before replacing it.
+///
+/// Injection: `digest_vouched` ignoring `base_survey_edit` (trusting any
+/// recorded digest) clears the mark: the listing says nothing is un-uploaded
+/// and the open replaces the copy with SpeleoDB's revision, the edit back on it.
+#[test]
+fn a_digest_another_writer_carried_past_its_edit_is_not_trusted() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        drop(open_for_editing(&endpoint, &dest));
+        let digest = digest_on_disk(&dest).expect("installed with BASE's digest");
+        // What a writer that keeps unknown `local.speleodb` keys leaves: it
+        // edited (moving `last_edit`), uploaded with the answer lost, took the
+        // edit back and saved; the survey is BASE's and the digest is kept.
+        let bytes = std::fs::read(&dest).expect("read");
+        let mut extras = decoded(&dest).extras;
+        extras.local.speleodb.unpushed_edits = true;
+        extras.local.speleodb.last_edit_at = Some(chrono::Utc::now());
+        assert_eq!(
+            extras.local.speleodb.base_survey.as_deref(),
+            Some(digest.as_str())
+        );
+        std::fs::write(
+            &dest,
+            stalx_v2::rewrite_local(&bytes, &extras).expect("rewrite"),
+        )
+        .expect("write");
+        // Its upload did land, as revision NEWER.
+        repo.lock()
+            .expect("repo")
+            .push(NEWER, revision(&endpoint, Some(12.5)));
+
+        let state = signed_in(&endpoint);
+        assert!(listed_unpushed(&state), "the copy is still un-uploaded");
+        let refused = pull(&state, &dest).expect_err("the open asks first");
+        assert_eq!(refused.action, SpeleoDbAction::UnpushedLocalEdits);
+        assert_eq!(
+            survey_at(&dest),
+            downloaded_survey(BASE, &repo),
+            "untouched"
+        );
+        assert!(state.open_project(dest.clone()).success);
+        assert!(open_link(&state).has_unpushed_edits, "and opens marked");
+    });
+}
+
+/// F2-digest-2, the chain itself: this build vouches for every edit it records
+/// while the digest still speaks for the copy, so its own crash-lost edit
+/// settles as before; an edit recorded after one it did not vouch for drops the
+/// digest for good.
+#[test]
+fn the_digest_counts_only_while_this_build_recorded_every_edit_since() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, _repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        set_elevation(&state, Some(12.5));
+        set_elevation(&state, None);
+        let saved = save(&state);
+        assert_eq!(
+            saved.speleodb_unpushed_cleared,
+            Some(true),
+            "own edits are vouched for"
+        );
+        drop(state);
+
+        // Another writer's edit time over the kept digest, then this build edits.
+        let bytes = std::fs::read(&dest).expect("read");
+        let mut extras = decoded(&dest).extras;
+        extras.local.speleodb.unpushed_edits = true;
+        extras.local.speleodb.last_edit_at = Some(chrono::Utc::now());
+        std::fs::write(
+            &dest,
+            stalx_v2::rewrite_local(&bytes, &extras).expect("rewrite"),
+        )
+        .expect("write");
+        let state = signed_in(&endpoint);
+        assert!(state.open_project(dest.clone()).success);
+        assert!(open_link(&state).has_unpushed_edits);
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(ID));
+        set_elevation(&state, Some(1.0));
+        set_elevation(&state, None);
+        let saved = save(&state);
+        assert_eq!(
+            saved.speleodb_unpushed_cleared, None,
+            "the digest no longer counts"
+        );
+        assert_eq!(digest_on_disk(&dest), None, "and is gone");
+        assert!(open_link(&state).has_unpushed_edits);
+    });
 }

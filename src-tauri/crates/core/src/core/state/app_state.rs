@@ -469,8 +469,13 @@ impl AppState {
             let mut link = file.speleo_link();
             let l = link.as_mut()?;
             let flipped = !l.has_unpushed_edits || l.last_edit_at.is_none();
+            let now = chrono::Utc::now();
             l.has_unpushed_edits = true;
-            l.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            l.last_edit_at = Some(now.to_rfc3339());
+            // S2: this build keeps the BASE survey digest, so it vouches for the
+            // edit time it records - unless an edit by a writer that does not
+            // know the digest came first (F2-digest-2).
+            super::speleodb_base_survey::vouch_for_edit(&mut file.extras.local.speleodb, Some(now));
             file.set_speleo_link(link.as_ref());
             Some(flipped)
         });

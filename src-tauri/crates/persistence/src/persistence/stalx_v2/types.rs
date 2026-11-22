@@ -72,6 +72,14 @@ pub struct LocalSync {
     /// or "Don't save" after an edit). `None`: not known, and the mark is
     /// taken at its word.
     pub base_survey: Option<String>,
+    /// The [`Self::last_edit_at`] the digest's writer vouched for: the time of
+    /// the last edit a build that keeps the digest recorded since the digest
+    /// was. The digest counts only while `last_edit_at` still equals it. A
+    /// writer that does not know the digest keeps both keys as they are, and an
+    /// edit it makes changes `last_edit_at` alone, so the digest stops counting
+    /// from there (F2-digest-2): such a writer may also have uploaded, which
+    /// the digest cannot know of.
+    pub base_survey_edit: Option<DateTime<Utc>>,
     /// Set by the first accepted edit; cleared only by a confirmed push.
     pub unpushed_edits: bool,
     pub last_edit_at: Option<DateTime<Utc>>,

@@ -924,7 +924,11 @@ impl AppState {
         // on any copy without a digest.
         {
             let _project = self.speleodb_push_project_guard(generation)?;
-            self.with_file(|file| file.extras.local.speleodb.base_survey = None);
+            self.with_file(|file| {
+                let sync = &mut file.extras.local.speleodb;
+                sync.base_survey = None;
+                sync.base_survey_edit = None;
+            });
         }
 
         // A push first saves (plan 6.5): the local copy and the commit describe the

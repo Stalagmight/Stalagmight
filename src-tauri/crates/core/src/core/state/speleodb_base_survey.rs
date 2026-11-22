@@ -46,11 +46,24 @@ use super::AppState;
 use crate::persistence::stalx_v2::{self, Extras, Format, Header, LocalSync, MAX_V2_FILE_BYTES};
 use crate::speleodb::SpeleoDbError;
 
+/// Whether `sync`'s digest still speaks for the copy: every edit recorded since
+/// it was recorded was recorded by a build that keeps it, so `last_edit_at` is
+/// the one that build vouched for (`base_survey_edit`). An edit by a writer that
+/// does not know the digest moved `last_edit_at` alone; that writer may also have
+/// uploaded (its upload cannot drop a digest it does not know), so the digest no
+/// longer says what SpeleoDB holds past BASE (F2-digest-2).
+pub(super) fn digest_vouched(sync: &LocalSync) -> bool {
+    sync.base_survey.is_some()
+        && sync.last_edit_at.is_some()
+        && sync.base_survey_edit == sync.last_edit_at
+}
+
 /// Whether `sync` marks un-uploaded work over a survey that is exactly BASE's:
 /// `bytes` (the whole file the sync state belongs to) hold the survey whose
-/// digest was recorded for the BASE `sync` names.
+/// digest was recorded for the BASE `sync` names, and the digest is still
+/// vouched for ([`digest_vouched`]).
 pub(super) fn holds_base_survey(bytes: &[u8], sync: &LocalSync) -> bool {
-    if !sync.unpushed_edits {
+    if !sync.unpushed_edits || !digest_vouched(sync) {
         return false;
     }
     let (Some(base), Some(recorded)) = (sync.base_commit.as_deref(), sync.base_survey.as_deref())
@@ -89,7 +102,7 @@ pub(super) fn probe_settled(path: &Path) -> std::io::Result<Header> {
         && header.complete
         && header.local.as_ref().is_some_and(|local| {
             let sync = &local.speleodb;
-            sync.unpushed_edits && sync.base_commit.is_some() && sync.base_survey.is_some()
+            sync.unpushed_edits && sync.base_commit.is_some() && digest_vouched(sync)
         });
     if !worth_reading {
         return Ok(header);
@@ -140,6 +153,24 @@ fn read_whole(path: &Path) -> std::io::Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+/// An edit is being recorded at `at` (`mark_remote_dirty`): the digest goes on
+/// speaking for the copy only when it was still vouched for before this edit,
+/// or no edit came since it was recorded. Then this build vouches for `at` too;
+/// otherwise a writer that does not know the digest edited since, and the
+/// digest goes (F2-digest-2). Call before `last_edit_at` is moved to `at`.
+pub(super) fn vouch_for_edit(sync: &mut LocalSync, at: Option<chrono::DateTime<chrono::Utc>>) {
+    if sync.base_survey.is_none() {
+        sync.base_survey_edit = None;
+        return;
+    }
+    if sync.base_survey_edit == sync.last_edit_at {
+        sync.base_survey_edit = at;
+    } else {
+        sync.base_survey = None;
+        sync.base_survey_edit = None;
+    }
 }
 
 /// The open's half: a file just read (`bytes`) whose mark is stale opens clean.
@@ -206,7 +237,11 @@ impl AppState {
             file.set_speleo_link(Some(&link));
             if let Some(bytes) = pushed {
                 let digest = base_digest(bytes, link.base_commit_sha.as_deref());
-                file.extras.local.speleodb.base_survey = digest;
+                let sync = &mut file.extras.local.speleodb;
+                // A late edit kept marked was this session's, so it is vouched
+                // for; with none, there is no edit since the digest.
+                sync.base_survey_edit = digest.as_ref().and(sync.last_edit_at);
+                sync.base_survey = digest;
             }
             Some(())
         });

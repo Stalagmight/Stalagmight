@@ -130,14 +130,30 @@ pub(super) struct PreparedDownload {
     /// A migrated legacy revision's conversion notice (stations the upgrade
     /// moved), as a local upgrade raises it (review finding G-speleodb-1).
     pub(super) conversion: Option<ConversionNotice>,
+    /// The revision whose bytes these are, when the caller named it
+    /// ([`Self::holding_revision`]); `None` when it is not known.
+    revision: Option<String>,
 }
 
 impl PreparedDownload {
+    /// Name the revision these bytes are (`None`: not known). The install records
+    /// BASE's survey digest only for bytes it knows are BASE's: the revision named
+    /// here, when it is the link's BASE. Every caller that downloads by revision
+    /// names it: the pull and the fast-forward their pinned tip, a Restore or a
+    /// View the revision it fetched (F2-digest-1).
+    pub(super) fn holding_revision(mut self, revision: Option<&str>) -> Self {
+        self.revision = revision.map(str::to_owned);
+        self
+    }
+
     /// The bytes the cache file gets, with `display` (the outgoing copy's view
-    /// toggles) as its per-machine view. Under a clean link the copy IS its
-    /// BASE revision, so the digest of the survey it gets is recorded as BASE's
-    /// (`local.speleodb.base_survey`, S2); a link the install marks un-uploaded
-    /// (a Restore) holds another revision than its BASE and records none.
+    /// toggles) as its per-machine view. When the bytes are known to be the
+    /// link's BASE revision ([`Self::holding_revision`]), the digest of the survey
+    /// they hold is recorded as BASE's (`local.speleodb.base_survey`, S2). A
+    /// Restore of an older revision holds another revision than its BASE (the
+    /// server tip it rides on) and records none, whatever its dirty bit says: a
+    /// digest there would let the first save clear the Restore's mark, and Done
+    /// would then hand the lock back with the Restore never uploaded.
     pub(super) fn cache_bytes(
         &mut self,
         display: BTreeMap<String, String>,
@@ -147,13 +163,18 @@ impl PreparedDownload {
         };
         self.extras.local.display = display;
         self.extras.local.speleodb.base_survey = None;
+        self.extras.local.speleodb.base_survey_edit = None;
         let bytes = match &self.original {
             Some(original) => rewrite_local(original, &self.extras),
             None => encode(&self.project, &self.extras, Mode::Normal),
         }
         .map_err(failed)?;
         let sync = &self.extras.local.speleodb;
-        if sync.unpushed_edits {
+        let holds_base = match (self.revision.as_deref(), sync.base_commit.as_deref()) {
+            (Some(revision), Some(base)) => revision.eq_ignore_ascii_case(base),
+            _ => false,
+        };
+        if !holds_base {
             return Ok(bytes);
         }
         let Some(digest) =
@@ -319,6 +340,7 @@ impl AppState {
             history_dropped,
             legacy_parity,
             conversion,
+            revision: None,
         })
     }
 

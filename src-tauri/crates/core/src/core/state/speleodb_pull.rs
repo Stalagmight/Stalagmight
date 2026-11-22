@@ -450,6 +450,7 @@ impl AppState {
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(project_id, &dest)?;
         }
+        let revision = pinned.clone();
         let new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
@@ -463,16 +464,20 @@ impl AppState {
         // The installed copy carries no Unwind position or watermark (the prepared
         // download keeps no per-machine state), so the reopened project starts
         // with neither.
-        let prepared = self.prepare_download(
-            native.path(),
-            new_link,
-            InheritedUndo::Drop,
-            &download_decode_options(),
-        )?;
+        let prepared = self
+            .prepare_download(
+                native.path(),
+                new_link,
+                InheritedUndo::Drop,
+                &download_decode_options(),
+            )?
+            .holding_revision(revision.as_deref());
         self.open_project_download(prepared, dest.clone(), consent, was_editing)?;
         Ok(dest.to_string_lossy().into_owned())
     }
 
+    /// Install the download at `source`, which is revision `link`'s BASE (a pull
+    /// downloads by the tip it pins as BASE; `None` is an undated download).
     fn install_linked_download_with_limits(
         &self,
         source: &std::path::Path,
@@ -483,7 +488,10 @@ impl AppState {
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
         let project_id = link.project_id.clone();
-        let prepared = self.prepare_download(source, link, undo, &options.limits)?;
+        let revision = link.base_commit_sha.clone();
+        let prepared = self
+            .prepare_download(source, link, undo, &options.limits)?
+            .holding_revision(revision.as_deref());
         self.replace_cache_for_session(prepared, dest, &project_id, policy, options.generation)
     }
 }
