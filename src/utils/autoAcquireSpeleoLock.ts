@@ -3,28 +3,49 @@ import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from './ipc';
-import { humanizeSpeleoError, speleoErrorAction } from './speleoError';
+import { humanizeSpeleoError, lockMayBeHeld, speleoErrorAction } from './speleoError';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
 import type { StartEditingResult } from '../types/ipc.generated';
+
+/**
+ * What the notice reports, which picks its title: a project that just OPENED
+ * read-only (the automatic Start Editing after an open did not get the lock), or
+ * a Start Editing on a project already open that left it read-only (Resume
+ * editing, Start editing; demo item 7: that one is not an open).
+ */
+export type ReadOnlyNoticeKind = 'opened' | 'stillReadOnly';
 
 interface ReadOnlyNotice {
   path: string;
   sessionGeneration: number;
   message: string;
+  kind: ReadOnlyNoticeKind;
 }
 
 // Independent of activeDialog: an open-project picker closes when its load
 // finishes, and must not dismiss the acquisition result that follows it.
 export const useSpeleoReadOnlyNotice = create<{ notice: ReadOnlyNotice | null }>(() => ({ notice: null }));
 
-export function showSpeleoReadOnlyNotice(message: string): void {
+export function showSpeleoReadOnlyNotice(message: string, kind: ReadOnlyNoticeKind): void {
   const path = useProjectStore.getState().project?.file_path;
   if (!path) return;
   useSpeleoReadOnlyNotice.setState({ notice: {
     path,
     sessionGeneration: useSpeleoStore.getState().sessionGeneration,
     message,
+    kind,
   } });
+}
+
+/**
+ * The read-only notice's text for a failed Start Editing: `message`, and when the
+ * refusal says this account may now hold the lock (`lockMayBeHeld`: a lock
+ * request that may have reached SpeleoDB, which nothing could confirm), one
+ * sentence saying so, so the close that later hands it back, or asks "Couldn't
+ * hand back the lock", is not a surprise (demo item 3).
+ */
+export function startEditingFailureNotice(message: string, error: unknown): string {
+  return lockMayBeHeld(error) ? `${message} ${i18n.t('speleodb.readOnlyNotice.lockMayBeHeld')}` : message;
 }
 
 /** Called once after a new remote project load, never by a refresh or same-file reload. */
@@ -61,14 +82,16 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
       const key = result.email
         ? (keeps ? 'speleoExitPrompt.readOnly.lockedByKeepsChanges' : 'speleodb.readOnlyNotice.lockedBy')
         : (keeps ? 'speleoExitPrompt.readOnly.unavailableKeepsChanges' : 'speleodb.readOnlyNotice.unavailable');
-      showSpeleoReadOnlyNotice(i18n.t(key, { email: result.email }));
+      showSpeleoReadOnlyNotice(i18n.t(key, { email: result.email }), 'opened');
     }
     // Divergence already has its own resolution dialog. Successful acquisition is silent.
     void useSpeleoStore.getState().refreshLinkStatus();
   } catch (error) {
     if (!stillCurrent()) return;
     if (speleoErrorAction(error) === 'ReLogin') useSpeleoStore.getState().clearSession();
-    showSpeleoReadOnlyNotice(humanizeSpeleoError(error, i18n.t('speleodb.readOnlyNotice.failed')));
+    showSpeleoReadOnlyNotice(startEditingFailureNotice(
+      humanizeSpeleoError(error, i18n.t('speleodb.readOnlyNotice.failed')), error,
+    ), 'opened');
   } finally {
     useSpeleoStore.getState().endBusy(token);
   }

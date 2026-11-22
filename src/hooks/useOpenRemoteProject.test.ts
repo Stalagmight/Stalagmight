@@ -312,6 +312,13 @@ describe('useOpenRemoteProject (#218)', () => {
     });
     expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
     expect(useUIStore.getState().showToast).toHaveBeenCalledWith(message, 'speleodb-offline-open', 'warning');
+    // Demo item 5: the toast fades, so the seed carries what the history said and
+    // the SpeleoDB tab keeps saying the copy is behind.
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({
+      offline: true,
+      ...(newer_on_server === true ? { newerOnServer: true } : {}),
+    }));
+    expect(setLinkOnOpenMock.mock.calls[0]?.[0]?.newerOnServer).toBe(newer_on_server === true ? true : undefined);
   });
 
   // Offline opening must preserve edits that never reached the server.

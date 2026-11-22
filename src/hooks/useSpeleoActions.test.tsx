@@ -781,6 +781,48 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
     expect(useUIStore.getState().showToast).not.toHaveBeenCalled();
     expect(useSpeleoStore.getState().clearSession).not.toHaveBeenCalled();
   });
+
+  // Demo items 3 and 7 (screenshots 04, 08): Resume editing on a project already
+  // open. The notice is not "Project opened read-only" (nothing was opened), and
+  // when the lock request may have landed and nothing could confirm it
+  // (`lock_may_be_held`), it says the lock may be held and what happens to it, so
+  // the "Couldn't hand back the lock" question at Close is not a surprise.
+  it.each([
+    [true, true],
+    [undefined, false],
+  ] as const)('a failed Resume editing is titled for what happened; lock_may_be_held %s says so: %s', async (flag, said) => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({
+      session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Dropped', ...(flag ? { lock_may_be_held: flag } : {}),
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.startEditing();
+    });
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('stillReadOnly');
+    const sentence = 'The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock back '
+      + 'when you close the project, or you can try again.';
+    expect(notice?.message).toBe(
+      'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. '
+        + `Check your network connection and try again.${said ? ` ${sentence}` : ''}`,
+    );
+  });
+
+  it('a Resume editing someone else is in the way of is titled for what happened too', async () => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'locked_by', email: 'other@example.com' });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.startEditing();
+    });
+    expect(useSpeleoReadOnlyNotice.getState().notice?.kind).toBe('stillReadOnly');
+  });
 });
 
 /**

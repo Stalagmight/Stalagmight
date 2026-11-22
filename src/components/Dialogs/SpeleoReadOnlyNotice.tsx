@@ -13,7 +13,9 @@ export function SpeleoReadOnlyNotice() {
   if (!notice || notice.path !== path || notice.sessionGeneration !== generation) return null;
   const dismiss = () => useSpeleoReadOnlyNotice.setState({ notice: null });
   return (
-    <DialogWrapper title={t('speleodb.readOnlyNotice.title')} onClose={dismiss} size="sm" data-testid="speleodb-read-only-dialog">
+    <DialogWrapper
+      title={t(notice.kind === 'opened' ? 'speleodb.readOnlyNotice.title' : 'speleodb.readOnlyNotice.stillReadOnlyTitle')}
+      onClose={dismiss} size="sm" data-testid="speleodb-read-only-dialog">
       <p className="text-sm text-text-secondary mb-4">{notice.message}</p>
       <div className="flex justify-end">
         <Button variant="primary" onClick={dismiss} data-testid="speleodb-read-only-continue">

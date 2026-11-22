@@ -514,6 +514,13 @@ interface SpeleoStore {
     /** Cached data has no confirmed relationship to the current server tip. */
     offline?: boolean;
     /**
+     * With `offline`: SpeleoDB's history answered and names a revision newer than
+     * the copy (`SpeleoOpenResult.newer_on_server`). A clean copy then seeds
+     * `remote_ahead`, so the SpeleoDB tab says the copy is behind from the start,
+     * not only the open's toast (demo item 5).
+     */
+    newerOnServer?: boolean;
+    /**
      * WHICH SpeleoDB project this seed is for.
      *
      * The seed used to omit it, leaving `remoteProjectId` to the status refresh - which
@@ -1178,7 +1185,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, offline = false, projectId = null }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, offline = false, newerOnServer = false, projectId = null }) =>
     set({
       // Committed in the SAME synchronous `set()` as the rest of the seed, so nothing
       // can observe the new project's link beside the old project's id. `syncProjectLink`
@@ -1209,8 +1216,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
         // edits, or an offline cache, has no confirmed server tip; claim nothing until a refresh
-        // resolves it rather than render a self-contradictory "up to date + dirty".
-        remoteState: offline || hasUnpushedEdits ? 'unknown' : 'up_to_date',
+        // resolves it rather than render a self-contradictory "up to date + dirty". The one
+        // thing an offline open can know is that SpeleoDB is ahead of a clean copy.
+        remoteState: offline && newerOnServer && !hasUnpushedEdits ? 'remote_ahead'
+          : offline || hasUnpushedEdits ? 'unknown' : 'up_to_date',
         noAccess: false,
         serverError: null,
       },

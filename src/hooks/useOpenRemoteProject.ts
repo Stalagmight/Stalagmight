@@ -184,6 +184,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           hasUnpushedEdits: hasUnpushedEdits === true,
           // A copy opened without the server's say has no confirmed server tip.
           ...(result.offline || result.read_only ? { offline: true } : {}),
+          // ...unless the history answered and named a newer one (demo item 5).
+          ...(result.offline && result.newer_on_server === true ? { newerOnServer: true } : {}),
           projectId,
         });
       }

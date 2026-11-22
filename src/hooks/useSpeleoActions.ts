@@ -1,4 +1,4 @@
-import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
+import { showSpeleoReadOnlyNotice, startEditingFailureNotice } from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -181,7 +181,7 @@ export function useSpeleoActions(): SpeleoActions {
           };
         }
         case 'locked_by':
-          showSpeleoReadOnlyNotice(t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', { email: result.email }));
+          showSpeleoReadOnlyNotice(t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', { email: result.email }), 'stillReadOnly');
           return { editing: false, treeReplaced: false, landed: true };
         case 'divergence_needed':
           return { editing: false, treeReplaced: false, landed: true };
@@ -211,7 +211,10 @@ export function useSpeleoActions(): SpeleoActions {
       return routed.editing;
     } catch (e) {
       if (speleoProjectSessionStillCurrent(issuedFor)) {
-        showSpeleoReadOnlyNotice(humanizeError(e, 'speleodb.readOnlyNotice.failed'));
+        showSpeleoReadOnlyNotice(
+          startEditingFailureNotice(humanizeError(e, 'speleodb.readOnlyNotice.failed'), e),
+          'stillReadOnly',
+        );
       }
       return false;
     } finally {

@@ -1056,6 +1056,23 @@ describe('speleoStore', () => {
     });
   });
 
+  // Demo item 5: an offline open whose history answered with a newer revision
+  // knows one thing about the server tip - the clean copy is behind it - and seeds
+  // it, so the SpeleoDB tab says so after the toast is gone. Nothing else changes:
+  // without that answer, or over un-uploaded work, it still claims nothing.
+  describe('setLinkOnOpen after an offline open (demo item 5)', () => {
+    it.each([
+      [true, false, 'remote_ahead'],
+      [false, false, 'unknown'],
+      [true, true, 'unknown'],
+    ] as const)('newerOnServer %s, un-uploaded %s: %s', (newerOnServer, hasUnpushedEdits, remoteState) => {
+      useSpeleoStore.getState().setLinkOnOpen({
+        permission: 'READ_AND_WRITE', forPath: '/a.stalx', offline: true, newerOnServer, hasUnpushedEdits,
+      });
+      expect(useSpeleoStore.getState().link?.remoteState).toBe(remoteState);
+    });
+  });
+
   // #270: the revert dialog raises the push-failure banner (via `done`) and stays
   // open pointing the user at it - but it renders through AlertDialog's
   // full-viewport scrim, so the banner behind it is covered and unclickable. It
