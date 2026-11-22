@@ -40,7 +40,9 @@ while that request is pending. Failure removes the indicator and keeps retry det
 
 Autosave and failed-autosave retry are always local-only, including while an upload
 dialog is open or cancelled. Save and Close releases and closes only after confirmed
-success with no newer edits. Cancel, conflict, uncertainty and release failure leave
+success with no newer edits, and stops on an upload that replaced a revision another
+session pushed meanwhile, so its banner is read. Cancel, conflict, uncertainty and
+release failure leave
 the project open. Plain Close, project switching and Quit retain automatic lock
 release without upload and Discard changes / Cancel protection for unsaved work,
 including unsent SpeleoDB form drafts (asked first, in-app). Saved unuploaded work

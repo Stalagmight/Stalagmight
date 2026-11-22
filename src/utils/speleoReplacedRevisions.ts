@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next';
-import type { SpeleoRevision } from '../types/ipc.generated';
+import type { DoneResult, PushResult, SpeleoRevision } from '../types/ipc.generated';
 
 /** The short revision id the Revision History list shows. */
 const SHORT_SHA = 8;
@@ -26,4 +26,19 @@ export function replacedRevisionsNotice(t: TFunction, revisions: readonly Speleo
     name: message ? t('speleodb.replaced.named', { message, sha }) : sha,
     author: latest.author_email.trim() || t('speleodb.revisions.unknownAuthor'),
   });
+}
+
+/**
+ * [R3] The upload landed, but on top of revisions another session uploaded
+ * meanwhile: `applyDone` / `applyPush` raised the banner that names them.
+ *
+ * Every way out of the project that ran the upload stops on it, so that banner
+ * is read before the project closes: the exit prompt and the sign-out, Save and
+ * Close, and the older-version confirmation finishing a close or quit. The lock
+ * is back and nothing is left to upload, so the next close asks nothing and
+ * proceeds. One predicate, so no close path can drift from the others.
+ */
+export function landedOverReplacedRevisions(result: DoneResult | PushResult | null | undefined): boolean {
+  if (result?.kind !== 'released' && result?.kind !== 'pushed') return false;
+  return (result.replaced_revisions?.length ?? 0) > 0;
 }

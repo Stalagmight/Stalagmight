@@ -7,6 +7,7 @@ import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
+import { landedOverReplacedRevisions } from '../../utils/speleoReplacedRevisions';
 
 /** Same bound the Save / Finish editing upload uses before it lets the user walk away. */
 export const UPLOAD_PROGRESS_LIMIT_MS = 120_000;
@@ -60,7 +61,7 @@ export function useSpeleoExitUpload() {
       if (isShown && !isShown() && isCurrent()) toastLateUploadOutcome(resolved);
       if (resolved?.kind === 'divergence_needed') return 'diverged';
       if (resolved?.kind !== 'released') return 'failed';
-      if (resolved.replaced_revisions?.length) return 'replaced';
+      if (landedOverReplacedRevisions(resolved)) return 'replaced';
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) return 'newer';
       return 'released';
     } finally {

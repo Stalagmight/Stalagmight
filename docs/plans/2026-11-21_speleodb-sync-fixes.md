@@ -93,6 +93,15 @@ only on a timeout (the docs carried it as "Known gap F1, #669").
 - `speleodb_pull::tests::offline_fallback_requires_connection_failure_and_matching_cache_identity`
   includes `Dropped`; `src/utils/speleoError.test.tsx` checks the new line differs
   from every other cause's and never says "could not connect".
+- The automatic Start Editing after an offline open loses its reply the same way.
+  Its refusal keeps the raw diagnostic in `message` ("Network error talking to
+  SpeleoDB: error sending request", for the log) and carries `transport: Dropped`
+  (`the_automatic_start_editing_after_an_offline_open_names_the_lost_reply`); both
+  Start Editing surfaces (the acquire after an open, and the Start editing buttons)
+  word the read-only notice from `transport`, so the user reads the Dropped line,
+  never the raw text, and no toast repeats it (`autoAcquireSpeleoLock.test.ts`,
+  `useSpeleoActions.test.tsx`, and the offline-open case of
+  `speleodb-home-cache.spec.ts`).
 
 Before the fix, 7 of the 9 client tests and 3 of the 4 open tests failed, the
 open test with the fuzzer's exact refusal. Injections, each made, run and
@@ -348,9 +357,13 @@ lock first overwrite the one that inherited it.
   the new revision's parent. It rides the next `Released` / `Pushed` as
   `replaced_revisions` and is shown on a persistent `replaced_revision` banner
   instead of the success toast (notifications.md: data at risk never rides a
-  toast), naming the latest revision as the Revision History shows it. The exit
-  prompt and the sign-out stop on it (`ExitUploadResult` `'replaced'`, like
-  `'diverged'`) so the banner is read before the project closes.
+  toast), naming the latest revision as the Revision History shows it. Every
+  close that ran the upload stops on it so the banner is read before the project
+  closes: the exit prompt and the sign-out (`ExitUploadResult` `'replaced'`, like
+  `'diverged'`), Save and Close, and the older-version confirmation finishing a
+  close or a quit, all through one predicate
+  (`landedOverReplacedRevisions`). The lock is back and nothing is left to
+  upload, so the next close asks nothing.
 - No server change. A conditional upload on SpeleoDB (a `base` on the upload view,
   refused when HEAD moved) is the only complete fix for the race, and is worth
   proposing upstream.
@@ -366,7 +379,9 @@ lost race is named (Save Changes and Done) and reported once; the status shows t
 conflict. Unit tests in `speleodb/sync.rs` (ancestry, `plan_push`,
 `status_verdict`, `replaced_by_upload`) and `models.rs`. Vitest: the refusal
 routes to the divergence prompt; the replaced report rides the banner only; the
-exit and sign-out dialogs stop on it. Playwright: `speleodb-same-account.spec.ts`.
+exit and sign-out dialogs, Save and Close and the older-version confirmation
+(close and quit) stop on it. Playwright: `speleodb-same-account.spec.ts` (Save
+Changes, and Save and Close followed by a close that asks nothing).
 Three older tests asserted the old shortcut (holding the lock made any commit of
 the account ours); they now record an upload of this process first and assert
 `Conflict` without one.
@@ -377,7 +392,8 @@ test, five sync tests); no description match (the no-licence test and its unit
 test); no post-upload check (both race tests); only the direct parent in
 `replaced_by_upload` (its multi-revision unit test); no `replaced` arm in the exit
 and sign-out dialogs, no banner in `applyPush`, or the success toast kept (five
-vitest cases).
+vitest cases); no stop in Save and Close (its vitest case and the Playwright case)
+or in the older-version confirmation (its close and quit cases).
 
 ### Left
 

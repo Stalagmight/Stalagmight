@@ -254,6 +254,46 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     });
   });
 
+  /**
+   * R3: raised out of a close (Save and Close of an older version) or a quit, the
+   * upload landed on top of a revision another session pushed meanwhile. The
+   * banner behind this dialog names it, so the exit stops as the exit prompt's
+   * does: no close, no quit, the banner stays. Synthetic revision.
+   */
+  it.each(['close', 'quit'] as const)('R3: an upload that replaced a revision pushed meanwhile stops the %s it was raised out of', async (kind) => {
+    const replaced = {
+      id: '0123456789abcdef0123456789abcdef01234567', parent_ids: [], author_email: 'diver@example.com',
+      authored_date: null, message: 'Surveyed the sump',
+    };
+    invokeIpcMock.mockImplementation(async (command: string) =>
+      command === 'speleodb_done' ? { kind: 'released', replaced_revisions: [replaced] } : null);
+    useProjectStore.setState({ isDirty: false, saveProject: vi.fn(async () => ({ success: true })) as never });
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: 'diver@example.com', lockedByOther: false,
+        hasUnpushedEdits: true, unwound: true, undoMode: 'full', remoteState: 'up_to_date', noAccess: false,
+        serverError: null,
+      },
+    });
+    const pendingExit = kind === 'quit' ? { kind } : { kind, request: reserveProjectRequest() };
+    // `openExitPrompt` recorded the dialog this confirmation displaced.
+    useUIStore.setState({ activeDialog: 'speleodb-unwound-push', dialogData: {
+      message: 'old version', pendingExit,
+      cancelReturnsTo: 'speleodb-done', cancelReturnsData: { mode: 'push', closeAfterSave: true },
+    } });
+    render(<SpeleoUnwoundPushDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+    expect(handBackProjectMock).not.toHaveBeenCalled();
+    expect(performQuitMock).not.toHaveBeenCalled();
+    // The prompt it displaced is not put back over the banner either.
+    expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [replaced] });
+    expect(useSpeleoStore.getState().link).toMatchObject({ editState: 'read-only', hasUnpushedEdits: false });
+  });
+
   it.each(['request', 'session'])('refuses both actions after its %s is replaced', async (replacement) => {
     const request = reserveProjectRequest();
     const sessionGeneration = useSpeleoStore.getState().sessionGeneration;

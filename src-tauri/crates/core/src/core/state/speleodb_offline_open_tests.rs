@@ -407,3 +407,48 @@ fn an_upload_whose_reply_is_lost_stays_unconfirmed_and_is_sent_once() {
         });
     }
 }
+
+#[test]
+fn the_automatic_start_editing_after_an_offline_open_names_the_lost_reply() {
+    // After an offline open the frontend's automatic Start Editing runs against the
+    // same server, and its reads lose their replies the same way. The refusal
+    // keeps the raw diagnostic in `message` ("Network error talking to SpeleoDB:
+    // error sending request", for the log) and the cause in `transport`, which is
+    // all the frontend words the notice from: the lost reply (`Dropped`), never
+    // the catch-all. The copy stays read-only.
+    for lost in Lost::NO_REPLY {
+        crate::test_helpers::with_isolated_config(|| {
+            let temp = tempfile::tempdir().expect("temp");
+            let _cache = TestCacheRoot::set(temp.path());
+            let (url, _) = server(lost, project_reads);
+            let copy = seed(temp.path(), &url, false);
+            let state = AppState::new().expect("state");
+            sign_in(&state, &url);
+            state.speleodb_record_cache_owner(&copy, &url, ME, "Remote");
+            let opened = open(&state, &copy, LocalEditsPolicy::Protect).expect("offline open");
+            assert_eq!(opened.offline, Some(true), "{lost:?}");
+            assert!(state.open_project(copy).success, "{lost:?}");
+
+            let refused = state
+                .speleodb_start_editing()
+                .expect_err("no reply, no edit session");
+            assert_eq!(
+                refused.action,
+                SpeleoDbAction::Retry,
+                "{lost:?}: {refused:?}"
+            );
+            assert_eq!(
+                refused.transport,
+                Some(TransportCause::Dropped),
+                "{lost:?}: {refused:?}"
+            );
+            assert!(
+                refused
+                    .message
+                    .starts_with("Network error talking to SpeleoDB"),
+                "{lost:?}: the raw diagnostic stays for the log: {refused:?}"
+            );
+            assert!(!state.edit_enabled(), "{lost:?}: still read-only");
+        });
+    }
+}

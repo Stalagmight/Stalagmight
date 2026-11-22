@@ -20,6 +20,7 @@ import { countUnresolvedErrors, unresolvedErrorsKey } from '../../utils/validati
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
+import { landedOverReplacedRevisions } from '../../utils/speleoReplacedRevisions';
 // lock#6: a quit meanwhile waits for the whole save-upload-close, not just its calls.
 import { holdQuitDuring } from '../../utils/quitAfterWork';
 
@@ -207,6 +208,17 @@ export default function SpeleoDoneDialog() {
         setUploading(false);
         if (settledAfterDismiss(resolved)) return;
         if (resolved?.kind === 'released' && closeAfterSave) {
+          // R3: the upload landed on top of revisions another session pushed
+          // meanwhile, and the banner behind this dialog names them. Closing the
+          // project now would close that report unread, so Save and Close stops
+          // here as the exit prompt and the sign-out do: the dialog goes, the
+          // banner shows, and the project stays open. The lock is back and
+          // nothing is left to upload, so the next close asks nothing.
+          if (landedOverReplacedRevisions(resolved)) {
+            setUploadContinuation(null);
+            closeDialog();
+            return;
+          }
           const latest = useProjectStore.getState();
           if (latest.isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) {
             setSaveFailure('Newer changes remain on this computer. The project stays open.');

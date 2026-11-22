@@ -6,7 +6,8 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
-import { closeExitStillCurrent, handBackProject, performQuit, readPendingExit } from '../../utils/quit';
+import { abandonUpdateRestart, closeExitStillCurrent, handBackProject, performQuit, readPendingExit } from '../../utils/quit';
+import { landedOverReplacedRevisions } from '../../utils/speleoReplacedRevisions';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -161,6 +162,18 @@ export default function SpeleoUnwoundPushDialog() {
     const resolved = await done(message, { acceptOlderVersion: true, isCurrent: current });
     if (stopIfStale()) return;
     if (resolved?.kind === 'released') {
+      // R3: the upload landed on top of revisions another session pushed meanwhile,
+      // and the banner behind this dialog names them. The quit or close would take
+      // that report away unread, so it stops here as the exit prompt does: the
+      // dialog goes, the banner shows, the project stays open. The lock is back and
+      // nothing is left to upload, so the next close or quit asks nothing.
+      if (landedOverReplacedRevisions(resolved)) {
+        trackDialogComplete('speleodb-unwound-push');
+        if (pendingExit.kind === 'quit') abandonUpdateRestart();
+        setUploadContinuation(null);
+        closeDialog();
+        return;
+      }
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) { setBusy(false); return; }
       trackDialogComplete('speleodb-unwound-push');
       const treeGeneration = useProjectStore.getState().projectTreeGeneration;
