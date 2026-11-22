@@ -20,7 +20,8 @@ const summary = (id: string, lockHolder: string | null = null): SpeleoProjectSum
   id, name: `Cave ${id}`, permission: 'READ_AND_WRITE', lock_holder: lockHolder, type_tag: 'stalx', latest_commit_sha: null,
 });
 const localState = (o: Partial<SpeleoLocalProjectState> = {}): SpeleoLocalProjectState => ({
-  has_local_copy: true, has_unpushed_edits: false, last_edit_at: null, is_open: false, state_unknown: false, ...o,
+  has_local_copy: true, has_unpushed_edits: false, last_edit_at: null, is_open: false, state_unknown: false,
+  lock_claimed_here: false, ...o,
 });
 const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: ME, lockedByOther: false,

@@ -170,6 +170,18 @@ pub struct SpeleoLocalProjectState {
     /// The UI must render this as UNKNOWN (and withhold the destructive choices),
     /// never as clean.
     pub state_unknown: bool,
+    /// This run of the app holds a claim of the signed-in account on the
+    /// project's write lock: since it started it took (or inherited) the lock and
+    /// has not handed it back - an edit session, a lock kept on purpose, a release
+    /// that failed. Claims are not persisted, so `false` says only that THIS run
+    /// points at no such lock, never that this computer did not take it (a run
+    /// that crashed leaves its lock with no claim after the restart).
+    ///
+    /// The held-lock prompt reads it with [`Self::has_local_copy`]: SpeleoDB's lock
+    /// is the account's, so the same account signed in on another computer holds
+    /// it too, and only a row with neither a claim nor a copy here is one this
+    /// computer cannot have taken (demo item 1).
+    pub lock_claimed_here: bool,
 }
 
 /// The active lock ("mutex") on a project, when one is held.

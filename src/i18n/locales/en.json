@@ -3939,12 +3939,13 @@
       "notice_other": "Your upload replaced {{count}} revisions uploaded by {{author}} while yours was on its way, the latest {{name}}. Their changes are not in yours. They are still in the SpeleoDB tab's Revision History, where you can view or restore them."
     },
     "heldLocks": {
-      "title": "You hold SpeleoDB write locks",
-      "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
-      "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
+      "title": "Your account holds SpeleoDB write locks",
+      "description_one": "Your account holds the write lock on this SpeleoDB project. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly. If that session is still editing, releasing the lock lets others change the project under it.",
+      "description_other": "Your account holds the write lock on {{count}} SpeleoDB projects. Each may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly. If that session is still editing, releasing its lock lets others change the project under it.",
+      "notThisComputer": "Held by this account, not by this computer",
       "keep": "Not now",
-      "release": "Release",
-      "releaseOneAria": "Release the write lock on {{name}}",
+      "release": "Release anyway",
+      "releaseOneAria": "Release the write lock on {{name}} anyway",
       "releasing": "Releasing…",
       "releaseFailed": "Could not release the write locks"
     },
