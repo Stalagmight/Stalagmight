@@ -26,6 +26,7 @@ import { useSpeleoActions } from './useSpeleoActions';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import i18n from '../i18n';
 
 let saveProjectMock: ReturnType<typeof vi.fn>;
 
@@ -1021,6 +1022,7 @@ describe('useSpeleoActions - same-account sessions (R3)', () => {
       applyDone: real.applyDone,
       applyPush: real.applyPush,
       banner: null,
+      replacedRevisions: null,
       divergence: null,
       link: {
         permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: 'diver@example.com', lockedByOther: false,
@@ -1069,10 +1071,81 @@ describe('useSpeleoActions - same-account sessions (R3)', () => {
       await result.current[verb]('From B');
     });
 
-    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
     // One event, one surface: no "Changes uploaded" toast beside it.
     expect(showToast).not.toHaveBeenCalled();
     // The upload landed, so the disk is flushed as after any landed upload.
     expect(saveProjectMock).toHaveBeenCalledWith(undefined, true);
+  });
+
+  // F4R3-locks-push-2: an edit lands after the backend took its snapshot and
+  // before this reply: the push is shown as unconfirmed, but the upload did
+  // land, and the backend gave its only copy of the report with it.
+  // Injection: the downgrade replacing the whole result drops the report.
+  it('a push downgraded for an edit during the reply keeps what it replaced', async () => {
+    useProjectStore.setState({ projectTreeGeneration: 1 });
+    invokeIpcMock.mockImplementation(async () => {
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+      return { kind: 'pushed', replaced_revisions: [REPLACED] };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.push('From B');
+    });
+    expect(outcome).toEqual({ kind: 'push_unconfirmed', replaced_revisions: [REPLACED] });
+    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // The Left item of the plan: a release with newer edits behind it raises its
+  // push-failure line, and the replaced report stays beside it.
+  it('a release with newer edits behind it keeps the replaced report beside its failure line', async () => {
+    useProjectStore.setState({ projectTreeGeneration: 1 });
+    invokeIpcMock.mockImplementation(async () => {
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+      return { kind: 'released', replaced_revisions: [REPLACED] };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.done('From B');
+    });
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // F4R3-locks-push-3: the upload landed and replaced a revision, then the
+  // release (or the push's bookkeeping) failed. The failure carries the report.
+  // Injection: the failure arm not raising `replacedRevisionsOf(e)` loses it.
+  it.each(['push', 'done'] as const)('a %s failure after a landing names what it replaced', async (verb) => {
+    invokeIpcMock.mockRejectedValue({
+      message: 'boom', action: 'StayDirty', status: 500, transport: null, unpushed_local: null,
+      newer_schema: null, replaced_revisions: [REPLACED],
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // F4R3-locks-push-8: the upload also left its undo history out to fit the
+  // size limit, a fact of its own: said beside the replaced report.
+  // Injection: the caveat toast inside `if (!replaced)` again is never shown.
+  it.each([
+    ['push', { kind: 'pushed', undo_history_omitted: true, replaced_revisions: [REPLACED] }, 'pushedWithoutHistory'],
+    ['done', { kind: 'released', undo_history_omitted: true, replaced_revisions: [REPLACED] }, 'releasedWithoutHistory'],
+  ] as const)('a %s that replaced a revision and left its undo history out says both', async (verb, reply, key) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue(reply);
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+    expect(showToast).toHaveBeenCalledWith(i18n.t(`speleodb.editBar.toasts.${key}`), expect.anything(), 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'success');
   });
 });

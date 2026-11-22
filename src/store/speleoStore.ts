@@ -71,33 +71,24 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
     is transient action feedback; `no_anchor` (no georeferenced zero datum on
     push/unlock) is the #200 non-blocking notice; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
-    after 3 s, leaving a failed upload with no trace); `replaced_revision` (R3)
-    is an upload that landed on top of revisions another session pushed
-    meanwhile (see {@link ReplacedRevisionBanner}). */
+    after 3 s, leaving a failed upload with no trace). An upload that replaced
+    another session's revisions (R3) has a slot of its own, `replacedRevisions`,
+    so that no later outcome in this slot can wipe it. */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'no_anchor' }
-  | PushFailedBanner
-  | ReplacedRevisionBanner;
+  | PushFailedBanner;
 
-/** [R3] The upload landed, but SpeleoDB put it on top of revisions another
-    session (of this account, which holds the same per-account lock) uploaded
-    between the push's check that nothing had moved and the upload itself. Their
-    changes are not in ours; they are still in the project's revision history.
-    Persistent until dismissed: it is the only report of the lost race, and the
-    work it names is at risk of being overlooked (notifications.md: data at risk
-    never rides a toast). `revisions` is newest first, from the backend's
-    `replaced_revisions`. */
-export interface ReplacedRevisionBanner {
-  kind: 'replaced_revision';
-  revisions: SpeleoRevision[];
-}
-
-/** [R3] The banner a landed upload raises when it replaced revisions, or `null`. */
-function replacedRevisionBanner(
+/** [R3] Fold the revisions a landed upload reports it replaced into the ones
+    already on screen: newest report first, each revision once. Nothing reported
+    leaves the slot as it is: only a dismissal or leaving the project clears it. */
+function withReplaced(
+  current: SpeleoRevision[] | null,
   revisions: SpeleoRevision[] | undefined,
-): ReplacedRevisionBanner | null {
-  return revisions && revisions.length > 0 ? { kind: 'replaced_revision', revisions } : null;
+): SpeleoRevision[] | null {
+  if (!revisions?.length) return current;
+  const reported = new Set(revisions.map((r) => r.id.toLowerCase()));
+  return [...revisions, ...(current ?? []).filter((r) => !reported.has(r.id.toLowerCase()))];
 }
 
 /** [#260] The last push/unlock failed. Carries the already-humanized error plus
@@ -277,6 +268,7 @@ export interface SpeleoLinkSnapshot {
   remoteProjectId: string | null;
   divergence: DivergenceOrigin | null;
   banner: SpeleoBanner | null;
+  replacedRevisions: SpeleoRevision[] | null;
 }
 
 interface SpeleoStore {
@@ -324,6 +316,18 @@ interface SpeleoStore {
   divergence: DivergenceOrigin | null;
   /** Transient banner (#200 seam). */
   banner: SpeleoBanner | null;
+  /**
+   * [R3] The upload landed, but SpeleoDB put it on top of these revisions,
+   * which another session (of this account, which holds the same per-account
+   * lock) uploaded between the push's check that nothing had moved and the
+   * upload itself; newest first. Their changes are not in ours; they are still
+   * in the project's revision history. Persistent until dismissed, in a slot of
+   * its own: it is the only report of the lost race, the work it names is at
+   * risk of being overlooked (notifications.md: data at risk never rides a
+   * toast), and no later push, release or Start editing outcome may take its
+   * place (F4R3-locks-push-4). Cleared by its Dismiss and by leaving the project.
+   */
+  replacedRevisions: SpeleoRevision[] | null;
   /**
    * Lock holder per accessible SpeleoDB project (`project_id` → holder email, or
    * `null` = free), from the single login/app-open `list_projects` scan (#201).
@@ -602,6 +606,12 @@ interface SpeleoStore {
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
   dismissBanner: () => void;
+  /** [R3] Report revisions a landed upload replaced: folded into the replaced
+      slot (see `replacedRevisions`). For a result the push/done reducers do not
+      see, such as a failure after the landing. */
+  raiseReplacedRevisions: (revisions: SpeleoRevision[] | undefined) => void;
+  /** [R3] The replaced banner's Dismiss. */
+  dismissReplacedRevisions: () => void;
 }
 
 /**
@@ -696,6 +706,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   remoteProjectId: null,
   divergence: null,
   banner: null,
+  replacedRevisions: null,
   remoteLocks: {},
   remoteProjects: {},
   remoteSummaries: {},
@@ -816,6 +827,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteProjectId: null,
               divergence: null,
               banner: null,
+              replacedRevisions: null,
             };
       }
       // Remote. Keep an already-seeded link only when it was seeded for THIS
@@ -836,6 +848,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         remoteProjectId: null,
         divergence: null,
         banner: null,
+        replacedRevisions: null,
         link: {
           // Read-only until the status confirms we hold the write lock. The
           // backend agrees: `project_load` re-derives its edit gate as
@@ -1099,6 +1112,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      replacedRevisions: null,
       // The revision-history line fetches per the open remote project id, which it
       // can no longer read token-lessly; drop it so it hides (rather than error-fetching)
       // until a re-login re-seeds it from the next status refresh.
@@ -1125,6 +1139,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           remoteProjectId: null,
           divergence: null,
           banner: null,
+          replacedRevisions: null,
         };
       }
       const editState = s.edit_enabled ? 'editing' : 'read-only';
@@ -1201,11 +1216,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       },
       divergence: null,
       banner: null,
+      replacedRevisions: null,
     }),
 
   snapshotLink: () => {
-    const { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner } = get();
-    return { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner };
+    const { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner, replacedRevisions } = get();
+    return { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner, replacedRevisions };
   },
 
   // `busy: false` mirrors `clearLink`: the seed's caller is done either way, and a
@@ -1237,6 +1253,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       remoteProjectId: null,
       divergence: null,
       banner: null,
+      replacedRevisions: null,
       busy: false,
     });
   },
@@ -1322,12 +1339,23 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               serverError: null,
             },
             divergence: null,
-            banner: replacedRevisionBanner(r.kind === 'released' ? r.replaced_revisions : undefined),
+            banner: null,
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'released' ? r.replaced_revisions : undefined,
+            ),
           };
         case 'divergence_needed':
           return { divergence: 'done' };
         case 'push_unconfirmed':
-          return { banner: { kind: 'push_unconfirmed' } };
+          // A landing with a late edit still names what it replaced (R3).
+          return {
+            banner: { kind: 'push_unconfirmed' },
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'push_unconfirmed' ? r.replaced_revisions : undefined,
+            ),
+          };
         case 'not_editing':
           // Nothing was uploaded and nothing was released: the backend's edit gate
           // was already closed (typically a 401 auto-drop, which runs
@@ -1358,12 +1386,22 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            banner: replacedRevisionBanner(r.kind === 'pushed' ? r.replaced_revisions : undefined),
+            banner: null,
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'pushed' ? r.replaced_revisions : undefined,
+            ),
           };
         case 'divergence_needed':
           return { divergence: 'push' };
         case 'push_unconfirmed':
-          return { banner: { kind: 'push_unconfirmed' } };
+          return {
+            banner: { kind: 'push_unconfirmed' },
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'push_unconfirmed' ? r.replaced_revisions : undefined,
+            ),
+          };
         case 'not_editing':
           // See applyDone: nothing left this machine, so nothing about the local
           // copy's relationship to the server may be marked resolved.
@@ -1421,6 +1459,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
 
   dismissBanner: () => set({ banner: null }),
+
+  raiseReplacedRevisions: (revisions) =>
+    set((state) => {
+      const next = withReplaced(state.replacedRevisions, revisions);
+      return next === state.replacedRevisions ? {} : { replacedRevisions: next };
+    }),
+
+  dismissReplacedRevisions: () => set({ replacedRevisions: null }),
 }));
 
 /**

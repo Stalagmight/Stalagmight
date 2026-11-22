@@ -271,7 +271,7 @@ it('R3: Save and Close stops on an upload that replaced a revision pushed meanwh
   // The dialog gets out of the banner's way; the project stays open.
   await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
   expect(close).not.toHaveBeenCalled();
-  expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [replaced] });
+  expect(useSpeleoStore.getState().replacedRevisions).toEqual([replaced]);
   // Nothing is left pending for a later upload dialog to resume.
   expect(getUploadContinuation('/replaced.stalx')).toBeNull();
   // The lock is back and nothing is left to upload, so the next close asks nothing.

@@ -33,14 +33,14 @@ const LINK: SpeleoLinkState = {
 };
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
-  useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null });
+  useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null, replacedRevisions: null });
 
 beforeEach(() => {
   setUploadContinuation(null);
   useProjectStore.setState({ project: { file_path: '/synthetic/remote.stalx', name: 'Synthetic survey', zero_datums: [] } as never, isDirty: false });
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue({ kind: 'editing' });
-  useSpeleoStore.setState({ link: null, banner: null, busy: false, session: null, remoteProjectId: 'synthetic' });
+  useSpeleoStore.setState({ link: null, banner: null, replacedRevisions: null, busy: false, session: null, remoteProjectId: 'synthetic' });
   useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceSection: null });
 });
 
@@ -76,49 +76,71 @@ describe('SpeleoBanner replaced revision (R3)', () => {
     authored_date: '2026-11-21T10:00:00.000Z',
     message,
   });
+  const SUMP = revision('0123456789abcdef0123456789abcdef01234567', 'Surveyed the sump');
 
   it('names the revision the upload replaced, who uploaded it, and where it still is', async () => {
     seedLink({ hasUnpushedEdits: false });
-    useSpeleoStore.getState().applyPush({
-      kind: 'pushed',
-      replaced_revisions: [revision('0123456789abcdef0123456789abcdef01234567', 'Surveyed the sump')],
-    });
+    useSpeleoStore.getState().applyPush({ kind: 'pushed', replaced_revisions: [SUMP] });
     render(<SpeleoBanner />);
-    const banner = screen.getByTestId('speleo-banner');
+    const banner = screen.getByTestId('speleo-replaced-banner');
     expect(banner).toHaveAttribute('data-kind', 'replaced_revision');
     expect(banner).toHaveTextContent(
       'Your upload replaced "Surveyed the sump" (01234567), uploaded by diver@example.com while yours was on its way. ' +
         'Its changes are not in yours. It is still in the SpeleoDB tab\'s Revision History, where you can view or restore it.',
     );
-    // Persistent until dismissed: nothing else reports the lost race.
     expect(screen.queryByTestId('speleo-banner-retry-push')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('speleo-banner-dismiss'));
-    expect(useSpeleoStore.getState().banner).toBeNull();
+    await userEvent.click(screen.getByTestId('speleo-replaced-banner-dismiss'));
+    expect(useSpeleoStore.getState().replacedRevisions).toBeNull();
+    expect(screen.queryByTestId('speleo-replaced-banner')).not.toBeInTheDocument();
   });
 
   it('counts several, names the latest, and falls back to the short id without a description', () => {
     seedLink({ hasUnpushedEdits: false });
     useSpeleoStore.setState({
-      banner: {
-        kind: 'replaced_revision',
-        revisions: [revision('abcdef0123456789', null), revision('9876543210fedcba', 'First')],
-      },
+      replacedRevisions: [revision('abcdef0123456789', null), revision('9876543210fedcba', 'First')],
     });
     render(<SpeleoBanner />);
-    expect(screen.getByTestId('speleo-banner')).toHaveTextContent(
+    expect(screen.getByTestId('speleo-replaced-banner')).toHaveTextContent(
       'Your upload replaced 2 revisions uploaded by diver@example.com while yours was on its way, the latest abcdef01. ' +
         'Their changes are not in yours. They are still in the SpeleoDB tab\'s Revision History, where you can view or restore them.',
     );
   });
 
-  it('a later no-anchor notice does not cover it', () => {
+  // F4R3-locks-push-4: persistent until dismissed. Every later outcome used to
+  // take the one banner slot: a clean push or release nulled it, Start editing
+  // kept only a push failure, and an unconfirmed or failed push overwrote it.
+  // Injection: the replaced report back in the shared `banner` slot (any of the
+  // writers below replacing it) fails these.
+  it.each([
+    ['a later clean push', () => useSpeleoStore.getState().applyPush({ kind: 'pushed' })],
+    ['a later clean release', () => useSpeleoStore.getState().applyDone({ kind: 'released' })],
+    ['Start editing', () => useSpeleoStore.getState().applyStartEditing({ kind: 'editing' })],
+    ['an unconfirmed push', () => useSpeleoStore.getState().applyPush({ kind: 'push_unconfirmed' })],
+    ['a failed push', () => useSpeleoStore.getState().raisePushFailedBanner({ message: 'x', origin: 'push', pushMessage: null })],
+    ['a no-anchor notice', () => useSpeleoStore.getState().raiseNoAnchorBanner()],
+  ])('stays through %s, beside whatever that raised', (_label, next) => {
+    seedLink({ hasUnpushedEdits: false, editState: 'editing' });
+    useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [SUMP] });
+    next();
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([SUMP]);
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-replaced-banner')).toBeInTheDocument();
+  });
+
+  it('a second report adds to the first, newest first, each revision once', () => {
+    seedLink({ hasUnpushedEdits: false, editState: 'editing' });
+    const later = revision('fedcba9876543210', 'Later');
+    useSpeleoStore.getState().applyPush({ kind: 'pushed', replaced_revisions: [SUMP] });
+    useSpeleoStore.getState().applyPush({ kind: 'push_unconfirmed', replaced_revisions: [later, SUMP] });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([later, SUMP]);
+    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+  });
+
+  it('leaving the project clears it', () => {
     seedLink({ hasUnpushedEdits: false });
-    useSpeleoStore.getState().applyDone({
-      kind: 'released',
-      replaced_revisions: [revision('0123456789abcdef', 'Surveyed the sump')],
-    });
-    useSpeleoStore.getState().raiseNoAnchorBanner();
-    expect(useSpeleoStore.getState().banner?.kind).toBe('replaced_revision');
+    useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [SUMP] });
+    useSpeleoStore.getState().clearLink();
+    expect(useSpeleoStore.getState().replacedRevisions).toBeNull();
   });
 });
 

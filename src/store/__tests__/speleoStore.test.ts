@@ -513,13 +513,15 @@ describe('speleoStore', () => {
       useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [REPLACED] });
       const s = useSpeleoStore.getState();
-      expect(s.banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+      expect(s.replacedRevisions).toEqual([REPLACED]);
+      // The push-unconfirmed banner it supersedes is gone.
+      expect(s.banner).toBeNull();
       // The upload itself landed: the lock is back and nothing is left to upload.
       expect(s.link?.editState).toBe('read-only');
       expect(s.link?.hasUnpushedEdits).toBe(false);
-      // An empty list is the ordinary case.
+      // An empty list is the ordinary case, and does not wipe the report.
       useSpeleoStore.getState().applyDone({ kind: 'released', replaced_revisions: [] });
-      expect(useSpeleoStore.getState().banner).toBeNull();
+      expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
     });
   });
 
@@ -560,7 +562,8 @@ describe('speleoStore', () => {
     it('R3: pushed with replaced revisions raises the banner that names them, still editing', () => {
       useSpeleoStore.getState().applyPush({ kind: 'pushed', replaced_revisions: [REPLACED] });
       const s = useSpeleoStore.getState();
-      expect(s.banner).toEqual({ kind: 'replaced_revision', revisions: [REPLACED] });
+      expect(s.replacedRevisions).toEqual([REPLACED]);
+      expect(s.banner).toBeNull();
       expect(s.link?.editState).toBe('editing');
       expect(s.link?.hasUnpushedEdits).toBe(false);
     });

@@ -29,8 +29,21 @@ export function replacedRevisionsNotice(t: TFunction, revisions: readonly Speleo
 }
 
 /**
+ * [R3] The revisions a failure that came after a landed upload carries (the
+ * backend's `SpeleoErrorDto.replaced_revisions`: Done's release failed after
+ * its upload landed over another session's revision), or `undefined`.
+ */
+export function replacedRevisionsOf(error: unknown): SpeleoRevision[] | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const revisions = (error as { replaced_revisions?: unknown }).replaced_revisions;
+  return Array.isArray(revisions) && revisions.length > 0 ? (revisions as SpeleoRevision[]) : undefined;
+}
+
+/**
  * [R3] The upload landed, but on top of revisions another session uploaded
- * meanwhile: `applyDone` / `applyPush` raised the banner that names them.
+ * meanwhile: `applyDone` / `applyPush` raised the banner that names them. Also
+ * a `push_unconfirmed` that carries them: the upload landed, and an edit made
+ * after it started is still to upload.
  *
  * Every way out of the project that ran the upload stops on it, so that banner
  * is read before the project closes: the exit prompt and the sign-out, Save and
@@ -39,6 +52,6 @@ export function replacedRevisionsNotice(t: TFunction, revisions: readonly Speleo
  * proceeds. One predicate, so no close path can drift from the others.
  */
 export function landedOverReplacedRevisions(result: DoneResult | PushResult | null | undefined): boolean {
-  if (result?.kind !== 'released' && result?.kind !== 'pushed') return false;
+  if (result?.kind !== 'released' && result?.kind !== 'pushed' && result?.kind !== 'push_unconfirmed') return false;
   return (result.replaced_revisions?.length ?? 0) > 0;
 }

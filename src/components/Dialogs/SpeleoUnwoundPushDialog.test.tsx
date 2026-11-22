@@ -290,7 +290,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     expect(performQuitMock).not.toHaveBeenCalled();
     // The prompt it displaced is not put back over the banner either.
     expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
-    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'replaced_revision', revisions: [replaced] });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([replaced]);
     expect(useSpeleoStore.getState().link).toMatchObject({ editState: 'read-only', hasUnpushedEdits: false });
   });
 

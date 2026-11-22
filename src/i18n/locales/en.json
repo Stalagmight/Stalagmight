@@ -3692,7 +3692,7 @@
       "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
       "keepLocal": {
         "label": "Keep my local version",
-        "help": "Upload your version to SpeleoDB to resolve the conflict."
+        "help": "Check SpeleoDB again and upload your version if nothing new has landed there. While SpeleoDB has a revision your copy does not contain, this comes back here: to keep your edits then, save them as an unmanaged file."
       },
       "takeRemote": {
         "label": "Take the SpeleoDB version",

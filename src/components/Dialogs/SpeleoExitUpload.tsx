@@ -50,6 +50,7 @@ export function useSpeleoExitUpload() {
   const upload = async (message: string, isCurrent: () => boolean, isShown?: () => boolean): Promise<ExitUploadResult> => {
     setSlow(false);
     setUploading(true);
+    const replacedBefore = useSpeleoStore.getState().replacedRevisions;
     try {
       const resolved = await done(message, {
         isCurrent,
@@ -60,8 +61,11 @@ export function useSpeleoExitUpload() {
       });
       if (isShown && !isShown() && isCurrent()) toastLateUploadOutcome(resolved);
       if (resolved?.kind === 'divergence_needed') return 'diverged';
+      // An upload that landed over another session's revision stops the exit,
+      // whatever followed the landing: a late edit still to upload, or a failed
+      // release (that failure carries the report, which `done` raised).
+      if (landedOverReplacedRevisions(resolved) || replacedReported(replacedBefore)) return 'replaced';
       if (resolved?.kind !== 'released') return 'failed';
-      if (landedOverReplacedRevisions(resolved)) return 'replaced';
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) return 'newer';
       return 'released';
     } finally {
@@ -70,6 +74,12 @@ export function useSpeleoExitUpload() {
   };
 
   return { upload, uploading, slow, unwound };
+}
+
+/** Whether a report of replaced revisions (R3) reached the store since `before`. */
+function replacedReported(before: unknown): boolean {
+  const now = useSpeleoStore.getState().replacedRevisions;
+  return !!now?.length && now !== before;
 }
 
 /** The description field and the notices that sit around it. */

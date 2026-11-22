@@ -14,6 +14,7 @@ import {
 import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { replacedRevisionsOf } from '../utils/speleoReplacedRevisions';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { confirmSpeleoReloadDiscard } from '../utils/speleoReloadConfirm';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -343,22 +344,26 @@ export function useSpeleoActions(): SpeleoActions {
         // An edit can land after the backend decides the snapshot is clean but
         // before this reply arrives. Keep those edits pending in the frontend too.
         if (result.kind === 'pushed' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
-          result = { kind: 'push_unconfirmed' };
+          // The upload did land: what it replaced (R3) is reported with the
+          // downgraded result, the only copy of it (F4R3-locks-push-2).
+          const replaced = result.replaced_revisions;
+          result = { kind: 'push_unconfirmed', ...(replaced?.length ? { replaced_revisions: replaced } : {}) };
         }
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
           // R3: an upload that replaced revisions pushed meanwhile is reported by
-          // the banner `applyPush` raised - this event's one surface, no toast.
+          // the banner `applyPush` raised - this event's one surface, no success
+          // toast.
           const replaced = result.kind === 'pushed' && !!result.replaced_revisions?.length;
-          if (!replaced) {
-            if (result.kind === 'pushed' && result.undo_history_omitted) {
-              // sdk#3: the upload left its undo history out to fit the server's size
-              // limit. Same event, one surface: the success toast becomes a caveat.
-              showToast(t('speleodb.editBar.toasts.pushedWithoutHistory'), TOAST_KEYS.SPELEODB_PUSHED, 'warning');
-            } else {
-              showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
-            }
+          if (result.kind === 'pushed' && result.undo_history_omitted) {
+            // sdk#3: the upload left its undo history out to fit the server's size
+            // limit. Same event, one surface: the success toast becomes a caveat.
+            // A fact of its own beside a replaced report, so it is said there too
+            // (F4R3-locks-push-8).
+            showToast(t('speleodb.editBar.toasts.pushedWithoutHistory'), TOAST_KEYS.SPELEODB_PUSHED, 'warning');
+          } else if (!replaced) {
+            showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
           }
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
@@ -388,6 +393,8 @@ export function useSpeleoActions(): SpeleoActions {
         return result;
       } catch (e) {
         if (!current()) return null;
+        // A failure after a landing names what the landing replaced (R3).
+        useSpeleoStore.getState().raiseReplacedRevisions(replacedRevisionsOf(e));
         // Banner only (durable; inline notice inside the Speleo dialogs while
         // one is open). The old extra toast was pre-#260 redundancy.
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed');
@@ -485,20 +492,19 @@ export function useSpeleoActions(): SpeleoActions {
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
-            // R3: see `push` - the banner naming the replaced revisions is the surface.
-            if (!(result.kind === 'released' && result.replaced_revisions?.length)) {
-              if (result.kind === 'released' && result.undo_history_omitted) {
-                // sdk#3: see `push` - an upload that left its undo history out says so.
-                showToast(t('speleodb.editBar.toasts.releasedWithoutHistory'), TOAST_KEYS.SPELEODB_RELEASED, 'warning');
-              } else {
-                showToast(
-                  hadUnpushedEdits
-                    ? t('speleodb.editBar.toasts.released')
-                    : t('speleodb.editBar.toasts.releasedNothingToUpload'),
-                  TOAST_KEYS.SPELEODB_RELEASED,
-                  'success',
-                );
-              }
+            // R3: see `push` - the banner naming the replaced revisions is the
+            // surface, and an upload that left its undo history out still says so.
+            if (result.kind === 'released' && result.undo_history_omitted) {
+              // sdk#3: see `push` - an upload that left its undo history out says so.
+              showToast(t('speleodb.editBar.toasts.releasedWithoutHistory'), TOAST_KEYS.SPELEODB_RELEASED, 'warning');
+            } else if (!(result.kind === 'released' && result.replaced_revisions?.length)) {
+              showToast(
+                hadUnpushedEdits
+                  ? t('speleodb.editBar.toasts.released')
+                  : t('speleodb.editBar.toasts.releasedNothingToUpload'),
+                TOAST_KEYS.SPELEODB_RELEASED,
+                'success',
+              );
             }
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
@@ -529,6 +535,9 @@ export function useSpeleoActions(): SpeleoActions {
         return result;
       } catch (e) {
         if (!current()) return null;
+        // The upload landed and the release after it failed: the failure carries
+        // what the landing replaced (R3, F4R3-locks-push-3).
+        useSpeleoStore.getState().raiseReplacedRevisions(replacedRevisionsOf(e));
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,

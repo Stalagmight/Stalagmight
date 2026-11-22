@@ -88,12 +88,12 @@ test('an upload that replaced a revision pushed meanwhile names it on the banner
   await editingRemoteProject(page, 'replaced');
   await saveToSpeleoDb(page);
   await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
-  const banner = page.getByTestId('speleo-banner');
+  const banner = page.getByTestId('speleo-replaced-banner');
   await expect(banner).toHaveAttribute('data-kind', 'replaced_revision');
   await expect(banner).toContainText('Your upload replaced "Surveyed the sump" (01234567), uploaded by test@example.com');
   await expect(banner).toContainText('Revision History, where you can view or restore it.');
   await expect(page.locator('[data-testid="toast"][data-toast-key="speleodb-pushed"]')).toHaveCount(0);
-  await page.getByTestId('speleo-banner-dismiss').click();
+  await page.getByTestId('speleo-replaced-banner-dismiss').click();
   await expect(banner).toHaveCount(0);
 });
 
@@ -125,7 +125,7 @@ test('Save and Close stops on an upload that replaced a revision pushed meanwhil
 
   // The upload landed, but the project stays open with the banner on screen.
   await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
-  const banner = page.getByTestId('speleo-banner');
+  const banner = page.getByTestId('speleo-replaced-banner');
   await expect(banner).toHaveAttribute('data-kind', 'replaced_revision');
   await expect(banner).toContainText('Your upload replaced "Surveyed the sump" (01234567), uploaded by test@example.com');
   await expect(page.getByTestId('single-system-view')).toBeVisible();

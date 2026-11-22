@@ -17,8 +17,12 @@ import { DialogWrapper } from './DialogWrapper';
  * only non-recoverable artifact (the server side is always recoverable from SDB
  * git):
  * - **Keep my local version**: route to the push dialog so the user uploads their
- *   version to resolve it (the push re-fences and, if it still diverges, lands
- *   back here - never a silent clobber).
+ *   version (the push re-fences and, if it still diverges, lands back here - never
+ *   a silent clobber). It resolves a conflict only when SpeleoDB has nothing new
+ *   any more (a transient fail-closed read); while another upload's revision is
+ *   SpeleoDB's latest - another account's, or another session of this one (R3) -
+ *   it comes back here every time, and its help says so and points at Save as an
+ *   unmanaged file (F4R3-locks-push-7).
  * - **Take the SpeleoDB version**: DESTROYS local unpushed edits and resets to the
  *   server tip. This is the only irreversible choice, so it is gated behind a
  *   SECOND in-dialog confirmation (Back / Destroy & continue) - there is no
