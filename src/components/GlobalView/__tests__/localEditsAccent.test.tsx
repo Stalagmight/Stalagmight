@@ -53,6 +53,7 @@ const STATES: SpeleoLocalStateMap = {
     last_edit_at: '2026-07-26T00:00:00Z',
     is_open: false,
     state_unknown: false,
+    lock_claimed_here: false,
   },
   [CLEAN]: {
     has_local_copy: true,
@@ -60,6 +61,7 @@ const STATES: SpeleoLocalStateMap = {
     last_edit_at: null,
     is_open: false,
     state_unknown: false,
+    lock_claimed_here: false,
   },
 };
 

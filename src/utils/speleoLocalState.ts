@@ -72,3 +72,34 @@ export function localStateUnknown(
   if (!projectId) return false;
   return states[projectId]?.state_unknown === true;
 }
+
+/**
+ * Whether this computer can positively NOT have taken the write lock the account
+ * holds on `projectId` (demo item 1).
+ *
+ * SpeleoDB's lock belongs to the ACCOUNT, so the same account signed in on another
+ * computer holds it too, and the server cannot say which session took it. This
+ * computer can only rule itself out: the row was read (not `state_unknown`), there
+ * is no local copy, the project is not open, this run holds no claim on the lock
+ * (`lock_claimed_here`), and no recent file is linked to the project
+ * (`linkedHere`, a published copy kept outside the cache). A clean copy here is
+ * NOT enough: a session on this computer that crashed over it leaves exactly that,
+ * and claims are not persisted across a restart.
+ *
+ * A positive report only: no row, or a failed read, is "cannot tell" (false).
+ */
+export function lockNotTakenHere(
+  states: SpeleoLocalStateMap,
+  projectId: string | null | undefined,
+  linkedHere: boolean,
+): boolean {
+  if (!projectId || linkedHere) return false;
+  const state = states[projectId];
+  if (!state) return false;
+  return (
+    !state.has_local_copy &&
+    !state.state_unknown &&
+    !state.is_open &&
+    state.lock_claimed_here !== true
+  );
+}

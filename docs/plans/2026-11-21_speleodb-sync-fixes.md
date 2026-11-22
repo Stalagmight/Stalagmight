@@ -655,7 +655,8 @@ A demo of the four fixes in the real app against an internal test server (two
 sessions, a fault proxy; never speleodb.org) found no P0 or P1. Items 3 to 7 of
 its list, and the review's leftover (every SpeleoDB failure surface worded by
 cause), are fixed here; each was reproduced first by a test that fails on the
-code before the fix. Items 1, 2, 8 and 9 are not in this change.
+code before the fix. Items 1 and 2 are in the next subsection; items 8 and 9
+(the memory warning, the replaced report's date format) are not addressed.
 
 - **Item 4 (P2) and the leftover: the release-failure dialog showed the raw
   diagnostic** ("What went wrong: The SpeleoDB lock could not be handed back:
@@ -725,3 +726,113 @@ code before the fix. Items 1, 2, 8 and 9 are not in this change.
   status that then cannot reach SpeleoDB says "Connection unavailable" and drops
   the line, which is what is known. Vitest `SpeleoWorkspaceHeader`,
   `speleoStore`, `useOpenRemoteProject`, and `speleodb-home-cache.spec.ts`.
+
+### The real-app demo: two sessions of one account
+
+A real-app run of `sdb/core` at cb85ce496 (two app instances with separate
+profiles, like two computers, against a test server; synthetic accounts and
+survey) listed what confused it. Its items 1 and 2 are the same root: SpeleoDB's
+lock belongs to the account, so the server cannot tell two sessions of one account
+apart, and the client did not say so or act on it.
+
+- **Demo item 1 (P2): a second live session was invited to release the lock the
+  first was editing under.** At sign-in the held-lock prompt listed the account's
+  lock, said "perhaps from a session that did not exit cleanly" and offered a bare
+  Release, which also took the initial focus (DialogWrapper focuses the first
+  enabled button: the first row's Release once the rows have loaded). The prompt is
+  built from the sign-in scan (`scanLocksOnOpen`: every project SpeleoDB names this
+  account as holding, minus the open one) joined with the local states, and nothing
+  in either can tell a live session of the account from a crashed one: the lock is
+  per account, and lock claims are process-local, so this computer's own crashed
+  session leaves no claim after the restart either. The stranded-claim cleanup is
+  not a prompt: it hands back only a lock THIS run claimed and never shows anything.
+  The sign-out survey, however, handed back every clean lock the account holds with
+  no question, which is the same hazard.
+  - Fix: the body says the lock may belong to Stalagmight open on another computer
+    with this account or to a session that did not exit cleanly, and that releasing
+    it while that session edits lets others change the project under it. The
+    release is the worded "Release anyway", never hidden (SpeleoDB never expires a
+    lock, so a crashed session's lock must stay releasable), and Not now is the
+    default focus (`data-autofocus`).
+  - A row says "Held by this account, not by this computer" only on a positive
+    answer (`lockNotTakenHere`): this run holds no claim on the lock
+    (`SpeleoLocalProjectState.lock_claimed_here`, new, joined by the backend from the
+    signed-in account's claims, whatever the disk says), there is no local copy, the
+    project is not open, its copy is not unreadable, and no recent file is linked to
+    the project (a published copy kept outside the cache). A clean copy here is not
+    enough: a session that crashed over it leaves exactly that.
+  - The sign-out leaves such a lock alone (`surveySignOut`): it strands nothing of
+    this computer's, and it may be the lock another session edits under.
+  - *Rejected:* a persisted "this computer took the lock" marker (a key in the
+    copy's `local.speleodb`, or the claims mirrored to a file in the config
+    directory), which would let the clean-copy case say "not by this computer" too.
+    Every release path (close, switch, quit, the update restart, delete, Done,
+    unlink, sign-out, the cleanup, the per-project Release of a project that is not
+    open) would have to clear it, and a missed clear makes the prompt say "this
+    computer" wrongly while a missed set makes it say "not by this computer"
+    wrongly; the per-project Release would also have to write a file it does not
+    have open. *Rejected:* withholding Release on rows that might be live (above).
+  - Tests: `a_row_says_whether_this_run_holds_a_claim_on_the_lock` (Rust: this
+    account's claim with no copy, another account's claim, a copy alone, the
+    single-file form), `HeldLockResumeDialog.sameAccount.test.tsx` (the body, Release
+    anyway and its release, the default focus with DialogWrapper's initial-focus
+    frame run by hand, each origin case including a failed read), the
+    `surveySignOut` case, and `speleodb-held-lock-same-account.spec.ts`
+    (Playwright: Enter keeps the lock; Release anyway releases). All failed on
+    cb85ce496 (the Rust one does not compile there: the field is new).
+    Injections: drop the claim join at the end of the listing (the Rust case);
+    drop `data-autofocus` from Not now (the focus case: focus lands on Release
+    anyway); drop the `lockNotTakenHere` term from the sign-out survey (its case).
+- **Demo item 2 (P2): Take the SpeleoDB version released the lock another session
+  of the account edits under.** Both sessions edit under the account's lock;
+  session 1 is refused (R3) and takes the SpeleoDB version. `speleodb_take_remote`
+  shut the gate and released the lock (abandoning, holder-checked: the holder is the
+  account, so the release went out), and SpeleoDB showed no lock while session 2
+  still said "You are editing".
+  - Decision: Take the SpeleoDB version releases nothing and leaves the claim as it
+    was (bound, unbound or kept). Replacing the copy is a fast-forward with
+    `LocalEditsPolicy::Discard` and needs nothing from the lock, so it has none to
+    give up. An edit session carries over the reload (data#3 is unchanged: only a
+    claim still bound carries) and goes on editing the server version; a read-only
+    session stays read-only with whatever pointer it had. The confirmation says
+    which ("You keep the write lock and go on editing the SpeleoDB version" / "The
+    write lock is left as it is, and the project stays read-only").
+  - *Rejected:* releasing and re-acquiring. The project is unlocked in between, and
+    an acquire that fails there leaves exactly the bug. *Rejected:* a re-acquire on
+    top (an acquire by the account that holds the lock is a no-op, so it proves
+    nothing). *Rejected:* clearing a kept claim's mark because the work behind it
+    was discarded: the next close would then release a lock that may be another
+    session's; it stays for the next sign-in's prompt, which now says so.
+  - Found on the way: the gate used to shut only after the history read, and the
+    fast-forward took its consent after that read, so an edit made during it was
+    discarded with the rest although the user had confirmed the discard before it
+    (reproduced on cb85ce496). The gate now stays open, so the revision read on entry
+    is the consent: an edit made since refuses the reload (`SessionMoved`, Retry)
+    and is kept.
+  - Tests: `taking_the_speleodb_version_keeps_the_lock_another_session_edits_under`
+    and `taking_the_speleodb_version_read_only_leaves_the_lock_as_it_was` (two
+    sessions of one account on the R3 loopback server, which now serves downloads
+    and mints hex revision ids), `take_remote_keeps_the_lock_and_the_edit_session`
+    (was `take_remote_reopens_the_server_version_read_only`) and
+    `an_edit_during_take_remotes_history_read_refuses_it` (integration,
+    `speleodb_revision_swap.rs`), the divergence dialog's two confirmation cases,
+    the `takeRemote` hook case, and `speleodb-take-remote.spec.ts` (Playwright,
+    editing and read-only). All failed on cb85ce496. Injections: the release put
+    back before the reload (both R3 cases and the integration keep-the-lock case);
+    no entry revision for the fast-forward (the edit-during-the-read case); the lock
+    line dropped from the confirmation (both dialog cases).
+- **Left**
+  - Every other release still cannot tell this session's lock from another
+    session's of the same account: a close, quit, Done or Switch to Read Only in one
+    session hands back the lock the other edits under (the holder check passes: the
+    holder is the account), and the stranded-claim cleanup hands back this run's
+    pointer even if another computer has since inherited the lock. Only a lock
+    SpeleoDB keeps per session (or a token the acquire returns and the release must
+    present) can fix that; worth proposing upstream with the conditional upload.
+  - The prompt cannot say "not by this computer" over a clean copy here (the
+    rejected marker above).
+  - The demo's items 3 to 7 (a lost acquire explained only at Close, the raw
+    diagnostic in "Couldn't hand back the lock", nothing persistent saying the copy
+    is behind, "Ready for editing" on an offline copy, the read-only notice's title
+    after Resume editing) are in the subsection above; items 8 and 9 (the memory
+    warning, the replaced report's date format) are not addressed.

@@ -11,8 +11,11 @@
 //!
 //! The one exception is a release that CARRIES the user's discard decision:
 //! [`AppState::speleodb_close_discarding_local`] (close with `discard_local`) and
-//! the other explicit-abandon verbs (delete, unlink, take-remote), which destroy
-//! the local work before the lock goes back.
+//! the other explicit-abandon verbs (delete, unlink), which destroy the local
+//! work before the lock goes back. Taking the SpeleoDB version also discards
+//! the local work, but it releases nothing: the copy goes on under the same
+//! lock (`speleodb_take_remote`), which another session of the account may be
+//! editing under too.
 //!
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
@@ -85,9 +88,9 @@ enum ReleaseIntent {
     /// are decided from the claim, so both may finish an owned claim after the
     /// edit gate has shut; they differ only in what the log says they were.
     Lifecycle,
-    /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
-    /// `speleodb_take_remote`): the user has said outright they are walking away
-    /// from the local work, so there is no future push for the veto to protect.
+    /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`):
+    /// the user has said outright they are walking away from the local work, so
+    /// there is no future push for the veto to protect.
     Abandon,
 }
 

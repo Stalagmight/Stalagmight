@@ -1353,16 +1353,31 @@ impl AppState {
     /// `.stalx` path so the frontend can reload the view (as the fast-forward arms
     /// of Start-editing / Update do).
     ///
-    /// Ends the edit session and leaves the project READ-ONLY: the held write lock
-    /// is released (holder-checked and best-effort, like [`Self::speleodb_unlink`]),
-    /// which takes the claim - and with it the edit gate (`speleodb_edit_gate`) -
-    /// before the reload, and the reload can only carry an edit session that still
-    /// has its claim. The user resumes via Start editing, which re-acquires the lock
-    /// and now reconciles cleanly (BASE has advanced to the tip). (data#3: the reload
-    /// used to copy the old gate across and reopen the project editable with no lock
-    /// held.)
+    /// The lock is left exactly as it is: no release, and the claim stays as it
+    /// was (bound, unbound or kept). Taking the server's version needs nothing
+    /// from the lock, and SpeleoDB's lock is the ACCOUNT's: the same account
+    /// signed in on another computer or in another window edits under the very
+    /// lock a release here would free (demo item 2, R3). This used to release it,
+    /// which left that other session editing with no lock on the server for
+    /// anyone else to take. So an edit session carries over the reload (its claim
+    /// is still bound; data#3's rule that only a bound claim carries is
+    /// unchanged) and goes on editing the server version, and a read-only
+    /// session stays read-only.
+    ///
+    /// The edit gate therefore stays open while this reads the history and
+    /// downloads, so an edit can land in the meantime. The user confirmed the
+    /// discard before it, so it is not discarded with the rest: the revision read
+    /// on entry is the consent the fast-forward checks, and an edit since refuses
+    /// the reload (`SessionMoved`) with the edit kept.
     pub fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
         let (generation, link) = self.speleodb_session_snapshot()?;
+        let consented_revision = {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.current_revision()
+        };
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1388,34 +1403,23 @@ impl AppState {
             )));
         }
 
-        // Abandoning local edits ends the edit session. The session's claim is what
-        // holds the gate open, so shut it first, outright: a release that is skipped
-        // (no account claim to release, a token from another deployment) or that
-        // fails (the claim comes back, unbound) must not leave it bound for the
-        // reload below to carry.
-        self.speleodb_shut_edit_gate();
-        // Then release the held lock (if any) so it isn't left stranded, mirroring
-        // speleodb_unlink. Best-effort and holder-checked - an offline release keeps
-        // the claim as a pointer for a later retry. The ABANDONING variant,
-        // necessarily: take-remote is only ever reached WITH un-pushed edits, and
-        // discarding them is the whole point of the verb (behind the frontend's
-        // second destroy-confirmation), so the veto that protects the silent
-        // close/quit/switch release must not apply here.
-        self.speleodb_release_held_lock_abandoning();
-
         // Re-pull + reset to the tip: BASE = tip, dirty cleared, last_edit_at reset,
         // and the in-place reload starts the undo/redo stacks empty (the server
         // snapshot carries no history). This IS a fast-forward, minus the dirty guard
-        // - the whole point of take-remote is to discard the local edits. With no
-        // bound claim there is no edit session for the reload to carry, so the
-        // project comes back read-only.
+        // - the whole point of take-remote is to discard the local edits - and it
+        // carries the edit session exactly as an Update's fast-forward does: only a
+        // claim still bound to it.
         self.speleodb_fast_forward(
             &endpoint,
             &token,
             insecure_http,
             &link,
             tip.as_deref(),
-            (LocalEditsPolicy::Discard, generation, None),
+            (
+                LocalEditsPolicy::Discard,
+                generation,
+                Some(consented_revision),
+            ),
         )
         .map_err(local_dto)
     }
@@ -1552,8 +1556,8 @@ impl AppState {
         params: &super::speleodb_lock_release::LockReleaseParams,
     ) -> bool {
         // The shared sink for start-editing's abort arms, the publish push and -
-        // through `speleodb_release_held_lock_*` - logout / unlink / take-remote /
-        // the instance switch, so this project's claim ends here: a lock the server
+        // through `speleodb_release_held_lock_*` - logout / unlink / the instance
+        // switch, so this project's claim ends here: a lock the server
         // confirms released, or confirms is not ours, is no longer this process's
         // to account for.
         //
@@ -3229,8 +3233,8 @@ mod tests {
         );
         assert!(
             state.speleodb_abandon_lock_release_params().is_some(),
-            "the abandon variant (unlink / take-remote) is NOT vetoed - both verbs \
-             are only ever reached with un-pushed edits"
+            "the abandon variant (unlink) is NOT vetoed - the verb walks away from \
+             the un-pushed edits on purpose"
         );
     }
 
@@ -4693,8 +4697,8 @@ mod tests {
 
     #[test]
     fn logout_does_not_release_a_lock_over_unpushed_edits() {
-        // Logging out is not the same act as surrendering the lock. Unlike unlink /
-        // take-remote - the verbs that legitimately bypass the veto - a logout
+        // Logging out is not the same act as surrendering the lock. Unlike unlink -
+        // the verb that legitimately bypasses the veto - a logout
         // neither deletes the link row nor discards the edits, so releasing here
         // leaves the project free for a colleague to lock and push while the work
         // is still only on this machine. The lock left held is recoverable: the

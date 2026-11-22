@@ -63,10 +63,33 @@ impl EventSink for NullSink {
     }
 }
 
-/// Hold the revision download until the test says so.
+/// Hold one request until the test says so: the first request on `route` once
+/// `armed` is set (it disarms itself there, so later ones pass).
 struct Gate {
+    route: &'static str,
+    armed: Arc<AtomicBool>,
     seen: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
+}
+
+impl Gate {
+    /// A gate on the revision download, armed from the start.
+    fn download(seen: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
+        Self {
+            route: "/download/stalagmight",
+            armed: Arc::new(AtomicBool::new(true)),
+            seen,
+            release,
+        }
+    }
+
+    /// Hold the request here if this is the one the gate waits for.
+    fn hold(&self, route: &str) {
+        if route.contains(self.route) && self.armed.swap(false, Ordering::SeqCst) {
+            self.seen.send(()).expect("request seen");
+            self.release.recv().expect("request released");
+        }
+    }
 }
 
 fn read_request(stream: &mut TcpStream) -> String {
@@ -144,11 +167,10 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
             stream.set_nonblocking(false).expect("blocking stream");
             let text = read_request(&mut stream);
             let route = text.lines().next().unwrap_or_default().to_owned();
+            if let Some(gate) = &gate {
+                gate.hold(&route);
+            }
             if route.contains("/download/stalagmight") {
-                if let Some(gate) = &gate {
-                    gate.seen.send(()).expect("download seen");
-                    gate.release.recv().expect("download released");
-                }
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", revision.len())
                     .expect("head");
                 stream.write_all(&revision).expect("body");
@@ -342,10 +364,7 @@ fn a_late_revision_reply_never_touches_the_project_open_now() {
         let stub = serve(
             id,
             revision_bytes(temp.path()),
-            Some(Gate {
-                seen: seen_tx,
-                release: release_rx,
-            }),
+            Some(Gate::download(seen_tx, release_rx)),
         );
         let state = AppState::new().expect("state");
         state.set_event_sink(Arc::new(NullSink));
@@ -462,14 +481,17 @@ fn an_unraced_view_and_restore_still_swap_the_open_tree() {
     }
 }
 
-/// data#3 regression: Take remote releases the lock and reloads the server tip.
-/// The reload used to copy the old edit gate across, so the project came back
-/// "editing" with no lock held - edits dirtied the link while anyone else could
-/// lock and push. The gate is the lock claim now: Take remote hands the lock back
-/// (the server still says it is ours, so the release is sent) and the project it
-/// reopens is read-only.
+/// Take the SpeleoDB version keeps the lock and the edit session (demo item 2).
+/// SpeleoDB's lock is the account's, so the same account signed in elsewhere
+/// edits under it too: a release here used to leave that session editing with
+/// no lock on the server. Taking the server's version needs no release, so the
+/// server version replaces the copy and the session goes on editing it under
+/// the lock it still holds. (data#3 still holds: the reload carries the edit
+/// session only because its claim is still bound to it.)
+/// Injection: put the release back into `speleodb_take_remote` and one release
+/// is sent and the project comes back read-only.
 #[test]
-fn take_remote_reopens_the_server_version_read_only() {
+fn take_remote_keeps_the_lock_and_the_edit_session() {
     let id = "33333333-3333-3333-3333-333333333331";
     let temp = tempfile::tempdir().expect("temp");
     let stub = serve(id, revision_bytes(temp.path()), None);
@@ -488,12 +510,72 @@ fn take_remote_reopens_the_server_version_read_only() {
     );
     assert_eq!(
         stub.releases.load(Ordering::SeqCst),
-        1,
-        "the held lock was handed back"
+        0,
+        "nothing was handed back"
     );
-    assert!(
-        !gate_open(&state),
-        "with the lock released, the reloaded project must be read-only"
+    assert!(gate_open(&state), "the session goes on editing");
+    drop(stub);
+}
+
+/// Taking the server version no longer shuts the edit gate first, so an edit
+/// can land while it reads SpeleoDB's history. That edit was made after the
+/// user confirmed the discard, so it is not discarded with the rest: the
+/// reload is refused and the edit stays. (Before this fix the gate was shut
+/// only after the history read, and an edit landing during it was discarded
+/// too.)
+/// Injection: drop the revision `speleodb_take_remote` reads on entry (pass
+/// `None` to the fast-forward) and the edit is discarded with the copy.
+#[test]
+fn an_edit_during_take_remotes_history_read_refuses_it() {
+    let id = "33333333-3333-3333-3333-333333333332";
+    let temp = tempfile::tempdir().expect("temp");
+    let (seen_tx, seen) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let armed = Arc::new(AtomicBool::new(false));
+    let stub = serve(
+        id,
+        revision_bytes(temp.path()),
+        Some(Gate {
+            route: "/revisions/",
+            armed: Arc::clone(&armed),
+            seen: seen_tx,
+            release: release_rx,
+        }),
     );
+    let state = AppState::new().expect("state");
+    state.set_event_sink(Arc::new(NullSink));
+    let cache = open_p(&state, id, &stub.base);
+    armed.store(true, Ordering::SeqCst);
+
+    std::thread::scope(|scope| {
+        let state = &state;
+        let pending = scope.spawn(move || {
+            state
+                .speleodb_take_remote()
+                .map_err(|e| (e.action, e.message))
+        });
+        seen.recv().expect("history read in flight");
+        let edited = state.set_surface_elevation(Some(12.5));
+        assert!(edited.success, "the session is still editing: {edited:?}");
+        release.send(()).expect("release the history read");
+        let (action, message) = pending
+            .join()
+            .expect("join")
+            .expect_err("an edit made meanwhile refuses the take");
+        assert_eq!(action, SpeleoDbAction::Retry, "{message}");
+    });
+    let open = state.get_project_state().expect("P");
+    assert_eq!(
+        open.name, "P",
+        "the server version did not replace the copy"
+    );
+    assert_eq!(
+        open.settings.surface_elevation,
+        Some(12.5),
+        "the edit made meanwhile is kept"
+    );
+    assert_eq!(on_disk(&cache).2.base_commit.as_deref(), Some(TIP));
+    assert_eq!(stub.releases.load(Ordering::SeqCst), 0);
+    assert!(gate_open(&state), "still editing");
     drop(stub);
 }

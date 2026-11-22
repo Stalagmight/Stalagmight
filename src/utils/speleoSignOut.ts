@@ -11,7 +11,12 @@
  *     disconnect (the normal upload, which releases), Keep on this computer, or
  *     Discard (second "lost forever" confirm, the open project only);
  * (b) every lock the account holds on the server with nothing un-uploaded behind
- *     it: handed back as part of the sign-out, no question asked;
+ *     it: handed back as part of the sign-out, no question asked - except a lock
+ *     this computer can positively not have taken (`lockNotTakenHere`: no claim
+ *     of this run, no copy, no recent file linked to the project). SpeleoDB's lock
+ *     is the account's, so that one is another session's of the same account,
+ *     maybe editing under it now; signing out here strands nothing of this
+ *     computer's, so it is left alone (demo item 1);
  * (c) every OTHER cached project of the account with un-uploaded work: always
  *     kept on this computer (the dialog names them and says they can be opened
  *     and uploaded after connecting again); a lock held on one is handed back
@@ -39,7 +44,7 @@ import type { SpeleoProjectSummary } from '../types/ipc.generated';
 import { emailsMatch } from './email';
 import { invokeIpc } from './ipc';
 import { needsSpeleoExitPrompt } from './speleoExit';
-import { fetchSpeleoLocalStates } from './speleoLocalState';
+import { fetchSpeleoLocalStates, lockNotTakenHere } from './speleoLocalState';
 
 export type SignOutKind = 'signOut' | 'switch';
 
@@ -92,7 +97,7 @@ export async function surveySignOut(): Promise<SignOutSurvey> {
   );
   const local = await fetchSpeleoLocalStates(listed.map((p) => p.id));
 
-  const { project, isDirty } = useProjectStore.getState();
+  const { project, isDirty, recentProjects } = useProjectStore.getState();
   const { link, remoteProjectId } = useSpeleoStore.getState();
   const openId = project ? remoteProjectId : null;
   const openNeedsAnswer = openId !== null && needsSpeleoExitPrompt(link, isDirty);
@@ -113,7 +118,13 @@ export async function surveySignOut(): Promise<SignOutSurvey> {
     // as un-uploaded rather than releasing the lock that may be guarding it.
     const unuploaded = state?.has_unpushed_edits === true || state?.state_unknown === true;
     if (unuploaded) survey.unuploaded.push(entry);
-    else if (entry.holdsLock) survey.releasable.push(entry);
+    else if (entry.holdsLock && !lockNotTakenHere(
+      local,
+      summary.id,
+      recentProjects.some((p) => p.speleodb_project_id === summary.id),
+    )) {
+      survey.releasable.push(entry);
+    }
   }
   return survey;
 }

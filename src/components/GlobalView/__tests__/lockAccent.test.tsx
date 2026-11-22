@@ -165,6 +165,7 @@ describe('recents write-lock accent', () => {
         last_edit_at: '2026-07-26T00:00:00Z',
         is_open: false,
         state_unknown: false,
+        lock_claimed_here: false,
       },
     });
     const row = screen.getByTestId(systemRowTestId(MINE_PROJECT.file_path));

@@ -644,7 +644,10 @@ may land late, under the retry, and is still this session's (F4R3-locks-push-5).
 the exit and sign-out uploads get `divergence_needed`, the divergence prompt
 opens, and the work, the lock and the base stay as they were. The status
 refresh uses the same rule, so the SpeleoDB tab shows the conflict before Save
-Changes is pressed. SpeleoDB has no conditional upload, so a revision landing
+Changes is pressed. Taking the SpeleoDB version from the divergence prompt then
+releases nothing: this session goes on editing the other session's revision under
+the same lock, and the other session keeps the lock it edits under (demo item 2).
+SpeleoDB has no conditional upload, so a revision landing
 between that check and the upload still goes under ours; the history read right
 after the upload finds it, and the result names it (`replaced_revisions`), whatever
 the result: the landing, a landing with a late edit still to upload
@@ -858,7 +861,12 @@ on, and every button is in the one footer row, Cancel first and the primary last
   on one is handed back with the others. The sign-out never discards another
   project's work.
 - The remaining locks are listed as handed back. With nothing to answer for the open
-  project, the footer is Cancel / Disconnect.
+  project, the footer is Cancel / Disconnect. A lock this computer can positively not
+  have taken is left alone and not listed: no claim of this run
+  (`lock_claimed_here`), no local copy, not open, and no recent file linked to the
+  project (`lockNotTakenHere`). SpeleoDB's lock is the account's, so such a lock
+  belongs to another session of the same account, which may be editing under it;
+  signing out here strands nothing of this computer's (demo item 1).
 
 Every answer hands the locks back and then disconnects, with Try again / Disconnect
 anyway (same footer row) when a release fails. There is no keep-the-lock answer.
@@ -910,6 +918,22 @@ release, and SpeleoDB never expires a lock on its own: a lock left held stays he
 until the next sign-in's held-lock prompt or the SpeleoDB website releases it.
 Close, Quit and Save-and-Close retain their separate lifecycle behavior.
 
+The held-lock prompt ("Your account holds SpeleoDB write locks",
+`HeldLockResumeDialog`) lists, at sign-in and app start, every project whose lock
+SpeleoDB names this account as holding, except the one open. SpeleoDB's lock is the
+account's, so the list also holds the lock of the same account signed in on another
+computer, which may be editing under it right now, and nothing here can tell that
+live session from one that crashed (demo item 1). The body says both are possible
+and that releasing a lock while its session edits lets others change the project
+under it. Not now is the default (focused, so Enter keeps every lock). A row with
+changes only on this computer, or whose copy cannot be read, offers Continue editing
+instead of a release; any other row offers "Release anyway", the holder-checked
+release, so a crashed session's lock stays releasable. A row this computer can
+positively not have taken (no claim of this run, no local copy, not open, no recent
+file linked to the project) says "Held by this account, not by this computer". A
+clean copy here does not rule this computer out: a session that crashed over it
+leaves exactly that, and lock claims do not survive a restart.
+
 ## Edit gate and lock claims
 
 The edit gate is not a stored flag. It is derived, on every read, from what is
@@ -937,15 +961,20 @@ Editing inherited it.
   boundary (close, open, create, logout, sign-in, a rejected token) moves the
   generation on, which leaves any binding stale, so the gate shuts without the
   boundary having to remember it.
-- Take remote shuts the gate and releases the lock before it reloads the server
-  version, so the project comes back read-only; the frontend reopens it without
-  re-acquiring and offers Resume editing.
+- Take the SpeleoDB version (Take remote) releases nothing and leaves the claim as it
+  was: an edit session carries over its reload (the claim is still bound) and goes
+  on editing the server version, and a read-only one stays read-only. The lock is
+  the account's, and another session of the same account may be editing under it;
+  releasing it here used to leave that session editing with no lock on the server
+  (demo item 2). The frontend reopens without acquiring and reads the edit state
+  back from the backend. An edit made after the confirmation, while the history
+  read or the download runs, refuses the reload and is kept.
 - A claim whose release failed is kept as an unbound pointer for a retry: the
   user's Retry in "Couldn't hand back the lock", or a later holder-checked
   release. It opens nothing.
 
 Every release - automatic (close, project switch, quit, restart-to-update, logout,
-account switch, unlink, Take remote, delete, Start Editing's unwind, the
+account switch, unlink, delete, Start Editing's unwind, the
 stranded-claim cleanup) or explicit (Save Changes and release with nothing to
 upload, the held-lock prompt's Release, Switch to Read Only) - first reads the lock
 holder and sends the release only when the server names the signed-in account.

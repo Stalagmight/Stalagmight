@@ -177,7 +177,8 @@ Only Start Editing can open the remote edit gate, after acquiring the lock and
 verifying live revision history: the gate is the lock claim bound to the editing
 session, so editing without a held lock cannot happen. Releasing or losing the
 lock shuts it, and an in-place reload keeps a session only while its claim is
-bound - Take remote releases first, so it comes back read-only. Status refresh can
+bound - Take remote releases nothing, so an editing session goes on editing the
+server version and a read-only one stays read-only. Status refresh can
 close a lost session but cannot resume one. Switch to Read Only Mode requires locally saved and uploaded work.
 Reload Project preserves the existing mode and does not acquire a lock; pending
 work requires Discard changes / Cancel. Local settings retains validation and

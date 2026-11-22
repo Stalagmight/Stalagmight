@@ -74,7 +74,8 @@ export interface SpeleoActions {
     opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
-      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
+      tip, keeping the lock (an edit session goes on editing the server version).
+      Returns `true` once the tree is reloaded, `false` if the call threw.
       The caller must gate this behind a destroy-confirmation. */
   takeRemote: () => Promise<boolean>;
 }
@@ -572,18 +573,20 @@ export function useSpeleoActions(): SpeleoActions {
     );
     const busyToken = beginBusy();
     try {
-      // Backend releases the lock, re-pulls + resets the tree to the server tip and
-      // returns the reloaded path; loadProject re-seeds the link status (→ read-only:
-      // the backend's edit gate is the lock claim, and Take remote handed it back).
+      // Backend re-pulls + resets the tree to the server tip and returns the
+      // reloaded path. It hands no lock back (demo item 2: the lock is the
+      // account's, and another session of it may be editing under it), so an edit
+      // session carries over the reload and a read-only one stays read-only; the
+      // link status re-read below shows which.
       const localPath = await invokeIpc<string>('speleodb_take_remote');
       // If the reload was superseded (the user opened another project mid-pull),
       // don't claim success: the backend reset already happened, but the view the
       // caller thinks it reloaded is not showing. Skip the toast + return false so
       // the divergence dialog doesn't close over a project the user left.
       //
-      // `acquireLock: false`, like every other in-place reload: the user chose to
-      // end the edit session, so the reopen must not take the lock straight back
-      // (data#3). They resume with Resume editing.
+      // `acquireLock: false`, like every other in-place reload: the reload keeps
+      // whatever edit session the backend carried, and a read-only project must
+      // not take the lock by itself (data#3). It resumes with Resume editing.
       const { success } = await loadProject(localPath, { acquireLock: false });
       if (!success) return false;
       if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;

@@ -614,7 +614,8 @@ Connect saves changed preferences and authenticates immediately. Success closes
 Settings and refreshes the project listing. Disconnect first runs the sign-out flow
 (the open project's un-uploaded work: Discard / Keep on this computer / Upload and
 disconnect; other copies with changes are kept on this computer; held locks handed
-back; Try again / Disconnect anyway when a hand-back fails). Cancel there
+back, except one this computer never took, which another session of the account
+holds; Try again / Disconnect anyway when a hand-back fails). Cancel there
 leaves you connected with Settings open. Once it goes ahead, Disconnect takes effect immediately,
 clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
 requires a subsequent Save. While connected, the server endpoint and both reset

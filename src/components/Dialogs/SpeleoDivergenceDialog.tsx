@@ -26,7 +26,10 @@ import { DialogWrapper } from './DialogWrapper';
  * - **Take the SpeleoDB version**: DESTROYS local unpushed edits and resets to the
  *   server tip. This is the only irreversible choice, so it is gated behind a
  *   SECOND in-dialog confirmation (Back / Destroy & continue) - there is no
- *   single-click path to data loss.
+ *   single-click path to data loss. It hands no lock back (the lock is the
+ *   account's, and another session of it may be editing under it - demo item 2):
+ *   an editing session goes on editing the server version, a read-only one stays
+ *   read-only, and the confirmation says which.
  * - **Save my version as a local copy**: keep the locally-edited work by converting
  *   it to a plain unmanaged `.stalx` (Save-As), abandoning the managed copy (a
  *   later Open-from-SpeleoDB re-pulls the clean server tip). This is the
@@ -105,6 +108,11 @@ export default function SpeleoDivergenceDialog() {
         <div className="space-y-4">
           <p className="text-sm text-text-primary font-medium" data-testid="speleodb-take-remote-warning">
             {t('speleodb.divergence.takeRemote.confirm.warning')}
+          </p>
+          <p className="text-sm text-text-secondary" data-testid="speleodb-take-remote-lock">
+            {editState === 'editing'
+              ? t('speleodb.divergence.takeRemote.confirm.lockKept')
+              : t('speleodb.divergence.takeRemote.confirm.lockUnchanged')}
           </p>
           <p className="text-xs text-text-secondary">
             {t('speleodb.divergence.takeRemote.confirm.hint')}
