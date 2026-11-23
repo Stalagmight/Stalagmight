@@ -5,7 +5,9 @@
 //!
 //! Random `AppState` commands - every command family (lines, shots, stations,
 //! merges and detaches, closures, datums, the move tools, comments, names,
-//! credit, Sections, settings), the bypass recipes (split shot, delete and
+//! credit, Sections, settings; a merge, a detach and a closure answer their
+//! dialog: a keep or `rest_keep` and the preview's renames, `KeepT` and
+//! `AnswersT`), the bypass recipes (split shot, delete and
 //! split, range delete shift and split, delete last shot and line, Split Line
 //! Here, Combine Lines, create and merge, imports, Add .stalx) and batches -
 //! interleaved with undo, redo, multi-step jumps and save/close/reopen
