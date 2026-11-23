@@ -161,7 +161,7 @@ fn shot_label(project: &Project, line: LineId, index: usize) -> String {
         project
             .line(line)
             .and_then(|l| l.station(i))
-            .and_then(|s| project.name_on(s, line))
+            .and_then(|s| project.shown_name(s))
             .map_or_else(|| i.to_string(), str::to_string)
     };
     format!(

@@ -1,40 +1,70 @@
-//! Detach (unmerge, plan 5.2): give one line its own copy of a junction.
+//! Detach Line from Station (unmerge, plan 5.2; RS 4.2): give one line its
+//! own station back at a junction.
 //!
-//! Detaching line L from station S mints S' (a fresh id; the name L shows S
-//! by, then uniquified; no comment, aliases or external id) and puts it in
-//! L's chain where S was, so S' sits exactly where S did. When one of S's
-//! aliases names L (the station L had before it was merged into S: a 0.6.0
-//! merge member, or the moving station of a merge), S' takes that alias's id
-//! and name back, and the alias leaves S (review finding UX-4: merging by
-//! mistake and detaching gives the line back as it was). When instead every
-//! other line knows S by an alias, L keeps S (its id, name and comment) and
-//! the other lines get back the station they had, as detaching them would
-//! (I-1: a station is not left only on lines that know it by another name).
-//! Combine Lines' torn junctions keep the fresh id. What belonged to L's
-//! member of the old merge follows it: the datums and closure ends whose
-//! `via` is L, and L's hand move at S. The anchor algorithm then settles
-//! both pieces (a fix that came along with L and is now the first datum of
-//! L's piece is promoted and puts that piece on its GPS, as today's unmerge
-//! does), and the orphan-closure sweep promotes a closure that only joined
-//! L's piece to the rest.
+//! Detaching line L from junction N, in the three cases of RS 4.2:
 //!
-//! Two forms, both detaching ONE line: the pair form detaches the second
-//! slot's line from the station the two slots share; the station form
-//! detaches the slot's line from every other line at that station (a no-op
-//! on a station that is not a junction, as today). Declared change (plan
-//! 5.2): on a hub of three or more lines the other lines stay joined.
+//! 1. **A record R of N names L** (L's own station was archived by a merge):
+//!    L gets a new node with R's identity (id, name, comment, external id),
+//!    and R leaves N. When R names other lines too (a split junction merged
+//!    away), all of R's lines come off together onto that node, since they
+//!    were one station (M-P2-3).
+//! 2. **L is native and every other line is named by a record**
+//!    ([`Project::detach_keeps`]): L keeps N's identity; the other lines get
+//!    a new node whose identity is the record naming them, or, when several
+//!    records remain, the one `rest_keep` picks (default: rule K over their
+//!    own lines); the others stay archived in the new node.
+//! 3. **L and another line are native** (Split Line Here, Create Line, an
+//!    import join): L gets a fresh station with N's own name and no comment.
+//!
+//! What belonged to the lines that come off follows them: the datums and
+//! closure ends whose `via` is one of them (with `kept`, those whose `via` is
+//! not L), and their hand moves at N. A closure's `archived` marker follows
+//! its end. History records (A5) stay with N, which keeps the identity they
+//! were archived under. Every identity shown anew is checked by N8: the
+//! user's renames answer a collision, an unanswered one refuses
+//! ([`super::OpError::NameTaken`]); the forms without a dialog letter it by
+//! rule L. A letter an earlier op gave because of the junction stays. The
+//! anchor algorithm then settles both pieces (a fix that came along and is
+//! now the first datum of its piece is promoted and puts that piece on its
+//! GPS, as today's unmerge does), and the orphan-closure sweep promotes a
+//! closure that only joined the pieces.
+//!
+//! Two forms, both detaching ONE line (or one record's lines): the pair form
+//! detaches the second slot's line from the station the two slots share; the
+//! station form detaches the slot's line from every other line at that
+//! station (a no-op on a station that is not a junction, as today).
 //!
 //! The mutation ([`Project::detach_ids`]) is the one core every detach goes
 //! through: these commands and Combine Lines' torn junctions
-//! (`edit/combine/`, plan 5.4 steps 2, 3 and 6).
+//! (`edit/combine/`, plan 5.4 steps 2, 3 and 6; RS-M2 makes those restoring
+//! detaches with the tear closure's archive).
 
 use crate::{LineId, StationId, StationRef};
 
 use super::ops::{OpError, OpOutcome, Sweep};
+use super::ops_merge::Answers;
 use super::{
-    AnchorReport, ClosureEnd, ClosureId, EditContext, Project, Station, StationAlias, SweepReport,
-    Topology,
+    ArchivedStation, ClosureEnd, ClosureId, EditContext, LetteredStation, Project, Station,
 };
+
+/// How a command answers the name collisions a detach makes (RS 4.2).
+#[derive(Debug, Clone, Copy)]
+pub enum NameAnswers<'a> {
+    /// The dialog's renames, each `(Station ID, new name)`; an unanswered
+    /// collision refuses ([`OpError::NameTaken`]).
+    Renames(&'a [(StationId, String)]),
+    /// No dialog: rule L letters every collision and the outcome reports it.
+    RuleL,
+}
+
+impl<'a> NameAnswers<'a> {
+    fn answers(self) -> Answers<'a> {
+        match self {
+            Self::Renames(renames) => Answers::Given(renames),
+            Self::RuleL => Answers::RuleL,
+        }
+    }
+}
 
 /// What a detach did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,34 +73,60 @@ pub struct DetachReport {
     pub line: LineId,
     /// The junction it was detached from (it stays on the other lines).
     pub station: StationId,
-    /// The line's new station where the junction was.
+    /// The station the lines that came off are on now, where the junction
+    /// was: the detached line's (with `kept`, the other lines').
     pub new_station: StationId,
-    /// Datums (list indices) that moved to the new station (`via` = line).
+    /// The lines that came off onto `new_station`, in line order: `line` and
+    /// the other lines of its record (RS 4.2 case 1), or with `kept` every
+    /// other line.
+    pub lines_off: Vec<LineId>,
+    /// Datums (list indices) that moved to the new station.
     pub moved_datums: Vec<usize>,
-    /// Closure ends that moved to the new station (`via` = line).
+    /// Closure ends that moved to the new station.
     pub moved_closure_ends: Vec<(ClosureId, ClosureEnd)>,
-    /// Whether the line's hand move at the junction moved too.
+    /// Whether a hand move at the junction moved too.
     pub moved_hand_move: bool,
-    /// Whether the new station took back the id and name of the junction's
-    /// alias that named its line.
-    pub restored_alias: bool,
-    /// The line kept the junction and the other lines, which all knew it by
-    /// aliases, got back their own station (`new_station`): see
-    /// [`Project::detach_line`].
+    /// The new station took back an archived identity (a record of the
+    /// junction): its id, name, comment and external id.
+    pub restored: bool,
+    /// The line kept the junction and the other lines, which were all named
+    /// by records, got back an archived station (`new_station`): RS 4.2
+    /// case 2.
     pub kept: bool,
+    /// A Combine tear of the junction's only native line made this record
+    /// history so the junction keeps a native line (A4): its lines show the
+    /// junction natively now (nothing visible changes). RS-M2 replaces this
+    /// with the case-2 distribution and the tear closure's archive (RS 4.4).
+    pub record_made_history: Option<StationId>,
 }
 
-/// What detaching a line would give it, for the Detach dialog: the new
-/// station's name and id, and whether they are the ones the line had before
-/// it was merged; and what every line through the junction ends up with.
+/// What detaching a line would give it, for the Detach dialog: the station
+/// the lines that come off get, whether it is one they had before a merge,
+/// and what every line through the junction ends up with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetachNaming {
+    /// The station the lines that come off get: its name, id and comment.
     pub name: String,
     pub id: StationId,
-    pub restored_alias: bool,
+    pub comment: Option<String>,
+    /// It is an archived station coming back.
+    pub restored: bool,
     /// The line keeps the junction; `name` and `id` are what the other lines
     /// get back.
     pub kept: bool,
+    /// The lines that come off with the detached one because one archived
+    /// station names them all (RS 4.2 case 1; the dialog says so).
+    pub together: Vec<LineId>,
+    /// With `kept` and several records naming the other lines: the records
+    /// `rest_keep` may pick (their Station IDs), and the default (rule K).
+    pub rest_choices: Vec<StationId>,
+    pub rest_default: Option<StationId>,
+    /// The identity the detached line showed at the junction before, when a
+    /// loop closure made it another station's (RS 4.2 case 3: it will show
+    /// the junction's own name).
+    pub shown_before: Option<StationId>,
+    /// The names the detach would show twice, with rule L's answers.
+    pub collisions: Vec<LetteredStation>,
     /// Every line through the junction, in slot order: the station it is on
     /// there after the detach (demo finding V-1: the dialog says what each
     /// line ends up with, not one Station ID for all).
@@ -86,29 +142,63 @@ pub struct DetachLineOutcome {
     pub station: StationId,
     /// The name the line shows it by.
     pub name: String,
-    /// The line comes off the junction (the detached line, or with `kept`
-    /// every other line); otherwise it stays on it.
+    /// The line comes off the junction; otherwise it stays on it.
     pub comes_off: bool,
-    /// The id of the alias the line knows that station by, when it is not
-    /// the station's own: the Station ID the line had there before a merge,
-    /// which it keeps only as an alias because it shares the station with
-    /// lines that know it by another id (lines that come off together stay
-    /// joined, and one station has one Station ID).
-    pub alias_id: Option<StationId>,
     /// The other lines on that station after the detach, in slot order.
     pub joined_with: Vec<LineId>,
 }
 
+/// Which detach [`Project::detach_ids`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DetachMode {
+    /// The command (RS 4.2): restore a record, keep the junction on the line
+    /// when every other line is named by a record (`rest_keep` picks the
+    /// record those lines take).
+    Restore { rest_keep: Option<StationId> },
+    /// Combine Lines' tear of one line (RS 4.3 "a slot moves to a new
+    /// node"): the fresh station takes the record naming the line, if any;
+    /// never the case-2 distribution (RS-M2): when the torn line is the
+    /// junction's only native line, the record rule K picks among those
+    /// naming the other lines becomes history instead.
+    Tear,
+}
+
 impl Project {
-    /// Detach line `line` from junction `station` (plan 5.2).
+    /// Detach line `line` from junction `station` (plan 5.2, RS 4.2),
+    /// applying `renames` in the same op; `rest_keep` picks the record the
+    /// other lines take when the line keeps the junction (case 2).
     pub fn detach_line(
         &mut self,
         station: StationId,
         line: LineId,
+        renames: &[(StationId, String)],
+        rest_keep: Option<StationId>,
+    ) -> Result<OpOutcome<DetachReport>, OpError> {
+        self.detach_with(station, line, NameAnswers::Renames(renames), rest_keep)
+    }
+
+    /// [`Self::detach_line`] with every collision settled by rule L (no
+    /// dialog).
+    pub fn detach_line_auto(
+        &mut self,
+        station: StationId,
+        line: LineId,
+        rest_keep: Option<StationId>,
+    ) -> Result<OpOutcome<DetachReport>, OpError> {
+        self.detach_with(station, line, NameAnswers::RuleL, rest_keep)
+    }
+
+    fn detach_with(
+        &mut self,
+        station: StationId,
+        line: LineId,
+        answers: NameAnswers<'_>,
+        rest_keep: Option<StationId>,
     ) -> Result<OpOutcome<DetachReport>, OpError> {
         self.detach_refusal(station, line)?;
         self.run_op(Sweep::Run, |p| {
-            let report = p.detach_ids(station, line, true)?;
+            let report = p.detach_ids(station, line, DetachMode::Restore { rest_keep })?;
+            answers.answers().apply(p)?;
             let ctx = EditContext::line(line).with_renamed(station, report.new_station);
             Ok((report, ctx))
         })
@@ -120,12 +210,14 @@ impl Project {
         &mut self,
         a: StationRef,
         b: StationRef,
+        answers: NameAnswers<'_>,
+        rest_keep: Option<StationId>,
     ) -> Result<OpOutcome<DetachReport>, OpError> {
         let (sa, sb) = (self.station_of_slot(a)?, self.station_of_slot(b)?);
         if sa != sb || a.line_id == b.line_id {
             return Err(OpError::NotDirectlyMerged);
         }
-        self.detach_line(sb, b.line_id)
+        self.detach_with(sb, b.line_id, answers, rest_keep)
     }
 
     /// Unmerge a station (today's `UnmergeStations`): the slot's line is
@@ -134,28 +226,27 @@ impl Project {
     pub fn unmerge_station(
         &mut self,
         slot: StationRef,
+        answers: NameAnswers<'_>,
+        rest_keep: Option<StationId>,
     ) -> Result<OpOutcome<Option<DetachReport>>, OpError> {
         let station = self.station_of_slot(slot)?;
         if !self.topology().is_junction(station) {
-            return Ok(OpOutcome {
-                value: None,
-                anchors: AnchorReport::default(),
-                sweep: SweepReport::default(),
-            });
+            return Ok(OpOutcome::unchanged(None));
         }
-        let outcome = self.detach_line(station, slot.line_id)?;
-        Ok(OpOutcome {
-            value: Some(outcome.value),
-            anchors: outcome.anchors,
-            sweep: outcome.sweep,
-        })
+        Ok(self
+            .detach_with(station, slot.line_id, answers, rest_keep)?
+            .map(Some))
     }
 
-    /// The name and id the new station of [`Self::detach_line`] would get,
-    /// and what every line through `station` ends up with there, from the
-    /// whole detach (epilogue included) run on a copy, so the dialog says
-    /// what the command does. Refused as the detach is.
-    pub fn detach_naming(&self, station: StationId, line: LineId) -> Result<DetachNaming, OpError> {
+    /// What [`Self::detach_line`] would do: the whole detach (epilogue
+    /// included, every collision answered by rule L) run on a copy, so the
+    /// dialog says what the command does. Refused as the detach is.
+    pub fn detach_naming(
+        &self,
+        station: StationId,
+        line: LineId,
+        rest_keep: Option<StationId>,
+    ) -> Result<DetachNaming, OpError> {
         let before = self.topology_arc();
         let mut slots: Vec<StationRef> = Vec::new();
         for &slot in before.slots_of(station) {
@@ -163,18 +254,26 @@ impl Project {
                 slots.push(slot);
             }
         }
+        let (rest_choices, rest_default) = if self.detach_keeps(station, line) {
+            let choices = self.rest_candidates(station, line);
+            let default = self.rule_k(choices.iter().map(|r| (r.id, r.lines.clone())));
+            (choices.iter().map(|r| r.id).collect(), default)
+        } else {
+            (Vec::new(), None)
+        };
+        let shown = self.shown(station);
         let mut copy = self.clone();
-        let report = copy.detach_line(station, line)?.value;
+        let outcome = copy.detach_line_auto(station, line, rest_keep)?;
+        let report = &outcome.value;
         let after = copy.topology_arc();
         let mut lines = Vec::with_capacity(slots.len());
         for slot in slots {
             let on = after.station_at(slot).ok_or(OpError::UnknownSlot(slot))?;
             let l = slot.line_id;
             let name = copy
-                .name_on(on, l)
+                .shown_name(on)
                 .ok_or(OpError::UnknownStation(on))?
                 .to_string();
-            let alias_id = copy.line_alias(on, l).map(|a| a.id).filter(|&id| id != on);
             let mut joined_with: Vec<LineId> = Vec::new();
             for other in after.slots_of(on) {
                 if other.line_id != l && !joined_with.contains(&other.line_id) {
@@ -185,43 +284,70 @@ impl Project {
                 line: l,
                 station: on,
                 name,
-                comes_off: (l == line) != report.kept,
-                alias_id,
+                comes_off: report.lines_off.contains(&l),
                 joined_with,
             });
         }
-        // The station the line(s) that come off get, by its own name: the
-        // detached line's, or with `kept` the other lines' (by the one that
-        // knows it by no alias).
-        let off = lines
-            .iter()
-            .find(|o| o.comes_off && o.alias_id.is_none())
-            .or_else(|| lines.iter().find(|o| o.comes_off))
-            .ok_or(OpError::NotDirectlyMerged)?;
+        let identity = copy
+            .stations
+            .get(&report.new_station)
+            .ok_or(OpError::UnknownStation(report.new_station))?;
         Ok(DetachNaming {
-            name: off.name.clone(),
-            id: off.station,
-            restored_alias: report.restored_alias,
+            name: copy
+                .shown_name(report.new_station)
+                .unwrap_or(&identity.name)
+                .to_string(),
+            id: report.new_station,
+            comment: identity.comment.clone(),
+            restored: report.restored,
             kept: report.kept,
+            together: if report.kept {
+                Vec::new()
+            } else {
+                report
+                    .lines_off
+                    .iter()
+                    .copied()
+                    .filter(|&l| l != line)
+                    .collect()
+            },
+            rest_choices,
+            rest_default,
+            shown_before: (!report.restored && !report.kept && shown != station).then_some(shown),
+            collisions: outcome.identities.lettered.clone(),
             lines,
         })
     }
 
-    /// Whether detaching `line` from `station` (with the alias restore every
-    /// command detach uses) keeps the station on `line` and gives the other
-    /// lines back their own station instead ([`Self::detach_others`]): the
-    /// line shows the station by its own name and every other line through
-    /// it knows it by an alias (I-1). Then the lines that come off are the
-    /// others, which is what the history names (N-2).
+    /// Whether detaching `line` from `station` keeps the station on `line`
+    /// and gives the other lines back an archived station instead (RS 4.2
+    /// case 2): the line is native there and records name every other line
+    /// through it. Then the lines that come off are the others, which is
+    /// what the history names (N-2).
     pub fn detach_keeps(&self, station: StationId, line: LineId) -> bool {
+        let Some(junction) = self.stations.get(&station) else {
+            return false;
+        };
         let lines = self.topology().lines_of(station);
         lines.contains(&line)
             && lines.len() > 1
-            && !self.known_by_alias_on(station, line)
+            && junction.record_for(line).is_none()
             && lines
                 .iter()
                 .filter(|&&l| l != line)
-                .all(|&l| self.known_by_alias_on(station, l))
+                .all(|&l| junction.record_for(l).is_some())
+    }
+
+    /// The records of `station` naming a line other than `line` (case 2's
+    /// candidates for the remaining lines), in list order.
+    fn rest_candidates(&self, station: StationId, line: LineId) -> Vec<ArchivedStation> {
+        self.stations.get(&station).map_or_else(Vec::new, |s| {
+            s.archived
+                .iter()
+                .filter(|r| r.lines.iter().any(|&l| l != line))
+                .cloned()
+                .collect()
+        })
     }
 
     /// Why line `line` may not be detached from `station`, if it may not:
@@ -242,108 +368,160 @@ impl Project {
         Ok(())
     }
 
-    /// The low-level detach (plan 5.2's mutation): mint the new station
-    /// (named as the line shows the junction, then letter-suffixed if taken
-    /// on the line; no comment, aliases or external id), rewrite the line's
-    /// chain, move what the line's member owned (datums and closure ends
-    /// whose `via` is the line, its hand move). With `restore`, an alias of
-    /// the junction that names the line gives the new station its id and
-    /// name (module docs); and when every other line knows the junction by an
-    /// alias the line keeps the junction and those lines get back their own
-    /// station instead ([`Self::detach_others`]). Refused, with nothing
-    /// changed, as [`Self::detach_line`]. No anchors, no sweep, no
-    /// validation.
+    /// The low-level detach (plan 5.2's mutation, RS 4.2's cases, module
+    /// docs): put the lines that come off on their station (a restored
+    /// record, or a fresh station named as the junction with no comment),
+    /// rewrite their chains and move what they owned (datums and closure
+    /// ends by `via`, hand moves). No renames, no anchors, no sweep, no
+    /// validation. Refused, with nothing changed, as [`Self::detach_line`].
     pub(super) fn detach_ids(
         &mut self,
         station: StationId,
         line: LineId,
-        restore: bool,
+        mode: DetachMode,
     ) -> Result<DetachReport, OpError> {
         self.detach_refusal(station, line)?;
-        let topology = self.topology_arc();
-        let others: Vec<LineId> = topology
-            .lines_of(station)
-            .into_iter()
-            .filter(|&l| l != line)
-            .collect();
-        if restore && self.detach_keeps(station, line) {
-            return self.detach_others(station, line, &others);
-        }
+        let lines = self.topology().lines_of(station);
         let junction = self
             .stations
             .get(&station)
             .ok_or(OpError::UnknownStation(station))?;
-        // The name the line shows the junction by (its alias's, when one
-        // names it): the line keeps showing it.
-        let name = self
-            .name_on(station, line)
-            .map_or_else(|| junction.name.clone(), str::to_string);
-        // The line's own alias: the last one naming it (the latest merge).
-        let own = if restore {
-            junction.aliases.iter().rposition(|a| a.line == Some(line))
-        } else {
-            None
-        };
-        let restored = match own {
-            Some(index) => self
-                .stations
-                .get_mut(&station)
-                .map(|j| j.aliases.remove(index).id),
-            None => None,
-        };
-        let new_station = match restored {
-            Some(id) => id,
-            None => self.mint_station_id()?,
-        };
-        self.stations
-            .insert(new_station, Station::new(new_station, name));
+        let record = junction.record_for(line).cloned();
+        match (record, mode) {
+            (Some(record), DetachMode::Restore { .. }) => {
+                let off: Vec<LineId> = lines
+                    .iter()
+                    .copied()
+                    .filter(|l| record.lines.contains(l))
+                    .collect();
+                Ok(self.restore_record(station, line, &record, off))
+            }
+            (Some(record), DetachMode::Tear) => {
+                // Only the torn line comes off; the record's other lines (a
+                // split junction merged away) show the junction natively now.
+                Ok(self.restore_record(station, line, &record, vec![line]))
+            }
+            (None, DetachMode::Restore { rest_keep }) if self.detach_keeps(station, line) => {
+                let others: Vec<LineId> = lines.iter().copied().filter(|&l| l != line).collect();
+                self.detach_others(station, line, &others, rest_keep)
+            }
+            (None, mode) => {
+                let name = junction.name.clone();
+                let record_made_history = if mode == DetachMode::Tear
+                    && self.detach_keeps(station, line)
+                {
+                    let candidates = self.rest_candidates(station, line);
+                    let chosen = self.rule_k(candidates.iter().map(|r| (r.id, r.lines.clone())));
+                    if let (Some(id), Some(junction)) = (chosen, self.stations.get_mut(&station)) {
+                        for record in &mut junction.archived {
+                            if record.id == id {
+                                record.lines.clear();
+                            }
+                        }
+                    }
+                    chosen
+                } else {
+                    None
+                };
+                let new_station = self.mint_station_id()?;
+                self.stations
+                    .insert(new_station, Station::new(new_station, name));
+                let moved_hand_move = self.move_slots(station, new_station, &[line]);
+                let (moved_datums, moved_closure_ends) =
+                    self.move_attachments(station, new_station, |via| via == Some(line));
+                Ok(DetachReport {
+                    line,
+                    station,
+                    new_station,
+                    lines_off: vec![line],
+                    moved_datums,
+                    moved_closure_ends,
+                    moved_hand_move,
+                    restored: false,
+                    kept: false,
+                    record_made_history,
+                })
+            }
+        }
+    }
 
-        let moved_hand_move = self.move_slots(station, new_station, &[line]);
+    /// RS 4.2 case 1: `record` of `station` leaves it and becomes the station
+    /// of `off` (its lines that come off), with what they owned.
+    fn restore_record(
+        &mut self,
+        station: StationId,
+        line: LineId,
+        record: &ArchivedStation,
+        off: Vec<LineId>,
+    ) -> DetachReport {
+        if let Some(junction) = self.stations.get_mut(&station) {
+            junction.archived.retain(|r| r.id != record.id);
+        }
+        let new_station = record.id;
+        self.stations.insert(new_station, record.to_station());
+        let moved_hand_move = self.move_slots(station, new_station, &off);
         let (moved_datums, moved_closure_ends) =
-            self.move_attachments(station, new_station, |via| via == Some(line));
-        self.uniquify_station_name(new_station);
-        Ok(DetachReport {
+            self.move_attachments(station, new_station, |via| {
+                via.is_some_and(|l| off.contains(&l))
+            });
+        DetachReport {
             line,
             station,
             new_station,
+            lines_off: off,
             moved_datums,
             moved_closure_ends,
             moved_hand_move,
-            restored_alias: restored.is_some(),
+            restored: true,
             kept: false,
-        })
+            record_made_history: None,
+        }
     }
 
-    /// Detach `line` from `station` when every other line (`others`) knows
-    /// the station by an alias (I-1): `line` keeps the station (its id, name,
-    /// comment and external id), and the other lines get back the identity
-    /// the first of those aliases (list order) records, its id and name, as
-    /// a Detach of one of them would give it back; the aliases naming the
-    /// other lines go with them. What was not the line's own follows the
-    /// other lines: datums and closure ends whose `via` is not the line, and
-    /// their hand moves.
+    /// RS 4.2 case 2: `line` keeps `station` (its id, name, comment and
+    /// external id), and the other lines (`others`, all named by records)
+    /// come off onto a new node whose identity is the record `rest_keep`
+    /// names, else rule K's over the records' own lines; the other records
+    /// naming those lines go with them, history records stay. What was not
+    /// the line's own follows the other lines: datums and closure ends whose
+    /// `via` is not the line, and their hand moves.
     fn detach_others(
         &mut self,
         station: StationId,
         line: LineId,
         others: &[LineId],
+        rest_keep: Option<StationId>,
     ) -> Result<DetachReport, OpError> {
+        let candidates = self.rest_candidates(station, line);
+        let chosen = match rest_keep {
+            Some(id) if candidates.iter().any(|r| r.id == id) => id,
+            Some(id) => return Err(OpError::InvalidKeep(id)),
+            None => self
+                .rule_k(candidates.iter().map(|r| (r.id, r.lines.clone())))
+                .ok_or(OpError::NotDirectlyMerged)?,
+        };
         let junction = self
             .stations
             .get_mut(&station)
             .ok_or(OpError::UnknownStation(station))?;
-        let names_other = |a: &StationAlias| a.line.is_some_and(|l| others.contains(&l));
-        let (moving, staying): (Vec<StationAlias>, Vec<StationAlias>) =
-            std::mem::take(&mut junction.aliases)
+        let names_other = |r: &ArchivedStation| r.lines.iter().any(|l| others.contains(l));
+        let (moving, staying): (Vec<ArchivedStation>, Vec<ArchivedStation>) =
+            std::mem::take(&mut junction.archived)
                 .into_iter()
-                .partition(|a| names_other(a));
-        junction.aliases = staying;
-        let fallback = junction.name.clone();
-        let mut moving = moving.into_iter();
-        let first = moving.next().ok_or(OpError::NotDirectlyMerged)?;
-        let new_station = first.id;
-        let mut identity = Station::new(new_station, first.name.unwrap_or(fallback));
-        identity.aliases = moving.collect();
+                .partition(|r| names_other(r));
+        junction.archived = staying;
+        let mut identity = None;
+        let mut rest = Vec::with_capacity(moving.len());
+        for record in moving {
+            if record.id == chosen {
+                identity = Some(record.to_station());
+            } else {
+                rest.push(record);
+            }
+        }
+        let mut identity = identity.ok_or(OpError::InvalidKeep(chosen))?;
+        identity.archived = rest;
+        let new_station = identity.id;
         self.stations.insert(new_station, identity);
 
         let moved_hand_move = self.move_slots(station, new_station, others);
@@ -353,11 +531,13 @@ impl Project {
             line,
             station,
             new_station,
+            lines_off: others.to_vec(),
             moved_datums,
             moved_closure_ends,
             moved_hand_move,
-            restored_alias: true,
+            restored: true,
             kept: true,
+            record_made_history: None,
         })
     }
 
@@ -408,72 +588,5 @@ impl Project {
             }
         }
         (moved_datums, moved_closure_ends)
-    }
-
-    /// I-1: every station an edit took a line off and left only on lines
-    /// that know it by an alias goes back to the identity the first of those
-    /// aliases (list order) records, as a Detach gives a line back its
-    /// station: the alias's id and name, the alias leaving the station. The
-    /// station keeps its comment (it may hold every line's notes), its
-    /// external id and its other aliases; its slots, hand moves, datums,
-    /// closure ends and placement follow the new id. Each line still shows
-    /// the name it showed (invariant 8 holds as before). Runs in the epilogue
-    /// of every edit and command (not Combine Lines, whose torn junctions
-    /// keep their ids) after stale attachments are dropped (so an alias of a
-    /// line that left is no longer a reason); `before` is the topology before
-    /// the edit, so a station the edit did not take a line off is left
-    /// alone. Returns `(old, new)` per station, in id order, for the anchor
-    /// algorithm ([`EditContext::reidentified`]).
-    pub(super) fn restore_alias_identities(
-        &mut self,
-        before: &Topology,
-    ) -> Vec<(StationId, StationId)> {
-        let topology = self.topology_arc();
-        let candidates: Vec<StationId> = self
-            .stations
-            .iter()
-            .filter(|(&id, s)| {
-                s.aliases.iter().any(|a| a.line.is_some())
-                    && topology.slots_of(id).len() < before.slots_of(id).len()
-            })
-            .map(|(&id, _)| id)
-            .collect();
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for station in candidates {
-            let lines = topology.lines_of(station);
-            if lines.is_empty() || !lines.iter().all(|&l| self.known_by_alias_on(station, l)) {
-                continue;
-            }
-            let Some(mut identity) = self.stations.remove(&station) else {
-                continue;
-            };
-            let Some(index) = identity
-                .aliases
-                .iter()
-                .position(|a| a.line.is_some_and(|l| lines.contains(&l)))
-            else {
-                self.stations.insert(station, identity);
-                continue;
-            };
-            let alias = identity.aliases.remove(index);
-            let new = alias.id;
-            identity.id = new;
-            if let Some(name) = alias.name {
-                identity.name = name;
-            }
-            self.stations.insert(new, identity);
-            self.move_slots(station, new, &lines);
-            self.move_attachments(station, new, |_| true);
-            for placement in &mut self.placements {
-                if placement.station == station {
-                    placement.station = new;
-                }
-            }
-            out.push((station, new));
-        }
-        out
     }
 }

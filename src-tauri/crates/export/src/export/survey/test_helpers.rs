@@ -277,7 +277,7 @@ impl Survey {
     /// piece).
     pub(crate) fn merge(&mut self, a: At, b: At) {
         let (a, b) = (self.station(a.0, a.1), self.station(b.0, b.1));
-        if let Err(e) = self.project.merge_stations(a, b) {
+        if let Err(e) = self.project.merge_keeping_stationary(a, b) {
             panic!("merge refused: {e}");
         }
     }

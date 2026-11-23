@@ -25,8 +25,7 @@
 
 use crate::StationId;
 
-use super::ops_merge::CommentRule;
-use super::{ClosureEnd, ClosureId, EditContext, LoopClosure, Project};
+use super::{ClosureEnd, ClosureId, EditContext, LetteredStation, LoopClosure, Project};
 
 /// What the sweep did, as warning data for the command's result.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -40,6 +39,9 @@ pub struct SweepReport {
     pub promoted: Vec<Promotion>,
     /// Sole-bridge closures kept because both pieces are placed.
     pub kept_between_placed: Vec<ClosureId>,
+    /// The names the promotions made repeat, lettered by rule L (RS 5.3: a
+    /// path without a dialog).
+    pub lettered: Vec<LetteredStation>,
 }
 
 impl SweepReport {
@@ -58,7 +60,7 @@ pub struct Promotion {
     pub position: usize,
     /// The station that stayed (the stationary piece's end).
     pub survivor: StationId,
-    /// The moving piece's end, now an alias of the survivor.
+    /// The moving piece's end, now archived in the survivor (a record).
     pub retired: StationId,
 }
 
@@ -90,6 +92,9 @@ impl Project {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let original = self.closures.clone();
+        // The state before the first promotion, for rule L's "new on the
+        // line" (cloned only when a promotion happens).
+        let mut before_promotions: Option<Project> = None;
         let mut fates = vec![Fate::Keep; self.closures.len()];
         let named = |c: &LoopClosure| moving.iter().any(|(id, _)| *id == c.id);
         let (first, rest): (Vec<usize>, Vec<usize>) =
@@ -125,11 +130,14 @@ impl Project {
                 _ => (closure.b, closure.a),
             };
             let before = self.anchor_snapshot();
-            if self
-                .merge_ids(survivor, retired, CommentRule::Join)
-                .is_err()
-            {
+            let pre = before_promotions.is_none().then(|| self.clone());
+            // RS-M2: the promotion keeps the closure's kept end (geometry
+            // first, then re-identify, RS 5.4); today's survivor keeps here.
+            if self.merge_ids(survivor, retired).is_err() {
                 continue;
+            }
+            if pre.is_some() {
+                before_promotions = pre;
             }
             let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
             self.settle_anchors(&before, &ctx);
@@ -140,6 +148,9 @@ impl Project {
                 survivor,
                 retired,
             });
+        }
+        if let Some(before) = &before_promotions {
+            report.lettered = self.letter_collisions(before);
         }
         if fates.iter().any(|fate| *fate != Fate::Keep) {
             let closures = std::mem::take(&mut self.closures);

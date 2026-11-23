@@ -823,7 +823,7 @@ what Stalagmight writes for it (a test keeps it so).
 "stations":[
 [0,"A0"],
 [1,"A1"],
-[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0",1]]}],
+[2,"A2",{"comment":"tie-off on a rock","archived":[{"id":7,"name":"B0","lines":[1]}]}],
 [3,"A3"],
 [4,"B1"],
 [5,"C0"],

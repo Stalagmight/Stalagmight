@@ -357,7 +357,7 @@ fn a_deleted_station_takes_its_comment_datums_and_closures_and_a_junction_stays(
     near(xy(&after, a1), xy(&before, a1), TOL, "A:1 stays");
     assert_still(&before, &after, TOL, &[st(&p, b, 0), a1]);
     assert!(p.topology().is_junction(a1));
-    assert_eq!(p.station(a1).unwrap().aliases.len(), 1);
+    assert_eq!(p.station(a1).unwrap().archived.len(), 1);
     assert_valid(&p);
 }
 

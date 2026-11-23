@@ -50,6 +50,7 @@ use crate::{LineId, Section, StationId};
 
 // The model (plan 1-4).
 mod anchors;
+mod archive;
 mod build;
 mod naming;
 mod positions;
@@ -191,17 +192,18 @@ mod validate_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod alias_identity_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod append_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
+)]
+mod archive_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -261,11 +263,12 @@ mod ops_test_helpers;
 
 pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, ShotSigmas, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
+pub use archive::{IdentityReport, RestoredIdentity, ShownIndex};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
 pub use gas::{GasProfilePoint, GasReach};
 pub use graph::{AlongLine, RulerPoint, StationDistances, StationPositions};
-pub use naming::NameConflict;
+pub use naming::{LetteredStation, NameCollision, NameConflict};
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,
 };
@@ -274,8 +277,8 @@ pub use roles::{FarFix, GpsGapWarning};
 pub use stats::SurveyStats;
 pub use topology::{Component, ShotLocation, ShotUuidIndex, Topology};
 pub use types::{
-    ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement, ProjectSettings,
-    Shot, Station, StationAlias, ZeroDatum, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE,
+    ArchivedStation, ClosureId, ClosureStrategy, Counters, Line, LineMeta, LoopClosure, Placement,
+    ProjectSettings, Shot, Station, ZeroDatum, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE,
     MAX_SHOT_UUID_CHARS,
 };
 pub use validate::{
@@ -296,8 +299,10 @@ pub use edit::{
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::ClosureCreated;
 pub use ops_datums::{DatumChange, DatumSet};
-pub use ops_detach::{DetachLineOutcome, DetachNaming, DetachReport};
-pub use ops_merge::{MergeCheck, MergeDatumShift, MergeMove, MergeReport};
+pub use ops_detach::{DetachLineOutcome, DetachNaming, DetachReport, NameAnswers};
+pub use ops_merge::{
+    MergeCandidate, MergeCheck, MergeCollision, MergeDatumShift, MergeMove, MergeReport,
+};
 pub use ops_move::{SegmentMoved, StationMoved};
 pub use sweep::{Promotion, SweepReport};
 

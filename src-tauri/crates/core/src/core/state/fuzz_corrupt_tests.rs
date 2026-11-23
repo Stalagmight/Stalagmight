@@ -153,13 +153,14 @@ fn entry_lines(lines: &[&str]) -> (Vec<(usize, Stack, usize)>, usize, usize) {
 /// The entry text with `kind` applied, or `None` when it does not apply (no
 /// line side to change a hash of).
 fn damage(entry: &str, kind: Kind) -> Option<String> {
+    use crate::models::survey::changeset::HISTORY_FORMAT_VERSION as VERSION;
     match kind {
         Kind::Version => entry
-            .strip_prefix("{\"v\":1,")
-            .map(|rest| format!("{{\"v\":2,{rest}")),
+            .strip_prefix(&format!("{{\"v\":{VERSION},"))
+            .map(|rest| format!("{{\"v\":{},{rest}", VERSION + 1)),
         Kind::UnknownMember => entry
-            .strip_prefix("{\"v\":1,")
-            .map(|rest| format!("{{\"v\":1,\"zz\":0,{rest}")),
+            .strip_prefix(&format!("{{\"v\":{VERSION},"))
+            .map(|rest| format!("{{\"v\":{VERSION},\"zz\":0,{rest}")),
         Kind::NotAnObject => Some("0".to_string()),
         Kind::BadTime => {
             let start = entry.find("\"t\":\"")? + 5;

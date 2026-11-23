@@ -8,7 +8,7 @@ use super::ops_test_helpers::{
     assert_shifted, assert_still, assert_valid, free_line, gps_at, ok, origin, run, xy, xy_all,
 };
 use super::test_helpers::{at, project};
-use super::{ClosureStrategy, LineId, OpError, Project, StationAlias};
+use super::{ArchivedStation, ClosureStrategy, LineId, OpError, Project};
 
 const TOL: f64 = 1e-9;
 
@@ -45,21 +45,24 @@ fn merging_two_free_pieces_moves_a_onto_b_and_keeps_bs_placement() {
     let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
     let a2_name = p.stations[&a2].name.clone();
     let before = xy_all(&p);
-    let out = ok(p.merge_stations(a2, b0));
+    let out = ok(p.merge_keeping_stationary(a2, b0));
     assert_valid(&p);
-    assert_eq!(out.value.survivor, b0);
-    assert_eq!(out.value.retired, a2);
+    assert_eq!(out.value.kept, b0);
+    assert_eq!(out.value.archived, a2);
+    assert_eq!((out.value.stationary, out.value.moving), (b0, a2));
     assert_eq!(out.value.moving_lines, vec![a]);
     assert!(!p.stations.contains_key(&a2));
     assert_eq!(p.line_stations(a).unwrap().last(), Some(&b0));
     assert!(p.topology().is_junction(b0));
     assert_eq!(
-        p.stations[&b0].aliases,
-        vec![StationAlias {
+        p.stations[&b0].archived,
+        vec![ArchivedStation {
             id: a2,
-            name: Some(a2_name),
-            // A knew the retired station by that name (UX-4).
-            line: Some(a),
+            name: a2_name,
+            comment: None,
+            external: None,
+            // A's own station there (RS 4.1 step 2).
+            lines: vec![a],
         }]
     );
     // B stays; A moves by (100 - 20, 50 - 0).
@@ -85,12 +88,12 @@ fn a_placed_piece_stays_and_the_free_one_moves_whichever_is_picked_first() {
         let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
         let before = xy_all(&p);
         let out = if a_first {
-            ok(p.merge_stations(a2, b0))
+            ok(p.merge_keeping_stationary(a2, b0))
         } else {
-            ok(p.merge_stations(b0, a2))
+            ok(p.merge_keeping_stationary(b0, a2))
         };
         assert_valid(&p);
-        assert_eq!(out.value.survivor, a2, "the placed side survives");
+        assert_eq!(out.value.kept, a2, "the placed side is kept here");
         assert_eq!(out.value.moving_lines, vec![b]);
         let delta = [
             before[&a2][0] - before[&b0][0],
@@ -122,12 +125,12 @@ fn merging_two_placed_pieces_moves_the_later_one_and_makes_its_datum_a_fix() {
         let b_before = xy(&p, b0);
 
         let out = if b_first {
-            ok(p.merge_stations(b0, a2))
+            ok(p.merge_keeping_stationary(b0, a2))
         } else {
-            ok(p.merge_stations(a2, b0))
+            ok(p.merge_keeping_stationary(a2, b0))
         };
         assert_valid(&p);
-        assert_eq!(out.value.survivor, a2);
+        assert_eq!(out.value.kept, a2);
         let a_after: Vec<_> = (0..=2).map(|i| xy(&p, at(&p, a, i))).collect();
         assert_eq!(a_before, a_after, "the earlier placement holds its piece");
         let b_after = xy(&p, at(&p, b, 0));
@@ -167,13 +170,27 @@ fn a_merge_is_refused_for_one_station_unknown_stations_and_one_piece() {
     let (mut p, a, b) = two_free_pieces();
     let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     let before = p.clone();
-    assert_eq!(p.merge_stations(a0, a0), Err(OpError::AlreadyMerged));
-    assert_eq!(p.merge_stations(a0, a2), Err(OpError::AlreadyConnected));
-    assert_eq!(p.merge_stations(a0, 999), Err(OpError::UnknownStation(999)));
-    ok(p.merge_stations(a2, b0));
+    assert_eq!(
+        p.merge_keeping_stationary(a0, a0),
+        Err(OpError::AlreadyMerged)
+    );
+    assert_eq!(
+        p.merge_keeping_stationary(a0, a2),
+        Err(OpError::AlreadyConnected)
+    );
+    assert_eq!(
+        p.merge_keeping_stationary(a0, 999),
+        Err(OpError::UnknownStation(999))
+    );
+    assert_eq!(
+        p.merge_stations(a2, b0, a0, &[]),
+        Err(OpError::InvalidKeep(a0)),
+        "a merge keeps one of its two stations"
+    );
+    ok(p.merge_keeping_stationary(a2, b0));
     let b2 = at(&p, b, 2);
     assert_eq!(
-        p.merge_stations(a0, b2),
+        p.merge_keeping_stationary(a0, b2),
         Err(OpError::AlreadyConnected),
         "the halves of one piece are already connected"
     );
@@ -184,35 +201,64 @@ fn a_merge_is_refused_for_one_station_unknown_stations_and_one_piece() {
     assert_ne!(p, before);
 }
 
+/// RS 4.1: the kept station is shown on every line and keeps its comment;
+/// the other one keeps its own comment in its record (nothing is joined).
+/// A:0 is named "0" like the kept B:0, which A now shows at its end: the
+/// merge with no answer refuses (N8), the dialog's answer (rule L's letter,
+/// the preview's suggestion) lets it through, and so does the no-dialog form.
+/// Injection: join the comments in `merge_ids` and the kept comment reads
+/// both notes.
 #[test]
-fn the_survivor_keeps_its_name_comment_and_ids_and_joins_the_comments() {
+fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
     let (mut p, a, b) = two_free_pieces();
     let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
-    p.station_mut(b0).unwrap().comment = Some("survivor note".to_string());
-    p.station_mut(a2).unwrap().comment = Some("retired note".to_string());
-    // A:0 is named "0" like the survivor B:0. A shows the junction by the
-    // retired station's name "2" (its alias names A), so nothing is renamed
-    // and no line shows one name twice (I-3; 0.6.0 kept each line's own name
-    // for its member).
+    p.station_mut(b0).unwrap().comment = Some("kept note".to_string());
+    p.station_mut(a2).unwrap().comment = Some("archived note".to_string());
     assert_eq!(p.stations[&a0].name, p.stations[&b0].name);
-    ok(p.merge_stations(a2, b0));
+    let before = p.clone();
+    assert_eq!(
+        p.merge_stations(a2, b0, b0, &[]),
+        Err(OpError::NameTaken {
+            line: a,
+            name: "0".to_string()
+        })
+    );
+    assert_eq!(p, before, "a refused merge changes nothing");
+    let preview = p.merge_preview(a2, b0, b0).unwrap();
+    assert_eq!(preview.collisions.len(), 1);
+    let letter = &preview.collisions[0].suggestion;
+    assert_eq!((letter.station, letter.line), (a0, a));
+    assert_eq!((letter.from.as_str(), letter.to.as_str()), ("0", "0a"));
+    assert_eq!(
+        preview.hidden,
+        (a2, "2".to_string(), Some("archived note".to_string()))
+    );
+    assert_eq!(
+        preview.renamed_lines,
+        vec![a],
+        "A shows the junction as 0 now"
+    );
+    ok(p.merge_stations(a2, b0, b0, &[(a0, "0a".to_string())]));
     assert_valid(&p);
     assert_eq!(p.stations[&b0].name, "0");
-    assert_eq!(p.stations[&a0].name, "0");
-    assert!(p.known_by_alias_on(b0, a));
-    assert_eq!(p.name_on(b0, a), Some("2"));
-    assert_eq!(p.name_on(b0, b), Some("0"));
+    assert_eq!(p.stations[&a0].name, "0a");
+    assert!(!p.is_native(b0, a));
+    assert!(p.is_native(b0, b));
+    assert_eq!(p.shown_name(b0), Some("0"));
+    assert_eq!(p.stations[&b0].comment.as_deref(), Some("kept note"));
     assert_eq!(
-        p.stations[&b0].comment.as_deref(),
-        Some("survivor note\n\nretired note")
+        p.stations[&b0].archived[0].comment.as_deref(),
+        Some("archived note")
     );
 
-    // Same comment twice, or one side empty: no duplication.
-    let (mut p, a, b) = two_free_pieces();
-    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
-    p.station_mut(a2).unwrap().comment = Some("only".to_string());
-    ok(p.merge_stations(a2, b0));
-    assert_eq!(p.stations[&b0].comment.as_deref(), Some("only"));
+    // Without a dialog rule L letters A's own 0 (shown on one line), never
+    // the kept junction (shown on two).
+    let mut auto = before;
+    let out = ok(auto.merge_stations_auto(a2, b0, b0));
+    assert_eq!(out.identities.lettered.len(), 1);
+    assert_eq!(out.identities.lettered[0].station, a0);
+    assert_eq!(auto.stations[&a0].name, "0a");
+    assert_eq!(auto, p, "the dialog's answer is rule L's");
 }
 
 #[test]
@@ -224,9 +270,9 @@ fn hand_moves_datums_and_closure_ends_follow_the_retired_station() {
         .hand_moves
         .insert(a2, [0.25, -0.5, 0.0]);
     ok(p.create_closure(a0, Some(a), a2, Some(a), ClosureStrategy::Batch));
-    let out = ok(p.merge_stations(a2, b0));
+    let out = ok(p.merge_keeping_stationary(a2, b0));
     assert_valid(&p);
-    assert_eq!(out.value.survivor, b0);
+    assert_eq!(out.value.kept, b0);
     assert_eq!(
         p.line(a).unwrap().hand_moves.get(&b0),
         Some(&[0.25, -0.5, 0.0])
@@ -244,7 +290,7 @@ fn a_closure_between_the_merged_stations_is_removed_by_the_sweep() {
     let closure = ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch))
         .value
         .closure;
-    let out = ok(p.merge_stations(a2, b0));
+    let out = ok(p.merge_keeping_stationary(a2, b0));
     assert_valid(&p);
     assert!(p.closures.is_empty());
     // Reported as the sweep found it: the merge had already put both ends on
@@ -302,7 +348,7 @@ fn two_placed_pieces_joined_by_a_closure_are_connected_for_the_dialog_but_may_me
     let check = p.merge_check(a2, b0).unwrap();
     assert!(check.connected && !check.can_merge);
     let before = xy_all(&p);
-    ok(p.merge_stations(a2, b0));
+    ok(p.merge_keeping_stationary(a2, b0));
     assert_valid(&p);
     assert_eq!(
         p.closures.len(),
@@ -321,19 +367,17 @@ fn two_placed_pieces_joined_by_a_closure_are_connected_for_the_dialog_but_may_me
     );
 }
 
-/// A retired station two lines showed by its own name (a Split Line Here
-/// junction, so no alias names either half) keeps that name on both: the
-/// first half gets an alias with the retired id, the second one with a fresh
-/// id, and nothing is renamed although the survivor's name is taken on both
-/// (I-3: every path keeps a line's own name instead of lettering a station).
-/// Injection: give only the first native line an alias (the old
-/// `alias_line`) and the second half shows the survivor's `0` next to its
-/// own `0`: invariant 8 refuses the merge.
+/// A retired station two lines showed natively (a Split Line Here
+/// junction) is archived whole: ONE record with its id and both halves'
+/// lines, nothing minted (RS 4.1 step 2). Detaching either half then brings
+/// it back for both (they were one station). Injection: archive the first
+/// native line only (the U1 `alias_line`) and the second half is native at
+/// the merged node.
 #[test]
-fn a_merge_keeps_every_lines_own_name_for_a_junction_it_retires() {
+fn a_merge_archives_a_split_junction_whole() {
     use super::SplitOptions;
     let (mut p, a, b) = two_free_pieces();
-    let (a0, a1, b0) = (at(&p, a, 0), at(&p, a, 1), at(&p, b, 0));
+    let (a1, b0) = (at(&p, a, 1), at(&p, b, 0));
     let a2 = p
         .split_line(
             a,
@@ -348,23 +392,22 @@ fn a_merge_keeps_every_lines_own_name_for_a_junction_it_retires() {
         .unwrap()
         .value;
     assert_valid(&p);
-    // The second half's own stations: rename one `0` so it would clash.
-    let a2_end = at(&p, a2, 1);
-    p.station_mut(a2_end).unwrap().name = "0".to_string();
-    assert_valid(&p);
     let counter = p.counters.next_station_id;
-    ok(p.merge_stations(a1, b0));
+    ok(p.merge_keeping_stationary(a1, b0));
     assert_valid(&p);
-    assert_eq!(p.stations[&b0].name, "0");
-    assert_eq!(p.stations[&a0].name, "0");
-    assert_eq!(p.stations[&a2_end].name, "0");
-    assert_eq!(p.name_on(b0, a), Some("1"));
-    assert_eq!(p.name_on(b0, a2), Some("1"));
-    assert_eq!(p.name_on(b0, b), Some("0"));
-    let aliases = &p.stations[&b0].aliases;
-    assert_eq!(aliases.len(), 2);
-    assert_eq!((aliases[0].id, aliases[0].line), (a1, Some(a)));
-    assert_eq!((aliases[1].id, aliases[1].line), (counter, Some(a2)));
+    assert_eq!(p.counters.next_station_id, counter, "nothing minted");
+    let archived = &p.stations[&b0].archived;
+    assert_eq!(archived.len(), 1);
+    assert_eq!(
+        (archived[0].id, archived[0].lines.clone()),
+        (a1, vec![a, a2])
+    );
+    assert_eq!(p.native_lines(b0), vec![b]);
+    let out = ok(p.detach_line(b0, a2, &[], None));
+    assert_eq!(out.value.new_station, a1);
+    assert_eq!(out.value.lines_off, vec![a, a2]);
+    assert!(p.topology().lines_of(b0) == vec![b]);
+    assert_valid(&p);
 }
 
 /// The Merge dialog's preview (demo issue I-4) is what the merge then does:
@@ -377,13 +420,13 @@ fn the_merge_preview_is_what_the_merge_does() {
     let (mut p, a, b) = two_free_pieces();
     let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
     let before = p.clone();
-    let preview = p.merge_preview(a2, b0).unwrap();
+    let preview = p.merge_preview(a2, b0, b0).unwrap();
     assert_eq!(p, before, "read-only");
     assert_eq!(preview.stationary, b0);
     assert_eq!(preview.moving_lines, vec![a]);
     assert!((preview.shift_m - 80.0_f64.hypot(50.0)).abs() < 1e-6);
     let xy_before = xy_all(&p);
-    ok(p.merge_stations(a2, b0));
+    ok(p.merge_keeping_stationary(a2, b0));
     let moved = xy_all(&p)
         .iter()
         .filter_map(|(s, [x, y])| {
@@ -395,5 +438,5 @@ fn the_merge_preview_is_what_the_merge_does() {
     let joined = p.raw_positions().z(b0).unwrap();
     assert!((joined - preview.joined_depth_m).abs() < TOL);
     // A refused pair has no preview.
-    assert_eq!(p.merge_preview(b0, b0), None);
+    assert_eq!(p.merge_preview(b0, b0, b0), None);
 }

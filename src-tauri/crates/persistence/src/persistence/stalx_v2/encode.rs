@@ -402,6 +402,10 @@ fn write_body(
             small(o.key("b_via"), u64::from(via));
         }
         string(o.key("strategy"), tokens::strategy(closure.strategy));
+        if let Some(end) = closure.archived {
+            // RS 8.1: the end the closure archives.
+            string(o.key("archived"), &end.to_string());
+        }
         o.close();
         Ok(())
     })?;
@@ -487,44 +491,47 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
     small(out, u64::from(station.id));
     out.push(b',');
     string(out, &station.name);
-    if station.comment.is_some() || !station.aliases.is_empty() || station.external.is_some() {
+    if station.comment.is_some() || station.external.is_some() || !station.archived.is_empty() {
         out.push(b',');
         let mut o = Obj::open(out);
         if let Some(comment) = &station.comment {
             string(o.key("comment"), comment);
         }
-        if !station.aliases.is_empty() {
-            let b = o.key("aliases");
+        if let Some(external) = &station.external {
+            string(o.key("external"), external);
+        }
+        if !station.archived.is_empty() {
+            // RS 8.1: each record an object `{id, name, comment?, external?,
+            // lines?}`. RS-F: the `requires` feature and the docs.
+            let b = o.key("archived");
             b.push(b'[');
-            for (i, alias) in station.aliases.iter().enumerate() {
+            for (i, record) in station.archived.iter().enumerate() {
                 if i > 0 {
                     b.push(b',');
                 }
-                // `[id]`, `[id, name]`, or with the line that knew the
-                // station by it `[id, name, line]` (`null` for no name).
-                b.push(b'[');
-                small(b, u64::from(alias.id));
-                match (&alias.name, alias.line) {
-                    (Some(name), line) => {
-                        b.push(b',');
-                        string(b, name);
-                        if let Some(line) = line {
-                            b.push(b',');
-                            small(b, u64::from(line));
-                        }
-                    }
-                    (None, Some(line)) => {
-                        b.extend_from_slice(b",null,");
-                        small(b, u64::from(line));
-                    }
-                    (None, None) => {}
+                let mut r = Obj::open(b);
+                small(r.key("id"), u64::from(record.id));
+                string(r.key("name"), &record.name);
+                if let Some(comment) = &record.comment {
+                    string(r.key("comment"), comment);
                 }
-                b.push(b']');
+                if let Some(external) = &record.external {
+                    string(r.key("external"), external);
+                }
+                if !record.lines.is_empty() {
+                    let l = r.key("lines");
+                    l.push(b'[');
+                    for (j, line) in record.lines.iter().enumerate() {
+                        if j > 0 {
+                            l.push(b',');
+                        }
+                        small(l, u64::from(*line));
+                    }
+                    l.push(b']');
+                }
+                r.close();
             }
             b.push(b']');
-        }
-        if let Some(external) = &station.external {
-            string(o.key("external"), external);
         }
         o.close();
     }

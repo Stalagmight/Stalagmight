@@ -529,9 +529,14 @@ fn unmerges_name_the_stations_they_detach() {
         station_b: StationRef::new(BRANCH, 0),
     };
     record(&o.state, &cmd, |p| {
-        p.unmerge_station_pair(StationRef::new(MAIN, 2), StationRef::new(BRANCH, 0))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station_pair(
+            StationRef::new(MAIN, 2),
+            StationRef::new(BRANCH, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
     // The menu's words (Detach Line from Station): the pair form detaches
@@ -551,9 +556,13 @@ fn unmerges_name_the_stations_they_detach() {
         station_ref: StationRef::new(BRANCH, 0),
     };
     record(&o.state, &cmd, |p| {
-        p.unmerge_station(StationRef::new(BRANCH, 0))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(BRANCH, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     let item = assert_survives(&o);
     assert_eq!(item.description, "Detach line \"Branch\" from Main / 2");
@@ -584,7 +593,13 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
     let junction = p.topology().station_at(StationRef::new(MAIN, 4)).unwrap();
     assert!(p.detach_keeps(junction, MAIN), "Main keeps the station");
     assert!(!p.detach_keeps(junction, SIDE));
-    assert_eq!(p.name_on(junction, SIDE), Some("0"));
+    // Every line shows the kept station (Main's 4, RS 4.1); Side's own 0 is
+    // archived in it.
+    assert_eq!(p.shown_name(junction), Some("4"));
+    assert_eq!(
+        p.record_naming(junction, SIDE).map(|r| r.name.as_str()),
+        Some("0")
+    );
 
     exec(
         &o.state,

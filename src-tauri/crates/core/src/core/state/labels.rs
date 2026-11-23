@@ -116,7 +116,7 @@ impl<'p> NameBook<'p> {
     /// the name that line knows it by).
     pub(crate) fn station_name(&self, slot: StationRef) -> Option<String> {
         let id = self.project.topology().station_at(slot)?;
-        Some(self.project.name_on(id, slot.line_id)?.to_string())
+        Some(self.project.shown_name(id)?.to_string())
     }
 
     /// `Line name / station name` of the station at a slot.
@@ -170,7 +170,7 @@ impl<'p> NameBook<'p> {
             .collect();
         staying
             .iter()
-            .find(|s| !self.project.known_by_alias_on(station, s.line_id))
+            .find(|s| self.project.is_native(station, s.line_id))
             .or_else(|| staying.first())
             .copied()
     }

@@ -35,6 +35,7 @@ fn a_closure_stores_its_ends_hints_and_strategy_and_derives_its_figures() {
             b: a3,
             b_via: Some(a),
             strategy: ClosureStrategy::Batch,
+            archived: None,
         }
     );
     assert_eq!(p.closures, vec![out.value.closure]);

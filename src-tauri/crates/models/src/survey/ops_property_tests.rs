@@ -216,7 +216,7 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
             let (stationary, moving) = p.merge_direction(a, b);
             let (fixed, moved) = (piece(p, stationary), piece(p, moving));
             let xy_before = xy_all(p);
-            let result = p.merge_stations(a, b);
+            let result = p.merge_keeping_stationary(a, b);
             if result.is_ok() {
                 // The stationary piece stays; the moving one moves rigidly
                 // so its station lands on the survivor.
@@ -255,11 +255,12 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
                 return "detach: none".to_string();
             };
             let xy_before = xy_all(p);
-            let result = p.unmerge_station(slot);
+            let result = p.unmerge_station(slot, crate::survey::NameAnswers::RuleL, None);
             if let Ok(OpOutcome {
                 value: Some(report),
                 anchors,
                 sweep,
+                ..
             }) = &result
             {
                 // Nothing moves unless a fix that ended up in a piece of its
@@ -483,7 +484,7 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
             let (Some(a), Some(b)) = (a, b) else {
                 return "pair detach: none".to_string();
             };
-            let result = p.unmerge_station_pair(a, b);
+            let result = p.unmerge_station_pair(a, b, crate::survey::NameAnswers::RuleL, None);
             check(
                 p,
                 &before,

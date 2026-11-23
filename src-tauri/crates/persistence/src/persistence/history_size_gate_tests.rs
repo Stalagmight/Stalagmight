@@ -174,12 +174,16 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("merge stations", |p, g| {
             let (a, b) = (station(p, g.island, 0), station(p, g.mid(), 10));
-            p.merge_stations(a, b).map(|_| ()).map_err(err)
+            p.merge_keeping_stationary(a, b).map(|_| ()).map_err(err)
         }),
         ("unmerge stations", |p, g| {
-            p.unmerge_station(StationRef::new(g.mid(), 0))
-                .map(|_| ())
-                .map_err(err)
+            p.unmerge_station(
+                StationRef::new(g.mid(), 0),
+                crate::models::survey::NameAnswers::RuleL,
+                None,
+            )
+            .map(|_| ())
+            .map_err(err)
         }),
         ("unmerge station pair", |p, g| {
             let parent = g.lines[(g.mid_index() - 1) / 2];
@@ -187,6 +191,8 @@ fn actions() -> Vec<(&'static str, Action)> {
             p.unmerge_station_pair(
                 StationRef::new(parent, at as u32),
                 StationRef::new(g.mid(), 0),
+                crate::models::survey::NameAnswers::RuleL,
+                None,
             )
             .map(|_| ())
             .map_err(err)

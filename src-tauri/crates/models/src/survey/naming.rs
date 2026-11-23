@@ -1,125 +1,115 @@
-//! Station names (plan 5.3, per line) and shot-uuid identity.
+//! Station names (RS, plan 2026-11-23) and shot-uuid identity.
 //!
-//! A line shows each of its stations by the name that line knows it by
-//! ([`Project::name_on`]): the station's own name, except on a line one of
-//! its aliases names (the line that knew the station by that alias: a 0.6.0
-//! merge member's line, a merge's moving line, a line an import joined onto
-//! it, a half of a split), which shows the alias's name. A junction keeps one
-//! Station ID; each line keeps its own name for it, so a merge, a
-//! conversion, a detach or a delete changes no name any line shows (review
-//! of the real-app demo, I-3; 0.6.0 kept each line's own name for its
-//! member). Invariant 8: no line shows two stations by one name. Repeats a
-//! command makes are resolved by the existing letter-suffix rule
-//! ([`crate::station_naming::name_with_free_letter`]): `5` -> `5a`,
-//! `Junction` -> `Junction-a`.
+//! Every line shows a node by its **shown identity** ([`Project::shown`]):
+//! the node's own identity, or, for a loop end a closure archives, the kept
+//! end's. A merged junction shows its kept station on every line; the
+//! stations a merge did not keep are records, shown nowhere, whose names
+//! count toward no uniqueness. Invariant N8: on each line, slots that show
+//! different identities have different names (two slots of one identity on
+//! a line, a same-line closure, are allowed).
 //!
-//! A rename addresses a slot ([`Project::set_name_on`]): on a line that knows
-//! the station by an alias it renames that alias, which only that line
-//! shows; elsewhere it renames the station, which every line without an alias
-//! of its own shows ([`Project::lines_sharing_name_on`]), so the new name is
-//! checked on all of them ([`Project::conflicts_with_name_on`]).
+//! A rename addresses the shown identity, so it is checked on every line
+//! that identity is shown on ([`Project::conflicts_with_name`]). Repeats an
+//! operation makes are settled by **rule L** ([`Project::letter_collisions`],
+//! RS 2): the colliding identity shown on fewer lines takes the existing
+//! letter suffix ([`crate::station_naming::name_with_free_letter`]: `5` ->
+//! `5a`, `Junction` -> `Junction-a`); on a tie the one new on the line does;
+//! an identity shown on more lines than the one it collides with is never
+//! lettered, and chain order never decides.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::station_naming::name_with_free_letter;
 use crate::{LineId, StationId, StationRef};
 
-use super::{Project, ShotLocation, StationAlias};
+use super::{Project, ShotLocation, ShownIndex, Topology};
 
 /// Another station holding the same name on a shared line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NameConflict {
-    /// A line both stations are on.
+    /// A line both stations are shown on.
     pub line: LineId,
-    /// The other station.
+    /// The other station (the identity it shows).
     pub other: StationId,
 }
 
+/// An N8 collision: on `line`, `name` is shown by several identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameCollision {
+    pub line: LineId,
+    pub name: String,
+    /// The identities (their Station IDs) shown by `name` on the line, in
+    /// chain order of their first slot.
+    pub identities: Vec<StationId>,
+}
+
+/// A station rule L gave a letter suffix (RS 2), for the op's notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetteredStation {
+    /// The identity renamed (its Station ID).
+    pub station: StationId,
+    /// The line it collided on.
+    pub line: LineId,
+    /// The identity it collided with, which kept the name.
+    pub other: StationId,
+    pub from: String,
+    pub to: String,
+}
+
 impl Project {
-    /// The alias by which `line` knows `station`: the last of its aliases
-    /// whose `line` names it (the latest merge), if any.
-    pub fn line_alias(&self, station: StationId, line: LineId) -> Option<&StationAlias> {
-        self.stations
-            .get(&station)?
-            .aliases
-            .iter()
-            .rev()
-            .find(|a| a.line == Some(line))
+    /// The name `node` is shown by on every line through it: its shown
+    /// identity's name. `None` when the station does not exist.
+    pub fn shown_name(&self, node: StationId) -> Option<&str> {
+        self.shown_station(node).map(|s| s.name.as_str())
     }
 
-    /// Whether `line` knows `station` by one of its aliases
-    /// ([`Self::line_alias`]).
-    pub fn known_by_alias_on(&self, station: StationId, line: LineId) -> bool {
-        self.line_alias(station, line).is_some()
-    }
-
-    /// The name `line` shows `station` by: the name of the alias the line
-    /// knows it by when that alias has one, else the station's own name.
-    /// `None` when the station does not exist.
-    pub fn name_on(&self, station: StationId, line: LineId) -> Option<&str> {
-        let s = self.stations.get(&station)?;
-        let alias = s.aliases.iter().rev().find(|a| a.line == Some(line));
-        Some(alias.and_then(|a| a.name.as_deref()).unwrap_or(&s.name))
-    }
-
-    /// The name the line of `slot` shows the station there by
-    /// ([`Self::name_on`]); `None` for a slot that does not exist.
+    /// The name the slot shows ([`Self::shown_name`] of its node); `None`
+    /// for a slot that does not exist.
     pub fn slot_name(&self, slot: StationRef) -> Option<&str> {
         let station = self
             .line(slot.line_id)?
             .station(slot.station_index as usize)?;
-        self.name_on(station, slot.line_id)
+        self.shown_name(station)
     }
 
-    /// Set the name `line` shows `station` by: the alias the line knows it
-    /// by when it has one (only that line shows it), else the station's own
-    /// name (every line in [`Self::lines_sharing_name_on`] shows it). No
-    /// checks.
-    pub fn set_name_on(&mut self, station: StationId, line: LineId, name: String) {
-        let Some(s) = self.stations.get_mut(&station) else {
-            return;
-        };
-        match s.aliases.iter_mut().rev().find(|a| a.line == Some(line)) {
-            Some(alias) => alias.name = Some(name),
-            None => s.name = name,
+    /// Rename the identity `node` shows (every line it is shown on shows
+    /// the new name). No checks.
+    pub fn set_shown_name(&mut self, node: StationId, name: String) {
+        let identity = self.shown(node);
+        if let Some(s) = self.stations.get_mut(&identity) {
+            s.name = name;
         }
     }
 
-    /// The lines of `station` that show its own name: every line it is on
-    /// but those that know it by an alias, in list order.
-    pub fn lines_showing_name(&self, station: StationId) -> Vec<LineId> {
+    /// Every `(shown identity, line)` pair of this state, for rule L's "new
+    /// on the line".
+    pub(super) fn shown_pairs(&self) -> BTreeSet<(StationId, LineId)> {
         let topology = self.topology();
-        topology
-            .lines_of(station)
-            .into_iter()
-            .filter(|&line| !self.known_by_alias_on(station, line))
-            .collect()
-    }
-
-    /// The lines that show the name `line` shows `station` by: `line` alone
-    /// when it knows the station by an alias, else every line showing the
-    /// station's own name ([`Self::lines_showing_name`]).
-    pub fn lines_sharing_name_on(&self, station: StationId, line: LineId) -> Vec<LineId> {
-        if self.known_by_alias_on(station, line) {
-            vec![line]
-        } else {
-            self.lines_showing_name(station)
+        let index = self.shown_index();
+        let mut out = BTreeSet::new();
+        for (position, line) in self.lines.iter().enumerate() {
+            for &node in topology.chain_at(position).unwrap_or(&[]) {
+                out.insert((index.shown(node), line.id));
+            }
         }
+        out
     }
 
-    /// The stations other than `station` that `lines` show by `name`.
+    /// The identities other than `identity` that `lines` show by `name`.
     fn conflicts_on_lines(
         &self,
-        station: StationId,
+        identity: StationId,
         lines: &[LineId],
         name: &str,
     ) -> Vec<NameConflict> {
         let topology = self.topology();
+        let index = self.shown_index();
         let mut out = Vec::new();
         for &line in lines {
-            for &other in topology.chain(line).unwrap_or(&[]) {
-                if other != station
-                    && self.name_on(other, line) == Some(name)
+            for &node in topology.chain(line).unwrap_or(&[]) {
+                let other = index.shown(node);
+                if other != identity
+                    && self.stations.get(&other).is_some_and(|s| s.name == name)
                     && !out.contains(&NameConflict { line, other })
                 {
                     out.push(NameConflict { line, other });
@@ -129,43 +119,36 @@ impl Project {
         out
     }
 
-    /// The stations that share `station`'s own name on a line showing it,
+    /// The stations sharing the name `node` shows, on a line that shows it,
     /// by line (list order), then chain order.
-    pub fn name_conflicts(&self, station: StationId) -> Vec<NameConflict> {
-        match self.stations.get(&station) {
-            Some(s) => self.conflicts_with_name(station, &s.name),
+    pub fn name_conflicts(&self, node: StationId) -> Vec<NameConflict> {
+        match self.shown_station(node) {
+            Some(s) => self.conflicts_with_name(node, &s.name),
             None => Vec::new(),
         }
     }
 
-    /// The stations already shown by `name` on a line that shows `station`'s
-    /// own name: what renaming the station itself to `name` would collide
-    /// with.
-    pub fn conflicts_with_name(&self, station: StationId, name: &str) -> Vec<NameConflict> {
-        self.conflicts_on_lines(station, &self.lines_showing_name(station), name)
+    /// What renaming the identity `node` shows to `name` would collide with:
+    /// the other identities shown by `name` on a line that identity is shown
+    /// on.
+    pub fn conflicts_with_name(&self, node: StationId, name: &str) -> Vec<NameConflict> {
+        let identity = self.shown(node);
+        self.conflicts_on_lines(identity, &self.lines_shown_on(identity), name)
     }
 
-    /// What renaming `station` through its slot on `line` to `name` would
-    /// collide with: the stations shown by `name` on the lines that show the
-    /// renamed name ([`Self::lines_sharing_name_on`]).
-    pub fn conflicts_with_name_on(
-        &self,
-        station: StationId,
-        line: LineId,
-        name: &str,
-    ) -> Vec<NameConflict> {
-        self.conflicts_on_lines(station, &self.lines_sharing_name_on(station, line), name)
-    }
-
-    /// Every name shown on `lines` by a station other than `station`.
-    fn names_on_lines(&self, station: StationId, lines: &[LineId]) -> BTreeSet<String> {
+    /// Every name the identity `node` shows must not repeat: the names the
+    /// lines it is shown on show other identities by.
+    pub fn names_around(&self, node: StationId) -> BTreeSet<String> {
+        let identity = self.shown(node);
         let topology = self.topology();
+        let index = self.shown_index();
         let mut taken = BTreeSet::new();
-        for &line in lines {
+        for line in self.lines_shown_on(identity) {
             for &other in topology.chain(line).unwrap_or(&[]) {
-                if other != station {
-                    if let Some(name) = self.name_on(other, line) {
-                        taken.insert(name.to_string());
+                let shown = index.shown(other);
+                if shown != identity {
+                    if let Some(s) = self.stations.get(&shown) {
+                        taken.insert(s.name.clone());
                     }
                 }
             }
@@ -173,75 +156,196 @@ impl Project {
         taken
     }
 
-    /// Every name `station`'s own name must not repeat: the names the lines
-    /// showing it ([`Self::lines_showing_name`]) show their other stations
-    /// by.
-    pub fn names_around(&self, station: StationId) -> BTreeSet<String> {
-        self.names_on_lines(station, &self.lines_showing_name(station))
-    }
-
-    /// Every name the name `line` shows `station` by must not repeat
-    /// ([`Self::lines_sharing_name_on`]).
-    pub fn names_around_on(&self, station: StationId, line: LineId) -> BTreeSet<String> {
-        self.names_on_lines(station, &self.lines_sharing_name_on(station, line))
-    }
-
-    /// If `station`'s own name collides on a line showing it, give it the
-    /// first free letter suffix of its name (free on every such line) and
-    /// return the new name; `None` when it was already unique (or does not
-    /// exist).
-    pub fn uniquify_station_name(&mut self, station: StationId) -> Option<String> {
-        let current = self.stations.get(&station)?.name.clone();
-        let taken = self.names_around(station);
+    /// If the name `node` shows collides on a line it is shown on, give its
+    /// identity the first free letter suffix (free on every such line) and
+    /// return the new name; `None` when it was already unique.
+    pub fn uniquify_station_name(&mut self, node: StationId) -> Option<String> {
+        let current = self.shown_name(node)?.to_string();
+        let taken = self.names_around(node);
         if !taken.contains(&current) {
             return None;
         }
         let fresh = name_with_free_letter(&current, &|n| taken.contains(n));
-        if let Some(s) = self.stations.get_mut(&station) {
-            s.name.clone_from(&fresh);
-        }
-        Some(fresh)
-    }
-
-    /// If the name `line` shows `station` by collides on a line that shows
-    /// it, give it the first free letter suffix (free on every such line)
-    /// and return the new name; `None` when it was already unique.
-    pub fn uniquify_name_on(&mut self, station: StationId, line: LineId) -> Option<String> {
-        let current = self.name_on(station, line)?.to_string();
-        let taken = self.names_around_on(station, line);
-        if !taken.contains(&current) {
-            return None;
-        }
-        let fresh = name_with_free_letter(&current, &|n| taken.contains(n));
-        self.set_name_on(station, line, fresh.clone());
+        self.set_shown_name(node, fresh.clone());
         Some(fresh)
     }
 
     /// Make the names line `line` shows unique in chain order: the first
-    /// holder of a name keeps it, a later one gets a letter suffix that is
-    /// free on every line showing the renamed name. Returns the renamed
-    /// stations in chain order.
+    /// identity showing a name keeps it, a later one gets a letter suffix
+    /// free on every line it is shown on. Returns the renamed identities in
+    /// chain order. RS-M2 (Combine) and RS-F (the 0.6.0 migration) replace
+    /// its chain-order choice by rule L ([`Self::letter_collisions`]).
     pub fn uniquify_line_names(&mut self, line: LineId) -> Vec<StationId> {
         let Some(chain) = self.topology().chain(line).map(<[StationId]>::to_vec) else {
             return Vec::new();
         };
-        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut seen: BTreeMap<String, StationId> = BTreeMap::new();
         let mut renamed = Vec::new();
-        for station in chain {
-            let Some(name) = self.name_on(station, line).map(str::to_string) else {
+        for node in chain {
+            let identity = self.shown(node);
+            let Some(name) = self.shown_name(identity).map(str::to_string) else {
                 continue;
             };
-            if seen.insert(name.clone()) {
-                continue;
+            match seen.get(&name) {
+                None => {
+                    seen.insert(name, identity);
+                    continue;
+                }
+                Some(&first) if first == identity => continue,
+                Some(_) => {}
             }
-            let mut taken = self.names_around_on(station, line);
-            taken.extend(seen.iter().cloned());
+            let mut taken = self.names_around(identity);
+            taken.extend(seen.keys().cloned());
             let fresh = name_with_free_letter(&name, &|n| taken.contains(n));
-            self.set_name_on(station, line, fresh.clone());
-            seen.insert(fresh);
-            renamed.push(station);
+            self.set_shown_name(identity, fresh.clone());
+            seen.insert(fresh, identity);
+            renamed.push(identity);
         }
         renamed
+    }
+
+    /// The N8 repeats of the line at list `position`, in chain order: each
+    /// `(name, first, second)` where a slot shows identity `second` by the
+    /// name identity `first` showed at an earlier slot (each pair once).
+    pub(super) fn line_name_repeats<'a>(
+        &'a self,
+        topology: &'a Topology,
+        index: &ShownIndex,
+        position: usize,
+    ) -> Vec<(&'a str, StationId, StationId)> {
+        let Some(chain) = topology.chain_at(position) else {
+            return Vec::new();
+        };
+        let named = |node: &StationId| {
+            let identity = index.shown(*node);
+            self.stations
+                .get(&identity)
+                .map(|s| (s.name.as_str(), identity))
+        };
+        // Fast path: no name on two identities of the chain.
+        let mut sorted: Vec<(&str, StationId)> = chain.iter().filter_map(named).collect();
+        sorted.sort_unstable();
+        if sorted
+            .windows(2)
+            .all(|w| w[0].0 != w[1].0 || w[0].1 == w[1].1)
+        {
+            return Vec::new();
+        }
+        let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
+        let mut out: Vec<(&str, StationId, StationId)> = Vec::new();
+        for node in chain {
+            let Some((name, identity)) = named(node) else {
+                continue;
+            };
+            match seen.get(name) {
+                Some(&first) if first != identity => {
+                    if !out.contains(&(name, first, identity)) {
+                        out.push((name, first, identity));
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    seen.insert(name, identity);
+                }
+            }
+        }
+        out
+    }
+
+    /// The N8 collisions of the line at list `position`: each name its slots
+    /// show more than one identity by, with those identities.
+    fn line_collisions(
+        &self,
+        topology: &Topology,
+        index: &ShownIndex,
+        position: usize,
+    ) -> Vec<NameCollision> {
+        let Some(line) = self.lines.get(position) else {
+            return Vec::new();
+        };
+        let mut out: Vec<NameCollision> = Vec::new();
+        for (name, first, second) in self.line_name_repeats(topology, index, position) {
+            match out.iter_mut().find(|c| c.name == name) {
+                Some(collision) => {
+                    if !collision.identities.contains(&second) {
+                        collision.identities.push(second);
+                    }
+                }
+                None => out.push(NameCollision {
+                    line: line.id,
+                    name: name.to_string(),
+                    identities: vec![first, second],
+                }),
+            }
+        }
+        out
+    }
+
+    /// Every N8 collision (RS 3), by line (list order), then chain order.
+    pub fn name_collisions(&self) -> Vec<NameCollision> {
+        let topology = self.topology();
+        let index = self.shown_index();
+        (0..self.lines.len())
+            .flat_map(|position| self.line_collisions(topology, &index, position))
+            .collect()
+    }
+
+    /// Rule L (RS 2): settle every N8 collision by lettering, of the
+    /// identities sharing a name on a line, all but the one shown on the
+    /// most lines (on a tie: the one that already showed on the line in
+    /// `before`, then the lowest Station ID). Each letter is free on every
+    /// line the lettered identity is shown on, so no letter makes a new
+    /// collision and the pass ends. Returns each letter, in the order given.
+    pub fn letter_collisions(&mut self, before: &Project) -> Vec<LetteredStation> {
+        let mut out = Vec::new();
+        let mut before_pairs: Option<BTreeSet<(StationId, LineId)>> = None;
+        loop {
+            let collisions = self.name_collisions();
+            if collisions.is_empty() {
+                break;
+            }
+            let pairs = before_pairs.get_or_insert_with(|| before.shown_pairs());
+            let mut changed = false;
+            for collision in collisions {
+                // An earlier letter of this pass may have settled it.
+                let holders: Vec<StationId> = collision
+                    .identities
+                    .iter()
+                    .copied()
+                    .filter(|&id| self.shown_name(id) == Some(collision.name.as_str()))
+                    .collect();
+                if holders.len() < 2 {
+                    continue;
+                }
+                let rank = |id: StationId| {
+                    (
+                        self.lines_shown_on(id).len(),
+                        pairs.contains(&(id, collision.line)),
+                        std::cmp::Reverse(id),
+                    )
+                };
+                let Some(keeper) = holders.iter().copied().max_by_key(|&id| rank(id)) else {
+                    continue;
+                };
+                for identity in holders.into_iter().filter(|&id| id != keeper) {
+                    let taken = self.names_around(identity);
+                    let fresh = name_with_free_letter(&collision.name, &|n| taken.contains(n));
+                    self.set_shown_name(identity, fresh.clone());
+                    changed = true;
+                    out.push(LetteredStation {
+                        station: identity,
+                        line: collision.line,
+                        other: keeper,
+                        from: collision.name.clone(),
+                        to: fresh,
+                    });
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        out
     }
 
     /// Whether some shot already has `uuid`.

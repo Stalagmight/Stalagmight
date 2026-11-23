@@ -169,10 +169,10 @@ fn sketch(
             let mut wire = Station::with_coordinates(slot, Coordinates::new(x, y, z));
             wire.id = id;
             if let Some(station) = project.station(id) {
-                // The name this slot's line shows (I-3): the representative
-                // slot then labels a junction as the map does.
+                // The name every line shows (RS 4.1: a junction's kept
+                // station). RS-X: no label at a closure-archived end (RS 9).
                 wire.name = project
-                    .name_on(id, line.id)
+                    .shown_name(id)
                     .map_or_else(|| station.name.clone(), str::to_string);
                 if first_drawn(id) == Some(slot) {
                     wire.comment = station.comment.clone().filter(|c| !c.is_empty());

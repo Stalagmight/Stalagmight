@@ -238,15 +238,15 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(survey.station_comments[0].text, "lead");
     // Every position has a name once the survey is read (an unnamed station
     // is seeded from its index, as the app does on open). The junction keeps
-    // Main's "2" and has that one name on both sections; Side knows it by its
-    // alias (Side's own start), so Side's own station 2 keeps "2" too and
-    // nothing is lettered (review findings D-migration-upgrade-8, UX-3).
+    // Main's "2" and has that one name on both sections (RS 8.3: Side's own
+    // start is archived), so Side's own station 2 takes the letter. RS-F:
+    // the 8.3 migration (rule K, rule L).
     let name = |at: StationId| name_at(&survey, at);
     assert_eq!(
         [0, 1, 2, 3, 4].map(|i| name(id(main.id, i))),
         ["0", "1", "2", "3", "17"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "2a"]);
     assert_eq!(survey.station_names.len(), 8);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.unresolved_references, 0);
@@ -490,8 +490,7 @@ fn a_file_without_station_names_reads_with_seeded_names() {
     let survey = read_file(&path).unwrap();
 
     // One per position, seeded from the index; the junction has Main's on
-    // both sections, and Side (which knows it by its alias) keeps its own
-    // "2" (review findings D-migration-upgrade-8, UX-3).
+    // both sections, and Side's own "2" takes the letter (RS 8.3).
     assert_eq!(survey.station_names.len(), 8);
     let (main, side) = (survey.sections[0].id, survey.sections[1].id);
     let name = |section_id, index| name_at(&survey, StationId { section_id, index });
@@ -499,7 +498,7 @@ fn a_file_without_station_names_reads_with_seeded_names() {
         [0, 1, 2, 3, 4].map(|i| name(main, i)),
         ["0", "1", "2", "3", "4"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "2a"]);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);

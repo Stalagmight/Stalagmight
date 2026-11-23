@@ -497,15 +497,20 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
-        // A junction's name is per line (I-3): every slot, a junction's
-        // included, shows the name 0.6.0 showed there, so a different name is
-        // explained only by a letter the migration gave a repeat.
+        // RS 8.3: a junction shows its kept station's name on every line, so
+        // a junction slot's name may differ from the one 0.6.0 showed there;
+        // any other different name is explained only by a letter the
+        // migration gave a repeat. RS-F: the Z3 oracle under rule K and
+        // rule L (only a name the conversion notice lists).
         for (key, class) in [
             (
                 "id",
                 Some("identity: a junction shares the survivor's Station ID"),
             ),
-            ("name", None),
+            (
+                "name",
+                Some("identity: a junction shows its kept station's name on every line"),
+            ),
             (
                 "comment",
                 Some("identity: a junction shares one (joined) comment"),
@@ -1814,13 +1819,13 @@ fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
         .unwrap()
         .project;
     let junction = p.station_at(StationRef::new(0, 0)).unwrap();
-    let member = p.line_alias(junction, 3).cloned().unwrap();
+    let member = p.record_naming(junction, 3).cloned().unwrap();
     let shot = p.line(0).unwrap().shots[0].id;
     let done = p.delete_shot(0, shot).unwrap();
     assert!(!done.value.station_deleted);
     assert_eq!(p.station_at(StationRef::new(3, 0)), Some(member.id));
     assert_eq!(done.report.reidentified, vec![(junction, member.id)]);
-    assert_eq!(p.stations[&member.id].name, member.name.unwrap());
+    assert_eq!(p.stations[&member.id].name, member.name);
     assert!(done.report.sweep.promoted.is_empty());
     assert_eq!(done.value.closures_removed.len(), 1, "the member's Tie");
 }

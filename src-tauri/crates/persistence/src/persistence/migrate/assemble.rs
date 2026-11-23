@@ -366,6 +366,7 @@ fn build_closures(
             b: sb,
             b_via: vb,
             strategy: ClosureStrategy::Tie,
+            archived: None, // RS-F: 8.3 / 8.2 give closures an archived end
         };
         let origin = if fate == Fate::DemotedSameLine {
             TieOrigin::SameLineMerge
@@ -405,6 +406,7 @@ fn build_closures(
             b: sb,
             b_via: vb,
             strategy,
+            archived: None, // RS-F: 8.3 / 8.2 give closures an archived end
         };
         built.push((migrated, snap, !keep_id, origin));
     }
@@ -636,7 +638,7 @@ fn names_changed(
             .get(&dense)
             .cloned()
             .unwrap_or_else(|| slot.station_index.to_string());
-        let Some(to) = project.name_on(station, slot.line_id).map(str::to_string) else {
+        let Some(to) = project.shown_name(station).map(str::to_string) else {
             continue;
         };
         if from != to {

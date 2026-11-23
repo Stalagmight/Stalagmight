@@ -9,13 +9,15 @@
 //!    closures that end up across one shot, the closures the solve skips
 //!    now);
 //! 2. mutate the model on a working copy;
-//! 3. epilogue: [`Project::drop_stale_attachments`], then
-//!    [`Project::restore_alias_identities`] (a station left only on lines
-//!    that know it by an alias goes back to that identity, I-1), then
-//!    [`Project::settle_anchors`] with the [`super::EditContext`] the
-//!    operation declares, then (topology edits) the orphan-closure sweep
-//!    ([`Project::sweep_orphan_closures`]) and the removal of closures the
-//!    edit newly left across one shot (#737);
+//! 3. epilogue (RS 3): [`Project::drop_stale_attachments`] (archived record
+//!    lines included, A2), then [`Project::restore_archived_identities`] (a
+//!    station left with no native line takes the archived identity naming
+//!    its lines, A4 and RS 4.3), then [`Project::settle_anchors`] with the
+//!    [`super::EditContext`] the operation declares, then (topology edits)
+//!    the orphan-closure sweep ([`Project::sweep_orphan_closures`]) and the
+//!    removal of closures the edit newly left across one shot (#737), then
+//!    the closure-archive normalisation (C1, C2, RS 5.4) and rule L for the
+//!    name collisions the edit made ([`Project::letter_collisions`]);
 //! 4. [`Project::validate`]: any violation refuses the operation and the
 //!    project is left exactly as it was ([`EditError::Invalid`]).
 //!
@@ -50,8 +52,8 @@ use std::fmt;
 use crate::{LineId, StationId};
 
 use super::{
-    AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, LoopClosure, Project,
-    RawPositions, StaleAttachments, SweepReport, Violation,
+    AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, IdentityReport, LoopClosure,
+    Project, RawPositions, StaleAttachments, SweepReport, Violation,
 };
 
 mod combine;
@@ -223,10 +225,14 @@ pub struct EditReport {
     pub anchors: AnchorReport,
     /// `via` hints and hand moves cleared because their station left a line.
     pub stale: StaleAttachments,
-    /// Stations the edit left only on lines that know them by an alias,
-    /// back under that alias's identity, `(old, new)`
-    /// ([`Project::restore_alias_identities`], I-1).
+    /// Stations the edit left with no native line, back under the archived
+    /// identity naming their lines, `(old, new)`
+    /// ([`Project::restore_archived_identities`], RS 4.3).
     pub reidentified: Vec<(StationId, StationId)>,
+    /// What the epilogue did to identities: the restores (with the comments
+    /// that moved or became hidden), dropped closure archives and rule-L
+    /// letters (RS 3), for the edit's notice and preview.
+    pub identities: IdentityReport,
     /// What the orphan-closure sweep did (topology edits only).
     pub sweep: SweepReport,
     /// Closures removed because the edit left them across one shot (#737),
@@ -363,7 +369,7 @@ impl Project {
         } else {
             Vec::new()
         };
-        let report = self.finish_edit(&before, &skipped_before, &epilogue);
+        let report = self.finish_edit(original, &before, &skipped_before, &epilogue);
         let violations = self.validate();
         if !violations.is_empty() {
             return Err(EditError::Invalid(violations));
@@ -371,15 +377,19 @@ impl Project {
         Ok(Edited { value, report })
     }
 
-    /// The epilogue of [`Self::run_edit`] (steps 3 of the module docs).
+    /// The epilogue of [`Self::run_edit`] (steps 3 of the module docs);
+    /// `original` is the state before the edit (rule L's "new on the line").
     fn finish_edit(
         &mut self,
+        original: &Project,
         before: &AnchorSnapshot,
         skipped_before: &[ClosureId],
         epilogue: &Epilogue,
     ) -> EditReport {
         let stale = self.drop_stale_attachments();
-        let reidentified = self.restore_alias_identities(before.topology());
+        let restored = self.restore_archived_identities();
+        let reidentified: Vec<(StationId, StationId)> =
+            restored.iter().map(|r| (r.old, r.new)).collect();
         let ctx = epilogue.ctx.clone().with_reidentified(&reidentified);
         let anchors = self.settle_anchors(before, &ctx);
         let sweep = if epilogue.sweep {
@@ -392,10 +402,17 @@ impl Project {
         } else {
             Vec::new()
         };
+        let unarchived = self.normalise_closure_archives();
+        let lettered = self.letter_collisions(original);
         EditReport {
             anchors,
             stale,
             reidentified,
+            identities: IdentityReport {
+                restored,
+                unarchived,
+                lettered,
+            },
             sweep,
             removed_across_one_shot,
         }

@@ -1393,8 +1393,8 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
         // B's stations follow A's two: B:2 is A:3, B:0 the joined A:1.
         let joined = st(&after, a, 1);
         assert_eq!(st(&after, a, 3), b2, "{what}");
-        let aliases = &after.station(joined).unwrap().aliases;
-        assert!(aliases.iter().any(|x| x.id == b0), "{what}: B:0 folded");
+        let archived = &after.station(joined).unwrap().archived;
+        assert!(archived.iter().any(|x| x.id == b0), "{what}: B:0 folded");
         assert_eq!(junctions(&after), 0, "{what}");
         assert_eq!(after.closures.len(), 1, "{what}");
         let left = after.closures[0];

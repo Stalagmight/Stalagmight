@@ -560,7 +560,7 @@ fn counters_of(project: &Project, raw: &RawCounters) -> Counters {
     let next_station = project
         .stations
         .values()
-        .flat_map(|s| std::iter::once(s.id).chain(s.aliases.iter().map(|a| a.id)))
+        .flat_map(|s| std::iter::once(s.id).chain(s.archived.iter().map(|r| r.id)))
         .max()
         .map_or(defaults.next_station_id, |m| m.saturating_add(1));
     let next_closure = project

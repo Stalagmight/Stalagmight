@@ -505,3 +505,102 @@ archives.
 5. **RS-UI**, after RS-W: 6 and 7, i18n, vitest, Playwright.
 6. **RS-T (oracles and farm)**, after RS-M and RS-W: 12's properties and fuzz
    oracles, farm jobs.
+
+## Deviations (package RS-M1)
+
+Decisions the model core took where this page is silent or the code
+disagreed, each with its reason.
+
+- **Merge Stations keeps the stationary station until RS-W.** The command
+  carries no `keep` yet, so it calls `Project::merge_keeping_stationary`:
+  the station whose piece stays put is kept and every collision is lettered
+  by rule L. The current dialog tells the user the other piece "moves to
+  join" that station, and it is the identity a merge kept before RS; the
+  geometry is the same for either keep. RS-W passes the dialog's keep and
+  renames to `merge_stations`. Tests written before RS merge the same way.
+- **Rule L ties.** Of the identities sharing a name on a line, all but the
+  strongest are lettered: most lines shown on, then already shown on that
+  line before the op, then the lowest Station ID (the mirror of rule K's
+  tie). "New on the line" is judged against the state before the whole op.
+- **Default keep with two datum holders.** The datum preference applies when
+  exactly one station holds a datum; when both do, rule K decides.
+- **A closure-forced keep overrides `keep`.** Every path (the API, a
+  promotion, the Combine join) must keep an archiving closure's kept end
+  (4.1 step 4), so `merge_stations` keeps it whatever `keep` says and reports
+  it (`MergeReport::keep_forced_by`, `MergeMove::keep_forced_by`) instead of
+  refusing; `keep` that is neither station refuses (`OpError::InvalidKeep`).
+- **Renames answer the op's own collisions.** They apply right after the
+  mutation, before the epilogue, and an unanswered collision then refuses
+  (`NameTaken`). A collision the epilogue itself makes (a restore, a sweep
+  promotion, a #737 removal) is lettered by rule L even in an op with
+  renames: those paths have no dialog. A rename names an identity by its
+  Station ID; an id that is no station refuses.
+- **Merge preview suggestions are rule L's.** `MergeMove::collisions` comes
+  from the merge run on a copy with every collision lettered; when the kept
+  identity is shown on fewer lines than the one it collides with, rule L
+  letters the kept one, and that is the suggestion.
+- **Detach keeps history records on the junction.** Records carry no
+  ownership link, so in all three cases the history records (A5) stay with
+  the node that keeps its own identity.
+- **A tear with a several-line record.** A Combine tear takes one line off
+  (`DetachMode::Tear`): when the record naming it names other lines too, the
+  fresh node takes the record and those other lines become native at the
+  junction (an id cannot be both a node and a record, A1). They show the
+  same name as before, without the dot.
+- **A tear of the junction's only native line.** Instead of the `detach_keeps`
+  distribution (RS-M2, with the tear closure's archive), the record rule K
+  picks among those naming the other lines becomes history, so the junction
+  keeps a native line (A4) and Combine's slot map keeps its meaning. Nothing
+  visible changes (those lines already showed the junction's identity, now
+  without a dot); the archived identity comes back only by undo. M-P1-4 names
+  this as the alternative; RS-M2 replaces it.
+- **The RS 4.3 comment rule.** "No comment" is none or empty text; the old
+  identity's external moves when the record has none. The history record
+  keeps whatever did not move, and the report names a comment it hides
+  (`RestoredIdentity::comment_hidden`), which the delete previews carry
+  (`DeleteShotPreview::identities`, `DeleteRangePreview::identities`).
+- **Epilogue order.** Drop stale attachments (record lines included), the A4
+  restore on every node, settle the anchors, the sweep, the #737 removal,
+  the closure normalisation (once, after every node merge of the op), rule
+  L, validate. The sweep letters its own promotions' collisions too, so a
+  sweep run outside a command leaves a valid model.
+- **Combine (minimal, RS-M2 finishes it).** It runs the A4 restore as a
+  safety net, rule L before its validation, the shared-join rule (records
+  drop `k` and `o`), and its comment pick only when `jo` becomes history;
+  its chain-order `uniquify_line_names` and prefix plan stay, on shown names.
+  Promotions keep today's survivor (RS-M2: the closure's kept end).
+- **Foreign slot.** Implemented as the precise rule of section 2: the slot's
+  line is not a native line of the node holding its shown identity, so a
+  same-line closure on a native line of the kept end is not foreign.
+- **N8 reports.** In chain order, one `DuplicateStationName` per (first,
+  later) pair of identities on a line; the identities are Station IDs of the
+  nodes holding them.
+- **Version 2 records before RS-F.** The encoder writes `archived` record
+  objects and closures' `archived` end, the decoder reads them (an unknown
+  record key is tier 1). U1 alias rows still decode, naively, into records
+  (the latest naming a line wins, the earlier are history, a null name takes
+  the station's own) until the 8.2 upgrade replaces this. The `requires`
+  feature is not written yet. The file-format example row carries its record
+  as an object; the prose is RS-F's.
+- **Salvage and the migration (minimal, RS-F).** The renamed violations
+  (`ArchivedIdCollision`, `ArchivedIdOutOfRange`, `StaleArchivedLine`) keep
+  their repairs; `LineNamedTwice` drops the line from the later record,
+  `NoNativeLine` makes the station's records history, C1 and C2 normalise.
+  The migration builds records with joined comments and letters by chain
+  order; the migration and wire-equivalence oracles accept the names the
+  conversion notice declares and a junction's kept name on every line.
+- **Import joins (minimal, RS-X).** The new line shows the kept junction;
+  the file's different name becomes a record naming the new line (no comment
+  or external yet), and new stations named like the junction are lettered
+  and reported, as the funnel already did without an alias.
+- **Wire (minimal, RS-W).** Each slot's name and comment are its shown
+  identity's; `aliases` carries one entry per record line (a history record
+  one with no line); `DetachLineResult::alias_id` is always `None`.
+- **Undo kit.** Its merge keeps either station at random and answers the
+  collisions with the preview's suggestions, one time in five with no
+  answer (refused, nothing changed); its detach picks `rest_keep` at random.
+- **Two T5 oracles ignored for RS-T.** The range-vs-singles metamorphic
+  tests compare junction identities by the U1 rules; under RS a letter one
+  route gives stays and a restore may pick another record when the routes'
+  promotions differ. They are `#[ignore]`d with that reason until RS-T moves
+  T5 to the new rules.

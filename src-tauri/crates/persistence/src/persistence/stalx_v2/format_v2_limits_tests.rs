@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::models::survey::{CounterKind, LineMeta, Project, StartAt, StationAlias, Violation};
+use crate::models::survey::{ArchivedStation, CounterKind, LineMeta, Project, StartAt, Violation};
 use crate::models::{Person, ShotData, SurveyCredit};
 
 use super::test_helpers::{generate, text_of, SMALL};
@@ -177,19 +177,21 @@ fn a_line_holds_at_most_99999_shots() {
 }
 
 #[test]
-fn alias_ids_and_counters_stay_in_range() {
+fn archived_ids_and_counters_stay_in_range() {
     let (mut p, extras) = generate(2, SMALL);
     let host = *p.stations.keys().next().unwrap();
-    p.station_mut(host).unwrap().aliases.push(StationAlias {
+    p.station_mut(host).unwrap().archived.push(ArchivedStation {
         id: 4_000_000_000,
-        name: None,
-        line: None,
+        name: "old".to_string(),
+        comment: None,
+        external: None,
+        lines: Vec::new(),
     });
     p.counters.next_station_id = 4_000_000_001;
     // `validate` checks both ranges; the encoder refuses through it.
-    let alias = Violation::AliasOutOfRange {
+    let alias = Violation::ArchivedIdOutOfRange {
         station: host,
-        alias: 4_000_000_000,
+        archived: 4_000_000_000,
     };
     let counter = Violation::CounterOutOfRange {
         counter: CounterKind::Station,
@@ -204,12 +206,12 @@ fn alias_ids_and_counters_stay_in_range() {
         text_of(&encode(&one_line(3), &Extras::default(), Mode::Normal).unwrap()).to_string();
     let first = text.lines().find(|l| l.starts_with("[0,")).unwrap();
     let row = first.trim_end_matches(',').trim_end_matches(']');
-    let with_alias = format!("{row},{{\"aliases\":[[4000000000]]}}],");
+    let with_alias = format!("{row},{{\"archived\":[{{\"id\":4000000000,\"name\":\"x\"}}]}}],");
     let bad = text.replacen(first, &with_alias, 1);
     assert!(matches!(
         decode(bad.as_bytes(), &DecodeOptions::default()),
         Err(DecodeError::Invalid { violations })
-            if violations.iter().any(|v| matches!(v, Violation::AliasOutOfRange { .. }))
+            if violations.iter().any(|v| matches!(v, Violation::ArchivedIdOutOfRange { .. }))
     ));
     let (salvaged, report) = decode_salvage(bad.as_bytes());
     assert!(salvaged.is_some_and(|q| q.is_valid()), "{report:?}");

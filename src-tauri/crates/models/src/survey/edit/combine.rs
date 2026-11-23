@@ -25,8 +25,9 @@
 //! 3. when both sides are held by placement datums, M's line is also detached
 //!    from every junction whose far part holds one (refused only when both
 //!    lines carry a placement datum on their own stations, as today);
-//! 4. the other line's join station is folded into the kept line's (its id
-//!    and name become aliases; the comment follows the dialog's pick), the
+//! 4. the other line's join station is folded into the kept line's (it is
+//!    archived in it, RS 4.4; the comment follows the dialog's pick when it
+//!    becomes history), the
 //!    other line is reversed when needed and its shots join the kept line;
 //! 5. snaps the move tears, and snaps across the two sides (which would tie
 //!    the combined line to itself), become `Batch`; the fixed side's hand move
