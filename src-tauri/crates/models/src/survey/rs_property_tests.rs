@@ -296,7 +296,7 @@ impl Fuzz {
         for _ in 0..3 + self.rng.below(3) {
             let _ = self.free_line();
         }
-        for _ in 0..1 + self.rng.below(2) {
+        for _ in 0..=self.rng.below(2) {
             if let Some(from) = self.rng.pick(self.p.topology().stations()) {
                 let _ = self.branch(from);
             }
@@ -1486,7 +1486,7 @@ fn merge_then_detach(
         ));
     }
     let mut on: Vec<LineId> = copy.topology().lines_of(x);
-    let mut named = record.lines.clone();
+    let mut named = record.lines;
     on.sort_unstable();
     named.sort_unstable();
     if on != named {
@@ -1681,7 +1681,7 @@ fn the_detach_preview_survives_a_promotion_of_the_station_it_restores() {
     let naming = p.detach_naming(x1, x, None).unwrap();
     assert_eq!(naming.id, y1);
     assert!(naming.restored && naming.kept);
-    let mut q = p.clone();
+    let mut q = p;
     let out = q.detach_line_auto(x1, x, None).unwrap();
     assert_eq!(out.sweep.promoted.len(), 1, "the closure is promoted");
     assert!(

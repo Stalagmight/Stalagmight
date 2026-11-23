@@ -171,7 +171,7 @@ fn hostile_renames(rng: &mut Rng, project: &Project) -> Option<Vec<StationRename
         .flat_map(|s| s.archived.iter().map(|r| r.id))
         .next();
     let mut out: Vec<StationRename> = Vec::new();
-    for _ in 0..1 + rng.below(3) {
+    for _ in 0..=rng.below(3) {
         let station_id = match rng.below(5) {
             0 => StationId::MAX,
             1 => record.unwrap_or(StationId::MAX - 1),

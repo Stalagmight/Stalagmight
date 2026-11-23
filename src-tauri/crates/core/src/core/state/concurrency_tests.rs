@@ -359,7 +359,7 @@ fn worker(
                         // before the command runs, so another thread may
                         // have made them stale (refused, or still valid).
                         let (keep, renames) = if rng.chance(50) {
-                            dialog_answers(&state, station_a, station_b, &mut rng)
+                            dialog_answers(state, station_a, station_b, &mut rng)
                         } else {
                             (None, None)
                         };

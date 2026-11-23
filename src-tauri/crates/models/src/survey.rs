@@ -270,6 +270,7 @@ mod ops_test_helpers;
 #[expect(
     clippy::panic,
     clippy::print_stdout,
+    clippy::unwrap_used,
     reason = "a seeded fuzzer: its per-seed failure lines ARE its output, and a panic is how a \
               gate test fails"
 )]
