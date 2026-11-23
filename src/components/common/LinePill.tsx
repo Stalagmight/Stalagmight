@@ -151,18 +151,19 @@ export function HomeLineMark({ mark, testId }: { mark: HomeMark; testId?: string
 export function LoopEndMark({ label, testId }: { label?: string | undefined; testId?: string | undefined }) {
   return (
     <span className="sh-lpill-loop" data-testid={testId}>
-      <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
-        <path
-          d="M9.6 4.2A4 4 0 1 0 10 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <path d="M11.2 2.4 L10.4 5.4 L7.6 4.4 Z" fill="currentColor" />
-      </svg>
+      <LoopGlyph />
       {label && <span className="sr-only"> {label}</span>}
     </span>
+  );
+}
+
+/** The loop mark's glyph (an open ring with an arrowhead) in `currentColor`, 1em square. */
+export function LoopGlyph() {
+  return (
+    <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
+      <path d="M9.6 4.2A4 4 0 1 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M11.2 2.4 L10.4 5.4 L7.6 4.4 Z" fill="currentColor" />
+    </svg>
   );
 }
 

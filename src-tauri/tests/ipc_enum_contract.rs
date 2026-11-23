@@ -42,8 +42,8 @@ use stalagmight_lib::models::{
     ClosureEndWire, ClosureStrategy, CombineJoinKind, CombinePick, CombineRemovedKind,
     CombineRenameReason, CombineReplacedKind, CorrectionSource, CreditTargets, CylRole, DatumRole,
     ImportPlacement, KeepRefusalReason, KeptMovesReason, LineEnd, NorthReference, PlanMode,
-    RangeDeleteKind, ShotKind, SplitAt, SplitSide, SurveyDirection, TankMaterial, TornTieKind,
-    TornTieReason, UndoMode,
+    ProsePart, RangeDeleteKind, ShotKind, SplitAt, SplitSide, SurveyDirection, TankMaterial,
+    TornTieKind, TornTieReason, UndoMode,
 };
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpShotType};
 use stalagmight_lib::parsers::tml::{TmlRootPlacement, TmlShotType, TmlUnit};
@@ -219,6 +219,7 @@ fn checked() -> Vec<Check> {
         OverlapMode,
         Permission,
         PlanMode,
+        ProsePart,
         PushResult,
         RangeDeleteKind,
         RemoteState,

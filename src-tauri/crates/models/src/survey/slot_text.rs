@@ -19,14 +19,22 @@
 //! i18n `identity.foreignLabel` and `identity.loopEndLabel`) word it the
 //! same, and the Warnings tab strips a warning's `Shot <label> ` prefix by
 //! that equality.
+//!
+//! Each plain form has a part form (RS-PROSE, `crate::prose`): the same
+//! words as a [`ProsePart`] the frontend draws as a prose pill, and a
+//! `*_marked` form a builder puts in its `format!` where the name goes, so
+//! the text it words splits into its plain string and its parts
+//! (`prose::split`).
 
 use std::collections::HashMap;
 
+use crate::prose::{self, loop_flag, ProsePart, ProseShot, ProseShotEnd, ProseStation};
 use crate::{LineId, StationId, StationRef};
 
 use super::{Project, RecordIndex, ShownIndex};
 
 /// How a slot shows its node, for its plain text.
+#[derive(Clone, Copy)]
 enum Shows {
     Native,
     /// The shown station's home line.
@@ -70,6 +78,134 @@ impl Project {
     pub fn shot_text(&self, line: LineId, index: usize) -> String {
         shot_text_by(self, line, index, |slot| self.slot_name_text(slot))
     }
+
+    /// `slot` as a prose part: [`Self::slot_name_text`]'s words, or with
+    /// `with_line` [`Self::slot_text`]'s, and what its pill draws. `None`
+    /// for a slot that does not exist.
+    pub fn slot_part(&self, slot: StationRef, with_line: bool) -> Option<ProsePart> {
+        let shows = self.shows(slot)?;
+        slot_part_of(self, slot, shows, with_line)
+    }
+
+    /// [`Self::slot_part`] marked for a `format!` (`prose::mark`); the
+    /// plain words when the slot does not exist.
+    pub fn slot_marked(&self, slot: StationRef, with_line: bool) -> String {
+        match self.slot_part(slot, with_line) {
+            Some(part) => prose::mark(&part),
+            None if with_line => self
+                .slot_text(slot)
+                .unwrap_or_else(|| slot.station_index.to_string()),
+            None => self.slot_name_text(slot),
+        }
+    }
+
+    /// The shot from chain index `index` of `line` as a prose part
+    /// ([`Self::shot_text`]'s words).
+    pub fn shot_part(&self, line: LineId, index: usize) -> ProsePart {
+        let text = self.shot_text(line, index);
+        shot_part_by(self, line, index, text, |slot| self.shows(slot))
+    }
+
+    /// [`Self::shot_part`] marked for a `format!`.
+    pub fn shot_marked(&self, line: LineId, index: usize) -> String {
+        prose::mark(&self.shot_part(line, index))
+    }
+
+    /// [`Self::station_text`] marked for a `format!`: the slot's part on
+    /// `line` (or the station's first line), else its words.
+    pub fn station_marked(&self, station: StationId, line: Option<LineId>) -> String {
+        let topology = self.topology();
+        let slot = line
+            .and_then(|l| topology.slot_on(station, l))
+            .or_else(|| topology.first_slot(station));
+        match slot.and_then(|s| self.slot_part(s, true)) {
+            Some(part) => prose::mark(&part),
+            None => self.station_text(station, line),
+        }
+    }
+
+    /// Line `line` as a marked prose part, by [`Self::line_label_of`], in
+    /// quotes when `quoted` (`line "Main"`).
+    pub fn line_marked(&self, line: LineId, quoted: bool) -> String {
+        prose::mark(&prose::line_part(
+            self.line(line).map(|_| line),
+            &self.line_label_of(line),
+            quoted,
+        ))
+    }
+}
+
+/// The part of `slot`, which `shows` says how it shows.
+fn slot_part_of(
+    project: &Project,
+    slot: StationRef,
+    shows: Shows,
+    with_line: bool,
+) -> Option<ProsePart> {
+    let node = project.station_at(slot)?;
+    let name = project.slot_name(slot)?.to_string();
+    let (home_line, loop_end) = match shows {
+        Shows::Native => (None, false),
+        Shows::Foreign(home) => (Some(home), false),
+        Shows::LoopEnd(_) => (None, true),
+    };
+    let text = if with_line {
+        full_text(project, slot, shows)?
+    } else {
+        name_text(project, slot, Some(shows))
+    };
+    Some(ProsePart::Station(ProseStation {
+        text,
+        line_id: Some(slot.line_id),
+        context: with_line.then(|| project.line_label_of(slot.line_id)),
+        name,
+        home_line,
+        loop_end: loop_flag(loop_end),
+        station_id: Some(project.shown(node)),
+        slot: Some(slot),
+    }))
+}
+
+/// The part of the shot from `index` of `line` worded `text`, each end's
+/// marks by `shows`.
+fn shot_part_by(
+    project: &Project,
+    line: LineId,
+    index: usize,
+    text: String,
+    mut shows: impl FnMut(StationRef) -> Option<Shows>,
+) -> ProsePart {
+    let mut end = |i: usize| {
+        let Ok(i) = u32::try_from(i) else {
+            return ProseShotEnd {
+                name: i.to_string(),
+                home_line: None,
+                loop_end: None,
+            };
+        };
+        let slot = StationRef::new(line, i);
+        let name = project
+            .slot_name(slot)
+            .map_or_else(|| i.to_string(), str::to_string);
+        let (home_line, loop_end) = match shows(slot) {
+            Some(Shows::Foreign(home)) => (Some(home), false),
+            Some(Shows::LoopEnd(_)) => (None, true),
+            Some(Shows::Native) | None => (None, false),
+        };
+        ProseShotEnd {
+            name,
+            home_line,
+            loop_end: loop_flag(loop_end),
+        }
+    };
+    let (from, to) = (end(index), end(index + 1));
+    ProsePart::Shot(ProseShot {
+        text,
+        line_id: project.line(line).map(|_| line),
+        context: Some(project.line_label_of(line)),
+        from,
+        to,
+    })
 }
 
 /// [`Project::slot_name_text`] of `slot`, which `shows` says how it shows.
@@ -180,6 +316,34 @@ impl<'p> SlotTexts<'p> {
     pub fn shot_text(&mut self, line: LineId, index: usize) -> String {
         let project = self.project;
         shot_text_by(project, line, index, |slot| self.slot_name_text(slot))
+    }
+
+    /// [`Project::slot_part`].
+    pub fn slot_part(&mut self, slot: StationRef, with_line: bool) -> Option<ProsePart> {
+        let shows = self.shows(slot)?;
+        slot_part_of(self.project, slot, shows, with_line)
+    }
+
+    /// [`Project::shot_marked`].
+    pub fn shot_marked(&mut self, line: LineId, index: usize) -> String {
+        let text = self.shot_text(line, index);
+        let project = self.project;
+        prose::mark(&shot_part_by(project, line, index, text, |slot| {
+            self.shows(slot)
+        }))
+    }
+
+    /// [`Project::station_marked`].
+    pub fn station_marked(&mut self, station: StationId, line: Option<LineId>) -> String {
+        let project = self.project;
+        let topology = project.topology();
+        let slot = line
+            .and_then(|l| topology.slot_on(station, l))
+            .or_else(|| topology.first_slot(station));
+        match slot.and_then(|s| self.slot_part(s, true)) {
+            Some(part) => prose::mark(&part),
+            None => self.station_text(station, line),
+        }
     }
 
     /// [`Project::station_text`].
