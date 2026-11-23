@@ -1957,10 +1957,15 @@
         "comment": "A new comment changes it on every line it is on: {{lines}}.",
         "both": "A new name and comment change it on every line it is on: {{lines}}."
       },
-      "proceed": {
-        "name": "Rename it on every line",
-        "comment": "Change its comment on every line",
-        "both": "Change it on every line"
+      "proceedOn": {
+        "name": "Rename {{station}} to {{to}} on {{lines}}",
+        "comment": "Change the comment of {{station}} on {{lines}}",
+        "both": "Rename {{station}} to {{to}} and change its comment on {{lines}}"
+      },
+      "proceedTo": {
+        "name": "Rename {{station}} to {{to}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Rename {{station}} to {{to}} and change its comment"
       },
       "proceedLoop": {
         "name": "Rename {{station}}",

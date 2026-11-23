@@ -2,7 +2,7 @@
  * RS 5.4 (U-P2-5): a rename or comment edit through a foreign slot or a loop
  * end changes the station the slot SHOWS, on every line it is on, so Edit
  * Station first says whose station it is and offers the way back to the
- * line's own: "12 belongs to Main. Rename it on every line / Detach Side to
+ * line's own: "12 belongs to Main. Rename Main / 12 to 12b on Main and Side / Detach Side to
  * get back its own station 0 / Cancel", or for a loop end "Shown as Main / 3
  * through a loop closure. Rename Main / 3 / Remove the closure / Cancel". A
  * native slot saves at once. The Station ID row reads the shown Station ID.
@@ -124,7 +124,12 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
         'A new name changes it on every line it is on: Main and Side.',
       ),
     );
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Rename it on every line');
+    // RS-FX6, P3-11: the button says what it renames, to what, and where,
+    // worded as the loop-end variant is ("Rename it on every line" named
+    // neither). Injection: drop `newName` from the prompt.
+    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(
+      'Rename Main / 12 to 12b on Main and Side',
+    );
     expect(screen.getByTestId('shown-identity-prompt-detach')).toHaveTextContent(
       'Detach Side to get back its own station 0',
     );

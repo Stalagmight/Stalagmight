@@ -558,6 +558,7 @@ export default function EditStationDialog() {
             <ShownIdentityPrompt
               stationRef={stationRef}
               edit={nameChanged && commentChanged ? 'both' : nameChanged ? 'name' : 'comment'}
+              newName={nameChanged ? name.trim() : undefined}
               onProceed={() => void handleSave(true)}
               onCancel={() => setAskingOwner(false)}
               busy={isLoading}

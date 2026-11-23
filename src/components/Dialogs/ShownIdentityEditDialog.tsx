@@ -89,6 +89,7 @@ export default function ShownIdentityEditDialog() {
           <ShownIdentityPrompt
             stationRef={stationRef}
             edit={kind}
+            newName={kind === 'name' && typeof value === 'string' ? value : undefined}
             onProceed={() => void proceed()}
             onCancel={closeDialog}
             busy={busy}
