@@ -55,6 +55,7 @@ mod build;
 mod naming;
 mod positions;
 mod records;
+mod slot_text;
 mod topology;
 mod types;
 mod validate;

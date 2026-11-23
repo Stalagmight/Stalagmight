@@ -37,11 +37,13 @@ fn station_text(project: &Project, at: StationRef) -> String {
         .map_or_else(
             || format!("a station of {line}"),
             |name| {
-                let name = name.trim();
-                if name.is_empty() {
+                if name.trim().is_empty() {
                     format!("{line} / {}", at.station_index)
                 } else {
-                    format!("{line} / {name}")
+                    // A dotted slot or a loop end qualified (RS-FX5).
+                    project
+                        .slot_text(at)
+                        .unwrap_or_else(|| format!("{line} / {}", name.trim()))
                 }
             },
         )

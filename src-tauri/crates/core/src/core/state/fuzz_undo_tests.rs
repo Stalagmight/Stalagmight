@@ -3327,7 +3327,9 @@ impl Fuzzer {
 
     /// A closure's drawn keep and answers, read off the Create Loop Closure
     /// dialog's preview (`preview_loop_closure`): its default (`None` is
-    /// "Keep both names"), and the collisions of the choice it resolves to.
+    /// "Keep both names"). The preview lists no collision (RS-FX5: an
+    /// archive makes loop ends only, which count for no uniqueness), so
+    /// every drawn answer but "none" is the empty list the dialog sends.
     /// `A` or `B` may be an end C1 or C2 refuses (the command refuses it).
     fn closure_answers(
         &self,
@@ -3344,14 +3346,7 @@ impl Fuzzer {
             KeepT::A => self.station_id_at(a),
             KeepT::B => self.station_id_at(b),
         };
-        let collisions = preview
-            .as_ref()
-            .and_then(|n| n.options.iter().find(|o| o.keep == keep))
-            .map(|o| &o.collisions);
-        let renames = match collisions {
-            Some(collisions) => answers.renames(collisions),
-            None => (answers != AnswersT::Absent).then(Vec::new),
-        };
+        let renames = (answers != AnswersT::Absent).then(Vec::new);
         (keep, renames)
     }
 

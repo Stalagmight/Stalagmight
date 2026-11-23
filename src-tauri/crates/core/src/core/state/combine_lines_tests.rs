@@ -861,8 +861,9 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
 }
 
 /// The same shape with O merged onto X's end instead of started there: X's
-/// end is kept, so O shows it by X's name too (RS 4.1) and the warning names
-/// both slots by the kept name, as the Combine dialog lists them. Injection:
+/// end is kept, so O shows it by X's name too (RS 4.1, with X's dot) and the
+/// warning names both slots by the kept name, as the Combine dialog lists
+/// them, O's dotted one qualified by its home line X (RS-FX5). Injection:
 /// naming O's slot by the archived record's name fails it with "O / 0".
 #[test]
 fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
@@ -901,8 +902,8 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     assert_eq!(
         warnings,
         vec![format!(
-            "Removed the merge of O / {own} and X / {own}: combining the lines left its two \
-             stations at the two ends of one shot."
+            "Removed the merge of O / {own} (X) and X / {own}: combining the lines left its \
+             two stations at the two ends of one shot."
         )]
     );
 }

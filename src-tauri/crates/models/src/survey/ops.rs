@@ -374,17 +374,21 @@ impl Project {
     }
 
     /// A station as the user reads it on `line`: `Main Line / 4`, by the
-    /// name the station is shown by ([`Self::shown_name`]). Falls back to the
-    /// station's first line, then to `a station`.
+    /// name the slot shows, with the qualifier a dotted slot or a loop end
+    /// takes in plain text (`Side / 12 (Main)`, [`Self::slot_text`],
+    /// RS-FX5). Falls back to the station's first line, then to `a station`.
     pub fn station_text(&self, station: StationId, line: Option<LineId>) -> String {
         let topology = self.topology();
-        let line = line
-            .filter(|&l| topology.slot_on(station, l).is_some())
-            .or_else(|| topology.first_slot(station).map(|slot| slot.line_id));
-        match (line, self.shown_station(station)) {
-            (Some(line), Some(s)) => format!("{} / {}", self.line_label_of(line), s.name),
+        let slot = line
+            .and_then(|l| topology.slot_on(station, l))
+            .or_else(|| topology.first_slot(station));
+        match (
+            slot.and_then(|s| self.slot_text(s)),
+            self.shown_station(station),
+        ) {
+            (Some(text), _) => text,
             (None, Some(s)) => s.name.clone(),
-            (_, None) => "a station".to_string(),
+            (None, None) => "a station".to_string(),
         }
     }
 }

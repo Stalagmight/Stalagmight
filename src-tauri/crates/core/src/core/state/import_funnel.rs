@@ -1585,6 +1585,15 @@ fn station_label(project: &Project, line: Option<LineId>, station: &str) -> Stri
 /// The slot of `line` at `node` as a receipt names it: the line, and the
 /// name the slot shows (its node's shown identity).
 fn slot_label(project: &Project, line: LineId, node: StationId) -> String {
+    // A dotted slot or a loop end qualified, as every plain text names it
+    // (`Main / 1 (Side)`, RS-FX5).
+    if let Some(text) = project
+        .topology()
+        .slot_on(node, line)
+        .and_then(|slot| project.slot_text(slot))
+    {
+        return receipt_reason(&text);
+    }
     station_label(
         project,
         Some(line),

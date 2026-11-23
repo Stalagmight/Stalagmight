@@ -77,13 +77,19 @@ fn frozen_cut_refusal(
 /// the halves are renamed) and the station it was cut at by the name the
 /// halves show it by now (I-3: the second half has a copy of the alias the
 /// line knew it by; a cut inside a shot names its new station only from here
-/// on), else its position on the first half.
+/// on; a dotted slot or a loop end qualified, RS-FX5), else its position on
+/// the first half.
 fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> String {
     let at = project
         .line(second)
         .and_then(|l| project.shown_name(l.start))
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
+        .filter(|name| !name.trim().is_empty())
+        .map(|_| {
+            project
+                .slot_name_text(crate::models::StationRef::new(second, 0))
+                .trim()
+                .to_string()
+        })
         .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());
     super::labels::split_line_label(line_name, &at)
 }

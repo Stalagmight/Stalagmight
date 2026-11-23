@@ -111,10 +111,12 @@ impl Project {
         };
         if let Cut::Station(k) = cut {
             if k == 0 || k >= l.shots.len() {
-                let name = l
-                    .station(k)
-                    .and_then(|s| self.stations.get(&s))
-                    .map_or_else(|| k.to_string(), |s| s.name.clone());
+                // The name the line shows there, as plain text (a dotted
+                // slot or a loop end qualified, RS-FX5).
+                let name = u32::try_from(k).map_or_else(
+                    |_| k.to_string(),
+                    |i| self.slot_name_text(crate::StationRef::new(line, i)),
+                );
                 return Err(EditError::refused(format!(
                     "Station {name} is the first or last station of {}; split at a station in \
                      the middle",

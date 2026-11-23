@@ -244,3 +244,52 @@ fn a_letter_is_free_among_native_slots_only() {
     let names = shown(&p, br);
     assert_eq!(names.iter().filter(|n| *n == "5a").count(), 2);
 }
+
+/// Point 4 of RS-FX5: plain text that names a slot without the dot or the
+/// loop mark qualifies a dotted slot by the kept station's home line and a
+/// loop end by the line it sits on, so Branch's two "12"s read apart
+/// (`slot_text.rs`; the frontend's `stationLabelOf` words them the same).
+#[test]
+fn plain_text_tells_the_two_12s_on_a_line_apart() {
+    let (mut p, main, br) = main_and_branch();
+    let (m12, b0) = (at(&p, main, 12), at(&p, br, 0));
+    ok(p.merge_stations(b0, m12, m12, &[]));
+    let b6 = at(&p, br, 6);
+    ok(p.create_closure(b6, Some(br), m12, Some(main), BATCH, Some(m12), &[]));
+    let slot = |line, i| StationRef::new(line, i);
+    let (main_label, br_label) = (p.line_label_of(main), p.line_label_of(br));
+    assert_eq!(p.slot_name_text(slot(br, 12)), "12", "native");
+    assert_eq!(p.slot_name_text(slot(br, 0)), format!("12 ({main_label})"));
+    assert_eq!(
+        p.slot_name_text(slot(br, 6)),
+        format!("12 (loop end on {br_label})")
+    );
+    assert_eq!(p.slot_name_text(slot(main, 12)), "12", "its own line");
+    assert_eq!(
+        p.slot_text(slot(br, 12)).as_deref(),
+        Some(format!("{br_label} / 12").as_str())
+    );
+    assert_eq!(
+        p.slot_text(slot(br, 0)).as_deref(),
+        Some(format!("{br_label} / 12 ({main_label})").as_str())
+    );
+    assert_eq!(
+        p.slot_text(slot(br, 6)).as_deref(),
+        Some(format!("{main_label} / 12 (loop end on {br_label})").as_str())
+    );
+    assert_eq!(
+        p.shot_text(br, 0),
+        format!("{br_label}: 12 ({main_label}) \u{2192} 1")
+    );
+    assert_eq!(p.shot_text(br, 11), format!("{br_label}: 11 \u{2192} 12"));
+    assert_eq!(
+        p.station_text(m12, Some(br)),
+        format!("{br_label} / 12 ({main_label})")
+    );
+    assert_eq!(
+        p.station_text(m12, Some(main)),
+        format!("{main_label} / 12")
+    );
+    assert_eq!(p.slot_name_text(slot(br, 99)), "99", "no such slot");
+    assert_eq!(p.slot_text(slot(br, 99)), None);
+}
