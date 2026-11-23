@@ -4286,6 +4286,8 @@
       "discardOthersKept": "Only this project is affected: the other projects keep their changes on this computer.",
       "discardFailed": "The changes to \"{{name}}\" could not be discarded.",
       "willRelease": "These projects will be handed back so others can edit them:",
+    "heldUnclaimedBody_one": "Your account holds the write lock on this project, and Stalagmight on this computer did not take it. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so disconnecting leaves it held. If that session is still editing, releasing the lock lets others change the project under it.",
+    "heldUnclaimedBody_other": "Your account holds the write lock on these {{count}} projects, and Stalagmight on this computer did not take them. Each may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so disconnecting leaves them held. If that session is still editing, releasing its lock lets others change the project under it.",
       "signOut": "Disconnect",
       "switch": "Switch account",
       "releasing": "Handing projects back to SpeleoDB…",
