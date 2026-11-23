@@ -1120,11 +1120,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           home_line: node.kept.line_id,
         };
       };
-      /** The name collisions (N8) a station shown anew on `lines` makes: each
-       *  other station there that shows its name, with the dialog's two
-       *  answers. Rule L letters the one shown on fewer lines, on a tie the
-       *  one new on the line (`letterNew`): a merge's kept station is on more
-       *  lines than a plain station, a restored station is new on its line. */
+      /** The name collisions (N8) a station shown anew makes on `lines`, the
+       *  lines it is NATIVE on afterwards (RS-FX5: a foreign slot or a loop
+       *  end counts for no name uniqueness): each other station a native slot
+       *  there shows by its name, with the dialog's two answers. Rule L
+       *  letters the one shown on fewer lines, on a tie the one new on the
+       *  line (`letterNew`): a merge's kept station is on more lines than a
+       *  plain station, a restored station is new on its line. */
       const mockCollisions = (
         junctions: Map<string, MockStationRef[]>,
         closures: ReadonlyArray<MockArchivedClosure>,
@@ -1147,9 +1149,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const ref = { line_id: lineId, station_index: i };
             if (exceptKeys.has(mockSlotKey(ref))) continue;
             const slot = mockSlotIdentity(junctions, ref, closures);
-            const otherId = slot.shown?.id ?? slot.id;
-            if (slot.name !== shownAnew.name || otherId === shownAnew.id) continue;
-            const other: MockIdentity = { id: otherId, name: slot.name, home_line: slot.shown?.home_line ?? lineId };
+            // A dotted slot (foreign or a loop end) never collides.
+            if (slot.shown !== undefined) continue;
+            if (slot.name !== shownAnew.name || slot.id === shownAnew.id) continue;
+            const other: MockIdentity = { id: slot.id, name: slot.name, home_line: lineId };
             const anew = { station: shownAnew, to: `${shownAnew.name}a` };
             const lettered = { station: other, to: `${slot.name}a` };
             out.push({
@@ -1165,7 +1168,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       /** `check_merge_connectivity`'s merge preview (RS 4.1, 7): both stations
        *  as keep candidates, the default (the one a merge without `keep`
        *  keeps: the first slot in line order), and per keep the lines that
-       *  show the kept name, the station archived and the collisions. */
+       *  show the kept name, the station archived and the collisions. The
+       *  kept name is shown anew on the other station's lines through
+       *  foreign slots (RS-FX5), so a collision is listed only on a line the
+       *  kept station is native on afterwards: its kept member's (the mock's
+       *  foreign rule), which a same-line merge alone can share. */
       const mockMergePreview = (a: MockStationRef, b: MockStationRef) => {
         const lines = (currentProject?.lines ?? []) as Array<{ id: number }>;
         const junctions = mockJunctions(
@@ -1183,12 +1190,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         const unionKeys = new Set(union.map(mockSlotKey));
         const [ia, ib] = [mockIdentityOf(junctions, a), mockIdentityOf(junctions, b)];
         const defaultIdentity = membersOf(a).some((m) => mockSlotKey(m) === mockSlotKey(first(union))) ? ia : ib;
-        const keep = (kept: MockIdentity, otherRef: MockStationRef, other: MockIdentity) => {
+        const keep = (keptRef: MockStationRef, kept: MockIdentity, otherRef: MockStationRef, other: MockIdentity) => {
           const renamed = [...new Set(membersOf(otherRef).map((m) => m.line_id))];
+          const nativeLine = mockKeptOf(junctions, keptRef).line_id;
           return {
             keep: kept.id,
             renamed_lines: renamed,
-            collisions: mockCollisions(junctions, closures, kept, renamed, unionKeys, false),
+            collisions: mockCollisions(
+              junctions,
+              closures,
+              kept,
+              renamed.filter((l) => l === nativeLine),
+              unionKeys,
+              false,
+            ),
             hidden: other,
             // The mock's merges run no promotion: nothing else is hidden.
             comments_hidden: [],
@@ -1204,7 +1219,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             { station: b, identity: ib, holds_datum: false },
           ],
           default_keep: defaultIdentity.id,
-          keeps: [keep(ia, b, ib), keep(ib, a, ia)],
+          keeps: [keep(a, ia, b, ib), keep(b, ib, a, ia)],
         };
       };
       /** The wire's `station_merges`: star pairs from each junction's first slot,
@@ -1404,10 +1419,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
        *  why rule K's may not (C1: the other end is already archived by a
        *  closure; C2: the kept end already shows the other end), the default
        *  and what each choice hides and repeats. Rule K is the mock's
-       *  simplification: the first end. The kept end's shown identity is
-       *  shown anew on the other end's lines, so a name another station
-       *  there shows collides; rule L letters that station (the kept one is
-       *  on more lines). */
+       *  simplification: the first end. The archived end becomes a loop end,
+       *  which counts for no name uniqueness (RS-FX5), so no option lists a
+       *  collision (the wire's `ClosureKeepPreview` has no such field). */
       const mockClosureNaming = (stationA: MockStationRef, stationB: MockStationRef) => {
         const junctions = mockJunctions(
           (currentProject?.lines ?? []) as Array<{ id: number }>,
@@ -1443,19 +1457,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
         const choice = (keepRef: MockStationRef, otherRef: MockStationRef, other: MockIdentity) => {
           const lines = [...new Set(mockNodeSlots(junctions, otherRef).map((m) => m.line_id))];
-          return {
-            keep: own(keepRef).id,
-            hidden: other,
-            renamed_lines: lines,
-            collisions: mockCollisions(
-              junctions,
-              closures,
-              shownOf(keepRef),
-              lines,
-              new Set(mockNodeSlots(junctions, otherRef).map(mockSlotKey)),
-              false,
-            ),
-          };
+          return { keep: own(keepRef).id, hidden: other, renamed_lines: lines };
         };
         const ruleKRefused = refusal(stationA, stationB);
         const allowed = [
@@ -1467,12 +1469,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           allowed: allowed.map((x) => x.id),
           rule_k: a.id,
           ...(ruleKRefused !== undefined ? { rule_k_refused: ruleKRefused } : { default_keep: a.id }),
-          options: [...allowed.map((x) => x.option), { renamed_lines: [], collisions: [] }],
+          options: [...allowed.map((x) => x.option), { renamed_lines: [] }],
         };
       };
       /** `preview_remove_loop_closure` (RS 5.3): what comes back (the
        *  archived end's own station) and on which slot; its name is shown
-       *  anew on its lines, so a name another station there shows collides,
+       *  anew on its lines, so a name a native slot shows another station by
+       *  collides on a line it is native on (RS-FX5: its node's kept
+       *  member's line in the mock; the dotted slots elsewhere never do),
        *  and rule L letters the station that comes back (new on the line). */
       const mockRemovalNaming = (closure: {
         id: bigint;
@@ -1490,13 +1494,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         const slot = archive.end === 'a' ? closure.station_a : closure.station_b;
         const slots = mockNodeSlots(junctions, slot);
         const lines = [...new Set(slots.map((m) => m.line_id))];
+        const nativeLine = mockKeptOf(junctions, slot).line_id;
         return {
           closure_id: closure.id,
           archived_slot: slot,
           comes_back: archive.station,
           shown_as: archive.shown_as,
           renamed_lines: lines,
-          collisions: mockCollisions(junctions, others, archive.station, lines, new Set(slots.map(mockSlotKey)), true),
+          collisions: mockCollisions(
+            junctions,
+            others,
+            archive.station,
+            lines.filter((l) => l === nativeLine),
+            new Set(slots.map(mockSlotKey)),
+            true,
+          ),
         };
       };
       /** `preview_detach_line` (UX-4, I-1, RS 4.2). Every member of a mock
@@ -1558,13 +1570,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           home_line: m.line_id,
         });
         // The station that comes back is shown anew on the lines that come
-        // off: a name another station there shows collides (N8), and rule
-        // L letters the station new on the line.
+        // off; it is native on its own line only (the others come off with
+        // it as records, foreign slots), so a name a native slot of that
+        // line shows another station by collides (N8, RS-FX5), and rule L
+        // letters the station new on the line.
         const collisions = mockCollisions(
           junctions,
           (currentProject?.loop_closures ?? []) as MockArchivedClosure[],
           record(back),
-          offLines.map((m) => m.line_id),
+          offLines.filter((m) => m.line_id === back.line_id).map((m) => m.line_id),
           new Set(offLines.map(mockSlotKey)),
           true,
         );
@@ -4863,16 +4877,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (alreadyExists) {
                 return { success: false, error: 'A loop closure already exists between these stations.' };
               }
-              // RS 5.2: a keep C1 or C2 forbids refuses (InvalidKeep), and
-              // renames must answer the chosen keep's collisions (NameTaken).
+              // RS 5.2: a keep C1 or C2 forbids refuses (InvalidKeep). A
+              // closure makes loop ends only, which repeat no name (RS-FX5),
+              // so there is no collision to answer.
               if (typeof keep === 'number') {
                 const naming = mockClosureNaming(stationA, stationB);
                 if (!naming.allowed.includes(keep)) {
                   return { success: false, error: `Station ${keep} is not one this can keep` };
                 }
-                const option = naming.options.find((o) => 'keep' in o && o.keep === keep);
-                const unanswered = option ? mockUnanswered(option.collisions, args?.renames) : null;
-                if (unanswered) return { success: false, error: unanswered };
               }
 
               const maxExistingId = loopClosures.reduce(
@@ -5253,8 +5265,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return { success: false, error: `Line ${stationRef.line_id} not found`, line_ids: [] };
             }
             // A rename addresses the identity the slot shows (RS 5.4): a
-            // junction's kept station, or a loop end's closure's kept end, on
-            // every line it is shown on; each of those lines is checked.
+            // junction's kept station, or a loop end's closure's kept end.
+            // N8 counts native slots only (RS-FX5), so the rename is checked
+            // on the lines the identity is native on, against the native
+            // slots there that show other identities.
             const junctions = mockJunctions(
               lines,
               (currentProject?.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
@@ -5262,21 +5276,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const closures = (currentProject?.loop_closures ?? []) as MockArchivedClosure[];
             const target = mockSlotIdentity(junctions, stationRef, closures);
             const targetId = target.shown?.id ?? target.id;
-            const showsTarget = (ref: MockStationRef) => {
-              const shown = mockSlotIdentity(junctions, ref, closures);
-              return (shown.shown?.id ?? shown.id) === targetId;
+            // The identity a native slot shows (its node's), or undefined for a
+            // foreign slot or a loop end.
+            const nativeIdentity = (ref: MockStationRef) => {
+              const slot = mockSlotIdentity(junctions, ref, closures);
+              return slot.shown === undefined ? slot : undefined;
             };
-            const shownLines = new Set<number>();
+            const nativeLines = new Set<number>();
             for (const l of lines) {
               for (let i = 0; i <= l.shots.length; i++) {
-                if (showsTarget({ line_id: l.id, station_index: i })) shownLines.add(l.id);
+                if (nativeIdentity({ line_id: l.id, station_index: i })?.id === targetId) nativeLines.add(l.id);
               }
             }
-            for (const l of lines.filter((x) => shownLines.has(x.id))) {
+            for (const l of lines.filter((x) => nativeLines.has(x.id))) {
               for (let i = 0; i <= l.shots.length; i++) {
-                const other = { line_id: l.id, station_index: i };
-                if (showsTarget(other)) continue;
-                if (mockSlotIdentity(junctions, other, closures).name === name) {
+                const other = nativeIdentity({ line_id: l.id, station_index: i });
+                if (other === undefined || other.id === targetId) continue;
+                if (other.name === name) {
                   return {
                     success: false,
                     error: `Line "${l.name ?? ''}" already has a station named "${name}"`,
