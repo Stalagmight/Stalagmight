@@ -31,6 +31,8 @@ export interface EntityBlobProps {
   stationId?: number | null | undefined;
   /** A station pill's home-line mark: the line the station belongs to (see `LinePill.tsx`). */
   homeLineId?: number | null | undefined;
+  /** A station pill's loop mark: a loop closure shows this station as its other end (RS 6). */
+  loopEnd?: boolean | undefined;
   /** A shot pill's two ends, each with an optional home-line mark; replaces `children` in the pill. */
   shotEnds?:
     | { from: string; to: string; fromHomeLineId?: number | null | undefined; toHomeLineId?: number | null | undefined }
@@ -54,6 +56,7 @@ export function EntityBlob({
   context,
   stationId,
   homeLineId,
+  loopEnd = false,
   shotEnds,
   plain,
   trailing,
@@ -98,6 +101,8 @@ export function EntityBlob({
             : null
         }
         mark={entity === 'station' ? markOf(pill, homeLineId) : null}
+        loopEnd={entity === 'station' && loopEnd}
+        loopEndLabel={t('identity.loopEnd')}
         stationId={entity === 'station' ? stationId : null}
         stationIdLabel={t('identity.stationId')}
         trailing={trailing}
@@ -107,9 +112,11 @@ export function EntityBlob({
 }
 
 /**
- * A station as a pill: its name, its Station ID, its line's colour and, with
- * `withLine`, its line as the context (`Main Line: 17`). Below Full it is the
- * plain label (`Main Line / 17`).
+ * A station as a pill: its name, the Station ID it shows, its line's colour
+ * and, with `withLine`, its line as the context (`Main Line: 17`). A foreign
+ * slot carries the dot of its shown station's home line, and a loop end the
+ * loop mark (RS 6), unless `homeLineId` says otherwise. Below Full it is the
+ * plain label (`Main Line / 17`, `Side / 12 (Main)` for a foreign slot).
  */
 export function StationBlob({
   station,
@@ -132,8 +139,9 @@ export function StationBlob({
       entity="station"
       lineId={station.line_id}
       context={withLine ? labels.lineName(station.line_id) : null}
-      stationId={labels.stationId(station)}
-      homeLineId={homeLineId}
+      stationId={labels.shownStationId(station)}
+      homeLineId={homeLineId === undefined ? labels.homeMark(station) : homeLineId}
+      loopEnd={labels.shown(station)?.loop_end === true}
       plain={labels.station(station, withLine)}
       className={className}
       testId={testId}

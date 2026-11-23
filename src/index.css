@@ -1756,6 +1756,17 @@ button.sh-apill {
   background: var(--mark-dot);
   box-shadow: 0 0 0 1px var(--mark-ring, transparent);
 }
+/* A loop end's mark (RS 6): a small open ring after the name and its dot, in
+   the pill's muted colour. */
+.sh-lpill-loop {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+  margin-left: 0.08em;
+  font-size: 0.8em;
+  line-height: 1;
+  color: var(--pill-muted);
+}
 .sh-lpill-sid {
   flex: none;
   position: relative;

@@ -109,8 +109,10 @@ describe('Detach dialog naming', () => {
     const naming = await screen.findByTestId('unmerge-stations-naming');
     expect(naming).toHaveTextContent('Side comes off and gets back the station it had here before the merge.');
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
-      'The line you detach keeps its shots and gets its own station here, with no comment.',
+      'The line you detach keeps its shots and gets its own station here.',
     );
+    // RS 4.2: what comes back, by name and Station ID.
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 7).');
   });
 
   it('follows the chosen line: the junction stays on its own line and the merged lines get their station back', async () => {

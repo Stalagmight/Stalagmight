@@ -1045,6 +1045,102 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
         }
       };
+      type MockIdentity = { id: number; name: string; comment?: string; home_line?: number };
+      /** A node's shown identity as a preview names it (RS 7). */
+      const mockIdentityOf = (junctions: Map<string, MockStationRef[]>, ref: MockStationRef): MockIdentity => {
+        const node = mockNodeIdentity(junctions, ref);
+        return {
+          id: node.id,
+          name: node.name,
+          ...(node.comment !== undefined ? { comment: node.comment } : {}),
+          home_line: node.kept.line_id,
+        };
+      };
+      /** The name collisions (N8) a station shown anew on `lines` makes: each
+       *  other station there that shows its name, with the dialog's two
+       *  answers. Rule L letters the one shown on fewer lines, on a tie the
+       *  one new on the line (`letterNew`): a merge's kept station is on more
+       *  lines than a plain station, a restored station is new on its line. */
+      const mockCollisions = (
+        junctions: Map<string, MockStationRef[]>,
+        closures: ReadonlyArray<MockArchivedClosure>,
+        shownAnew: MockIdentity,
+        lines: ReadonlyArray<number>,
+        exceptKeys: ReadonlySet<string>,
+        letterNew: boolean,
+      ) => {
+        const out: Array<{
+          line_id: number;
+          name: string;
+          letter: { station: MockIdentity; to: string };
+          alternative: { station: MockIdentity; to: string };
+        }> = [];
+        const projectLines = (currentProject?.lines ?? []) as Array<{ id: number; shots?: unknown[] }>;
+        for (const lineId of new Set(lines)) {
+          const line = projectLines.find((l) => l.id === lineId);
+          if (!line) continue;
+          for (let i = 0; i <= (line.shots?.length ?? 0); i++) {
+            const ref = { line_id: lineId, station_index: i };
+            if (exceptKeys.has(mockSlotKey(ref))) continue;
+            const slot = mockSlotIdentity(junctions, ref, closures);
+            const otherId = slot.shown?.id ?? slot.id;
+            if (slot.name !== shownAnew.name || otherId === shownAnew.id) continue;
+            const other: MockIdentity = { id: otherId, name: slot.name, home_line: slot.shown?.home_line ?? lineId };
+            const anew = { station: shownAnew, to: `${shownAnew.name}a` };
+            const lettered = { station: other, to: `${slot.name}a` };
+            out.push({
+              line_id: lineId,
+              name: slot.name,
+              letter: letterNew ? anew : lettered,
+              alternative: letterNew ? lettered : anew,
+            });
+          }
+        }
+        return out;
+      };
+      /** `check_merge_connectivity`'s merge preview (RS 4.1, 7): both stations
+       *  as keep candidates, the default (the one a merge without `keep`
+       *  keeps: the first slot in line order), and per keep the lines that
+       *  show the kept name, the station archived and the collisions. */
+      const mockMergePreview = (a: MockStationRef, b: MockStationRef) => {
+        const lines = (currentProject?.lines ?? []) as Array<{ id: number }>;
+        const junctions = mockJunctions(
+          lines,
+          (currentProject?.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>,
+        );
+        const closures = (currentProject?.loop_closures ?? []) as MockArchivedClosure[];
+        const order = new Map<number, number>();
+        lines.forEach((line, i) => order.set(line.id, i));
+        const membersOf = (ref: MockStationRef) => junctions.get(mockSlotKey(ref)) ?? [ref];
+        const rank = (ref: MockStationRef) => [order.get(ref.line_id) ?? Number.MAX_SAFE_INTEGER, ref.station_index];
+        const first = (refs: MockStationRef[]) =>
+          [...refs].sort((x, y) => rank(x)[0]! - rank(y)[0]! || rank(x)[1]! - rank(y)[1]!)[0]!;
+        const union = [...membersOf(a), ...membersOf(b)];
+        const unionKeys = new Set(union.map(mockSlotKey));
+        const [ia, ib] = [mockIdentityOf(junctions, a), mockIdentityOf(junctions, b)];
+        const defaultIdentity = membersOf(a).some((m) => mockSlotKey(m) === mockSlotKey(first(union))) ? ia : ib;
+        const keep = (kept: MockIdentity, otherRef: MockStationRef, other: MockIdentity) => {
+          const renamed = [...new Set(membersOf(otherRef).map((m) => m.line_id))];
+          return {
+            keep: kept.id,
+            renamed_lines: renamed,
+            collisions: mockCollisions(junctions, closures, kept, renamed, unionKeys, false),
+            hidden: other,
+          };
+        };
+        return {
+          moving_line_ids: [a.line_id],
+          shift_m: 0,
+          joins: b,
+          junctions: [],
+          candidates: [
+            { station: a, identity: ia, holds_datum: false },
+            { station: b, identity: ib, holds_datum: false },
+          ],
+          default_keep: defaultIdentity.id,
+          keeps: [keep(ia, b, ib), keep(ib, a, ia)],
+        };
+      };
       /** The wire's `station_merges`: star pairs from each junction's first slot,
        *  stamped with the project's creation time (`merged_at`, plan W4). */
       const mockStarMerges = (
@@ -4387,7 +4483,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (mockConnectivity) {
               return mockConnectivity;
             }
-            return { connected: false, preview: null, can_merge: true, reason: null };
+            const mergeA = (args?.stationA ?? args?.station_a) as MockStationRef | undefined;
+            const mergeB = (args?.stationB ?? args?.station_b) as MockStationRef | undefined;
+            return {
+              connected: false,
+              preview: null,
+              can_merge: true,
+              reason: null,
+              ...(mergeA && mergeB && currentProject ? { merge_preview: mockMergePreview(mergeA, mergeB) } : {}),
+            };
           }
 
           case 'create_loop_closure': {
@@ -4672,6 +4776,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               name: mockStationName(m.line_id, m.station_index),
               home_line: m.line_id,
             });
+            // The station that comes back is shown anew on the lines that come
+            // off: a name another station there shows collides (N8), and rule
+            // L letters the station new on the line.
+            const collisions = mockCollisions(
+              junctions,
+              (currentProject?.loop_closures ?? []) as MockArchivedClosure[],
+              record(back),
+              offLines.map((m) => m.line_id),
+              new Set(offLines.map(mockSlotKey)),
+              true,
+            );
             return {
               name: mockStationName(back.line_id, back.station_index),
               station_id: mockStationId(back.line_id, back.station_index),
@@ -4682,7 +4797,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               together: [],
               rest_choices: kept && others.length > 1 ? others.map(record) : [],
               ...(kept && others.length > 1 ? { rest_default: record(others[0]!).id } : {}),
-              collisions: [],
+              collisions,
             };
           }
 

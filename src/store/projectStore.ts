@@ -20,6 +20,8 @@ import {
 } from '../utils/editErrors';
 import { hasAdjustmentInputs } from '../utils/closures';
 import { notifyRemovedClosures } from '../utils/closureRemovalToast';
+import { notifyIdentityChanges } from '../utils/identityNotice';
+import { lineNameOf } from '../utils/stationIdentity';
 import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
@@ -719,6 +721,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           applyEditAftermath(result.reversed_lines, get().project?.lines ?? [], edit);
         }
         set({ isDirty: true });
+        // Names the action changed on its own (rule L letters, restored
+        // archived stations, RS 7): one notice per action.
+        notifyIdentityChanges(result, (lineId) =>
+          lineNameOf({ lines: get().project?.lines, surveyData: get().surveyData }, lineId),
+        );
         noteImportResolvedDeferredSave(command, result, set);
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-

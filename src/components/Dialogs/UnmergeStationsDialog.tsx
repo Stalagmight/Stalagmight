@@ -6,11 +6,14 @@ import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import type { DetachLinePreview, DetachLineResult } from '../../types/ipc.generated';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { displayStationName } from '../../utils/formatters';
+import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.line_id}:${ref.station_index}`;
@@ -134,12 +137,13 @@ export default function UnmergeStationsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, unmergeStations, unmergeStationPair } = useProjectStore();
   const labels = useIdentityLabels();
+  const editingBlocked = useEditingBlocked();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
-  const stationComment = stationRef
-    ? stations.find((station) => sameStationRef(station.station_ref, stationRef))?.comment ?? ''
-    : '';
+  // The line the user already chose (the "Also on" detach button, the
+  // rename prompt's "Detach Side"): preselected, the default never moves it.
+  const chosenLine = typeof dialogData.chosenLine === 'number' ? dialogData.chosenLine : undefined;
 
   /** Every slot of the station: the clicked one first, then the other lines through it. */
   const slots = useMemo(() => {
@@ -164,12 +168,17 @@ export default function UnmergeStationsDialog() {
   const [previewsSettled, setPreviewsSettled] = useState(false);
   // Once the user picks a line, the default stops following the previews.
   const pickedRef = useRef(false);
+  // The record the remaining junction shows (RS 4.2 case 2), when the user
+  // picked one; the selected line's preview is asked again with it.
+  const [restKeep, setRestKeep] = useState<number | undefined>(undefined);
 
   useEffect(() => {
-    pickedRef.current = false;
+    const chosen = chosenLine === undefined ? undefined : slots.find((ref) => ref.line_id === chosenLine);
+    pickedRef.current = chosen !== undefined;
     setPreviews(new Map());
     setPreviewsSettled(false);
-    setSelectedKey(slots.length > 0 ? stationRefKey(slots[0]!) : '');
+    setRestKeep(undefined);
+    setSelectedKey(chosen ? stationRefKey(chosen) : slots.length > 0 ? stationRefKey(slots[0]!) : '');
     if (!stationRef || slots.length === 0) return;
     let live = true;
     void Promise.all(
@@ -193,7 +202,7 @@ export default function UnmergeStationsDialog() {
     return () => {
       live = false;
     };
-  }, [slots, stationRef]);
+  }, [slots, stationRef, chosenLine]);
 
   const selected = useMemo(
     () => slots.find((ref) => stationRefKey(ref) === selectedKey) ?? null,
@@ -201,6 +210,28 @@ export default function UnmergeStationsDialog() {
   );
   const naming = selected ? previews.get(selected.line_id) ?? null : null;
   const same = useMemo(() => sameDetachResult(slots, previews), [slots, previews]);
+
+  // A remaining-junction pick asks the chosen line's preview again with it.
+  const restLine = same ? same.off.line_id : selected?.line_id;
+  useEffect(() => {
+    if (restKeep === undefined || !stationRef || restLine === undefined) return;
+    let live = true;
+    Promise.resolve(
+      invokeIpc<DetachLinePreview>(
+        'preview_detach_line',
+        { stationRef, lineId: restLine, restKeep },
+        { purpose: 'preview detach line' },
+      ),
+    )
+      .then((preview) => {
+        if (!live || !preview) return;
+        setPreviews((prev) => new Map(prev).set(restLine, preview));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [restKeep, restLine, stationRef]);
   // A two-line junction waits for its previews: they decide whether there is
   // a choice to show at all.
   const waiting = slots.length === 2 && !previewsSettled;
@@ -222,15 +253,37 @@ export default function UnmergeStationsDialog() {
     return <EntityBlob entity="line" lineId={ref.line_id}>{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
   };
 
+  // The preview of the line that comes off: its collisions are what the
+  // dialog asks about.
+  const targetPreview = target ? previews.get(target.line_id) ?? null : null;
+  const [answers, setAnswer] = useCollisionAnswers(targetPreview?.collisions);
+
   const handleConfirm = async () => {
     if (!stationRef || !target) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
     try {
-      const result = sameStationRef(target, stationRef)
-        ? await unmergeStations(stationRef)
-        : await unmergeStationPair(stationRef, target);
+      // The dialog's answers (RS 4.2): every collision answered, and the
+      // record the remaining junction shows when the user picked one.
+      const answered = targetPreview
+        ? {
+            renames: renamesFromAnswers(targetPreview.collisions, answers),
+            ...(restKeep !== undefined ? { restKeep } : {}),
+          }
+        : undefined;
+      const own = sameStationRef(target, stationRef);
+      const result = answered
+        ? own
+          ? await unmergeStations(stationRef, answered)
+          : await unmergeStationPair(stationRef, target, answered)
+        : own
+          ? await unmergeStations(stationRef)
+          : await unmergeStationPair(stationRef, target);
       if (!result.success) {
         setError(result.error ?? t('dialogs.detachLine.failed'));
         return;
@@ -267,7 +320,7 @@ export default function UnmergeStationsDialog() {
         )}
 
         {same ? (
-          <SameResultBody same={same} comment={stationComment} />
+          <SameResultBody same={same} />
         ) : (
           <>
             <p className="text-sm text-text-secondary" data-testid="unmerge-stations-lead">
@@ -291,6 +344,9 @@ export default function UnmergeStationsDialog() {
                         onChange={() => {
                           pickedRef.current = true;
                           setSelectedKey(key);
+                          // A remaining-junction pick belongs to the line it
+                          // was made for.
+                          setRestKeep(undefined);
                         }}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
@@ -315,12 +371,17 @@ export default function UnmergeStationsDialog() {
               </p>
             )}
 
+            {naming && selected && <ComesBack preview={naming} line={selected.line_id} />}
+
             {naming && naming.lines.length > 0 && <DetachResults preview={naming} />}
 
-            {naming?.restored && !naming.kept && selected && stationComment.trim() !== '' && (
-              <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comment">
-                {t('dialogs.detachLine.commentStays', { line: labels.lineName(selected.line_id) })}
-              </p>
+            {naming && (naming.rest_choices ?? []).length > 1 && (
+              <RestPicker
+                preview={naming}
+                restKeep={restKeep}
+                onRestKeep={setRestKeep}
+                disabled={isLoading}
+              />
             )}
 
             {!waiting && (
@@ -336,6 +397,22 @@ export default function UnmergeStationsDialog() {
           </>
         )}
 
+        {targetPreview && (
+          <CollisionRows
+            collisions={targetPreview.collisions}
+            answers={answers}
+            onAnswer={setAnswer}
+            testIdPrefix="unmerge-stations"
+            disabled={isLoading}
+          />
+        )}
+
+        {targetPreview?.restored && (
+          <p className="text-xs text-text-secondary" data-testid="unmerge-stations-letters-stay">
+            {t('dialogs.detachLine.lettersStay')}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="unmerge-stations-cancel">
             {t('dialogs.detachLine.cancel')}
@@ -343,7 +420,7 @@ export default function UnmergeStationsDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !target || waiting}
+            disabled={isLoading || !target || waiting || editingBlocked}
             data-testid="unmerge-stations-confirm"
           >
             {isLoading ? t('dialogs.detachLine.working') : t('dialogs.detachLine.confirm')}
@@ -391,28 +468,113 @@ function DetachResults({ preview }: { preview: DetachLinePreview }) {
   );
 }
 
+/**
+ * What comes back on the detached line (RS 4.2, 7): the station's name, its
+ * comment when it has one, and its Station ID; the lines that come off with
+ * it because they were one station; and, when a loop closure made the line
+ * show another station, that it will show its own again.
+ */
+function ComesBack({ preview, line }: { preview: DetachLinePreview; line: number }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const label = useIdentityLabel();
+  const comment = (preview.comment ?? '').trim();
+  return (
+    <>
+      {preview.restored && (
+        <div className="text-sm text-text-primary" data-testid="unmerge-stations-comes-back">
+          <p>
+            {t('dialogs.detachLine.comesBack', { name: displayStationName(preview.name), id: preview.station_id })}
+          </p>
+          {comment !== '' && (
+            <p className="text-text-secondary" data-testid="unmerge-stations-comes-back-comment">
+              {t('dialogs.detachLine.comesBackComment', { comment })}
+            </p>
+          )}
+        </div>
+      )}
+      {(preview.together ?? []).length > 0 && (
+        <p className="text-sm text-text-primary" data-testid="unmerge-stations-together">
+          {t('dialogs.detachLine.offTogether', {
+            count: (preview.together ?? []).length,
+            lines: listNames((preview.together ?? []).map(labels.lineName), t),
+            line: labels.lineName(line),
+          })}
+        </p>
+      )}
+      {preview.shown_before && (
+        <p className="text-sm text-text-secondary" data-testid="unmerge-stations-shown-before">
+          {t('dialogs.detachLine.shownBefore', {
+            line: labels.lineName(line),
+            station: label(preview.shown_before),
+            name: displayStationName(preview.name),
+          })}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The remaining junction's station (RS 4.2 case 2), when several archived
+ *  stations could show it: one radio each, rule K's preselected. */
+function RestPicker({
+  preview,
+  restKeep,
+  onRestKeep,
+  disabled,
+}: {
+  preview: DetachLinePreview;
+  restKeep: number | undefined;
+  onRestKeep: (id: number) => void;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  const chosen = restKeep ?? preview.rest_default ?? preview.station_id;
+  return (
+    <fieldset className="space-y-1 text-sm" data-testid="unmerge-stations-rest">
+      <legend className="text-text-primary">{t('dialogs.detachLine.restLead')}</legend>
+      {preview.rest_choices.map((identity) => (
+        <label key={identity.id} className="flex items-center gap-2 p-1 rounded hover:bg-background-50">
+          <input
+            type="radio"
+            name="unmerge-rest"
+            value={identity.id}
+            checked={chosen === identity.id}
+            disabled={disabled}
+            onChange={() => onRestKeep(identity.id)}
+            data-testid={`unmerge-stations-rest-${identity.id}`}
+          />
+          <span>{t('dialogs.detachLine.restChoice', { station: label(identity), id: identity.id })}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 /** The whole body when the choice does not change the result (N-2): which
- *  line comes off and what it gets back, which line keeps the station, and,
- *  when the station has a comment, that it stays with the keeper. */
-function SameResultBody({ same: { off, keeper, preview }, comment }: { same: SameDetachResult; comment: string }) {
+ *  line comes off and what it gets back (its comment too), and which line
+ *  keeps the station. */
+function SameResultBody({ same: { off, keeper, preview } }: { same: SameDetachResult }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const line = labels.lineName(off.line_id);
   const keeperLine = labels.lineName(keeper.line_id);
+  const comment = (preview.comment ?? '').trim();
   return (
     <>
       <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
         {t('dialogs.detachLine.comesOff', {
           line,
-          name: preview.name,
+          name: displayStationName(preview.name),
           id: preview.station_id,
           keeper: keeperLine,
           station: labels.stationName(keeper),
         })}
       </p>
-      {comment.trim() !== '' && (
-        <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comment">
-          {t('dialogs.detachLine.commentStaysWith', { line, keeper: keeperLine })}
+      {comment !== '' && (
+        <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comes-back-comment">
+          {t('dialogs.detachLine.comesBackComment', { comment })}
         </p>
       )}
       <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">

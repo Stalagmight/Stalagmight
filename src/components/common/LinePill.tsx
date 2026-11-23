@@ -8,7 +8,9 @@
  *
  * A station can also carry a home-line mark: a small second dot, in the colour
  * of the line the station belongs to, right after its name, for a station
- * shown on a line that is not its home line.
+ * shown on a line that is not its home line. A loop end (a station a loop
+ * closure shows as its other end, RS 6) carries a small loop mark there too,
+ * even where it has no dot.
  */
 import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -105,6 +107,26 @@ export function HomeLineMark({ mark, testId }: { mark: PillDot; testId?: string 
   );
 }
 
+/** The loop mark after a loop end's name (see the module doc): a small open
+ *  ring in the pill's muted colour, with words for a screen reader. */
+export function LoopEndMark({ label, testId }: { label?: string | undefined; testId?: string | undefined }) {
+  return (
+    <span className="sh-lpill-loop" data-testid={testId}>
+      <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
+        <path
+          d="M9.6 4.2A4 4 0 1 0 10 6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <path d="M11.2 2.4 L10.4 5.4 L7.6 4.4 Z" fill="currentColor" />
+      </svg>
+      {label && <span className="sr-only"> {label}</span>}
+    </span>
+  );
+}
+
 /** A shot's two station names, each with its home-line mark when it has one. */
 export interface ShotEnds {
   from: string;
@@ -124,6 +146,10 @@ export interface PillPartsProps {
   shotEnds?: ShotEnds | null | undefined;
   /** A station pill's home-line mark, right after the name. */
   mark?: PillDot | null | undefined;
+  /** A station pill's loop mark (a loop end, RS 6), after the name and its dot. */
+  loopEnd?: boolean | undefined;
+  /** Words read for the loop mark by a screen reader. */
+  loopEndLabel?: string | undefined;
   /** A station's Station ID, as a muted superscript at the end. */
   stationId?: number | null | undefined;
   /** Words read before the Station ID by a screen reader (a span pill has no aria-label). */
@@ -141,6 +167,8 @@ export function PillParts({
   main,
   shotEnds,
   mark,
+  loopEnd = false,
+  loopEndLabel,
   stationId,
   stationIdLabel,
   missing = false,
@@ -177,6 +205,7 @@ export function PillParts({
         )}
       </span>
       {mark && <HomeLineMark mark={mark} testId={part('home-dot')} />}
+      {loopEnd && <LoopEndMark label={loopEndLabel} testId={part('loop-end')} />}
       {stationId !== null && stationId !== undefined && (
         <>
           {' '}

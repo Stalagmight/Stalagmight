@@ -27,6 +27,8 @@ import { buildShotColumns } from './dataTableShotColumns';
 import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
 import { useDataTableCredit } from './useDataTableCredit';
 import { buildStationColumns, stationRenameToSend } from './dataTableStationColumns';
+import { editNeedsOwnerPrompt } from '../Dialogs/ShownIdentityPrompt';
+import { shotEndMarks } from '../common/shotEndMarks';
 import { HEADER_HIDE_GROUPS, STATION_MENU_COLS } from './dataTableColumnGroups';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
@@ -1223,7 +1225,12 @@ function ProjectDataTable({ lines }: DataTableProps) {
           title={labels.shotAt(selectedLineId, shotIndex, true)}
           data-testid={`data-table-shot-row-label-${selectedLineId}-${shot.id}`}
         >
-          <EntityBlob entity="shot" lineId={selectedLineId} className="min-w-0 max-w-full">
+          <EntityBlob
+            entity="shot"
+            lineId={selectedLineId}
+            shotEnds={shotEndMarks(labels, selectedLineId, shotIndex)}
+            className="min-w-0 max-w-full"
+          >
             {labels.shotAt(selectedLineId, shotIndex)}
           </EntityBlob>
         </span>
@@ -1243,19 +1250,27 @@ function ProjectDataTable({ lines }: DataTableProps) {
       if (editingBlocked) return;
       const station = lineStations[rowIndex];
       if (!station) return;
+      // A foreign slot or a loop end shows another line's station: say whose
+      // it is before the edit changes it on every line (RS 5.4).
+      const ask = editNeedsOwnerPrompt(station.shown);
       if (colKey === 'name') {
         const name = stationRenameToSend(value, station);
         if (name === null) return;
         setSource('data-table');
-        void setStationName(station.station_ref, name);
+        if (ask) openDialog('shown-identity-edit', { stationRef: station.station_ref, kind: 'name', value: name });
+        else void setStationName(station.station_ref, name);
         return;
       }
       if (colKey !== 'comment') return;
       setSource('data-table');
       const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
-      void updateStationComment(station.station_ref, comment);
+      if (ask && comment !== (station.comment ?? null)) {
+        openDialog('shown-identity-edit', { stationRef: station.station_ref, kind: 'comment', value: comment });
+      } else if (!ask) {
+        void updateStationComment(station.station_ref, comment);
+      }
     },
-    [editingBlocked, lineStations, updateStationComment, setStationName]
+    [editingBlocked, lineStations, updateStationComment, setStationName, openDialog]
   );
 
   const onStationActiveCellChange = useCallback(
@@ -1419,7 +1434,11 @@ function ProjectDataTable({ lines }: DataTableProps) {
         title={labels.station(station.station_ref, true)}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <StationBlob station={station.station_ref} className="min-w-0 max-w-full" />
+        <StationBlob
+          station={station.station_ref}
+          className="min-w-0 max-w-full"
+          testId={`data-table-station-pill-${station.station_ref.line_id}-${station.station_ref.station_index}`}
+        />
       </span>
     ),
     [triggerCenterOnStation, labels]

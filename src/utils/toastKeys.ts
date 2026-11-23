@@ -29,6 +29,12 @@ export const TOAST_KEYS = {
    * (#737). One toast lists every closure the delete removed.
    */
   CLOSURE_REMOVED: 'closure-removed',
+  /**
+   * What an action did to station names on its own (RS 7): the letters rule L
+   * gave, archived stations it brought back, loop closure ends that show their
+   * own name again. One toast per action.
+   */
+  STATION_IDENTITIES: 'station-identities',
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',

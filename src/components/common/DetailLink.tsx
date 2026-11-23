@@ -98,7 +98,8 @@ export interface DetailLinkProps {
   /**
    * A station pill's home-line mark: the line the station belongs to, when the
    * pill shows it on another line (a small dot in that line's colour after the
-   * name). Station links only.
+   * name). Station links only. Absent: the slot's own (RS 6: a foreign slot's
+   * shown station's home line); null: none.
    */
   homeLineId?: number | null | undefined;
   /**
@@ -107,7 +108,8 @@ export interface DetailLinkProps {
    * name the other LINE (UX-7), and the Station ID row above already says it.
    */
   stationIdShown?: boolean | undefined;
-  /** A shot pill's home-line marks, per end (see `homeLineId`). Shot links only. */
+  /** A shot pill's home-line marks, per end (see `homeLineId`). Shot links
+   *  only. Absent: each end's own (a foreign end's home line). */
   shotHomeLineIds?: { from?: number | null | undefined; to?: number | null | undefined } | undefined;
 }
 
@@ -187,10 +189,12 @@ export function DetailLink({
   const position = hasPosition(target) ? target.position : null;
   // A station pill ends with the station's Station ID (the one the Station
   // IDs label mode shows); the spoken name carries it too.
+  // The Station ID the slot shows (RS 6), its foreign dot and its loop mark.
+  const stationRef = type === 'station' && position !== null ? { line_id: target.lineId, station_index: position } : null;
   const stationId =
-    showPill && stationIdShown && !isMissing && type === 'station' && position !== null
-      ? labels.stationId({ line_id: target.lineId, station_index: position })
-      : null;
+    showPill && stationIdShown && !isMissing && stationRef !== null ? labels.shownStationId(stationRef) : null;
+  const stationHome = homeLineId !== undefined ? homeLineId : stationRef !== null ? labels.homeMark(stationRef) : null;
+  const loopEnd = stationRef !== null && !isMissing && labels.shown(stationRef)?.loop_end === true;
   const spokenText = spokenTarget(type, fullText ?? displayText, stationId);
   const ariaLabel = generateAriaLabel(type, fullText ?? displayText, stationId);
 
@@ -257,8 +261,12 @@ export function DetailLink({
   // A shot with a home-line mark shows its two ends separately, so each mark
   // sits right after its station's name.
   const shotIndex = type === 'shot' && position !== null ? position - 1 : null;
-  const fromMark = showPill && shotIndex !== null ? markOf(pill, shotHomeLineIds?.from) : null;
-  const toMark = showPill && shotIndex !== null ? markOf(pill, shotHomeLineIds?.to) : null;
+  const endHome = (end: number | null | undefined, index: number): number | null | undefined =>
+    end !== undefined ? end : labels.homeMark({ line_id: target.lineId, station_index: index });
+  const fromMark =
+    showPill && shotIndex !== null && !isMissing ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
+  const toMark =
+    showPill && shotIndex !== null && !isMissing ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
   const shotEnds =
     shotIndex !== null && (fromMark || toMark)
       ? {
@@ -292,7 +300,9 @@ export function DetailLink({
           context={type === 'line' ? null : pillContext}
           main={pillLabel ?? displayText}
           shotEnds={shotEnds}
-          mark={type === 'station' && !isMissing ? markOf(pill, homeLineId) : null}
+          mark={type === 'station' && !isMissing ? markOf(pill, stationHome) : null}
+          loopEnd={loopEnd}
+          loopEndLabel={i18n.t('identity.loopEnd')}
           stationId={stationId}
           missing={isMissing}
         />

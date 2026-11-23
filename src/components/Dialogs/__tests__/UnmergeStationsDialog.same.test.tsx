@@ -26,6 +26,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { sameDetachResult } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
 
@@ -69,6 +70,8 @@ function openOn(clicked: ReturnType<typeof slot>, other: ReturnType<typeof slot>
 const SENTENCE = 'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.';
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   unmergeStations.mockResolvedValue({ success: true });
   unmergeStationPair.mockResolvedValue({ success: true });
@@ -89,8 +92,8 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'North Passage keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.',
     );
-    // No comment on the station: nothing to say about it.
-    expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull();
+    // No comment comes back: nothing to say about one.
+    expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
   });
 
   it('detaches the line that comes off, never the keeper the user clicked', async () => {
@@ -98,8 +101,10 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    // The pair form detaches the partner's line: North Passage.
-    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0));
+    // The pair form detaches the partner's line: North Passage. The preview
+    // named no collision, so the answers are an empty list (RS 4.2): a
+    // collision it did not show refuses rather than letters.
+    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0), { renames: [] });
     expect(unmergeStations).not.toHaveBeenCalled();
   });
 
@@ -109,16 +114,23 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     expect(screen.queryByTestId(`unmerge-station-option-${NORTH}-0`)).toBeNull();
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(unmergeStations).toHaveBeenCalledWith(slot(NORTH, 0));
+    expect(unmergeStations).toHaveBeenCalledWith(slot(NORTH, 0), { renames: [] });
     expect(unmergeStationPair).not.toHaveBeenCalled();
   });
 
-  it('says the comment stays with the line that keeps the station', async () => {
-    project('T-junction, line arrow points out\n\nSilt bank, low visibility');
-    openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(await screen.findByTestId('unmerge-stations-comment')).toHaveTextContent(
-      "The station's comment stays with Main Line. If part of it was North Passage's own, copy it over after detaching.",
+  // RS 4.2: the station that comes back has its own comment (a merge never
+  // joins comments), so the dialog says it, and says nothing of the
+  // junction's own comment, which stays where it is.
+  it("says the comment that comes back with the line's own station", async () => {
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN ? KEEPS : { ...RESTORES, comment: 'Silt bank, low visibility' },
     );
+    project('T-junction, line arrow points out');
+    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    expect(await screen.findByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent(
+      'With its comment: "Silt bank, low visibility"',
+    );
+    expect(screen.queryByText(/T-junction/)).toBeNull();
   });
 
   it('shows no choice while the previews are out, and Detach waits for them', async () => {

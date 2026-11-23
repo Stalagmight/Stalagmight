@@ -931,3 +931,100 @@ or the code disagreed, each with its reason.
   closures and station names (nine files), the three tests that asserted
   U1's per-line junction names now read the kept name on both lines; the
   rest of the Playwright suite was not run here.
+
+## Deviations (package RS-UI)
+
+Decisions the frontend package took where this page is silent or the code
+disagreed, each with its reason.
+
+- **Every dialog with a preview sends `renames`, an empty list included.**
+  Merge Stations, Create Loop Closure, Detach Line from Station and Remove
+  Closure send the answers whenever their naming preview answered, so a
+  collision the preview did not show refuses (`NameTaken`) instead of being
+  lettered behind the user's back. Without a preview (it failed, or the pair
+  is refused) they send none, and rule L letters with a notice, as before.
+- **Two answers per collision, no free text.** Each collision row offers
+  rule L's letter (checked) and the backend's alternative, as 4.1 step 6
+  says; a free-text name would need its own N8 check on every line, and
+  Rename Station is one step away.
+- **The Merge dialog's keep radios replace its Station A / B rows.** Each
+  radio is that station's pill (line, own name, Station ID), so the rows
+  would say the same twice; without a keep preview the old rows stay and
+  Merge sends no `keep`. The geometry sentence reads "Side moves 24 m onto
+  Main / 12's position" (7), so it no longer says the moving piece joins a
+  station it may be the kept one of.
+- **Create before the closure preview answers keeps both names.** The keep
+  radios appear when `preview_loop_closure` answers; a Create sent before
+  keeps both names (nothing hidden), the conservative choice. When rule K's
+  end may not be kept, a note says why "Keep both names" is the default.
+- **Plain text for a foreign slot needs the line.** `station(ref, true)`
+  reads `Side / 12 (Main)`; without the line (a pill's main part, a table
+  cell) it is the bare name, and the pill's dot says whose it is.
+- **One plain label for a loop end: `Main / 3 (loop end on Side)`.** 6 asks
+  for "K (loop end on Side)" in closure texts and "K (loop end)" on Plan
+  pins; the pins use the same label (it is the one plain-text label of the
+  slot), which also says where the loop end is.
+- **Plan mode's route, ruler, turn and drop lists are the engine's.** The
+  frontend lists no route stations by name: the route, the ruler's path,
+  the turn frontier and the drops come from the gas engine and the ruler
+  query by node and are drawn on the map; the endpoint and way-point rows
+  name the slots the user picked, which read the plain label above. The
+  collapse across closure edges therefore belongs to the engine's outputs
+  (`survey/gas.rs`, the ruler's path), outside RS-UI; it is left to RS-T or
+  a follow-up.
+- **Station details.** The Name and Station ID rows show the shown
+  identity; a foreign slot adds "12 belongs to Main"; a loop end opens with
+  "Loop closure end, shown as Main / 3" and "Its own station 17 (Station ID
+  17) is hidden"; position, depth and datum stay its own. "Also on" rows
+  name the other line only. The records list ("Archived here", which 6
+  does not mention) replaces "Also known as": each record with the lines
+  whose own station it was, or "kept for its Station ID" for history (A5),
+  and its comment.
+- **The one-click entry points ask on more than "comes back".** The detach
+  button opens Detach Line from Station when the preview restores a
+  station, keeps the junction on the line (others get a station back),
+  takes lines off together, offers a remaining-junction choice, changes
+  what a loop closure made the line show, or names a collision; the remove
+  buttons when the closure hides a station or a name would repeat. A
+  failed preview acts at once (the command reports its own refusal). The
+  warning resolution counts an opened dialog as leaving the flow
+  (`navigated`), not as resolved.
+- **The whose-station prompt (5.4).** Edit Station shows it in place of its
+  buttons (one dialog is open at a time), when the name or the comment
+  changes through a foreign slot or a loop end; the data table opens a
+  small dialog (`shown-identity-edit`) before sending the cell's edit, and
+  Cancel drops it. "Detach Side to get back its own station 0" opens Detach
+  Line from Station with that line chosen; "Remove the closure" opens Remove
+  Closure. A datum set through a loop end is said before saving (Edit
+  Station's datum section names the loop end), since the command result
+  does not carry `DatumSet::shown_as` on the wire.
+- **The data table's prompt is a dialog of its own, with telemetry.** The
+  `shown-identity-edit` dialog gets the per-dialog telemetry set every
+  dialog carries (`action.dialog.*`, `dialog-cancel.*`, `dwell.dialog.*`,
+  `active-dwell.dialog.*`; the registry goes from 756 to 760 events), the
+  one Rust change of this package.
+- **The keep radios name each station by its own identity.** A
+  closure-archived candidate's slot shows its kept end's name, so the radio
+  draws a pill of the candidate's own name and Station ID and says "shown
+  as K through a loop closure" beside it (7: "its pill: line, own name,
+  Station ID").
+- **The data table's dot and loop mark ride the row's gutter pill.** The
+  Name column stays plain editable text; the gutter pill carries the dot
+  and the loop mark, the Station ID column reads the shown Station ID, and
+  a shot row's pill carries each foreign end's dot.
+- **Map labels.** Besides the name and the Station ID, a loop end's station
+  comment label is not drawn either (6 says "by name, Station ID or
+  comment").
+- **Notices.** `executeCommand` raises the notice for every command that
+  reports `identities`, not only the station commands, so Delete Shot,
+  Combine and the range recipes say what they lettered or restored too. A
+  restore whose old comment is hidden names the old Station ID (the notice
+  carries no old name).
+- **The stations stat's hint is a tooltip** on the Stations figure of
+  Project stats.
+- **History rows are the backend's** (RS-W); the frontend shows them as
+  given.
+- **The e2e mock's merge preview defaults to the first slot in line
+  order**, the station the mock keeps without `keep`, not the datum or
+  rule K default; its collisions letter by the same rule-L shape (a merge's
+  kept station is on more lines; a restored station is new on its line).
