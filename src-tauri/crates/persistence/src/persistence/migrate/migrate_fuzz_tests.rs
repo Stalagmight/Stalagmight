@@ -2124,3 +2124,24 @@ fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
         }
     }
 }
+
+/// Farm finding dbf19ed85330 (`wire-unexplained | removed_comments`, seeds
+/// 35006357, 35007676, 35010268 and 35010327): a 0.6.0 loop end with an
+/// empty comment, which the migration archives behind its closure's kept
+/// end. The wire now shows the kept end's comment there (RS 5.1), and a
+/// range delete over the loop end lists no comment: the end's own comment
+/// is none, and the kept end's stays. 0.6.0's preview listed the empty
+/// comment, and the wire oracle filtered empty legacy comments only where
+/// the slot now shows none, so it called the difference unexplained.
+/// Injection: record a slot in `empty_comments` only when its wire comment
+/// is gone (the oracle before the fix) and all four seeds fail.
+#[test]
+fn farm_seeds_an_empty_comment_on_an_archived_loop_end_is_no_comment() {
+    for seed in [35_006_357, 35_007_676, 35_010_268, 35_010_327] {
+        match run_seed(seed) {
+            Ok(Outcome::Migrated(_)) => {}
+            Ok(_) => panic!("seed {seed}: not migrated"),
+            Err(f) => panic!("seed {seed}: {} {}", f.class, f.detail),
+        }
+    }
+}
