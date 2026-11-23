@@ -352,7 +352,8 @@ the kept one, with its own identity, instead of being deleted. Each entry of
 | `name` | string | Its name. |
 | `comment` | string, opt | Its comment. |
 | `external` | string, opt | Its importer identity, as above. |
-| `lines` | array of integers, opt | Its **own lines**: the lines whose station it was here, each passing through this station, each named by at most one archived station of it. Left out when empty: the entry is then history, kept only so its id is never reused, and nothing brings it back. |
+| `into` | integer, opt | The id of another archived station of this station that it was archived under: that one was a junction holding it as its own archived station when a later merge archived the junction whole. Left out when it was archived under this station's own identity. Never its own id, never an entry with no `lines`, and following `into` never comes back to an entry. |
+| `lines` | array of integers, opt | Its **own lines**: the lines whose station it was here, each passing through this station, each named by at most one archived station of it. Left out when empty: the entry is then history, kept only so its id is never reused, owns no other entry, and nothing brings it back. |
 
 The junction shows its own name, Station ID and comment on every line through
 it, its archived stations' own lines included (Stalagmight marks those slots
@@ -364,6 +365,22 @@ the junction ("Detach Line from Station"), or when a delete leaves the
 junction only on lines one archived station names. A line through a station
 that none of its archived stations names is a **native line** of the station;
 a station always has one (rule 11).
+
+The `into` links make the archived stations of a station a forest under the
+station's own identity, in list order (oldest first; an entry comes before
+the one it was archived under). An entry and the entries under it are one
+former junction: detaching any line one of them names brings back the entry
+at the top (the one without `into`), on every line its entries name, with the
+entries under it still archived in it (their `into` left out where it named
+the top). Example: X, a junction of its own line and of line 5 (where R was
+archived in it), merged into Y, which is kept:
+
+```json
+[12,"Y1",{"archived":[{"id":8,"name":"R0","into":4,"lines":[5]},{"id":4,"name":"X1","lines":[3]}]}]
+```
+
+Detaching line 3 or line 5 from station 12 gives back station 4 (`X1`) on both
+lines, with `{"id":8,"name":"R0","lines":[5]}` archived in it.
 
 **Earlier form.** A version 2 file written before the `archived-stations`
 feature holds `aliases` instead of `archived`: each `[id]`, `[id, "name"]` or
@@ -584,10 +601,13 @@ The rules:
     stations never name every line through it.
 12. A station is the archived end of at most one closure, and following
     "archived end -> kept end" from a station never comes back to it.
+13. An archived station's `into` names another archived station of the same
+    station that has `lines`, and following `into` from an archived station
+    never comes back to it (5.8).
 
 A file without the `archived-stations` feature is checked after its upgrade
 (section 12): its own rule 8 was per line name, and the upgrade settles what
-rules 8, 11 and 12 need.
+rules 8, 11, 12 and 13 need.
 
 ## 7. Unknown content
 
@@ -869,7 +889,9 @@ For context; nothing here changes the format. The app's side is
   version 2 wrote it) is upgraded in memory when opened, as a legacy file is
   converted: each junction keeps the station on its longest line (its
   measured length, Reference shots excluded; a tie keeps the lowest Station
-  ID), the others archived, each naming the line that knew it, and the
+  ID), the others archived under it (none inside another: an earlier file
+  had no `into`, and one it holds is dropped), each naming the line that knew
+  it, and the
   junction's one comment stays with the kept station; each loop closure
   archives the end that is not on the longest line, in list order, unless
   rule 12 refuses, and then neither; a name a line now shows for two

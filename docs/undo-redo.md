@@ -233,7 +233,8 @@ still passes with room.
 
 Stations are entities with stable ids, so identity needs no epilogue: a
 changeset records a created or deleted station as its whole image (id, name,
-comment, archived records, external id) and a changed one by its changed fields, so an
+comment, archived records with the record each was archived under, external
+id) and a changed one by its changed fields, so an
 undone delete restores the same id and name and a redone insert re-creates
 the station with the id and name it had. The station counter goes to
 `max(live, recorded)`, so a later edit never takes an id a redo needs.

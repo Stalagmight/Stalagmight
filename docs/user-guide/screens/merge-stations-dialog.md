@@ -34,11 +34,11 @@ instead, the closure stays but stops hiding its end, so the station you kept
 is shown there too, and the dialog says so. If the kept name is already used
 by another station on a line it will be shown on, a row asks how to settle
 it: rename the other station (for example `12` to `12a`) or rename the kept
-one. When the archived station was itself a junction of earlier merges,
-**Detach Line from Station** gives it back on its own lines only, and the
-dialog names the lines that keep showing the kept station. A comment the
-merge hides in another way (a loop closure the merge turns into a junction)
-is named too; **Undo** brings it back.
+one. When the archived station was itself a junction of earlier merges, it
+is archived whole, with the stations archived in it still inside it:
+**Detach Line from Station** on any of its lines gives that junction back on
+all of them. A comment the merge hides in another way (a loop closure the
+merge turns into a junction) is named too; **Undo** brings it back.
 
 When both pieces are already placed by their own
 [zero datum](../concepts/zero-datums-and-gps-fixes.md), a note under the

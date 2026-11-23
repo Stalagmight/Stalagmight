@@ -71,7 +71,11 @@ for that line.
 The line you detach gets its own station at the same place: a line that was
 merged there gets back the Station ID, name and comment it had before (if
 another station on that line has taken the name since, the dialog asks how to
-settle it, and a letter an earlier merge gave stays). On a station
+settle it, and a letter an earlier merge gave stays). When the station was
+itself a junction of several lines before that merge, those lines come off
+together and get it back as one station, with any station archived in it
+still inside it; the dialog names the lines that come off with yours. Detach a
+line of that junction again to take it off on its own. On a station
 where three or more lines meet, the dialog asks what comes off: one line, or,
 on the row of the line that keeps the station, the other lines together (for
 example "Far Room and Upstream, together (Main Line keeps this station)").
