@@ -285,7 +285,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. An entity with a project-unique Station ID; a shot runs from one station to the next. |
 | **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots (a chain: its start station, then the station each shot ends at). Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: an old SQLite `.stalx` stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names)). |
-| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, each line showing it by the name that line knows it by (a line merged onto it keeps its own name for it). |
+| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, every line showing the station the merge kept. The other stations are archived in it with their own name and comment, and Detach Line from Station brings each back (kept and archived stations, plan 2026-11-23). |
 | **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project::sections`, serialized as `cave_section_id` on the wire and in the `sections` member of the version 2 file. |
 | **Placement** | Where a piece of the survey that holds no zero datum sits: one of its stations at a local (x, y) position. |
 | **Sections panel** | The left-dock tab that lists the project's lines, grouped under their Sections (ungrouped lines listed separately). It keeps its name. |
@@ -1101,36 +1101,41 @@ the test ids) but are never shown:
 └────────────────────────────────────────────────────┘
 ```
 
-**A junction** (a station on several lines) is one station: its Station ID
-and comment are the same from every slot, and each slot shows the name its
-line knows it by. The details say each fact once (demo finding N-3), the
-slot's own line too (V-8): Name is the name on the slot's line alone, the
-Line row under it names that line (a link to it), and "Connected" does not
-repeat it. "Also on" lists the other lines through it, one row
-each, the same for every junction however it was made (a merge, Split Line
-Here, a line started there, an import; I-9): the line by name (a link to its
-slot; never the station's own name again), then the name that line shows the
-station by when it is not the Name row's, and the Station ID that line had
-there before a merge when it has one (the alias naming the line, which Detach
-gives back): `North Passage 0 (Station ID 9)`. Each row has a button that
-detaches that line (tooltip "Detach <line> from this station"; the history
-row reads `Detach line "<line>" from <staying line> / <name>`). "Also known as" lists
-the Station IDs and names merged into the station (its aliases: a merge's
-retired station, or a 0.6.0 merge group's other members) that no "Also on"
-row shows: `<name> on <line> (Station ID <id>)` while a line still shows it
-by that name, the slot's own line's as `Station ID <id> on <line>` (the Name
-row says its name), else `<name> (Station ID <id>)`, so a surveyor can still
-find a former name and Station ID from the field notes; hidden when none is
-left. The Data table's Conn picker and Edit Station head their list of the
-other lines "Also on" too, Adjust Position says "Joined to N other lines",
-and the combine menu says "Joined here" for two lines sharing a station.
-"Connected" also lists every shot that meets the station on the other lines
+**A junction** (a station on several lines) is one station: its Station ID,
+name and comment are the same from every slot, the station the merge kept
+(kept and archived stations, plan 2026-11-23). The details show the identity
+the slot shows (RS 6) and say each fact once (demo finding N-3), the slot's
+own line too (V-8): the Line row names the slot's line (a link to it), and
+"Connected" does not repeat it. On a line whose own station a merge archived
+(a foreign slot) a line under the Name says whose station it is: "12 belongs
+to Main Line"; its pills carry a small dot in that line's colour. "Also on"
+lists the other lines through it, one row each, the same for every junction
+however it was made (a merge, Split Line Here, a line started there, an
+import; I-9): the line by name (a link to its slot), never a name of its own.
+Each row has a button that detaches that line (tooltip "Detach <line> from
+this station"); when the detach would bring a station back, take other lines
+with it or repeat a name, the button opens Detach Line from Station on that
+line instead. "Archived here" lists the stations merges archived in it, each
+with its name, Station ID and the line whose own station it was (`0 (Station
+ID 9), Side's own station`) or, for one no line names any more, "kept for its
+Station ID", and its comment; hidden when none. A loop closure end that
+shows its closure's kept end opens with "Loop closure end, shown as Main /
+3" and its own station, hidden until the closure is removed; its position,
+depth and datum are its own. A rename or comment edit through a foreign slot
+or a loop end (Edit Station, the data table) first says whose station it
+changes and offers Detach Line from Station or Remove Closure instead. The
+Data table's Conn picker and Edit Station head their list of the other lines
+"Also on" too, Adjust Position says "Joined to N other lines", and the
+combine menu says "Joined here" for two lines sharing a station. "Connected"
+also lists every shot that meets the station on the other lines
 (`StationOtherLineShots.tsx`), so a junction of three lines shows three or
 more shots, not just a previous and a next. A junction's zero datum is found
 from any of its slots, here and in Edit Station.
 
 **Loop Closures Section:**
-- Placed after "Also on" and "Also known as", before "Connected" section
+- Placed after "Also on" and "Archived here", before "Connected" section
+- A closure that hides one end says so: "Side / 17 is shown as Main / 3 (loop end). Removing the closure brings it back."
+- The remove button opens Remove Closure when the closure hides a station or a name would repeat
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries
 - Closures grouped by `closure_id`; direct closures listed first, then transitive
