@@ -73,9 +73,9 @@ use stalagmight_lib::models::{
 };
 use stalagmight_lib::models::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
-    KeepCandidate, LetteredStationWire, LoopClosureNaming, MergeKeepPreview, NameCollisionWire,
-    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownElsewhereWire, ShownSlot,
-    StationIdentity, StationOwner, StationRename,
+    KeepCandidate, KeepRefusalReason, LetteredStationWire, LoopClosureNaming, MergeKeepPreview,
+    NameCollisionWire, RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire,
+    ShownElsewhereWire, ShownSlot, StationIdentity, StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -324,6 +324,7 @@ fn main() {
     export::<KeepCandidate>(&out_dir);
     export::<MergeKeepPreview>(&out_dir);
     export::<ClosureKeepPreview>(&out_dir);
+    export::<KeepRefusalReason>(&out_dir);
     export::<LoopClosureNaming>(&out_dir);
     export::<RemoveClosureNaming>(&out_dir);
     export::<StationOwner>(&out_dir);
@@ -672,6 +673,7 @@ fn main() {
         "KeepCandidate",
         "MergeKeepPreview",
         "ClosureKeepPreview",
+        "KeepRefusalReason",
         "LoopClosureNaming",
         "RemoveClosureNaming",
         "StationOwner",

@@ -30,7 +30,7 @@
 //! removal, Combine's dedupe, which moves the archive instead) letters by
 //! rule L in its epilogue.
 
-use crate::{ClosurePreview, LineId, StationId, StationRef};
+use crate::{ClosurePreview, KeepRefusalReason, LineId, StationId, StationRef};
 
 use super::ops::{OpError, OpOutcome, Sweep};
 use super::ops_merge::Answers;
@@ -55,6 +55,8 @@ pub struct ClosureKeepChoices {
     pub allowed: Vec<StationId>,
     /// Rule K's end over the two (node candidates), allowed or not.
     pub rule_k: Option<StationId>,
+    /// Why rule K's end may not be kept (C1 or C2); `None` when it may.
+    pub rule_k_refused: Option<KeepRefusalReason>,
     /// The dialog's default: rule K's end when it is allowed, else `None`
     /// ("Keep both names": the closure archives nothing).
     pub default: Option<StationId>,
@@ -200,14 +202,33 @@ impl Project {
     /// one of the two, the end it archives is not archived by another
     /// closure (C1), and `keep` does not already show that end (C2).
     pub fn closure_keep_allowed(&self, a: StationId, b: StationId, keep: StationId) -> bool {
+        (keep == a || keep == b) && a != b && self.closure_keep_refusal(a, b, keep).is_none()
+    }
+
+    /// Why a closure between `a` and `b` may not keep `keep`, an end of it
+    /// (RS 5.2): C1 when the other end is already archived by another
+    /// closure, else C2 when `keep` already shows the other end. `None` when
+    /// the keep is allowed, and for a `keep` that is not an end.
+    pub fn closure_keep_refusal(
+        &self,
+        a: StationId,
+        b: StationId,
+        keep: StationId,
+    ) -> Option<KeepRefusalReason> {
         let archived = if keep == a {
             b
         } else if keep == b {
             a
         } else {
-            return false;
+            return None;
         };
-        a != b && !self.is_closure_archived(archived) && self.shown(keep) != archived
+        if self.is_closure_archived(archived) {
+            Some(KeepRefusalReason::OtherEndArchived)
+        } else if self.shown(keep) == archived {
+            Some(KeepRefusalReason::KeptShowsOtherEnd)
+        } else {
+            None
+        }
     }
 
     /// The Create Loop Closure dialog's choices between `a` and `b` (RS 5.2):
@@ -220,9 +241,13 @@ impl Project {
             .collect();
         let rule_k = self.rule_k_nodes(&[a, b]);
         let default = rule_k.filter(|k| allowed.contains(k));
+        let rule_k_refused = rule_k
+            .filter(|_| a != b)
+            .and_then(|k| self.closure_keep_refusal(a, b, k));
         ClosureKeepChoices {
             allowed,
             rule_k,
+            rule_k_refused,
             default,
         }
     }

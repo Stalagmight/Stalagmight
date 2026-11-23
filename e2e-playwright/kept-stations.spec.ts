@@ -42,10 +42,30 @@ interface E2E {
       stations: Array<{ station_ref: Ref; name: string; id: number; shown?: { id: number } }>;
       checkMergeConnectivity: (a: Ref, b: Ref) => Promise<{ merge_preview?: unknown }>;
       mergeStations: (a: Ref, b: Ref, answers?: unknown) => Promise<unknown>;
+      createLoopClosure: (
+        a: Ref,
+        b: Ref,
+        strategy: string,
+        answers?: unknown,
+      ) => Promise<{ success: boolean; error: string | null }>;
+      setZeroDatum: (r: Ref, gps: unknown, options: unknown) => Promise<unknown>;
       refreshProjectState: () => Promise<void>;
     };
   };
   uiStore: { getState: () => { openDialog: (name: string, data: unknown) => void; setSelection: (s: unknown) => void } };
+  gasPlanStore: { getState: () => { setEndpoint: (r: Ref | null) => void } };
+}
+
+/** Create Loop Closure through the store, keeping `keep`, with no renames
+ *  (a dialog that saw no collision). */
+async function createClosure(page: Page, a: Ref, b: Ref, keep: number): Promise<{ success: boolean; error: string | null }> {
+  return page.evaluate(
+    ({ a, b, keep }) =>
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.projectStore
+        .getState()
+        .createLoopClosure(a, b, 'Batch', { keep, renames: [] }),
+    { a, b, keep },
+  );
 }
 
 async function setUp(page: Page): Promise<[number, number]> {
@@ -261,5 +281,126 @@ test.describe('Kept and archived stations (RS)', () => {
     );
     // Side's own stations carry no dot.
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
+  });
+
+  // ui-1, ui-8: the remaining-junction picker. Main keeps a junction of three
+  // lines, so detaching Main leaves Side and North together on one of their
+  // own stations; the mock now applies the record `restKeep` picks.
+  test('detaching the kept line: the pick shows on the lines that come off, and leaving the line clears it', async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Kept Stations Rest');
+    const north: LineSeed = {
+      name: 'North',
+      shots: [{ azimuth_in: 0, azimuth_out: 0, length: 7, depth_in: 3, depth_out: 3 }],
+    };
+    await seedProjectWithLines(page, [main, side, north]);
+    await waitForMapIdle(page);
+    const [mainId, sideId, northId] = await page.evaluate(() =>
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.projectStore.getState().project!.lines.map((l) => l.id),
+    );
+    await seedNames(page, [
+      [sideId!, 0, 'S'],
+      [northId!, 0, 'N'],
+    ]);
+    await page.evaluate(
+      async ({ m, s, n, keep }) => {
+        const store = (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.projectStore.getState();
+        await store.mergeStations(m, s, { keep, renames: [] });
+        await store.mergeStations(m, n, { keep, renames: [] });
+      },
+      { m: ref(mainId!, 3), s: ref(sideId!, 0), n: ref(northId!, 0), keep: mainId! * 100_000 + 3 },
+    );
+    await page.evaluate(
+      ({ at, others }) => {
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore
+          .getState()
+          .openDialog('unmerge-stations', { stationRef: at, mergedStations: others, chosenLine: at.line_id });
+      },
+      { at: ref(mainId!, 3), others: [ref(sideId!, 0), ref(northId!, 0)] },
+    );
+    const dialog = page.getByTestId('unmerge-stations-dialog');
+    await expect(dialog).toBeVisible();
+    const sideRecord = sideId! * 100_000;
+    const northRecord = northId! * 100_000;
+    await expect(page.getByTestId(`unmerge-stations-rest-${sideRecord}`)).toBeChecked();
+    await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText('S (Station ID');
+
+    // Pick North's, leave the line and come back: the default is back on screen.
+    await page.getByTestId(`unmerge-stations-rest-${northRecord}`).click();
+    await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText('N (Station ID');
+    await page.getByTestId(`unmerge-station-option-${sideId}-0`).click();
+    await page.getByTestId(`unmerge-station-option-${mainId}-3`).click();
+    await expect(page.getByTestId(`unmerge-stations-rest-${sideRecord}`)).toBeChecked();
+    await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText('S (Station ID');
+
+    // Pick North's for real: Side and North come off showing N.
+    await page.getByTestId(`unmerge-stations-rest-${northRecord}`).click();
+    await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText('N (Station ID');
+    await page.getByTestId('unmerge-stations-confirm').click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => nameAt(page, ref(sideId!, 0))).toBe('N');
+    await expect.poll(() => nameAt(page, ref(northId!, 0))).toBe('N');
+    await expect.poll(() => nameAt(page, ref(mainId!, 3))).toBe('3');
+  });
+
+  // ui-6, ui-8: the mock models C1, so the note on rule K's refused end is
+  // reachable, and a command given renames refuses a collision they leave
+  // unanswered (NameTaken), as the backend does.
+  test("a closure whose rule K end may not be kept says why; unanswered renames refuse", async ({ page }) => {
+    const [mainId, sideId] = await setUp(page);
+    // Main / 1 - Side / 2 keeping Main / 1: Side / 2 is a loop end.
+    // Keeping Main / 1 shows 1 on Side, where Side / 1 is named 1: no answer
+    // given, so the command refuses and nothing changes.
+    const created = await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1);
+    expect(created.success).toBe(false);
+    expect(created.error).toContain('would show two stations named "1"');
+    await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('2');
+    await seedNames(page, [[sideId, 1, 'S1']]);
+    expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
+    await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('1');
+
+    // Main / 2 - Side / 2: keeping Main / 2 (rule K, the first end in the
+    // mock) would hide Side / 2 a second time (C1).
+    await page.evaluate(
+      ({ a, b }) => {
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore.getState().openDialog('closure', {
+          stationA: a,
+          stationB: b,
+          preview: { path_length: 20, misclosure_distance: 0.4, error_percentage: 2, horizontal_misclosure: 0.3, vertical_misclosure: 0.2 },
+        });
+      },
+      { a: ref(mainId, 2), b: ref(sideId, 2) },
+    );
+    await expect(page.getByTestId('closure-dialog')).toBeVisible();
+    await expect(page.getByTestId('closure-keep-not-allowed')).toHaveText(
+      'Main / 2 cannot be kept here: it would hide Side / 2, which another loop closure already shows as Main / 1.',
+    );
+    await expect(page.getByTestId('closure-keep-both')).toBeChecked();
+    await expect(page.getByTestId('closure-keep-outcome')).toHaveText(
+      'No name changes. Side / 2 stays shown as Main / 1 through another loop closure.',
+    );
+    await page.getByTestId('closure-cancel').click();
+    await expect(page.getByTestId('closure-dialog')).toBeHidden();
+  });
+
+  // RS 6: a Plan pin on a loop end reads "K (loop end)".
+  test('a Plan endpoint on a loop end reads as the station it is shown as', async ({ page }) => {
+    const [mainId, sideId] = await setUp(page);
+    await seedNames(page, [[sideId, 1, 'S1']]);
+    expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
+    await page.evaluate(
+      (at) =>
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.projectStore
+          .getState()
+          .setZeroDatum(at, { latitude: 24.55, longitude: -81.78, depth_reference: 0 }, { fitToBounds: false }),
+      ref(mainId, 0),
+    );
+    await page.getByTestId('mode-plan').click();
+    const entrance = page.getByTestId('gas-start-entrance');
+    if (await entrance.isVisible().catch(() => false)) await entrance.click();
+    await page.evaluate((at) => {
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.gasPlanStore.getState().setEndpoint(at);
+    }, ref(sideId, 2));
+    await expect(page.getByTestId('gas-endpoint-readout')).toHaveText('Main / 1 (loop end)');
   });
 });

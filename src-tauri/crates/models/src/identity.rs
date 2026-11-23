@@ -208,6 +208,19 @@ pub struct ClosureKeepPreview {
     pub collisions: Vec<NameCollisionWire>,
 }
 
+/// Why a loop closure may not keep an end (RS 5.2), for the dialog's note
+/// when rule K's end is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepRefusalReason {
+    /// C1: the end the keep would archive (the other end) is already a loop
+    /// end of another closure, which shows it as another station.
+    OtherEndArchived,
+    /// C2: the end kept is already shown as the end it would archive,
+    /// through another closure.
+    KeptShowsOtherEnd,
+}
+
 /// The Create Loop Closure dialog's naming part (`preview_loop_closure`):
 /// both ends, which may be kept (C1, C2), the default, and what each choice
 /// does.
@@ -221,6 +234,11 @@ pub struct LoopClosureNaming {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rule_k: Option<StationId>,
+    /// Why rule K's end may not be kept; absent when it may (or there is
+    /// none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rule_k_refused: Option<KeepRefusalReason>,
     /// The dialog's default: rule K's end when allowed; absent: "Keep both
     /// names".
     #[serde(default, skip_serializing_if = "Option::is_none")]

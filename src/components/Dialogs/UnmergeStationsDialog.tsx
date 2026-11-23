@@ -175,8 +175,16 @@ export default function UnmergeStationsDialog() {
   // Once the user picks a line, the default stops following the previews.
   const pickedRef = useRef(false);
   // The record the remaining junction shows (RS 4.2 case 2), when the user
-  // picked one; the selected line's preview is asked again with it.
+  // picked one; the selected line's preview is asked again with it. The
+  // pick's preview is kept apart from the line's default one (`previews`),
+  // so clearing the pick shows the default again (review finding ui-1).
   const [restKeep, setRestKeep] = useState<number | undefined>(undefined);
+  const [pickPreview, setPickPreview] = useState<{
+    line: number;
+    restKeep: number;
+    preview: DetachLinePreview;
+  } | null>(null);
+  const [pickFailed, setPickFailed] = useState(false);
 
   useEffect(() => {
     const chosen = chosenLine === undefined ? undefined : slots.find((ref) => ref.line_id === chosenLine);
@@ -184,6 +192,8 @@ export default function UnmergeStationsDialog() {
     setPreviews(new Map());
     setPreviewsSettled(false);
     setRestKeep(undefined);
+    setPickPreview(null);
+    setPickFailed(false);
     setSelectedKey(chosen ? stationRefKey(chosen) : slots.length > 0 ? stationRefKey(slots[0]!) : '');
     if (!stationRef || slots.length === 0) return;
     let live = true;
@@ -214,7 +224,6 @@ export default function UnmergeStationsDialog() {
     () => slots.find((ref) => stationRefKey(ref) === selectedKey) ?? null,
     [slots, selectedKey],
   );
-  const naming = selected ? previews.get(selected.line_id) ?? null : null;
   const same = useMemo(() => sameDetachResult(slots, previews), [slots, previews]);
 
   // A remaining-junction pick asks the chosen line's preview again with it.
@@ -222,22 +231,41 @@ export default function UnmergeStationsDialog() {
   useEffect(() => {
     if (restKeep === undefined || !stationRef || restLine === undefined) return;
     let live = true;
-    Promise.resolve(
-      invokeIpc<DetachLinePreview>(
-        'preview_detach_line',
-        { stationRef, lineId: restLine, restKeep },
-        { purpose: 'preview detach line' },
-      ),
-    )
+    Promise.resolve()
+      .then(() =>
+        invokeIpc<DetachLinePreview>(
+          'preview_detach_line',
+          { stationRef, lineId: restLine, restKeep },
+          { purpose: 'preview detach line' },
+        ),
+      )
       .then((preview) => {
-        if (!live || !preview) return;
-        setPreviews((prev) => new Map(prev).set(restLine, preview));
+        if (!live) return;
+        if (!preview) throw new Error('no preview');
+        setPickPreview({ line: restLine, restKeep, preview });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!live) return;
+        // Back to the station chosen for them: the preview on screen.
+        setRestKeep(undefined);
+        setPickFailed(true);
+      });
     return () => {
       live = false;
     };
   }, [restKeep, restLine, stationRef]);
+  // The pick's preview has not answered yet: what is on screen is not what
+  // Detach would send.
+  const pickPending =
+    restKeep !== undefined &&
+    !(pickPreview !== null && pickPreview.line === restLine && pickPreview.restKeep === restKeep);
+  /** The preview on screen for `line`: the pick's once it answered, else the
+   *  line's default. */
+  const previewOf = (line: number): DetachLinePreview | null =>
+    restKeep !== undefined && line === restLine && !pickPending && pickPreview
+      ? pickPreview.preview
+      : previews.get(line) ?? null;
+  const naming = selected ? previewOf(selected.line_id) : null;
   // A two-line junction waits for its previews: they decide whether there is
   // a choice to show at all.
   const waiting = slots.length === 2 && !previewsSettled;
@@ -261,7 +289,7 @@ export default function UnmergeStationsDialog() {
 
   // The preview of the line that comes off: its collisions are what the
   // dialog asks about.
-  const targetPreview = target ? previews.get(target.line_id) ?? null : null;
+  const targetPreview = target ? previewOf(target.line_id) : null;
   const [answers, setAnswer] = useCollisionAnswers(targetPreview?.collisions);
 
   const handleConfirm = async () => {
@@ -353,6 +381,7 @@ export default function UnmergeStationsDialog() {
                           // A remaining-junction pick belongs to the line it
                           // was made for.
                           setRestKeep(undefined);
+                          setPickFailed(false);
                         }}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
@@ -389,9 +418,17 @@ export default function UnmergeStationsDialog() {
               <RestPicker
                 preview={naming}
                 restKeep={restKeep}
-                onRestKeep={setRestKeep}
+                onRestKeep={(id) => {
+                  setPickFailed(false);
+                  setRestKeep(id === naming.rest_default ? undefined : id);
+                }}
                 disabled={isLoading}
               />
+            )}
+            {pickFailed && (
+              <p className="text-xs text-error" data-testid="unmerge-stations-rest-failed">
+                {t('dialogs.detachLine.restFailed')}
+              </p>
             )}
 
             {!waiting && (
@@ -430,7 +467,7 @@ export default function UnmergeStationsDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !target || waiting || editingBlocked}
+            disabled={isLoading || !target || waiting || pickPending || editingBlocked}
             data-testid="unmerge-stations-confirm"
           >
             {isLoading ? t('dialogs.detachLine.working') : t('dialogs.detachLine.confirm')}

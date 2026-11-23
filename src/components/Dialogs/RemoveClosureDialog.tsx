@@ -85,27 +85,38 @@ export default function RemoveClosureDialog() {
   );
 
   // What removing the chosen closure brings back (RS 5.3). A failed preview
-  // only hides the sentence; Remove then letters any collision itself.
+  // only hides the sentence; Remove then letters any collision itself. While
+  // it is out, Remove waits (review finding ui-7): sending no renames then
+  // would letter, behind a notice, a collision the dialog is about to show.
   const [naming, setNaming] = useState<RemoveClosureNaming | null>(null);
+  // The closure whose preview has answered or failed.
+  const [settledFor, setSettledFor] = useState<string | null>(null);
   useEffect(() => {
     setNaming(null);
+    setSettledFor(null);
     if (!selectedClosure) return;
+    const key = selectedClosure.closureId.toString();
     let live = true;
-    Promise.resolve(
-      invokeIpc<RemoveClosureNaming>(
-        'preview_remove_loop_closure',
-        { closureId: Number(selectedClosure.closureId) },
-        { purpose: 'preview remove loop closure' },
-      ),
-    )
+    Promise.resolve()
+      .then(() =>
+        invokeIpc<RemoveClosureNaming>(
+          'preview_remove_loop_closure',
+          { closureId: Number(selectedClosure.closureId) },
+          { purpose: 'preview remove loop closure' },
+        ),
+      )
       .then((answer) => {
-        if (live && answer && String(answer.closure_id) === selectedClosure.closureId.toString()) setNaming(answer);
+        if (live && answer && String(answer.closure_id) === key) setNaming(answer);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (live) setSettledFor(key);
+      });
     return () => {
       live = false;
     };
   }, [selectedClosure]);
+  const previewSettled = selectedClosure !== null && settledFor === selectedClosure.closureId.toString();
   const [answers, setAnswer] = useCollisionAnswers(naming?.collisions);
 
   /** The station a closure hides, by closure id (the rows' "17 comes back"). */
@@ -113,6 +124,24 @@ export default function RemoveClosureDialog() {
     const archive = project?.loop_closures?.find((c) => c.id === closureId)?.archived;
     return archive ? displayStationName(archive.station.name) : null;
   };
+
+  // The ends of the chosen closure that another closure shows as another
+  // station (ui-6): removing one that hides nothing leaves them so, which
+  // "both ends show their own names" would deny.
+  const staysShown: string[] = [];
+  const chosen = project?.loop_closures?.find((c) => c.id === selectedClosure?.closureId);
+  for (const end of chosen ? [chosen.station_a, chosen.station_b] : []) {
+    const by = labels.shown(end)?.loop_closure;
+    const archive = by === undefined ? undefined : project?.loop_closures?.find((c) => c.id === by)?.archived;
+    if (by !== undefined && by !== chosen?.id && archive) {
+      staysShown.push(
+        t('dialogs.closure.staysShownAs', {
+          station: identityLabel(archive.station),
+          shown: identityLabel(archive.shown_as),
+        }),
+      );
+    }
+  }
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => (
     <StationBlob station={ref} withLine />
@@ -222,7 +251,9 @@ export default function RemoveClosureDialog() {
         )}
         {naming && naming.comes_back === undefined && (
           <p className="text-sm text-text-secondary" data-testid="remove-closure-nothing-back">
-            {t('dialogs.removeClosure.nothingBack')}
+            {staysShown.length === 0
+              ? t('dialogs.removeClosure.nothingBack')
+              : [t('dialogs.removeClosure.nothingBackShown'), ...staysShown].join(' ')}
           </p>
         )}
         {naming && (
@@ -240,7 +271,7 @@ export default function RemoveClosureDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !selectedClosure || editingBlocked}
+            disabled={isLoading || !selectedClosure || !previewSettled || editingBlocked}
             data-testid="remove-closure-confirm"
           >
             {isLoading ? 'Removing...' : 'Remove'}

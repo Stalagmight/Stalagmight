@@ -78,6 +78,10 @@ export interface SpreadsheetGridProps<Row> {
   onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
   onBatchEdit?: (edits: CellEdit[]) => void;
+  /** Offer moving the selected cells by dragging the selection's edge (needs
+   *  `onBatchEdit`; default true). A host whose batch is not a move target
+   *  (the stations grid) turns it off. */
+  allowCellMove?: boolean;
   /** A REQUIRED cell (`kind: 'number'`) was emptied/deleted, so no value was
    *  emitted through {@link onEdit} - the grid just shows it as "missing" while
    *  the model keeps its last value. Hosts whose model is PROVISIONAL (draft
@@ -227,6 +231,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const {
     columns, rows, rowKey, rowTestId, cellTestId, onEdit,
     onBatchEdit,
+    allowCellMove = true,
     onClearMissing,
     locale = 'en-US',
     height = 400,
@@ -2247,7 +2252,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
               >
                 {/* Grab any edge (not the interior) to move the cells. */}
-                {!editing && onBatchEdit && (
+                {!editing && onBatchEdit && allowCellMove && (
                   <>
                     <div className="sg-move-edge" style={{ top: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />
                     <div className="sg-move-edge" style={{ bottom: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />

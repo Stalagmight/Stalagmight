@@ -1235,6 +1235,7 @@
       "shownElsewhere": "{{line}}: {{after}} where it showed {{before}}",
       "restLead": "The lines that come off show:",
       "restChoice": "{{station}} (Station ID {{id}})",
+      "restFailed": "That choice could not be checked, so the lines that come off show the station chosen for them.",
       "lettersStay": "A name that took a letter earlier because of this station keeps it."
     },
     "saveConflict": {
@@ -1911,8 +1912,12 @@
     "closure": {
       "keepLead": "Both ends show:",
       "keepBoth": "Keep both names",
-      "ruleKNotAllowed": "The end on the longer line is already a loop end of another closure, so it cannot be kept here.",
+      "ruleKOtherEndArchived": "{{keep}} cannot be kept here: it would hide {{other}}, which another loop closure already shows as {{shown}}.",
+      "ruleKShowsOtherEnd": "{{keep}} cannot be kept here: a loop closure already shows it as {{other}}.",
+      "ruleKNotAllowed": "{{keep}} cannot be kept here because of another loop closure at these ends.",
       "keepsBoth": "Each end keeps its own name.",
+      "keepsBothShown": "No name changes.",
+      "staysShownAs": "{{station}} stays shown as {{shown}} through another loop closure.",
       "hidden": "{{station}} is hidden: its point stays on the map, without a label. Remove Closure brings it back.",
       "hiddenWithComment": "{{station}} and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.",
       "renamedLines_one": "{{lines}} will show the kept station there.",
@@ -1924,11 +1929,21 @@
       "comesBack_other": "{{station}} comes back: {{lines}} show it again instead of {{shown}}.",
       "commentComesBack": "Its comment comes back too: \"{{comment}}\"",
       "nothingBack": "Both ends already show their own names, so no name changes.",
+      "nothingBackShown": "No name changes.",
       "comesBackPlain": "{{station}} comes back."
     },
     "shownIdentity": {
       "titleName": "Rename Station",
       "titleComment": "Station Comment",
+      "titleBatch": "Edit Stations",
+      "batchLead_one": "One station this edit changes is shown on other lines too:",
+      "batchLead_other": "{{count}} stations this edit changes are shown on other lines too:",
+      "batchBelongs": "On {{line}}, {{name}} belongs to {{home}}.",
+      "batchLoopEnd": "On {{line}}, {{name}} is shown as {{station}} through a loop closure.",
+      "batchLines": "The edit changes it on {{lines}}.",
+      "batchHeld": "Nothing is changed until you choose: the edit is applied whole or not at all.",
+      "batchProceed_one": "Apply the edit",
+      "batchProceed_other": "Apply all {{count}} edits",
       "belongs": "{{name}} belongs to {{line}}.",
       "loopEnd": "Shown as {{station}} through a loop closure.",
       "changes": {
@@ -4399,6 +4414,7 @@
     "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
     "loopEnd": "loop end",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
+    "loopEndPinLabel": "{{station}} (loop end)",
     "foreignLabel": "{{station}} ({{home}})"
   },
   "notices": {

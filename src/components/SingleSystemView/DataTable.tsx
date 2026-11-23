@@ -26,8 +26,8 @@ import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
 import { useDataTableCredit } from './useDataTableCredit';
-import { buildStationColumns, stationRenameToSend } from './dataTableStationColumns';
-import { editNeedsOwnerPrompt } from '../Dialogs/ShownIdentityPrompt';
+import { buildStationColumns } from './dataTableStationColumns';
+import { commitStationGridEdits, planStationGridEdits } from './stationGridEdits';
 import { shotEndMarks } from '../common/shotEndMarks';
 import { HEADER_HIDE_GROUPS, STATION_MENU_COLS } from './dataTableColumnGroups';
 import RawTableView from './RawTableView';
@@ -1243,34 +1243,22 @@ function ProjectDataTable({ lines }: DataTableProps) {
 
   // --- Stations view (SpreadsheetGrid) --------------------------------------
   // Stations are derived from shots, so only the name and the comment are
-  // editable - a single edit per commit (set_station_name / set_station_comment
-  // have no batch form, so the grid gets no onBatchEdit).
-  const onStationEdit = useCallback(
-    (rowIndex: number, colKey: string, value: unknown) => {
+  // editable. A commit over several cells is ONE batch (ui-2): its edits on
+  // foreign slots and loop ends share one whose-station prompt, and the
+  // native ones wait for its answer (`stationGridEdits`).
+  const onStationBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
       if (editingBlocked) return;
-      const station = lineStations[rowIndex];
-      if (!station) return;
-      // A foreign slot or a loop end shows another line's station: say whose
-      // it is before the edit changes it on every line (RS 5.4).
-      const ask = editNeedsOwnerPrompt(station.shown);
-      if (colKey === 'name') {
-        const name = stationRenameToSend(value, station);
-        if (name === null) return;
-        setSource('data-table');
-        if (ask) openDialog('shown-identity-edit', { stationRef: station.station_ref, kind: 'name', value: name });
-        else void setStationName(station.station_ref, name);
-        return;
-      }
-      if (colKey !== 'comment') return;
+      const planned = planStationGridEdits(edits, lineStations);
+      if (planned.length === 0) return;
       setSource('data-table');
-      const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
-      if (ask && comment !== (station.comment ?? null)) {
-        openDialog('shown-identity-edit', { stationRef: station.station_ref, kind: 'comment', value: comment });
-      } else if (!ask) {
-        void updateStationComment(station.station_ref, comment);
-      }
+      commitStationGridEdits(planned, openDialog, { setStationName, updateStationComment });
     },
     [editingBlocked, lineStations, updateStationComment, setStationName, openDialog]
+  );
+  const onStationEdit = useCallback(
+    (row: number, colKey: string, value: unknown) => onStationBatchEdit([{ row, colKey, value }]),
+    [onStationBatchEdit]
   );
 
   const onStationActiveCellChange = useCallback(
@@ -1846,6 +1834,8 @@ function ProjectDataTable({ lines }: DataTableProps) {
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
+                onBatchEdit={onStationBatchEdit}
+                allowCellMove={false}
                 onLockedEdit={notifyIfFileReadOnly}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}

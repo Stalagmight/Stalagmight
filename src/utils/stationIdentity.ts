@@ -330,6 +330,21 @@ export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = 
 }
 
 /**
+ * A Plan mode pin's label (RS 6): `Main Line / 17`, as {@link stationLabelOf}
+ * with the line, except a loop end, which reads as the station it is shown
+ * as with the mark alone, `Main / 3 (loop end)`: the pin is on that station
+ * (Plan's route, turn and drop lists collapse a loop end into it), so where
+ * the loop end sits, which closure texts add, says nothing here.
+ */
+export function planStationLabelOf(src: IdentitySource, ref: StationRef): string {
+  const shown = shownSlotOf(src, ref);
+  if (!shown?.loop_end) return stationLabelOf(src, ref, true);
+  return i18n.t('identity.loopEndPinLabel', {
+    station: formatStationLabel(stationNameOf(src, ref), lineNameOf(src, shown.home_line ?? ref.line_id)),
+  });
+}
+
+/**
  * `4 → 5` (or `Main Line: 4 → 5` with `withLine`) for the shot at 0-based
  * position `shotIndex` of line `lineId`: it runs from station `shotIndex` to
  * station `shotIndex + 1`.
@@ -383,6 +398,8 @@ export interface IdentityLabels {
   homeMark: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
   station: (ref: StationRef, withLine?: boolean) => string;
+  /** A Plan pin's label (see {@link planStationLabelOf}). */
+  planStation: (ref: StationRef) => string;
   shotAt: (lineId: number, shotIndex: number, withLine?: boolean) => string;
   shot: (lineId: number, shotId: number, withLine?: boolean) => string | null;
 }
@@ -401,6 +418,7 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
     homeMark: (ref) => homeMarkOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),
+    planStation: (ref) => planStationLabelOf(src, ref),
     shotAt: (lineId, shotIndex, withLine) => shotLabelAt(src, lineId, shotIndex, withLine),
     shot: (lineId, shotId, withLine) => shotLabelOf(src, lineId, shotId, withLine),
   };

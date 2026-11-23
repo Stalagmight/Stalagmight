@@ -15,6 +15,7 @@ vi.mock('../ipc', async (importOriginal) => ({
 
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { detachLineAsking, detachNeedsDialog, removalNeedsDialog, removeClosureAsking } from '../keptStationActions';
 import type { DetachLinePreview } from '../../types/ipc/DetachLinePreview';
 
@@ -40,6 +41,9 @@ const preview = (extra: Partial<DetachLinePreview> = {}): DetachLinePreview => (
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // A local project in Survey mode: editing is not blocked (the actions
+  // re-check the gate after their preview, ui-5).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   unmergeStationPair.mockResolvedValue({ success: true });
   removeLoopClosure.mockResolvedValue({ success: true });
   useProjectStore.setState({

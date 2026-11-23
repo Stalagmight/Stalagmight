@@ -8,7 +8,10 @@
 //!   the old `compute_station_coordinates` order; each slot carries its station's values.
 //! - `turn_frontier`: the first slot of each frontier station, in slot order.
 //! - route legs: a swum leg is named by the two slots on the leg shot's line, a closure tie by the
-//!   two stations' first slots.
+//!   two stations' first slots. A leg runs from the node its entry leaves by to the node the next
+//!   entry arrives at ([`GasReach::route_ends`]): they differ from the entry's station only where
+//!   the route collapsed a loop end and its kept end into one entry (RS 6), whose own tie leg is
+//!   not listed.
 //! - a route node's slot (`stage_drop_refs`, `final_turn_ref`, the profile's `station_ref`) is its
 //!   slot on [`GasReach::route_lines`]: the line of the arriving leg (the departing leg for the
 //!   first node).
@@ -73,7 +76,7 @@ impl GasReach {
         }
 
         let route: Vec<RouteLeg> = self
-            .route
+            .route_ends
             .windows(2)
             .enumerate()
             .filter_map(|(i, w)| {
@@ -84,8 +87,8 @@ impl GasReach {
                     .flatten()
                     .map(|shot| shot.line);
                 Some(RouteLeg {
-                    from: slot_on_or_first(topology, w[0], line)?,
-                    to: slot_on_or_first(topology, w[1], line)?,
+                    from: slot_on_or_first(topology, w[0][1], line)?,
+                    to: slot_on_or_first(topology, w[1][0], line)?,
                     is_jump: self.route_leg_kinds.get(i).copied().flatten() == Some(ShotKind::Jump),
                 })
             })

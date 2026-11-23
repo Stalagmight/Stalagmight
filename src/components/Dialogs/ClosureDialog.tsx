@@ -14,6 +14,7 @@ import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 import type { LoopClosureNaming } from '../../types/ipc/LoopClosureNaming';
 import type { ClosureKeepPreview } from '../../types/ipc/ClosureKeepPreview';
+import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
@@ -196,7 +197,8 @@ export default function ClosureDialog() {
             disabled={isLoading || !!closureRefusal}
           />
         )}
-        {option && <ClosureChoiceOutcome option={option} />}
+        {naming && <RuleKRefusal naming={naming} />}
+        {option && naming && <ClosureChoiceOutcome option={option} ends={naming.ends} />}
         {option && (
           <CollisionRows
             collisions={option.collisions}
@@ -312,26 +314,62 @@ function ClosureKeepChoice({
         />
         <span>{t('dialogs.closure.keepBoth')}</span>
       </label>
-      {naming.rule_k !== undefined && !naming.allowed.includes(naming.rule_k) && (
-        <p className="text-xs text-text-secondary" data-testid="closure-keep-not-allowed">
-          {t('dialogs.closure.ruleKNotAllowed')}
-        </p>
-      )}
     </fieldset>
+  );
+}
+
+/**
+ * Why rule K's end may not be kept (RS 5.2, review finding ui-6), from the
+ * backend's reason: C1, keeping it would hide the other end, which another
+ * closure already shows as another station; C2, it is itself shown as the
+ * other end. Shown whenever rule K's end is refused, also when no end may be
+ * kept (no keep choice is offered then).
+ */
+function RuleKRefusal({ naming }: { naming: LoopClosureNaming }) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  if (naming.rule_k === undefined || naming.allowed.includes(naming.rule_k)) return null;
+  const keep = naming.ends.find((e) => e.identity.id === naming.rule_k);
+  const other = naming.ends.find((e) => e.identity.id !== naming.rule_k);
+  if (!keep) return null;
+  const text =
+    naming.rule_k_refused === 'other_end_archived' && other?.shown_as
+      ? t('dialogs.closure.ruleKOtherEndArchived', {
+          keep: label(keep.identity),
+          other: label(other.identity),
+          shown: label(other.shown_as),
+        })
+      : naming.rule_k_refused === 'kept_shows_other_end' && other
+        ? t('dialogs.closure.ruleKShowsOtherEnd', { keep: label(keep.identity), other: label(other.identity) })
+        : t('dialogs.closure.ruleKNotAllowed', { keep: label(keep.identity) });
+  return (
+    <p className="text-xs text-text-secondary" data-testid="closure-keep-not-allowed">
+      {text}
+    </p>
   );
 }
 
 /** What the chosen end does (RS 7): the end hidden (its point stays, without
  *  a label; Remove Closure brings it back) and the lines that show another
- *  name there, or that keeping both names hides nothing. */
-function ClosureChoiceOutcome({ option }: { option: ClosureKeepPreview }) {
+ *  name there, or that keeping both names hides nothing. An end already shown
+ *  as another station through another closure stays so (ui-6), so "each end
+ *  keeps its own name" is said only when neither is. */
+function ClosureChoiceOutcome({ option, ends }: { option: ClosureKeepPreview; ends: KeepCandidate[] }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
   if (!option.hidden) {
+    const shownAs = ends.filter((e) => e.shown_as !== undefined);
     return (
       <p className="text-sm text-text-secondary" data-testid="closure-keep-outcome">
-        {t('dialogs.closure.keepsBoth')}
+        {shownAs.length === 0
+          ? t('dialogs.closure.keepsBoth')
+          : [
+              t('dialogs.closure.keepsBothShown'),
+              ...shownAs.map((e) =>
+                t('dialogs.closure.staysShownAs', { station: label(e.identity), shown: label(e.shown_as!) }),
+              ),
+            ].join(' ')}
       </p>
     );
   }

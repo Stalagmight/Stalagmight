@@ -21,6 +21,7 @@ import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { projectIdentityKey } from '../utils/projectIdentity';
+import { editNeedsOwnerPrompt } from '../components/Dialogs/ShownIdentityPrompt';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -562,36 +563,49 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'move_comment': {
-          const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
+          const { moveCommentSource, setMoveCommentSource } = useUIStore.getState();
           const mcStation = stations.find(
             (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
           );
+          // A foreign slot or a loop end shows another station's comment (it
+          // is on other lines too): say whose it is before picking it up or
+          // dropping one onto it (RS 5.4, ui-3); going on does the click.
+          const askFirst = (then: () => Promise<void> | void) => {
+            if (!editNeedsOwnerPrompt(currentIdentityLabels().shown(ref))) return then();
+            useUIStore.getState().openDialog('shown-identity-edit', { stationRef: ref, kind: 'comment', onProceed: then });
+          };
+          const screenPos = { x: mouseEvent.clientX, y: mouseEvent.clientY };
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
-            if (!mcStation?.comment) {
+            const comment = mcStation?.comment;
+            if (!comment) {
               showToast(t('map.toasts.noCommentToMove'), TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
-            setSelection({ type: 'station', stationRef: ref });
-            setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+            await askFirst(() => {
+              setSelection({ type: 'station', stationRef: ref });
+              setMoveCommentSource({ type: 'station', stationRef: ref, comment, screenPos });
+            });
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
-            if (targetComment) {
-              // Target has comment - open swap dialog
-              openDialog('swap-comments', {
-                source: moveCommentSource,
-                target: { type: 'station', stationRef: ref, comment: targetComment },
-              });
-            } else {
-              // Target empty - atomic move
-              const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
-                ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
-                : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
-              const target = { type: 'station' as const, station_ref: ref };
-              await useProjectStore.getState().moveComment(source, target, false);
-              clearMoveCommentSource();
-            }
+            await askFirst(async () => {
+              if (targetComment) {
+                // Target has comment - open swap dialog
+                useUIStore.getState().openDialog('swap-comments', {
+                  source: moveCommentSource,
+                  target: { type: 'station', stationRef: ref, comment: targetComment },
+                });
+              } else {
+                // Target empty - atomic move
+                const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
+                  ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
+                  : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
+                const target = { type: 'station' as const, station_ref: ref };
+                await useProjectStore.getState().moveComment(source, target, false);
+                useUIStore.getState().clearMoveCommentSource();
+              }
+            });
           }
           break;
         }

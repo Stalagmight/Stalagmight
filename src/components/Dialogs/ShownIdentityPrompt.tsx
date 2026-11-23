@@ -20,11 +20,13 @@ import { invokeIpc } from '../../utils/ipc';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { displayStationName } from '../../utils/formatters';
 import { removeClosureAsking } from '../../utils/keptStationActions';
 import type { StationRef } from '../../types/project';
 import type { StationOwner } from '../../types/ipc/StationOwner';
+import type { StationGridEdit } from '../SingleSystemView/stationGridEdits';
 import { Button } from '../common/Button';
 import { useIdentityLabel } from './keptStationParts';
 
@@ -56,6 +58,8 @@ export function ShownIdentityPrompt({
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
   const stations = useProjectStore((s) => s.stations);
+  // Every way on edits (ui-5): the read-only gate disables them; Cancel stays.
+  const editingBlocked = useEditingBlocked();
   const [owner, setOwner] = useState<StationOwner | null>(null);
   useEffect(() => {
     let live = true;
@@ -112,24 +116,140 @@ export function ShownIdentityPrompt({
         </p>
       )}
       <div className="flex flex-col gap-2">
-        <Button variant="primary" onClick={onProceed} disabled={busy} data-testid="shown-identity-prompt-proceed">
+        <Button
+          variant="primary"
+          onClick={onProceed}
+          disabled={busy || editingBlocked}
+          data-testid="shown-identity-prompt-proceed"
+        >
           {loopEnd
             ? t(`dialogs.shownIdentity.proceedLoop.${edit}`, { station: shownLabel })
             : t(`dialogs.shownIdentity.proceed.${edit}`)}
         </Button>
         {loopEnd && loopClosure !== undefined && (
-          <Button onClick={removeClosure} disabled={busy} data-testid="shown-identity-prompt-remove-closure">
+          <Button
+            onClick={removeClosure}
+            disabled={busy || editingBlocked}
+            data-testid="shown-identity-prompt-remove-closure"
+          >
             {t('dialogs.shownIdentity.removeClosure')}
           </Button>
         )}
         {!loopEnd && owner?.own_station && (
-          <Button onClick={detach} disabled={busy} data-testid="shown-identity-prompt-detach">
+          <Button onClick={detach} disabled={busy || editingBlocked} data-testid="shown-identity-prompt-detach">
             {t('dialogs.shownIdentity.detach', {
               line,
               name: displayStationName(owner.own_station.name),
             })}
           </Button>
         )}
+        <Button onClick={onCancel} disabled={busy} data-testid="shown-identity-prompt-cancel">
+          {t('dialogs.shownIdentity.cancel')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The prompt for one grid commit over several cells (a paste, a fill, a range
+ * clear; review finding ui-2): every station it changes that other lines
+ * show too, each with the lines the edit changes it on, then one answer for
+ * the whole commit. Going on sends every edit of it, the native ones too;
+ * Cancel drops them all, so the commit is applied whole or not at all.
+ */
+export function ShownIdentityBatchPrompt({
+  edits,
+  onProceed,
+  onCancel,
+  busy = false,
+}: {
+  edits: readonly StationGridEdit[];
+  onProceed: () => void;
+  onCancel: () => void;
+  busy?: boolean;
+}) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const label = useIdentityLabel();
+  const editingBlocked = useEditingBlocked();
+  // One row per station asked about, in the commit's order.
+  const asked: StationRef[] = [];
+  for (const e of edits) {
+    if (!e.ask) continue;
+    const same = (r: StationRef) => r.line_id === e.stationRef.line_id && r.station_index === e.stationRef.station_index;
+    if (!asked.some(same)) asked.push(e.stationRef);
+  }
+  const askedKey = asked.map((r) => `${r.line_id}:${r.station_index}`).join(',');
+  const [owners, setOwners] = useState<ReadonlyMap<string, StationOwner>>(new Map());
+  useEffect(() => {
+    let live = true;
+    const refs = askedKey === '' ? [] : askedKey.split(',').map((k) => {
+      const [line_id, station_index] = k.split(':').map(Number);
+      return { line_id: line_id!, station_index: station_index! };
+    });
+    void Promise.all(
+      refs.map((stationRef) =>
+        Promise.resolve()
+          .then(() =>
+            invokeIpc<StationOwner>('preview_station_identity', { stationRef }, { purpose: 'preview station identity' }),
+          )
+          .then((owner): [string, StationOwner] | null =>
+            owner ? [`${stationRef.line_id}:${stationRef.station_index}`, owner] : null,
+          )
+          .catch(() => null),
+      ),
+    ).then((answers) => {
+      if (live) setOwners(new Map(answers.filter((a): a is [string, StationOwner] => a !== null)));
+    });
+    return () => {
+      live = false;
+    };
+  }, [askedKey]);
+
+  return (
+    <div className="space-y-3 text-sm" data-testid="shown-identity-batch-prompt">
+      <p className="text-text-primary" data-testid="shown-identity-batch-lead">
+        {t('dialogs.shownIdentity.batchLead', { count: asked.length })}
+      </p>
+      <ul className="list-disc pl-5 space-y-1">
+        {asked.map((ref, i) => {
+          const owner = owners.get(`${ref.line_id}:${ref.station_index}`);
+          const shown = labels.shown(ref);
+          const loopEnd = owner ? owner.loop_closure !== undefined : shown?.loop_end === true;
+          const home = owner?.shown.home_line ?? shown?.home_line;
+          const lead = loopEnd
+            ? t('dialogs.shownIdentity.batchLoopEnd', {
+                line: labels.lineName(ref.line_id),
+                name: displayStationName(labels.stationName(ref)),
+                station: owner ? label(owner.shown) : labels.station(ref, true),
+              })
+            : t('dialogs.shownIdentity.batchBelongs', {
+                line: labels.lineName(ref.line_id),
+                name: displayStationName(labels.stationName(ref)),
+                home: home !== undefined ? labels.lineName(home) : labels.lineName(ref.line_id),
+              });
+          const lines = owner && owner.lines.length > 0 ? listNames(owner.lines.map(labels.lineName), t) : null;
+          return (
+            <li key={`${ref.line_id}:${ref.station_index}`} data-testid={`shown-identity-batch-row-${i}`}>
+              {lead}
+              {lines !== null && ` ${t('dialogs.shownIdentity.batchLines', { lines })}`}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-text-secondary" data-testid="shown-identity-batch-held">
+        {t('dialogs.shownIdentity.batchHeld')}
+      </p>
+      <div className="flex flex-col gap-2">
+        <Button
+          variant="primary"
+          onClick={onProceed}
+          disabled={busy || editingBlocked}
+          data-testid="shown-identity-prompt-proceed"
+        >
+          {t('dialogs.shownIdentity.batchProceed', { count: edits.length })}
+        </Button>
         <Button onClick={onCancel} disabled={busy} data-testid="shown-identity-prompt-cancel">
           {t('dialogs.shownIdentity.cancel')}
         </Button>

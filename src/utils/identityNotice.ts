@@ -11,7 +11,7 @@
  * reported; imports report theirs in the receipt only.
  */
 import i18n from '../i18n';
-import { useUIStore } from '../store/uiStore';
+import { TOAST_DEDUP_WINDOW_MS, useUIStore } from '../store/uiStore';
 import type { CommandResult } from '../types/commands';
 import type { IdentityNotice } from '../types/ipc/IdentityNotice';
 import { formatStationLabel } from './formatters';
@@ -49,10 +49,23 @@ export function identityNoticeMessage(notice: IdentityNotice | undefined, lineNa
  * result on unchanged (so a store action can wrap its command in one
  * expression). A `warning`: the action did what was asked, with names the
  * user did not choose; one Undo brings them back with the rest of it.
+ *
+ * Every action's notice rides one dedup key, and the toast stack refreshes a
+ * toast of the same key in place inside its burst window. So a notice that
+ * lands while an earlier one is still fresh joins it rather than replacing
+ * it (review finding ui-9): for an action without a dialog the notice is the
+ * only report of its letters. The same words twice in a burst are said once.
  */
 export function notifyIdentityChanges(result: CommandResult, lineName: (lineId: number) => string): CommandResult {
   if (!result.success) return result;
   const message = identityNoticeMessage(result.identities, lineName);
-  if (message !== null) useUIStore.getState().showToast(message, TOAST_KEYS.STATION_IDENTITIES, 'warning');
+  if (message === null) return result;
+  const ui = useUIStore.getState();
+  const now = performance.now();
+  const fresh = ui.toasts.find(
+    (t) => t.key === TOAST_KEYS.STATION_IDENTITIES && !t.leaving && now - t.refreshedAt < TOAST_DEDUP_WINDOW_MS,
+  );
+  const joined = fresh && !fresh.message.includes(message) ? `${fresh.message} ${message}` : (fresh?.message ?? message);
+  ui.showToast(joined, TOAST_KEYS.STATION_IDENTITIES, 'warning');
   return result;
 }
