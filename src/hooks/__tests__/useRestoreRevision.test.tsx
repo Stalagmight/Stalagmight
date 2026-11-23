@@ -184,3 +184,26 @@ describe('useRestoreRevision late replies', () => {
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A Restore (and so a Revert, whose upload follows it) keeps its edit session
+ * through the in-place swap: the backend carries the bound claim, and the frontend
+ * reconciles through `applySpeleoTreeReplacement` only. A `loadProject` here would
+ * be a project switch whose `cancel_loading` moves the backend's session on and
+ * ends that edit session, so the Revert's upload would find nothing to upload
+ * under (the fuzzer's model did exactly that: farm finding R3-same-account-
+ * overwrite, seed 950443, and sdbdemo2 issue 1 for the other in-place reloads).
+ * A guard: this held before the finding, and must go on holding.
+ */
+describe('useRestoreRevision reconciles in place, never through a project switch', () => {
+  it('calls neither loadProject nor cancel_loading', async () => {
+    const loadProject = vi.fn(async () => ({ success: true }));
+    useProjectStore.setState({ loadProject });
+
+    await run();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_restore_revision', expect.anything());
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(invokeIpcMock.mock.calls.map(([cmd]) => cmd)).not.toContain('cancel_loading');
+  });
+});
