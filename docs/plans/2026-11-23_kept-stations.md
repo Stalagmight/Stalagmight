@@ -1559,6 +1559,11 @@ and RS-FX1's "Records still carry no owner link".
   with the remaining lines, keeping its owner, but the history records
   directly under the junction's identity, which stay with it; in the restore
   the old identity becomes a history record that owns nothing.
+- **The history row names every line that comes off.** A Detach whose
+  archived station comes back on other lines too reads `Detach lines "Side"
+  and "Far" from Main / 4`, as case 2's row already named the lines that
+  come off (N-2); before, it named the addressed line alone, also for a
+  several-line record.
 - **History records stay with the identity they were archived under**: one
   under a record comes back inside it, one directly under the junction's
   identity stays with the junction.

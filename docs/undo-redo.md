@@ -465,7 +465,9 @@ the addressed line keeps it (it shows the station natively and a record
 archived in it names every other line there, `Project::detach_keeps`, RS
 4.2), the other lines come off and the label names them (`Detach lines "B"
 and "C" from Main / 4`), never the line that keeps the station (demo finding
-N-2).
+N-2); likewise, when the addressed line's archived station comes back on
+other lines too (a junction a merge archived whole, RS-FX4), the label names
+every line that comes off.
 
 The names are worded **at record time**, with the names before the edit
 (`core/state/labels.rs`), and stored in the entry. A metadata edit that renames
