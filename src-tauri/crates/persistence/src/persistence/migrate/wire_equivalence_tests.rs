@@ -465,19 +465,17 @@ impl<'a> Case<'a> {
         if !self.foreign(slot) {
             return false;
         }
-        match o["comment"].as_str().filter(|c| !c.is_empty()) {
-            None => true,
-            Some(_) => {
-                let line = self.p.line_label_of(slot.line_id);
-                let name = o["name"].as_str().unwrap_or_default();
-                self.migrated
-                    .extras
-                    .changes
-                    .comments_hidden
-                    .iter()
-                    .any(|c| c.line == line && c.station == name)
-            }
+        if o["comment"].as_str().is_none_or(str::is_empty) {
+            return true;
         }
+        let line = self.p.line_label_of(slot.line_id);
+        let name = o["name"].as_str().unwrap_or_default();
+        self.migrated
+            .extras
+            .changes
+            .comments_hidden
+            .iter()
+            .any(|c| c.line == line && c.station == name)
     }
 
     fn tied(&self, a: StationRef, b: StationRef) -> bool {

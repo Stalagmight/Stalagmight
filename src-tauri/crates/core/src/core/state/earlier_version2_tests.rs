@@ -239,7 +239,7 @@ fn an_earlier_revision_is_converted_on_install() {
             )
             .unwrap();
         assert!(requires_feature(&dest), "the cache copy is converted");
-        let opened = state.execute(Command::OpenProject { path: dest.clone() });
+        let opened = state.execute(Command::OpenProject { path: dest });
         assert!(opened.success, "{:?}", opened.error);
         assert!(!state.file_is_legacy());
         let notice = state.take_conversion_notice().expect("a notice");

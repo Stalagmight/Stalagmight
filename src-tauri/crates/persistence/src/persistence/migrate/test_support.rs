@@ -1167,7 +1167,11 @@ fn kept_stations(
 
     // 2. Rule K per junction.
     for (&node, station) in &p.stations {
-        if station.archived.iter().all(|a| a.is_history()) {
+        if station
+            .archived
+            .iter()
+            .all(crate::models::survey::ArchivedStation::is_history)
+        {
             continue;
         }
         let candidates = std::iter::once((node, p.native_lines(node))).chain(
