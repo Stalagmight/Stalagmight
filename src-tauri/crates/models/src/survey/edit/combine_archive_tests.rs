@@ -406,10 +406,7 @@ fn a_join_station_kept_for_a_third_line_is_reported() {
     let before = p.clone();
     let report = ok(p.combine_lines(k, o, &opts(CombinePick::Other, LineEnd::End, LineEnd::End)));
     assert_valid(&p);
-    let archived = report
-        .join_archived
-        .clone()
-        .expect("O1 stays archived for T");
+    let archived = report.join_archived.clone().unwrap();
     assert_eq!((archived.id, archived.lines.clone()), (o1, vec![t]));
     assert_eq!(archived.comment.as_deref(), Some("other note"));
     assert_eq!(

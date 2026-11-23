@@ -236,7 +236,7 @@ fn the_range_preview_names_what_split_would_hide() {
         preview.identities.hidden.is_empty(),
         "the gap-close hides nothing"
     );
-    let weld = preview.split_weld.as_ref().expect("Split is offered too");
+    let weld = preview.split_weld.as_ref().unwrap();
     assert_eq!(weld.promoted.len(), 1);
     let hidden: Vec<StationId> = weld.identities.hidden.iter().map(|h| h.station).collect();
     let mode = RangeDeleteMode::Split {
@@ -259,7 +259,7 @@ fn the_range_preview_names_what_split_would_hide() {
         "a promoted end's comment is hidden: {hidden:?}"
     );
     let wire = p.delete_range_impact(&preview);
-    let split = wire.split_identities.expect("on the wire");
+    let split = wire.split_identities.unwrap();
     assert_eq!(split.hidden.len(), hidden.len());
 }
 
