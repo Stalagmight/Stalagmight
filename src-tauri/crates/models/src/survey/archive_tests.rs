@@ -21,7 +21,7 @@ const TOL: f64 = 1e-9;
 
 /// Undo then redo the change from `before` to `after`, bit for bit, in the
 /// session and through the persisted entry.
-fn undo_is_exact(before: &Project, after: &Project) {
+pub(super) fn undo_is_exact(before: &Project, after: &Project) {
     let changes = capture(before, after);
     for (form, cs) in [
         ("session", changes.clone()),
@@ -36,7 +36,7 @@ fn undo_is_exact(before: &Project, after: &Project) {
 }
 
 /// The names `line` shows, in chain order.
-fn shown(p: &Project, line: LineId) -> Vec<String> {
+pub(super) fn shown(p: &Project, line: LineId) -> Vec<String> {
     p.line_stations(line)
         .unwrap()
         .iter()
@@ -45,7 +45,7 @@ fn shown(p: &Project, line: LineId) -> Vec<String> {
 }
 
 /// A record with a name and the lines it names.
-fn record(id: StationId, name: &str, lines: Vec<LineId>) -> ArchivedStation {
+pub(super) fn record(id: StationId, name: &str, lines: Vec<LineId>) -> ArchivedStation {
     ArchivedStation {
         id,
         name: name.to_string(),
@@ -56,7 +56,7 @@ fn record(id: StationId, name: &str, lines: Vec<LineId>) -> ArchivedStation {
 }
 
 /// Every slot's raw position, as bits, line by line in chain order.
-fn slot_bits(p: &Project) -> Vec<[u64; 3]> {
+pub(super) fn slot_bits(p: &Project) -> Vec<[u64; 3]> {
     let positions = p.raw_positions();
     let mut out = Vec::new();
     for line in p.lines() {
