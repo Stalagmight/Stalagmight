@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 type LineView = { id: number; name: string; shots: number };
 
@@ -98,7 +99,9 @@ test.describe('Combine Lines', () => {
     await combineWith(page, 'Main B');
     const dialog = page.getByTestId('combine-lines-dialog');
     await expect(dialog).toBeVisible();
-    await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main A \(2 shots\) and Main B \(2 shots\) at station Main A \/ 2$/);
+    // The lines and the join station are prose pills; the sentence reads as plain text wrote it.
+    await expectSpoken(page.getByTestId('combine-summary'), /^Combining Main A \(2 shots\) and Main B \(2 shots\) at station Main A \/ 2$/);
+    expect(await prosePillKinds(page.getByTestId('combine-summary'))).toEqual(['line', 'line', 'station']);
     await expect(page.getByTestId('combine-name')).toHaveValue('Main');
     // The combined survey credit is summarised from both halves' shots, in
     // the folded Details.
@@ -137,7 +140,7 @@ test.describe('Combine Lines', () => {
     await item.click();
     await expect(page.getByTestId('combine-lines-dialog')).toBeVisible();
     // End to end: the other line is reversed to line up.
-    await expect(page.getByTestId('combine-plan')).toHaveText('West will be reversed and added after East.');
+    await expectSpoken(page.getByTestId('combine-plan'), 'West will be reversed and added after East.', { exact: true });
     await expect(page.getByTestId('combine-reverse-notice')).toBeVisible();
     await expect(page.getByTestId('combine-swap-lr')).toBeChecked();
     await page.getByTestId('combine-confirm').click();
@@ -178,8 +181,8 @@ test.describe('Combine Lines', () => {
     await expect(page.getByTestId('combine-lines-dialog')).toBeVisible();
     await expect(page.getByTestId('combine-partner-picker')).toHaveCount(0);
     await openDetails(page);
-    await expect(page.getByTestId('combine-branches-note')).toContainText('Left stays attached at the join');
-    await expect(page.getByTestId('combine-summary')).toContainText('Combining Trunk (2 shots) and Right (3 shots)');
+    await expectSpoken(page.getByTestId('combine-branches-note'), 'Left stays attached at the join');
+    await expectSpoken(page.getByTestId('combine-summary'), 'Combining Trunk (2 shots) and Right (3 shots)');
     await page.getByTestId('combine-confirm').click();
     await waitForNoDialogs(page);
     const call = await page.evaluate(() => {
@@ -209,7 +212,7 @@ test.describe('Combine Lines', () => {
     );
     await combineWith(page, 'West');
 
-    await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
+    await expectSpoken(page.getByTestId('combine-closure-join'), 'East and West meet here across a loop closure');
     // The torn merge stays as a closure: nothing is removed (#746).
     await expect(page.getByTestId('combine-removed-summary')).toHaveCount(0);
     await openDetails(page);
