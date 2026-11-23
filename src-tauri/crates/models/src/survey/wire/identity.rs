@@ -12,8 +12,9 @@
 use crate::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, DetachLinePreview,
     DetachLineResult, IdentityNotice, KeepCandidate, LetteredStationWire, LineId,
-    LoopClosureNaming, MergeKeepPreview, NameCollisionWire, RemoveClosureNaming, RenameSuggestion,
-    RestoredIdentityWire, ShownElsewhereWire, StationId, StationIdentity, StationOwner, StationRef,
+    LoopClosureNaming, MergeKeepPreview, NameCollisionWire, NameRepeatWire, RemoveClosureNaming,
+    RenameSuggestion, RestoredIdentityWire, ShownElsewhereWire, StationId, StationIdentity,
+    StationOwner, StationRef,
 };
 
 use super::super::{
@@ -104,6 +105,8 @@ impl Project {
                 .iter()
                 .map(|r| RestoredIdentityWire {
                     old_id: r.old,
+                    old_name: r.old_name.clone(),
+                    old_home_line: r.old_home_line,
                     station: self.station_identity(r.new).unwrap_or(StationIdentity {
                         id: r.new,
                         name: String::new(),
@@ -166,6 +169,17 @@ impl Project {
             },
             unarchived: m.unarchived,
             comments_hidden: m.comments_hidden.iter().map(hidden_wire).collect(),
+            repeats: m
+                .repeats
+                .iter()
+                .map(|r| NameRepeatWire {
+                    line_id: r.line,
+                    name: r.name.clone(),
+                    station: self.identity_named(r.own, &r.name),
+                    shown: self.identity_named(r.shown, &r.name),
+                    loop_end: r.loop_end,
+                })
+                .collect(),
         }
     }
 

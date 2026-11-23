@@ -344,7 +344,7 @@ pub use ops_closures::{ClosureCreated, ClosureKeepChoices, ClosureNaming};
 pub use ops_datums::{DatumChange, DatumSet};
 pub use ops_detach::{DetachLineOutcome, DetachNaming, DetachReport, NameAnswers, ShownElsewhere};
 pub use ops_merge::{
-    MergeCandidate, MergeCheck, MergeCollision, MergeDatumShift, MergeMove, MergeReport,
+    MergeCandidate, MergeCheck, MergeCollision, MergeDatumShift, MergeMove, MergeReport, NameRepeat,
 };
 pub use ops_move::{SegmentMoved, StationMoved};
 pub use sweep::{Promotion, SweepReport};

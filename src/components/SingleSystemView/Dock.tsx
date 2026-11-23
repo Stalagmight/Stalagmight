@@ -5,6 +5,7 @@ import { useResizeHandle } from './useResizeHandle';
 import type { PanelReveal } from './usePanelReveal';
 import { PANEL_RESIZE_GRACE_MS, PANEL_SLIDE_MS } from './layoutConstants';
 import { clamp } from '../../utils/clamp';
+import { FULLSCREEN_TOP } from './chromeMetrics';
 
 /** Width/height of the always-present closed-state opener bar (px). */
 export const BAR = 12;
@@ -403,7 +404,7 @@ function DockComponent({
           (fullscreen ? (
             <div
               className="fixed inset-x-0 bottom-0 z-40 bg-panel"
-              style={{ top: 'var(--toolbar-h, 48px)' }}
+              style={{ top: FULLSCREEN_TOP }}
             >
               {children}
             </div>

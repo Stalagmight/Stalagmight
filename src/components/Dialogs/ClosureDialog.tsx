@@ -18,7 +18,7 @@ import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
-import { IdentityPill, useIdentityLabel } from './keptStationParts';
+import { IdentityPill, StickyDialogFooter, useIdentityLabel } from './keptStationParts';
 
 /** "Keep both names" in the keep choice (no end archived). */
 const BOTH = 'both';
@@ -231,8 +231,7 @@ export default function ClosureDialog() {
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        <StickyDialogFooter testId="closure-footer">
           <Button onClick={handleClose} disabled={isLoading} data-testid="closure-cancel">
             Cancel
           </Button>
@@ -245,7 +244,7 @@ export default function ClosureDialog() {
           >
             {isLoading ? 'Creating...' : 'Create Closure'}
           </Button>
-        </div>
+        </StickyDialogFooter>
       </div>
     </DialogWrapper>
   );

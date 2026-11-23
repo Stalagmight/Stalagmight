@@ -62,7 +62,10 @@ pub enum ConversionSource {
     #[default]
     OldFormat,
     /// A version 2 file an earlier build wrote, upgraded to kept and archived
-    /// stations (plan 2026-11-23 RS 8.2).
+    /// stations (plan 2026-11-23 RS 8.2). Named explicitly: serde's
+    /// `snake_case` puts no underscore before a digit (`earlier_version2`)
+    /// while ts-rs's does, and the frontend reads the TS spelling (RS-FX6).
+    #[serde(rename = "earlier_version_2")]
     EarlierVersion2,
 }
 
@@ -180,10 +183,68 @@ fn rename_clause(change: &NameChange) -> String {
     )
 }
 
-/// Every entry of `changes` worded, grouped by line (its names, then its
-/// hidden comments), then the closures that keep both names.
+/// `A`, `A and B`, `A, B and C`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// One station whose comment is hidden, with every line it showed it on
+/// (RS-FX6: one station on two lines hides one comment, said once).
+struct HiddenByIdentity<'a> {
+    station: &'a str,
+    lines: Vec<&'a str>,
+}
+
+/// The hidden comments of `changes` by identity, in order of first
+/// appearance (line order, then chain order).
+fn hidden_by_identity(changes: &IdentityChanges) -> Vec<HiddenByIdentity<'_>> {
+    let mut out: Vec<(crate::models::StationId, HiddenByIdentity<'_>)> = Vec::new();
+    for c in &changes.comments_hidden {
+        match out.iter_mut().find(|(id, _)| *id == c.identity) {
+            Some((_, entry)) => {
+                if !entry.lines.contains(&c.line.as_str()) {
+                    entry.lines.push(&c.line);
+                }
+            }
+            None => out.push((
+                c.identity,
+                HiddenByIdentity {
+                    station: &c.station,
+                    lines: vec![&c.line],
+                },
+            )),
+        }
+    }
+    out.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// "the comment of Side / 0 is hidden", or for a station shown on several
+/// lines "the comment of M4 on Main and Annex is hidden".
+fn hidden_clause(hidden: &HiddenByIdentity<'_>) -> String {
+    match hidden.lines.as_slice() {
+        [line] => format!(
+            "the comment of {} / {} is hidden",
+            text(line),
+            text(hidden.station)
+        ),
+        lines => format!(
+            "the comment of {} on {} is hidden",
+            text(hidden.station),
+            and_list(&lines.iter().map(|l| text(l)).collect::<Vec<_>>())
+        ),
+    }
+}
+
+/// Every entry of `changes` worded, grouped by line (its names, then the
+/// hidden comments first seen on it), then the closures that keep both
+/// names.
 fn identity_entries(changes: &IdentityChanges) -> Vec<String> {
     let mut out = Vec::new();
+    let hidden = hidden_by_identity(changes);
     for line in &changes.lines {
         out.extend(
             changes
@@ -193,17 +254,10 @@ fn identity_entries(changes: &IdentityChanges) -> Vec<String> {
                 .map(rename_clause),
         );
         out.extend(
-            changes
-                .comments_hidden
+            hidden
                 .iter()
-                .filter(|c| &c.line == line)
-                .map(|c| {
-                    format!(
-                        "the comment of {} / {} is hidden",
-                        text(&c.line),
-                        text(&c.station)
-                    )
-                }),
+                .filter(|h| h.lines.first() == Some(&line.as_str()))
+                .map(hidden_clause),
         );
     }
     out.extend(changes.closures_keep_both.iter().map(|c| {
@@ -341,7 +395,7 @@ impl ConversionNotice {
                 "stations now have a letter suffix",
             ),
             (
-                identity.comments_hidden.len(),
+                hidden_by_identity(identity).len(),
                 "station's comment is now hidden",
                 "stations' comments are now hidden",
             ),

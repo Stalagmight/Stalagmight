@@ -1136,7 +1136,7 @@ from any of its slots, here and in Edit Station.
 
 **Loop Closures Section:**
 - Placed after "Also on" and "Archived here", before "Connected" section
-- A closure that hides one end says so: "Side / 17 is shown as Main / 3 (loop end). Removing the closure brings it back."
+- A closure that hides one end says so: "Side / 17, the loop end, is shown as Main / 3. Removing the closure brings it back."
 - The remove button opens Remove Closure when the closure hides a station or a name would repeat
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries

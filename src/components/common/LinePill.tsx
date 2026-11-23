@@ -12,7 +12,9 @@
  * closure shows as its other end, RS 6) carries a small loop mark there too,
  * even where it has no dot. A shot pill carries each end's marks after that
  * end's name. The marks stand for the qualifier plain text adds (`12 (Main)`,
- * `3 (loop end on Side)`), so a pill's names are bare.
+ * `3 (loop end on Side)`), so a pill's names are bare; each mark carries those
+ * words for a screen reader, and the home-line mark a tooltip ("Belongs to
+ * Main", RS-FX6 P2-5), as the loop mark does.
  */
 import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -27,6 +29,7 @@ import {
   type PillDot,
 } from '../../theme/pillColors';
 import { SHOT_ARROW } from '../../utils/formatters';
+import i18n from '../../i18n';
 
 /** The colour of line `lineId` (any CSS colour), or null when there is no such line. */
 export function useLineColorOf(): (lineId: number | null | undefined) => string | null {
@@ -44,19 +47,41 @@ export function useLineColorOf(): (lineId: number | null | undefined) => string 
   );
 }
 
+/** The name of line `lineId`, or null when there is no such line. */
+export function useLineNameOf(): (lineId: number | null | undefined) => string | null {
+  const { projectLines, dataLines } = useProjectStore(
+    useShallow((s) => ({ projectLines: s.project?.lines, dataLines: s.surveyData?.lines })),
+  );
+  return useCallback(
+    (lineId) => {
+      if (lineId === null || lineId === undefined) return null;
+      return (
+        projectLines?.find((l) => l.id === lineId)?.name ?? dataLines?.find((l) => l.id === lineId)?.name ?? null
+      );
+    },
+    [projectLines, dataLines],
+  );
+}
+
 export interface ResolvedPill {
   colors: PillColors;
   /** The theme name the colours were derived for (marks are derived on it too). */
   theme: string;
   colorOf: (lineId: number | null | undefined) => string | null;
+  /** A line's name, for the words a home-line mark carries. */
+  lineNameOf?: ((lineId: number | null | undefined) => string | null) | undefined;
 }
 
 /** The colours of the pill of line `lineId` on the current theme. */
 export function usePillColors(lineId: number | null | undefined): ResolvedPill {
   const theme = useUIStore((s) => s.resolvedTheme);
   const colorOf = useLineColorOf();
-  return { colors: pillColorsOf(colorOf(lineId), theme), theme, colorOf };
+  const lineNameOf = useLineNameOf();
+  return { colors: pillColorsOf(colorOf(lineId), theme), theme, colorOf, lineNameOf };
 }
+
+/** A home-line mark: its dot, and the name of the line it stands for. */
+export type HomeMark = PillDot & { line?: string | undefined };
 
 /** The pill's colours as the custom properties the `.sh-lpill` rules read. */
 export function pillStyle(colors: PillColors): CSSProperties {
@@ -92,20 +117,32 @@ export function useMissingPillStyle(): CSSProperties {
 }
 
 /** The home-line mark's dot for line `homeLineId` on a pill coloured `pill`, or null for none. */
-export function markOf(pill: ResolvedPill, homeLineId: number | null | undefined): PillDot | null {
+export function markOf(pill: ResolvedPill, homeLineId: number | null | undefined): HomeMark | null {
   if (homeLineId === null || homeLineId === undefined) return null;
-  return pillMarkOf(pill.colorOf(homeLineId), pill.colors, pill.theme);
+  const line = pill.lineNameOf?.(homeLineId) ?? undefined;
+  return { ...pillMarkOf(pill.colorOf(homeLineId), pill.colors, pill.theme), line };
 }
 
-/** The second dot after a station name (see the module doc). */
-export function HomeLineMark({ mark, testId }: { mark: PillDot; testId?: string | undefined }) {
+/**
+ * The second dot after a station name (see the module doc). With the home
+ * line's name it says it in words too: a tooltip, "Belongs to Main", and
+ * for a screen reader " (Main)", so the name reads "12 (Main)" as plain text
+ * writes it (RS 6; RS-FX6, P2-5). Before, the 5 px dot was the only sign.
+ */
+export function HomeLineMark({ mark, testId }: { mark: HomeMark; testId?: string | undefined }) {
+  const style = { '--mark-dot': mark.dot, '--mark-ring': mark.ring ?? 'transparent' } as CSSProperties;
+  if (!mark.line) {
+    return <span className="sh-lpill-mark" style={style} aria-hidden="true" data-testid={testId} />;
+  }
   return (
     <span
       className="sh-lpill-mark"
-      style={{ '--mark-dot': mark.dot, '--mark-ring': mark.ring ?? 'transparent' } as CSSProperties}
-      aria-hidden="true"
+      style={style}
+      title={i18n.t('identity.homeMarkTitle', { line: mark.line })}
       data-testid={testId}
-    />
+    >
+      <span className="sr-only"> {i18n.t('identity.homeMarkLabel', { line: mark.line })}</span>
+    </span>
   );
 }
 
@@ -134,8 +171,8 @@ export function LoopEndMark({ label, testId }: { label?: string | undefined; tes
 export interface ShotEnds {
   from: string;
   to: string;
-  fromMark?: PillDot | null | undefined;
-  toMark?: PillDot | null | undefined;
+  fromMark?: HomeMark | null | undefined;
+  toMark?: HomeMark | null | undefined;
   fromLoopEnd?: boolean | undefined;
   toLoopEnd?: boolean | undefined;
 }
@@ -151,7 +188,7 @@ export interface PillPartsProps {
   /** A shot pill's main part as its two ends, so each can carry a mark. Overrides `main`. */
   shotEnds?: ShotEnds | null | undefined;
   /** A station pill's home-line mark, right after the name. */
-  mark?: PillDot | null | undefined;
+  mark?: HomeMark | null | undefined;
   /** A station pill's loop mark (a loop end, RS 6), after the name and its dot. */
   loopEnd?: boolean | undefined;
   /** Words read for a loop mark (the station's, or a shot end's) by a screen reader. */

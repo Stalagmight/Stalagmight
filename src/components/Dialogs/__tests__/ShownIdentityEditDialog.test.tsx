@@ -14,11 +14,12 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
   invokeIpc: (...args: unknown[]) => invokeIpc(...args),
 }));
 
-import '../../../i18n';
+import i18n from '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import ShownIdentityEditDialog from '../ShownIdentityEditDialog';
+import { proceedText } from '../ShownIdentityPrompt';
 import { buildStationColumns } from '../../SingleSystemView/dataTableStationColumns';
 import type { Station } from '../../../types/project';
 
@@ -71,6 +72,9 @@ describe("the data table's whose-station prompt (RS 5.4)", () => {
   it('sends nothing until going on, then renames the shown station', async () => {
     open('name', '12b');
     expect(await screen.findByTestId('shown-identity-prompt-lead')).toHaveTextContent('12 belongs to Main.');
+    // The new name is on the button (RS-FX6, P3-11): the cell cursor has
+    // moved on by now, so the prompt is where the user reads it.
+    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(/^Rename Main \/ 12 to 12b/);
     expect(setStationName).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('shown-identity-prompt-proceed'));
@@ -82,7 +86,7 @@ describe("the data table's whose-station prompt (RS 5.4)", () => {
   it('sends the comment edit, or nothing on Cancel', async () => {
     open('comment', 'Arch');
     await screen.findByTestId('shown-identity-prompt-lead');
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Change its comment on every line');
+    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Change the comment of Main / 12');
     fireEvent.click(screen.getByTestId('shown-identity-prompt-cancel'));
     expect(updateStationComment).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
@@ -104,5 +108,23 @@ describe('the Station ID column (RS 6)', () => {
     const native = { id: 13 } as unknown as Station;
     expect(idColumn.getValue(loopEnd, 0)).toBe(3);
     expect(idColumn.getValue(native, 1)).toBe(13);
+  });
+});
+
+/** RS-FX6, P3-11: one wording for the go-on button, foreign slot or loop
+ *  end: the station, the new name and the lines. */
+describe('proceedText', () => {
+  const t = i18n.t.bind(i18n);
+  it('says the station, the new name and the lines alike for both variants', () => {
+    expect(proceedText(t, 'name', 'Main / 8', '8E', 'Main and Loop')).toBe('Rename Main / 8 to 8E on Main and Loop');
+    expect(proceedText(t, 'name', 'Main / 12', '12J', 'Main and Side')).toBe('Rename Main / 12 to 12J on Main and Side');
+    expect(proceedText(t, 'comment', 'Main / 8', undefined, 'Main and Loop')).toBe(
+      'Change the comment of Main / 8 on Main and Loop',
+    );
+  });
+
+  it('leaves out what it does not know yet', () => {
+    expect(proceedText(t, 'name', 'Main / 8', '8E', null)).toBe('Rename Main / 8 to 8E');
+    expect(proceedText(t, 'name', 'Main / 8', undefined, 'Main and Loop')).toBe('Rename Main / 8');
   });
 });

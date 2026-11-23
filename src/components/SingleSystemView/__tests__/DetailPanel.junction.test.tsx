@@ -134,7 +134,10 @@ describe('a junction that shows its kept station on every line', () => {
   // fails.
   it('names the station\'s line once, in the Line row, which links to it (V-8)', () => {
     render(<DetailPanel />);
-    const panel = screen.getByTestId('station-detail');
+    // Visible text: a pill's home-line dot also says "(Main)" to a screen
+    // reader (RS-FX6, P2-5), which is no second visible naming.
+    const panel = screen.getByTestId('station-detail').cloneNode(true) as HTMLElement;
+    panel.querySelectorAll('.sr-only').forEach((el) => el.remove());
     expect(panel.textContent?.match(/Main(?! Line)/g)).toHaveLength(1);
     const line = screen.getByTestId('station-detail-line');
     expect(line).toHaveTextContent(/^Line:Main$/);
@@ -176,6 +179,16 @@ describe('a loop end in the station details (RS 6, U-P2-15)', () => {
     );
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('12');
     expect(screen.queryByTestId('station-detail-belongs')).toBeNull();
+    // RS-FX6, P3-14: Name and Station ID are Main / 4's, the position rows
+    // the loop end's own point; a heading says so. Injection: drop it.
+    const heading = screen.getByTestId('station-detail-loop-end-position');
+    expect(heading).toHaveTextContent("This end's own position:");
+    expect(heading.nextElementSibling).toHaveTextContent(/^X:/);
+  });
+
+  it('heads no position rows for a station that is no loop end', () => {
+    render(<DetailPanel />);
+    expect(screen.queryByTestId('station-detail-loop-end-position')).toBeNull();
   });
 });
 
@@ -221,12 +234,14 @@ describe('junction station details', () => {
     expect(link).toHaveAccessibleName(/Side/);
   });
 
+  // RS-FX6, P2-7: a history record says it is on no line now, not "kept
+  // for its Station ID", which said nothing to a surveyor.
   it('lists the stations archived in it under "Archived here"', () => {
     render(<DetailPanel />);
     const records = screen.getByTestId('station-detail-records');
     expect(records).toHaveTextContent('Archived here');
-    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent('0 (Station ID 20), kept for its Station ID');
-    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent('21 (Station ID 21), kept for its Station ID');
+    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent('0 (Station ID 20), no longer on any line');
+    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent('21 (Station ID 21), no longer on any line');
   });
 
   /** RS-FX4: a record archived inside another (its `into`) is listed under

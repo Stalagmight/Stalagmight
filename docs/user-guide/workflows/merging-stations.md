@@ -69,13 +69,18 @@ for that line.
    **Unmerge Stations**)
 
 The line you detach gets its own station at the same place: a line that was
-merged there gets back the Station ID, name and comment it had before (if
-another station on that line has taken the name since, the dialog asks how to
-settle it, and a letter an earlier merge gave stays). When the station was
+merged there gets back the Station ID, name and comment it had before. If
+another station on that line has taken the name since, the dialog asks which
+of the two takes a letter, naming each by its Station ID ("Rename the station
+that comes back (Side / 0, Station ID 15) to 0a", "Rename Side's own 0
+(Station ID 29) to 0a"), and the name it says the line gets back follows your
+choice. A letter an earlier merge gave stays, and the dialog says so when
+there is one. When the station was
 itself a junction of several lines before that merge, those lines come off
 together and get it back as one station, with any station archived in it
-still inside it; the dialog names the lines that come off with yours. Detach a
-line of that junction again to take it off on its own. On a station
+still inside it; the dialog names the lines that come off with yours and the
+stations that stay inside. Detach a line of that junction again to take it
+off on its own. On a station
 where three or more lines meet, the dialog asks what comes off: one line, or,
 on the row of the line that keeps the station, the other lines together (for
 example "Far Room and Upstream, together (Main Line keeps this station)").

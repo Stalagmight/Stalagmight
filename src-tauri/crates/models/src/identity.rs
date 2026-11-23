@@ -181,6 +181,28 @@ pub struct MergeKeepPreview {
     /// comment. Undo brings them back.
     #[serde(default)]
     pub comments_hidden: Vec<StationIdentity>,
+    /// Every name a line shows twice after the merge and not before (RS-FX5
+    /// allows it): the dialog says each, so a line listing a name twice is
+    /// no surprise (RS-FX6).
+    #[serde(default)]
+    pub repeats: Vec<NameRepeatWire>,
+}
+
+/// A name a line shows twice after a merge (`MergeKeepPreview::repeats`):
+/// the line's own station of that name keeps it, and the junction (or a
+/// loop end) shows the same name with the home line's dot (or the loop
+/// mark).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(rename = "NameRepeat")]
+pub struct NameRepeatWire {
+    pub line_id: LineId,
+    pub name: String,
+    /// The line's own station of that name.
+    pub station: StationIdentity,
+    /// The station shown there too, through the junction or a loop end.
+    pub shown: StationIdentity,
+    /// Shown through a loop end (the loop mark), not the junction's dot.
+    pub loop_end: bool,
 }
 
 /// A slot away from a detached junction that shows another station after
@@ -327,6 +349,14 @@ pub struct LetteredStationWire {
 pub struct RestoredIdentityWire {
     /// The Station ID it showed before (now a history record's).
     pub old_id: StationId,
+    /// The name it showed before, and that identity's home line before the
+    /// action, so a notice names a hidden comment by line and name ("Annex /
+    /// 3"), not by Station ID alone (RS-FX6).
+    #[serde(default)]
+    pub old_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub old_home_line: Option<LineId>,
     /// The identity it shows now.
     pub station: StationIdentity,
     /// The old identity's comment moved with it (the record had none).

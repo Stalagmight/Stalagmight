@@ -10,6 +10,10 @@
  *   pick's collisions.
  * - While the pick's preview is out, Detach waits.
  *
+ * The lines that come off (Side and North) get the station back together,
+ * so the lead says "They get back" (RS-FX6, P3-15), and it names the station
+ * as the chosen answer leaves it: rule L's letter by default (P2-2).
+ *
  * Injections (333e24ac5): the pick's preview overwrote the line's default
  * preview, so "coming back shows the default" fails (it reads "9 (Station ID
  * 50)" and sends 9a); Confirm stayed enabled while the pick's preview was
@@ -128,7 +132,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
     await screen.findByTestId('unmerge-stations-rest');
     fireEvent.click(screen.getByTestId('unmerge-stations-rest-50'));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 9 (Station ID 50).'),
+      expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).'),
     );
     expect(screen.getByTestId('unmerge-stations-collision-0')).toBeInTheDocument();
 
@@ -136,7 +140,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${SIDE}-0`));
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     expect(await screen.findByTestId('unmerge-stations-rest-40')).toBeChecked();
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 40).');
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 0 (Station ID 40).');
     expect(screen.queryByTestId('unmerge-stations-collision-0')).toBeNull();
 
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
@@ -154,7 +158,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
 
     resolvePicked!(MAIN_PICKED);
     await waitFor(() => expect(screen.getByTestId('unmerge-stations-confirm')).not.toBeDisabled());
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 9 (Station ID 50).');
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).');
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(unmergeStations).toHaveBeenCalledWith(slot(MAIN, 3), {

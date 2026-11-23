@@ -1165,6 +1165,45 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
         return out;
       };
+      /** The names a line will show twice after a merge (RS-FX6, P2-6): on
+       *  each line that shows the kept station through a foreign slot, a
+       *  native slot already named like it keeps its name (RS-FX5), and the
+       *  line then shows that name twice. */
+      const mockRepeats = (
+        junctions: Map<string, MockStationRef[]>,
+        closures: ReadonlyArray<MockArchivedClosure>,
+        kept: MockIdentity,
+        lines: ReadonlyArray<number>,
+        exceptKeys: ReadonlySet<string>,
+      ) => {
+        const out: Array<{
+          line_id: number;
+          name: string;
+          station: MockIdentity;
+          shown: MockIdentity;
+          loop_end: boolean;
+        }> = [];
+        const projectLines = (currentProject?.lines ?? []) as Array<{ id: number; shots?: unknown[] }>;
+        for (const lineId of new Set(lines)) {
+          const line = projectLines.find((l) => l.id === lineId);
+          if (!line) continue;
+          for (let i = 0; i <= (line.shots?.length ?? 0); i++) {
+            const ref = { line_id: lineId, station_index: i };
+            if (exceptKeys.has(mockSlotKey(ref))) continue;
+            const slot = mockSlotIdentity(junctions, ref, closures);
+            if (slot.shown !== undefined) continue;
+            if (slot.name !== kept.name || slot.id === kept.id) continue;
+            out.push({
+              line_id: lineId,
+              name: slot.name,
+              station: { id: slot.id, name: slot.name, home_line: lineId },
+              shown: kept,
+              loop_end: false,
+            });
+          }
+        }
+        return out;
+      };
       /** `check_merge_connectivity`'s merge preview (RS 4.1, 7): both stations
        *  as keep candidates, the default (the one a merge without `keep`
        *  keeps: the first slot in line order), and per keep the lines that
@@ -1207,6 +1246,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             hidden: other,
             // The mock's merges run no promotion: nothing else is hidden.
             comments_hidden: [],
+            repeats: mockRepeats(
+              junctions,
+              closures,
+              kept,
+              renamed.filter((l) => l !== nativeLine),
+              unionKeys,
+            ),
           };
         };
         return {

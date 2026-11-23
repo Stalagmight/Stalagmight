@@ -185,6 +185,27 @@ pub struct MergeMove {
     /// sweep makes, or a closure archive it moves, may hide one. `hidden`'s
     /// own comment is not repeated here.
     pub comments_hidden: Vec<super::HiddenComment>,
+    /// Every name a line shows twice after the merge and not before
+    /// ([`Project::name_repeats`]): the junction shown through a dotted slot
+    /// or a loop end beside the line's own station of that name, which
+    /// RS-FX5 allows and the dialog says (RS-FX6, P2-6).
+    pub repeats: Vec<NameRepeat>,
+}
+
+/// A name a line shows twice (RS-FX5, "dotted slots don't collide"): a native
+/// slot shows the line's own station `own`, and a dotted slot (a foreign
+/// slot, with the home line's dot) or a loop end (with the loop mark) shows
+/// another station `shown` of the same name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NameRepeat {
+    pub line: LineId,
+    pub name: String,
+    /// The line's own station of that name.
+    pub own: StationId,
+    /// The station the dotted slot or loop end shows.
+    pub shown: StationId,
+    /// Shown through a loop end (the loop mark), not a foreign slot.
+    pub loop_end: bool,
 }
 
 /// The Merge tool's check of a picked pair (today's
@@ -527,7 +548,53 @@ impl Project {
             ),
             unarchived: report.unarchived,
             comments_hidden: outcome.identities.hidden.clone(),
+            repeats: copy
+                .name_repeats()
+                .difference(&self.name_repeats())
+                .cloned()
+                .collect(),
         })
+    }
+
+    /// Every name a line shows twice ([`NameRepeat`]), by line, name and
+    /// Station IDs. Linear in the slots.
+    pub fn name_repeats(&self) -> std::collections::BTreeSet<NameRepeat> {
+        let native = super::NativeSlots::of(self);
+        let topology = self.topology();
+        let mut out = std::collections::BTreeSet::new();
+        for (position, line) in self.lines().iter().enumerate() {
+            let chain = topology.chain_at(position).unwrap_or(&[]);
+            let mut own: std::collections::HashMap<&str, StationId> =
+                std::collections::HashMap::new();
+            let mut dotted: Vec<(StationId, bool)> = Vec::new();
+            for &node in chain {
+                if native.is_native(node, line.id) {
+                    if let Some(station) = self.stations.get(&node) {
+                        own.entry(station.name.as_str()).or_insert(node);
+                    }
+                } else {
+                    let loop_end = native.index().is_archived(node);
+                    dotted.push((native.index().shown(node), loop_end));
+                }
+            }
+            for (shown, loop_end) in dotted {
+                let Some(station) = self.stations.get(&shown) else {
+                    continue;
+                };
+                if let Some(&own_id) = own.get(station.name.as_str()) {
+                    if own_id != shown {
+                        out.insert(NameRepeat {
+                            line: line.id,
+                            name: station.name.clone(),
+                            own: own_id,
+                            shown,
+                            loop_end,
+                        });
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The dialog's view of one merge station.

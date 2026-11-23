@@ -92,6 +92,18 @@ describe('Remove Closure under RS', () => {
     expect(invokeIpc).toHaveBeenCalledWith('preview_remove_loop_closure', { closureId: 5 }, expect.anything());
   });
 
+  // RS-FX6, P1-1: both answers rename a station named 17; each says which,
+  // by its role and Station ID. Injection: word them by `identityLabelOf`
+  // alone and both read "Rename Side / 17 to 17a".
+  it('names each answer by role and Station ID', async () => {
+    render(<RemoveClosureDialog />);
+    const letter = await screen.findByTestId('remove-closure-collision-0-letter');
+    expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 17, Station ID 17) to 17a');
+    expect(screen.getByTestId('remove-closure-collision-0-alternative').parentElement).toHaveTextContent(
+      "Rename Side's own 17 (Station ID 71) to 17a",
+    );
+  });
+
   it('removes with the answers to the collisions', async () => {
     render(<RemoveClosureDialog />);
     await screen.findByTestId('remove-closure-collision-0');

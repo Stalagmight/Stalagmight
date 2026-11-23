@@ -65,9 +65,11 @@ fn lettered(line: &str, from: &str, to: &str) -> NameChange {
 fn identity(names: Vec<NameChange>, hidden: &[(&str, &str)]) -> IdentityChanges {
     let comments_hidden: Vec<CommentHidden> = hidden
         .iter()
-        .map(|(line, station)| CommentHidden {
+        .enumerate()
+        .map(|(i, (line, station))| CommentHidden {
             line: (*line).to_owned(),
             station: (*station).to_owned(),
+            identity: u32::try_from(i).unwrap_or(u32::MAX),
         })
         .collect();
     let mut lines: Vec<String> = Vec::new();
@@ -324,4 +326,85 @@ fn a_rename_shows_no_bidi_control() {
         .expect("a notice")
         .view(false);
     assert_eq!(view.changes, ["Side / 0 is now shown as 0a"]);
+}
+
+/// The banner's lead is picked by the source's serde string, and the
+/// frontend's map is keyed by the generated TS spelling: the two must be the
+/// same string (RS-FX6, P2-3: serde's `snake_case` wrote
+/// `earlier_version2`, ts-rs `earlier_version_2`, so the earlier version 2
+/// banner had no lead). Injection: drop the variant's `serde(rename)`.
+#[test]
+fn the_source_serialises_as_its_typescript_literal() {
+    use ts_rs::TS;
+    let decl = ConversionSource::decl();
+    for (source, literal) in [
+        (ConversionSource::OldFormat, "old_format"),
+        (ConversionSource::EarlierVersion2, "earlier_version_2"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(source).ok(),
+            Some(serde_json::Value::String(literal.to_owned()))
+        );
+        assert!(
+            decl.contains(&format!("\"{literal}\"")),
+            "{literal} is not in {decl}"
+        );
+    }
+}
+
+/// One station on two lines hides one comment (RS-FX6, P3-9): the earlier
+/// file's M4 on Main and Annex was counted and listed once per line. It is
+/// counted once and listed once, with its lines. Injection: count
+/// `comments_hidden.len()` again and the banner says "2 stations' comments".
+#[test]
+fn one_station_on_two_lines_hides_one_comment() {
+    let report = crate::persistence::stalx_v2::UpgradeReport {
+        changes: IdentityChanges {
+            names: vec![
+                shown_as("Main", "M2", "Side", "S0"),
+                shown_as("Main", "M4", "Side", "S4"),
+                shown_as("Annex", "M4", "Side", "S4"),
+                lettered("Annex", "A1", "A1a"),
+            ],
+            comments_hidden: vec![
+                CommentHidden {
+                    line: "Main".to_owned(),
+                    station: "M4".to_owned(),
+                    identity: 4,
+                },
+                CommentHidden {
+                    line: "Annex".to_owned(),
+                    station: "M4".to_owned(),
+                    identity: 4,
+                },
+            ],
+            closures_keep_both: Vec::new(),
+            lines: vec!["Main".to_owned(), "Annex".to_owned()],
+        },
+        ..Default::default()
+    };
+    let view = ConversionNotice::of_upgrade(&report)
+        .expect("a notice")
+        .view(false);
+    assert!(
+        view.changes
+            .contains(&"1 station's comment is now hidden".to_owned()),
+        "{:?}",
+        view.changes
+    );
+    let hidden: Vec<&String> = view
+        .details
+        .iter()
+        .filter(|d| d.starts_with("the comment of"))
+        .collect();
+    assert_eq!(hidden, ["the comment of M4 on Main and Annex is hidden"]);
+    // Listed under the first line it is on, after that line's names.
+    assert_eq!(
+        view.details[..3],
+        [
+            "Main / M2 is now shown as Side / S0",
+            "Main / M4 is now shown as Side / S4",
+            "the comment of M4 on Main and Annex is hidden",
+        ]
+    );
 }

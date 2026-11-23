@@ -25,7 +25,7 @@ import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
-import MergeDialog, { defaultKeepOf } from '../MergeDialog';
+import MergeDialog, { defaultKeepOf, groupDepthReadings } from '../MergeDialog';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -58,8 +58,8 @@ function preview(extra: Partial<MergePreview> = {}): MergePreview {
     ],
     default_keep: 12,
     keeps: [
-      { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: { id: 12, name: '12', home_line: MAIN }, comments_hidden: [] },
-      { keep: 12, renamed_lines: [SIDE], collisions: [collision], hidden: side0, comments_hidden: [] },
+      { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: { id: 12, name: '12', home_line: MAIN }, comments_hidden: [], repeats: [] },
+      { keep: 12, renamed_lines: [SIDE], collisions: [collision], hidden: side0, comments_hidden: [], repeats: [] },
     ],
     ...extra,
   };
@@ -119,13 +119,21 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(screen.queryByTestId('merge-collisions')).toBeNull();
   });
 
-  it('lists a collision with its two answers, the letter first and checked', () => {
+  // RS-FX6, P1-1: both stations are named 12, so each answer says which it
+  // renames, by its role and Station ID ("Rename Side / 12 to 12a" twice
+  // could not be told apart). Injection: word both answers by
+  // `identityLabelOf` alone again.
+  it('lists a collision with its two answers, the letter first and checked, each by role and Station ID', () => {
     open(preview());
     const row = screen.getByTestId('merge-collision-0');
     expect(row).toHaveTextContent('On Side, 12 would name two stations');
     expect(screen.getByTestId('merge-collision-0-letter')).toBeChecked();
-    expect(row).toHaveTextContent('Rename Side / 12 to 12a');
-    expect(row).toHaveTextContent('Rename Main / 12 to 12a');
+    expect(screen.getByTestId('merge-collision-0-letter').parentElement).toHaveTextContent(
+      "Rename Side's own 12 (Station ID 41) to 12a",
+    );
+    expect(screen.getByTestId('merge-collision-0-alternative').parentElement).toHaveTextContent(
+      'Rename the kept station (Main / 12, Station ID 12) to 12a',
+    );
   });
 
   it('merges keeping the station chosen, with the letter answer', async () => {
@@ -159,7 +167,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     open(
       preview({
         keep_forced_by: 7n,
-        keeps: [{ keep: 12, renamed_lines: [SIDE], collisions: [], hidden: side0, comments_hidden: [] }],
+        keeps: [{ keep: 12, renamed_lines: [SIDE], collisions: [], hidden: side0, comments_hidden: [], repeats: [] }],
       }),
     );
     expect(screen.getByTestId('merge-keep-forced')).toHaveTextContent(
@@ -206,7 +214,7 @@ describe('defaultKeepOf', () => {
   it('takes the default when offered, else the one offered, else none', () => {
     expect(defaultKeepOf(preview())).toBe(12);
     expect(
-      defaultKeepOf(preview({ default_keep: 99, keeps: [{ keep: 40, renamed_lines: [], collisions: [], hidden: main12, comments_hidden: [] }] })),
+      defaultKeepOf(preview({ default_keep: 99, keeps: [{ keep: 40, renamed_lines: [], collisions: [], hidden: main12, comments_hidden: [], repeats: [] }] })),
     ).toBe(40);
     expect(defaultKeepOf(preview({ keeps: [] }))).toBeNull();
     expect(defaultKeepOf(undefined)).toBeNull();
@@ -227,7 +235,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     open(
       preview({
         keeps: [
-          { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: main12, comments_hidden: [] },
+          { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: main12, comments_hidden: [], repeats: [] },
           {
             keep: 12,
             renamed_lines: [SIDE],
@@ -235,6 +243,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
             hidden: side0,
             unarchived: 3n,
             comments_hidden: [{ id: 28, name: '3', home_line: MAIN, comment: 'Low air' }],
+            repeats: [],
           },
         ],
       }),
@@ -253,5 +262,113 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     expect(screen.queryByTestId('merge-loop-end-shown')).toBeNull();
     expect(screen.queryByTestId('merge-comments-hidden')).toBeNull();
     expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings it back\.$/);
+  });
+});
+
+/**
+ * RS-FX6: what else the dialog says before the user confirms. P2-6: a line
+ * that will show a name twice (RS-FX5 lets the junction's dotted 12 stand
+ * beside Side's own 12) is named, each repeat with the line's own station's
+ * Station ID. P3-12: a station archived inside the one the merge archives
+ * goes with it. P3-19: the depth list gives a line's equal readings once,
+ * with their count. Injections: dropping `NameRepeats`, the inside records
+ * or the grouping fails its case.
+ */
+describe('Merge Stations says the name repeats and what travels inside (RS-FX6)', () => {
+  it('names each name a line will show twice', () => {
+    open(
+      preview({
+        keeps: [
+          { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: main12, comments_hidden: [], repeats: [] },
+          {
+            keep: 12,
+            renamed_lines: [SIDE],
+            collisions: [],
+            hidden: side0,
+            comments_hidden: [],
+            repeats: [
+              {
+                line_id: SIDE,
+                name: '12',
+                station: { id: 41, name: '12', home_line: SIDE },
+                shown: main12,
+                loop_end: false,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(screen.getByTestId(`merge-repeat-${SIDE}-41`)).toHaveTextContent(
+      "Side already has a station 12 (Station ID 41); it keeps its name, and Side shows 12 twice, the junction with Main's dot.",
+    );
+    // The other keep makes no repeat: nothing is said.
+    fireEvent.click(screen.getByTestId('merge-keep-40'));
+    expect(screen.queryByTestId('merge-repeats')).toBeNull();
+  });
+
+  it('says a station archived inside the one archived goes with it', () => {
+    useProjectStore.setState({
+      stations: [
+        {
+          station_ref: A,
+          id: 40,
+          name: '0',
+          merged_with: [],
+          archived: [
+            { id: 46, name: '0', lines: [MAIN] },
+            { id: 47, name: '9', lines: [] },
+          ],
+        },
+        { station_ref: B, id: 12, name: '12', merged_with: [] },
+      ],
+    } as never);
+    open(preview());
+    expect(screen.getByTestId('merge-hidden-inside-46')).toHaveTextContent(
+      'Main / 0 (Station ID 46), archived inside Side / 0 by an earlier merge, stays inside it: a second Detach brings it back.',
+    );
+    // A history record (no line) is not said.
+    expect(screen.queryByTestId('merge-hidden-inside-47')).toBeNull();
+  });
+
+  it('lists equal readings on one line once, with their count', () => {
+    open(
+      preview({
+        depths: {
+          a_m: 6,
+          b_m: 7.8,
+          joined_m: 7.2,
+          readings: [
+            { line_id: SIDE, depth_m: 6 },
+            { line_id: MAIN, depth_m: 7.8 },
+            { line_id: MAIN, depth_m: 7.8 },
+          ],
+        },
+      }),
+    );
+    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
+      'Depths 6.0 m (Side), 7.8 m (Main, 2 readings) become 7.2 m',
+    );
+  });
+});
+
+describe('groupDepthReadings', () => {
+  it('groups equal readings by line in order, keeping different ones apart', () => {
+    const format = (v: number) => v.toFixed(1);
+    expect(
+      groupDepthReadings(
+        [
+          { line_id: 1, depth_m: 7.8 },
+          { line_id: 2, depth_m: 7.8 },
+          { line_id: 1, depth_m: 7.81 },
+          { line_id: 1, depth_m: 7.9 },
+        ],
+        format,
+      ),
+    ).toEqual([
+      { line_id: 1, depth: '7.8', count: 2 },
+      { line_id: 2, depth: '7.8', count: 1 },
+      { line_id: 1, depth: '7.9', count: 1 },
+    ]);
   });
 });

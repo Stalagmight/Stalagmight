@@ -150,6 +150,27 @@ fn the_merge_preview_offers_both_keeps_and_no_dotted_collision() {
     assert_eq!(keep_a.hidden, identity(b0, "0", Some(b)));
     assert!(keep_a.collisions.is_empty(), "{:?}", keep_a.collisions);
 
+    // Each keep names the name its line will show twice, both stations by
+    // Station ID (RS-FX6, P2-6), so the dialog can say it before the user
+    // confirms. Injection: leave `MergeMove::repeats` empty.
+    let repeat = |k: &crate::MergeKeepPreview| {
+        k.repeats
+            .iter()
+            .map(|r| {
+                (
+                    r.line_id,
+                    r.name.clone(),
+                    r.station.id,
+                    r.shown.id,
+                    r.loop_end,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(repeat(keep_b), [(a, "0".to_string(), a0, b0, false)]);
+    assert_eq!(repeat(keep_a), [(b, "2".to_string(), b2, a2, false)]);
+    assert_eq!(keep_a.repeats[0].shown.home_line, Some(a));
+
     for keep in [a2, b0] {
         let mut q = p.clone();
         ok(q.merge_stations(a2, b0, keep, &[]));
@@ -305,6 +326,12 @@ fn the_delete_preview_names_the_station_that_comes_back() {
     assert_eq!(notice.restored.len(), 1, "{notice:?}");
     let restored = &notice.restored[0];
     assert_eq!(restored.old_id, b0);
+    // The hidden comment is named by line and name, "B / 0", not by its
+    // Station ID alone (RS-FX6, P2-7): the old identity's home line before
+    // the delete, which the line left. Injection: leave `old_home_line`
+    // unfilled in `IdentityReport::with_hidden`.
+    assert_eq!(restored.old_name, "0");
+    assert_eq!(restored.old_home_line, Some(b));
     assert_eq!(restored.station.id, a2);
     assert_eq!(restored.station.name, "2");
     assert_eq!(restored.comment_hidden.as_deref(), Some("kept note"));

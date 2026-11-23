@@ -133,10 +133,10 @@ describe('DeleteShotImpactDetails - station names and comments (RS-FX1)', () => 
       />
     );
     expect(screen.getByTestId('impact-identities')).toHaveTextContent(
-      'The comment of Main Line / A5 is hidden: Undo brings it back.'
+      'Main Line / A5\'s comment ("Sump") is hidden: Undo brings it back.'
     );
     expect(screen.getByTestId('impact-split-identities')).toHaveTextContent(
-      'If you choose Split Line instead' + 'The comment of Main Line / A1 is hidden: Undo brings it back.'
+      'If you choose Split Line instead' + 'Main Line / A1\'s comment ("Low air") is hidden: Undo brings it back.'
     );
   });
 

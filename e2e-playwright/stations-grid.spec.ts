@@ -421,14 +421,21 @@ test.describe('Stations grid at a junction', () => {
     await page.getByTestId('data-table-columns-menu').click();
     await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3');
+    // The dotted row says whose station it shows (RS-FX6, P2-5).
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3 (Stations Test Line)');
 
     await page.getByTestId('grid-cell-0-name').dblclick();
+    // The editor holds the bare name.
+    await expect(page.getByTestId('grid-cell-editor')).toHaveValue('3');
     await page.getByTestId('grid-cell-editor').fill('J');
     await page.keyboard.press('Enter');
     const prompt = page.getByTestId('shown-identity-edit-dialog');
     await expect(prompt).toBeVisible();
     await expect(page.getByTestId('shown-identity-prompt-lead')).toHaveText('3 belongs to Stations Test Line.');
+    // One wording, with the new name and the lines (RS-FX6, P3-11).
+    await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText(
+      'Rename Stations Test Line / 3 to J on Stations Test Line and Side Line',
+    );
     await expect(page.getByTestId('shown-identity-prompt-detach')).toHaveText(
       'Detach Side Line to get back its own station 0',
     );

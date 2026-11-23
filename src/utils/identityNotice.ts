@@ -31,7 +31,14 @@ export function identityNoticeMessage(notice: IdentityNotice | undefined, lineNa
     const station = formatStationLabel(r.station.name, r.station.home_line === undefined ? null : lineName(r.station.home_line));
     parts.push(i18n.t('notices.identities.restored', { station, id: r.station.id }));
     if (r.comment_hidden !== undefined) {
-      parts.push(i18n.t('notices.identities.commentHidden', { id: r.old_id }));
+      // Named by line, name and text (RS-FX6, P2-7): "The comment of Annex
+      // / 3, "belay on a flake", is hidden"; an older backend without the
+      // old name gives the Station ID.
+      const old =
+        !r.old_name
+          ? i18n.t('notices.identities.stationId', { id: r.old_id })
+          : formatStationLabel(r.old_name, r.old_home_line === undefined ? null : lineName(r.old_home_line));
+      parts.push(i18n.t('notices.identities.commentHidden', { station: old, comment: r.comment_hidden }));
     }
   }
   if (notice.unarchived.length > 0) {
@@ -39,7 +46,7 @@ export function identityNoticeMessage(notice: IdentityNotice | undefined, lineNa
   }
   for (const h of notice.hidden ?? []) {
     const station = formatStationLabel(h.name, h.home_line === undefined ? null : lineName(h.home_line));
-    parts.push(i18n.t('notices.identities.hiddenComment', { station }));
+    parts.push(i18n.t('notices.identities.hiddenComment', { station, comment: h.comment ?? '' }));
   }
   return parts.length > 0 ? parts.join(' ') : null;
 }

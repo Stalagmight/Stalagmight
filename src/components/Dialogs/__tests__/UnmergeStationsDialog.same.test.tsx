@@ -197,3 +197,38 @@ describe('sameDetachResult', () => {
     expect(sameDetachResult([a, slot(MAIN, 5)], both)).toBeNull();
   });
 });
+
+/**
+ * RS-FX6, P2-2 (shots 14-16 of the RS capture): the one-sentence lead said
+ * "it gets back 0a" whatever answer the user chose, while choosing the other
+ * station's letter gives the station back as 0. The sentence follows the
+ * answer. Injection: print `preview.name` in `SameResultBody` again.
+ */
+describe('the one-sentence lead follows the chosen answer (RS-FX6)', () => {
+  it('says 0a for the letter and 0 when the other station takes it', async () => {
+    const collision = {
+      line_id: NORTH,
+      name: '0',
+      letter: { station: { id: 9, name: '0', home_line: NORTH }, to: '0a' },
+      alternative: { station: { id: 29, name: '0', home_line: NORTH }, to: '0a' },
+    };
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN
+        ? { ...KEEPS, name: '0a', collisions: [collision] }
+        : { ...RESTORES, name: '0a', collisions: [collision] },
+    );
+    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'North Passage comes off: it gets back 0a (Station ID 9); Main Line keeps station 3.',
+    );
+    fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
+    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.',
+    );
+    fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0), {
+      renames: [{ station_id: 29, name: '0a' }],
+    });
+  });
+});

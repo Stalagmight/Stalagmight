@@ -6,16 +6,22 @@
  * line's own station, so the Edit Station dialog and the data table first say
  * whose it is and offer the way back to the line's own station:
  *
- * - "12 belongs to Main Line. Rename it on every line / Detach Side to get
- *   back its own station 0 / Cancel"
- * - "Shown as Main / 20 through a loop closure. Rename Main / 20 / Remove the
- *   closure / Cancel"
+ * - "12 belongs to Main Line. Rename Main Line / 12 to 12J on Main Line and
+ *   Side / Detach Side to get back its own station 0 / Cancel"
+ * - "Shown as Main / 20 through a loop closure. Rename Main / 20 to 20E on
+ *   Main and Loop / Remove the closure / Cancel"
+ *
+ * Both variants word the action the same way, with the new name and the
+ * lines it changes on (RS-FX6, P3-11): "Rename Main / 8" and "Rename it on
+ * every line" were one action in two wordings, neither saying to what, while
+ * the cell cursor had already moved on.
  *
  * The facts come from `preview_station_identity`; while it is out, the words
  * come from the slot's own shown fields.
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useProjectStore } from '../../store/projectStore';
@@ -39,15 +45,37 @@ export function editNeedsOwnerPrompt(shown: { foreign: boolean; loop_end: boolea
   return shown !== undefined && (shown.foreign || shown.loop_end);
 }
 
+/**
+ * The go-on button's words: what the edit does to which station, to what
+ * name, and on which lines ("Rename Main / 8 to 8E on Main and Loop"). The
+ * lines once the preview has answered; the new name when the caller gives it.
+ */
+export function proceedText(
+  t: TFunction,
+  edit: ShownEdit,
+  station: string,
+  to: string | undefined,
+  lines: string | null,
+): string {
+  if ((edit === 'name' || edit === 'both') && (to === undefined || to === '')) {
+    return t(`dialogs.shownIdentity.proceedLoop.${edit}`, { station });
+  }
+  const key = lines === null ? 'proceedTo' : 'proceedOn';
+  return t(`dialogs.shownIdentity.${key}.${edit}`, { station, to, lines });
+}
+
 export function ShownIdentityPrompt({
   stationRef,
   edit,
+  newName,
   onProceed,
   onCancel,
   busy = false,
 }: {
   stationRef: StationRef;
   edit: ShownEdit;
+  /** The name the edit sets, said on the go-on button. */
+  newName?: string | undefined;
   /** Go on with the edit: it changes the shown station on every line. */
   onProceed: () => void;
   /** Back to editing (the Edit Station dialog) or drop the edit (the table). */
@@ -122,9 +150,7 @@ export function ShownIdentityPrompt({
           disabled={busy || editingBlocked}
           data-testid="shown-identity-prompt-proceed"
         >
-          {loopEnd
-            ? t(`dialogs.shownIdentity.proceedLoop.${edit}`, { station: shownLabel })
-            : t(`dialogs.shownIdentity.proceed.${edit}`)}
+          {proceedText(t, edit, shownLabel, newName?.trim(), lines)}
         </Button>
         {loopEnd && loopClosure !== undefined && (
           <Button
