@@ -194,7 +194,16 @@ regions). Read the comment blocks in those two files plus
   releasable), and focuses Not now, so Enter keeps every lock. A row it can prove is
   not this computer's says "Held by this account, not by this computer". The same
   goes for any confirmation whose action reaches past this computer: say what
-  happens to the lock (Take the SpeleoDB version: "You keep the write lock").
+  happens to the lock (Take the SpeleoDB version: "You keep the write lock"), and
+  for every other surface that shows or releases the same lock: the home screen uses
+  the prompt's words, and the sign-out dialog lists such a lock with "Release
+  anyway" per project instead of releasing it behind Disconnect. A promise like
+  "you go on editing" is kept or the read-only notice says it was not.
+- **A lost edit session is never silent.** When a status refresh finds that SpeleoDB
+  no longer gives this account the lock the session was editing under (another
+  session of the account handed it back, someone else took it, access changed), the
+  read-only notice says "Editing stopped" and why; work at risk behind a read-only
+  badge is a modal, not a state change to notice.
 - **An upload that replaced someone's revision is a banner, and stops an exit.**
   When a SpeleoDB upload lands on top of a revision another session uploaded
   between the push's check and the upload (R3), the upload succeeded but that

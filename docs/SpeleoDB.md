@@ -48,7 +48,13 @@ revision than this copy", seeded from that answer (`remote_ahead`) and kept by e
 status that reaches SpeleoDB, with "Resume editing downloads it first" where Resume
 editing is offered: Start Editing downloads the newer revision before it opens the
 edit gate, and over un-uploaded work it opens the divergence prompt and downloads
-nothing (demo item 5). While a status cannot reach SpeleoDB the tab's lock line
+nothing (demo item 5). One click does all of it: the frontend reconciles that
+download in place and never through a project switch, whose `cancel_loading` would
+end the edit session the download started (sdbdemo2 issue 2). While editing, the
+line says "Reload Project downloads it, and you go on editing" instead: the status
+reports the copy behind only when it is clean, and the reload carries the edit
+session. A download that replaced the copy dismisses the open's toast, which
+described the older copy. While a status cannot reach SpeleoDB the tab's lock line
 says the project is offline and what the last lock scan saw ("Offline - the lock was
 free when last checked"), never "Ready for editing" beside the read-only badge: an
 offline status reads no lock holder, which is "not known", not "free" (demo item
@@ -92,9 +98,16 @@ account's, and the Start Editing refusal says so (`SpeleoErrorDto.lock_may_be_he
 set whenever a refused Start Editing leaves such a claim): the read-only notice adds
 "The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock
 back when you close the project, or you can try again.", so the close that hands it
-back, or asks, is no surprise. The notice after Resume editing or Start editing on a
-project already open is titled "Still read-only"; only the automatic Start Editing
-after an open says "Project opened read-only" (demo item 7). A lost connection is
+back, or asks, is no surprise; such a refusal also forgets what the last lock scan
+saw for the project, so the offline lock line says "Offline - lock state not known"
+rather than "the lock was free when last checked". The notice after Resume editing or
+Start editing on a project already open is titled "Still read-only"; only the
+automatic Start Editing after an open says "Project opened read-only" (demo item 7).
+A status refresh that ends an edit session because SpeleoDB no longer gives this
+account the lock (handed back elsewhere, for example by a close in another session
+of the same account; taken by someone else; access that no longer allows editing)
+raises the same notice titled "Editing stopped", saying which and that the changes
+are kept on this computer (sdbdemo2 issue 4). A lost connection is
 worded "The connection to SpeleoDB at <server> was lost before it finished
 answering", never "Could not connect". Before this, a send
 failure knew only timeouts and TLS, so a refused, reset or dropped connection and the
@@ -644,7 +657,9 @@ may land late, under the retry, and is still this session's (F4R3-locks-push-5).
 the exit and sign-out uploads get `divergence_needed`, the divergence prompt
 opens, and the work, the lock and the base stay as they were. The status
 refresh uses the same rule, so the SpeleoDB tab shows the conflict before Save
-Changes is pressed. Taking the SpeleoDB version from the divergence prompt then
+Changes is pressed, and every `divergence_needed` marks it at once, so a prompt
+cancelled before the next status refresh still leaves "Resolve synchronization
+conflict" on the tab (sdbdemo2, screenshot 16b). Taking the SpeleoDB version from the divergence prompt then
 releases nothing: this session goes on editing the other session's revision under
 the same lock, and the other session keeps the lock it edits under (demo item 2).
 SpeleoDB has no conditional upload, so a revision landing
@@ -739,6 +754,12 @@ only in the log (demo item 4).
   appears in the next sign-in's held-lock prompt.
 - Cancel - stay in the project, read-only: the switch or quit is abandoned
   (with any update restart riding on it), and Resume editing takes the lock again.
+
+Only a session that was editing knows it holds the lock. From a read-only session
+(whose claim is a pointer to a lock a lost lock request may or may not have taken)
+the body says Stalagmight could not check whether the account holds the lock, "If
+your account holds it, nobody else can edit the project until it is handed back",
+and words Close and keep the lock the same way (sdbdemo2, screenshot 06).
 
 A quit that first waited for a transfer (see below) is re-issued un-confirmed, so
 it reaches the same question rather than exiting. Any other close failure keeps
@@ -857,19 +878,30 @@ on, and every button is in the one footer row, Cancel first and the primary last
   offered only while we hold the open project's lock.
 - Other cached copies with un-uploaded work are always kept on this computer: the
   body names them (names only, no buttons) and says they can be opened and uploaded
-  after connecting again. Their edits and un-uploaded flag survive, and a lock held
-  on one is handed back with the others. The sign-out never discards another
-  project's work.
-- The remaining locks are listed as handed back. With nothing to answer for the open
-  project, the footer is Cancel / Disconnect. A lock this computer can positively not
-  have taken is left alone and not listed: no claim of this run
-  (`lock_claimed_here`), no local copy, not open, and no recent file linked to the
-  project (`lockNotTakenHere`). SpeleoDB's lock is the account's, so such a lock
-  belongs to another session of the same account, which may be editing under it;
-  signing out here strands nothing of this computer's (demo item 1).
+  after connecting again. Their edits and un-uploaded flag survive, and a lock this
+  run claims on one is handed back with the others. The sign-out never discards
+  another project's work.
+- The remaining locks this run claims (`lock_claimed_here`: taken here, or kept by a
+  close) are listed as handed back. With nothing to answer for the open project, the
+  footer is Cancel / Disconnect.
+- Any other lock the account holds, where this computer has something of the
+  project (a copy, a recent file), may be the lock Stalagmight on another computer
+  with this account is editing under, or one a session that did not exit cleanly
+  left. It is treated as the held-lock prompt treats it (sdbdemo2 issue 5): the body
+  says so in the prompt's words, each project offers "Release anyway", Disconnect
+  leaves it held, and Cancel keeps the initial focus. It used to be handed back
+  behind a plain Disconnect.
+- A lock this computer can positively not have taken is left alone and not listed:
+  no claim of this run, no local copy, not open, and no recent file linked to the
+  project (`lockNotTakenHere`). Signing out here strands nothing of this computer's
+  (demo item 1).
 
-Every answer hands the locks back and then disconnects, with Try again / Disconnect
-anyway (same footer row) when a release fails. There is no keep-the-lock answer.
+When SpeleoDB cannot be asked, the dialog opens on "Could not check your projects"
+with the cause in plain words from the start (Try again / Disconnect anyway).
+
+Every answer hands this run's locks back and then disconnects, with Try again /
+Disconnect anyway (same footer row) when a release fails. There is no keep-the-lock
+answer for them.
 The backend still guards `speleodb_discard_cached_copy` (which the sign-out no
 longer calls): it needs the explicit `discard_unpushed` consent for a copy with
 un-uploaded or unreadable work, and refuses a copy the signed-in account is not the
@@ -934,6 +966,21 @@ file linked to the project) says "Held by this account, not by this computer". A
 clean copy here does not rule this computer out: a session that crashed over it
 leaves exactly that, and lock claims do not survive a restart.
 
+The home screen says the same about the same lock (sdbdemo2 issue 3, where the card
+behind the prompt said "You are editing"): a card, recents row or badge tooltip says
+"You are editing" only for a lock this run claims, "Held by this account, not by
+this computer" under the prompt's rule, and "Held by this account" when this
+computer cannot tell. And opening such a project does not take the lock over: the
+automatic Start Editing after an open (`speleodb_start_editing` with `afterOpen`)
+stops at a lock the account holds while this run holds no claim on it, before
+anything but the holder read is sent, and answers `locked_by` with the account's own
+email. The project opens read-only, the notice says the lock may be another
+computer's session's or a crashed one's and that Resume editing edits the project
+here too, and the SpeleoDB tab says "Read-only - your account holds the write lock".
+Resume editing, Start editing and the prompt's Continue editing take the lock as
+before; a lock this run claims (taken here, kept by a close) is resumed by the open
+too.
+
 ## Edit gate and lock claims
 
 The edit gate is not a stored flag. It is derived, on every read, from what is
@@ -966,8 +1013,13 @@ Editing inherited it.
   on editing the server version, and a read-only one stays read-only. The lock is
   the account's, and another session of the same account may be editing under it;
   releasing it here used to leave that session editing with no lock on the server
-  (demo item 2). The frontend reopens without acquiring and reads the edit state
-  back from the backend. An edit made after the confirmation, while the history
+  (demo item 2). The frontend reconciles the view in place without acquiring and
+  reads the edit state back from the backend. It never reloads through
+  `loadProject`: that is a project switch, whose `cancel_loading` moves the session
+  generation on and so ends the edit session the reload carried, which left Take
+  remote and a Resume editing that downloaded first read-only (sdbdemo2 issues 1
+  and 2). A reload whose re-read status still says read-only says so in the
+  "Still read-only" notice. An edit made after the confirmation, while the history
   read or the download runs, refuses the reload and is kept.
 - A claim whose release failed is kept as an unbound pointer for a retry: the
   user's Retry in "Couldn't hand back the lock", or a later holder-checked

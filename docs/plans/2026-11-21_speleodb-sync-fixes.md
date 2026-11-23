@@ -829,10 +829,171 @@ apart, and the client did not say so or act on it.
     pointer even if another computer has since inherited the lock. Only a lock
     SpeleoDB keeps per session (or a token the acquire returns and the release must
     present) can fix that; worth proposing upstream with the conditional upload.
+    (Kept by the second capture's issue 4, below; the session that loses its lock
+    now says so.)
   - The prompt cannot say "not by this computer" over a clean copy here (the
-    rejected marker above).
+    rejected marker above). The Home card, the open and the sign-out now use the
+    same rule (the second capture's issues 3 and 5, below).
   - The demo's items 3 to 7 (a lost acquire explained only at Close, the raw
     diagnostic in "Couldn't hand back the lock", nothing persistent saying the copy
     is behind, "Ready for editing" on an offline copy, the read-only notice's title
     after Resume editing) are in the subsection above; items 8 and 9 (the memory
     warning, the replaced report's date format) are not addressed.
+
+### The second real-app capture: promises the UI made and the app did not keep
+
+A second real-app run of `sdb/core` at e9df1b642 (the same two-instance setup and
+fault proxy against the internal test server, synthetic account and survey; never
+speleodb.org) found no P0 or P1. Its five P2s and six of its P3s are fixed here,
+each reproduced first by a test that fails on e9df1b642 (named with each item).
+
+- **Issues 1 and 2 (P2, screenshots 17, 18, 18b, 23 to 25): an in-place reload
+  ended the edit session it had just kept or started.** "Take the SpeleoDB version"
+  said "You keep the write lock and go on editing" and the session ended read-only
+  with Resume editing offered; Resume editing on a copy behind SpeleoDB downloaded
+  the newer revision and took the lock, stayed read-only with no message, and a
+  second click started editing. The backend was right both times: Take remote's
+  fast-forward carried the bound claim into the generation its reload bumps to, and
+  Start Editing's fast-forward arm bound the claim to it
+  (`take_remote_keeps_the_lock_and_the_edit_session` passed). The frontend then
+  reconciled the reload through `loadProject` (`useSpeleoActions.ts:174` Start
+  Editing's fast-forward, `:305` Update's, `:590` Take remote's on e9df1b642), which
+  is a project switch: its first step, `cancelLoading` (`projectStore.ts:1001`),
+  sends `cancel_loading`, which moves the SpeleoDB session generation on
+  (`app_state.rs:512`, so that a confirmed switch invalidates older downloads). The
+  claim stayed bound to the reload's generation, the gate predicate compares it with
+  the current one (`speleodb_edit_gate.rs:85`), and the gate was shut while the lock
+  stayed held on SpeleoDB. `load_project_full` then short-circuited on the open path
+  (`project_load.rs:631`), so nothing else happened. The Rust tests never sent
+  `cancel_loading` and the Playwright specs ran on a mock that did not model it,
+  which is why both passed.
+  - Fix: the three arms reconcile through `applySpeleoTreeReplacement` alone, as the
+    automatic Start Editing after an open and Restore already did (its doc says why
+    `loadProject` is not called). Keeping editing is safe in every branch the backend
+    carries it in (only a claim still bound to the session carries; data#3), so the
+    confirmation's words stay. Where the re-read status still says read-only after a
+    reload that should have kept or started editing (a lost-lock signal in between),
+    the "Still read-only" notice says so ("The SpeleoDB version is open, but editing
+    did not start. Resume editing tries again.") instead of a silent badge, and a
+    one-click Resume editing that downloaded first says "editing enabled" like the
+    plain one.
+  - Tests: vitest "an in-place reload keeps the edit session" (Take remote while
+    editing, from read-only, coming back read-only; one-click Resume editing;
+    a Resume editing whose reload ends read-only), four of five failing on
+    e9df1b642, and the three `loadProject` assertions inverted;
+    `speleodb-take-remote.spec.ts` now models `cancel_loading` ending the bound
+    session, and its editing case and the new one-click Resume editing case fail on
+    e9df1b642.
+- **Issue 3 (P2, screenshots 11, 12, 15): a second session of the account
+  contradicted itself.** The held-lock prompt said "Held by this account, not by
+  this computer" while the Home card behind it said "You are editing"
+  (`SpeleoProjectInfo.tsx:20`, from `lockedByMe` alone, `SpeleoLockBadge.tsx:52`);
+  opening the card then took the lock over in silence: the automatic Start Editing
+  probed the holder, found this account and inherited the lock
+  (`speleodb.rs:1019`; re-acquiring the account's own lock is a no-op on SpeleoDB).
+  - Fix, the Home card: the card, the recents line and the badge tooltip use the
+    prompt's rule (`speleoLockOrigin`, beside `lockNotTakenHere`): "You are editing"
+    only for a lock this run claims (`lock_claimed_here`), "Held by this account,
+    not by this computer" where this computer can positively not have taken it, and
+    "Held by this account" where it cannot tell. The tab of a read-only session
+    under the account's lock says "Read-only - your account holds the write lock".
+  - Fix, the open: the automatic Start Editing after an open
+    (`speleodb_start_editing` with `afterOpen`,
+    `AppState::speleodb_start_editing_after_open`) stops short of a lock the account
+    holds while this run holds no claim on it, before anything but the holder read
+    is sent, and answers `locked_by` with the account's own email. The project opens
+    read-only and the notice says, in the prompt's words, that the lock may be
+    Stalagmight open on another computer with this account or a session that did
+    not exit cleanly, and that Resume editing edits it here too. A lock this run
+    claims (taken here, kept by a close) is resumed as before, and Resume editing
+    and the held-lock prompt's Continue editing take the plain verb, so resuming a
+    crashed session's lock costs one click after the notice.
+  - *Rejected:* a new `StartEditingResult` variant (the existing `locked_by` with
+    the account's own email says the same, and every exhaustive match would have had
+    to change); refusing the plain verb too (a crashed session's lock must stay
+    resumable from Resume editing).
+  - Tests: `opening_does_not_take_over_a_lock_another_session_of_the_account_edits_under`
+    and `opening_resumes_a_lock_this_run_claims` (two sessions on the R3 loopback
+    server; the new verb does not exist on e9df1b642; injection: drop the
+    `resume_held` guard and the first fails), the autoAcquire vitest case,
+    `SpeleoProjectInfo` (four origin cases fail on e9df1b642), the header case, and
+    `speleodb-held-lock-same-account.spec.ts` asserting the card behind the prompt
+    (e9df1b642: "You are editing").
+- **Issue 4 (P2, screenshot 21): a session that lost its lock to another session
+  of the account turned read-only in silence.** Session 2's Close handed back the
+  account's lock (the Left list above: no release can tell the account's sessions
+  apart), and session 1's next status refresh switched to "Ready for editing" and
+  read-only with no surface (`speleoStore.ts:927` seeds the status and says
+  nothing).
+  - Decision: the release stays. X2's sign-out rule (`lockNotTakenHere`) never
+    applies to an open project, which always has a copy here, and an inherited claim
+    cannot stand in for "another session's" either: Continue editing after a crash
+    inherits too, and a close that kept that lock would strand it. The same holds
+    for the update restart's release. What changes is that the status refresh that
+    ends an edit session because SpeleoDB no longer gives this account the lock says
+    so (`speleoLockLostMessage`): the "Editing stopped" notice, worded by what the
+    reply knows (handed back elsewhere, perhaps by Stalagmight on another computer
+    with this account; held by someone else; access that no longer allows editing),
+    and that the changes are kept on this computer. A reply that did not hear from
+    SpeleoDB, a refused project (its own surface) or one that still names this
+    account says nothing here.
+  - Tests: speleoStore "a refresh that ends the edit session says why" (the three
+    worded cases fail on e9df1b642, four quiet cases), and the new case of
+    `speleodb-same-account.spec.ts` (e9df1b642: no notice).
+- **Issue 5 (P2, screenshots 27, 28): Disconnect handed back a lock the held-lock
+  prompt had warned about.** With a copy here, the prompt warned that the lock may
+  be another computer's and worded its button "Release anyway"; the sign-out survey
+  listed the same lock under "These projects will be handed back" and released it
+  behind a plain Disconnect (`speleoSignOut.ts:121` released every account lock but
+  one this computer can positively not have taken; `SpeleoSignOutDialog.tsx:101`).
+  - Fix: Disconnect hands back only locks this run claims (`lock_claimed_here`).
+    The account's other locks over a copy or a recent file here (`heldUnclaimed`)
+    are listed in the prompt's words with "Release anyway" per project, Disconnect
+    leaves them held, and Cancel keeps the initial focus. The "hands back every
+    project you are editing" line is said only when there is something of this
+    computer's to hand back. A lock this computer can positively not have taken is
+    still left alone without a dialog (X2, screenshot 13). A crashed session's lock
+    over a copy here is now left held by a plain Disconnect too, with the dialog
+    saying so; the next sign-in's prompt offers it again, as for any lock left held.
+  - Tests: the survey and dialog vitest cases (six fail on e9df1b642) and the new
+    case of `speleodb-exit-prompt.spec.ts`; that spec's local-state fixture now says
+    `lock_claimed_here`, which the backend always reports, for the locks its
+    scenarios took here.
+- **P3s, each small enough to fix here:**
+  - *06, the release-failure prompt stated a lock it could not vouch for*
+    (`SpeleoReleaseFailedDialog.tsx:64`): only an edit session knows it holds the
+    lock, so the prompt gets whether the session was editing when it tried to leave
+    (Close, switch, quit) and otherwise says it could not check whether the account
+    holds the lock, "if your account holds it ...". Tests: the routes cases and the
+    dialog's wording case.
+  - *07, "free when last checked" after a landed acquire*: a Start Editing refusal
+    that says the lock may be held forgets the last scan's entry for the project, so
+    the offline tab says "Offline - lock state not known". Tests: the
+    `lock_may_be_held` case of `useSpeleoActions` and an autoAcquire case.
+  - *16b, Cancel after a refused upload left no sign of the conflict*
+    (`speleoStore.ts:1405` and the other three divergence arms recorded only the
+    prompt's origin): every `divergence_needed` now marks the link as in conflict,
+    as the #202 re-verify's arm already did, so the tab keeps "Resolve
+    synchronization conflict". Tests: the four apply* divergence cases.
+  - *20, the behind line while editing named no next step*
+    (`SpeleoWorkspaceHeader.tsx:77`): while editing it says "Reload Project
+    downloads it, and you go on editing" (remote_ahead is reported only for a clean
+    copy, and the reload carries the session). Test: the header's editing case.
+  - *26, the first Disconnect check failure gave no cause* (`speleoSignOut.ts:194`
+    dropped the error): the guard words it by cause and the dialog shows it at once.
+    Tests: the guard and dialog cases.
+  - *The "newer revision ... which is older" toast outlived the download*
+    (`useOpenRemoteProject.ts:380`, an unregistered key nothing dismissed):
+    `applySpeleoTreeReplacement` dismisses the offline-open toasts when a revision
+    from SpeleoDB replaced the copy. Test: `speleoTreeReplacement.test.ts`.
+- **Left**
+  - The capture's P3 10 (the conflict prompt does not say what moved SpeleoDB) and
+    P3 12 (Settings > Map's satellite default has no effect; outside the sync work)
+    were not in this round.
+  - Issue 4's release is unchanged (above), so two live sessions of one account can
+    still pull the lock from under each other; the loser now says so, and the open
+    no longer starts a second edit session without a word.
+  - "Couldn't hand back the lock" decides certain or not from the frontend's edit
+    state when the user leaves. A backend flag on the release result (the claim was
+    unbound before the release) would also cover a session that reached the prompt
+    some other way; not needed by any path today.
