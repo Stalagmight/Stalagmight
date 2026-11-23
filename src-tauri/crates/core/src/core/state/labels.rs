@@ -218,9 +218,12 @@ impl<'p> NameBook<'p> {
             .copied()
             .filter(stays)
             .collect();
+        // The station's native lines once, not a scan of its records per
+        // slot (RS-FX9).
+        let native = self.project.native_lines(station);
         staying
             .iter()
-            .find(|s| self.project.is_native(station, s.line_id))
+            .find(|s| native.contains(&s.line_id))
             .or_else(|| staying.first())
             .copied()
     }

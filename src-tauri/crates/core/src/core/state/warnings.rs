@@ -50,7 +50,7 @@ use anyhow::Result;
 use super::open_file::FileState;
 use super::AppState;
 use crate::core::{Validator, WarningSeverity};
-use crate::models::survey::{AdjustmentFailure, Project, RawPositions};
+use crate::models::survey::{AdjustmentFailure, Project, RawPositions, SlotTexts};
 use crate::models::{
     datum_gap_ignore_code, severity_for_code, warning_is_ignorable, DatumGap, DatumRole, LineId,
     ProjectWarning, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
@@ -148,12 +148,21 @@ fn row(
     })
 }
 
-/// Every shot's own checks, in line list order.
+/// Every shot's own checks, in line list order. The shots are named through
+/// one [`SlotTexts`], so a hub named on each of its lines costs its lines,
+/// not its lines times its records (RS-FX9).
 fn shot_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
     let mut out = Vec::new();
+    let mut texts: Option<SlotTexts<'_>> = None;
     for line in project.lines() {
         for (shot_index, shot) in line.shots.iter().enumerate() {
-            for warning in Validator::validate_project_shot(project, line, shot_index) {
+            let named = || {
+                texts
+                    .get_or_insert_with(|| SlotTexts::new(project))
+                    .shot_text(line.id, shot_index)
+            };
+            for warning in Validator::validate_project_shot_named(project, line, shot_index, named)
+            {
                 let is_resolved = ignored.covers(&shot.uuid, &warning.code, &warning.code);
                 out.push(ProjectWarning {
                     line_id: line.id,
@@ -234,17 +243,19 @@ fn closure_across_one_shot_warnings(project: &Project, raw: &RawPositions) -> Ve
         return Vec::new();
     }
     let aligned = project.closure_alignment(raw);
+    let mut texts: Option<SlotTexts<'_>> = None;
     project
         .closures_across_one_shot_with(&aligned)
         .into_iter()
         .filter_map(|skipped| {
             let (line_id, shot_index) = skipped.collapsed_shot;
             let closure = project.closures.get(skipped.index)?;
+            let texts = texts.get_or_insert_with(|| SlotTexts::new(project));
             let message = format!(
                 "Shot {} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
-                Validator::shot_label(project, line_id, shot_index),
-                project.station_text(closure.a, closure.a_via),
-                project.station_text(closure.b, closure.b_via),
+                texts.shot_text(line_id, shot_index),
+                texts.station_text(closure.a, closure.a_via),
+                texts.station_text(closure.b, closure.b_via),
             );
             let mut warning = row(project, line_id, shot_index, CLOSURE_ACROSS_ONE_SHOT, message)?;
             warning.closure_id = Some(skipped.closure_id);
@@ -384,6 +395,7 @@ fn junction_depth_spread_warnings(
 ) -> Vec<ProjectWarning> {
     let topology = project.topology();
     let mut out = Vec::new();
+    let mut texts: Option<SlotTexts<'_>> = None;
     for &station in topology.stations() {
         let slots = topology.slots_of(station);
         if slots.len() < 2 {
@@ -419,7 +431,9 @@ fn junction_depth_spread_warnings(
             continue;
         };
         let name = crate::models::sanitize_display_text(
-            &project.station_text(station, Some(slot.line_id)),
+            &texts
+                .get_or_insert_with(|| SlotTexts::new(project))
+                .station_text(station, Some(slot.line_id)),
             crate::core::command::MAX_FILE_NAME_LEN,
         );
         let mean = raw.z(station).unwrap_or(f64::NAN);

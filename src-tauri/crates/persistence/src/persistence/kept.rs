@@ -20,10 +20,23 @@
 //! The change lists are survey content: for the conversion notice only,
 //! never logged.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::convert::Infallible;
 
-use crate::models::survey::{ClosureEnd, ClosureId, LetteredStation, Project};
+use crate::models::survey::{ClosureEnd, ClosureId, LetteredStation, Project, RecordIndex};
 use crate::models::{LineId, StationId};
+
+/// Asked inside the upgrade's long steps (once per line or junction) and
+/// between them: `Err` stops the upgrade, for a reader with a deadline
+/// (`stalx_v2::DecodeOptions::deadline`, RS-FX9). Every pass here is
+/// linear, so a check per line bounds the overrun to one line's work.
+pub(crate) type InTime<'a, E> = &'a dyn Fn() -> Result<(), E>;
+
+/// The [`InTime`] of an upgrade with no deadline (the 0.6.0 migration,
+/// salvage).
+pub(crate) fn no_deadline() -> Result<(), Infallible> {
+    Ok(())
+}
 
 /// One slot whose line shows another name than the file showed there.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -144,49 +157,52 @@ impl Before {
     /// What `project` shows per slot: on a line a record names, that record
     /// (its name; its comment, or under [`Comments::Shared`] the station's);
     /// else the node's own identity, or at a node a closure archives its
-    /// kept end's (only a file written with kept stations has one).
-    pub(crate) fn of(project: &Project, comments: Comments) -> Self {
+    /// kept end's (only a file written with kept stations has one). Each
+    /// slot's record is one lookup ([`RecordIndex`]), so a hub of many lines
+    /// and records costs its slots plus its record lines. `in_time` is asked
+    /// per line.
+    pub(crate) fn of<E>(
+        project: &Project,
+        comments: Comments,
+        in_time: InTime<'_, E>,
+    ) -> Result<Self, E> {
         let topology = project.topology();
         let index = project.shown_index();
+        let records = RecordIndex::of(project);
         let mut pairs = BTreeSet::new();
-        let slots = project
-            .lines()
-            .iter()
-            .enumerate()
-            .map(|(position, line)| {
-                topology
-                    .chain_at(position)
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|&node| {
-                        let shown = if let Some(record) = project.record_naming(node, line.id) {
-                            let comment = match comments {
-                                Comments::Own => record.comment.clone(),
-                                Comments::Shared => record.comment.clone().or_else(|| {
-                                    project.stations.get(&node).and_then(|s| s.comment.clone())
-                                }),
-                            };
-                            ShownBefore {
-                                identity: record.id,
-                                name: record.name.clone(),
-                                comment,
-                            }
-                        } else {
-                            let identity = index.shown(node);
-                            let station = project.stations.get(&identity);
-                            ShownBefore {
-                                identity,
-                                name: station.map(|s| s.name.clone()).unwrap_or_default(),
-                                comment: station.and_then(|s| s.comment.clone()),
-                            }
-                        };
-                        pairs.insert((shown.identity, line.id));
-                        shown
-                    })
-                    .collect()
-            })
-            .collect();
-        Self { slots, pairs }
+        let mut slots = Vec::with_capacity(project.lines().len());
+        for (position, line) in project.lines().iter().enumerate() {
+            in_time()?;
+            let chain = topology.chain_at(position).unwrap_or(&[]);
+            let mut shown_on_line = Vec::with_capacity(chain.len());
+            for &node in chain {
+                let shown = if let Some(record) = records.record(project, node, line.id) {
+                    let comment = match comments {
+                        Comments::Own => record.comment.clone(),
+                        Comments::Shared => record.comment.clone().or_else(|| {
+                            project.stations.get(&node).and_then(|s| s.comment.clone())
+                        }),
+                    };
+                    ShownBefore {
+                        identity: record.id,
+                        name: record.name.clone(),
+                        comment,
+                    }
+                } else {
+                    let identity = index.shown(node);
+                    let station = project.stations.get(&identity);
+                    ShownBefore {
+                        identity,
+                        name: station.map(|s| s.name.clone()).unwrap_or_default(),
+                        comment: station.and_then(|s| s.comment.clone()),
+                    }
+                };
+                pairs.insert((shown.identity, line.id));
+                shown_on_line.push(shown);
+            }
+            slots.push(shown_on_line);
+        }
+        Ok(Self { slots, pairs })
     }
 
     fn at(&self, position: usize, index: usize) -> Option<&ShownBefore> {
@@ -207,10 +223,11 @@ impl Before {
 /// re-keyed in one walk ([`Project::rekey_nodes`]), as each junction's
 /// choice reads only its own lines and records, which no other junction's
 /// re-key changes.
-pub(crate) fn keep_longest(
+pub(crate) fn keep_longest<E>(
     project: &mut Project,
     comments: Comments,
-) -> Vec<(StationId, StationId)> {
+    in_time: InTime<'_, E>,
+) -> Result<Vec<(StationId, StationId)>, E> {
     // Neither earlier form knew owners (U1 alias rows, 0.6.0 merge
     // members): every record is archived under its node's own identity
     // (RS-FX4), whatever an earlier file's record objects say.
@@ -226,6 +243,7 @@ pub(crate) fn keep_longest(
     let lengths = project.measured_lengths();
     let mut swapped = Vec::new();
     for node in junctions {
+        in_time()?;
         let native = project.native_lines(node);
         let Some(station) = project.stations.get(&node) else {
             continue;
@@ -266,7 +284,7 @@ pub(crate) fn keep_longest(
         swapped.push((node, winner));
     }
     project.rekey_nodes(&swapped);
-    swapped
+    Ok(swapped)
 }
 
 /// What [`settle`] did.
@@ -281,14 +299,22 @@ pub(crate) struct Settled {
 }
 
 /// The closure archives, N8 by rule L, and what lines show differently than
-/// `before` showed (steps 3 to 5 of RS 8.2; RS 8.3).
-pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
+/// `before` showed (steps 3 to 5 of RS 8.2; RS 8.3). `in_time` is asked
+/// between the steps and per line of the last.
+pub(crate) fn settle<E>(
+    project: &mut Project,
+    before: &Before,
+    in_time: InTime<'_, E>,
+) -> Result<Settled, E> {
     let (closures_archived, refused) = archive_closures(project);
+    in_time()?;
     let pairs = before.pairs.clone();
     let lettered = project.letter_collisions_with(move || pairs);
-    let (names, comments_hidden, lines) = slot_changes(project, before);
-    let closures_keep_both = closures_keep_both(project, &refused);
-    Settled {
+    in_time()?;
+    let mut homes = HomeLines::default();
+    let (names, comments_hidden, lines) = slot_changes(project, before, &mut homes, in_time)?;
+    let closures_keep_both = closures_keep_both(project, &refused, &mut homes);
+    Ok(Settled {
         closures_archived,
         lettered,
         changes: IdentityChanges {
@@ -297,6 +323,21 @@ pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
             closures_keep_both,
             lines,
         },
+    })
+}
+
+/// Each identity's home line ([`Project::home_line`]), worked out once: the
+/// notice names the kept station's home line on every slot that shows it,
+/// and a hub's home line costs its lines and records each time.
+#[derive(Default)]
+struct HomeLines(HashMap<StationId, Option<LineId>>);
+
+impl HomeLines {
+    fn of(&mut self, project: &Project, identity: StationId) -> Option<LineId> {
+        *self
+            .0
+            .entry(identity)
+            .or_insert_with(|| project.home_line(identity))
     }
 }
 
@@ -356,10 +397,16 @@ fn has_text(comment: Option<&String>) -> bool {
 /// what `before` says it showed, in line order, then chain order. A name
 /// change keeps the same identity (a letter) or shows another one; a comment
 /// is hidden when the slot showed text that it no longer shows.
-fn slot_changes(
+#[expect(
+    clippy::type_complexity,
+    reason = "the three notice lists, returned together as they are built together"
+)]
+fn slot_changes<E>(
     project: &Project,
     before: &Before,
-) -> (Vec<NameChange>, Vec<CommentHidden>, Vec<String>) {
+    homes: &mut HomeLines,
+    in_time: InTime<'_, E>,
+) -> Result<(Vec<NameChange>, Vec<CommentHidden>, Vec<String>), E> {
     let topology = project.topology();
     let index = project.shown_index();
     let mut labels: BTreeMap<LineId, String> = BTreeMap::new();
@@ -374,6 +421,7 @@ fn slot_changes(
     let mut order: Vec<String> = Vec::new();
     let mut ordered: BTreeSet<String> = BTreeSet::new();
     for (position, line) in project.lines().iter().enumerate() {
+        in_time()?;
         let chain = topology.chain_at(position).unwrap_or(&[]);
         for (i, &node) in chain.iter().enumerate() {
             let Some(was) = before.at(position, i) else {
@@ -388,7 +436,7 @@ fn slot_changes(
             if name_changed {
                 let lettered = identity == was.identity;
                 let kept_line = (!lettered)
-                    .then(|| project.home_line(identity))
+                    .then(|| homes.of(project, identity))
                     .flatten()
                     .map(&mut label);
                 names.push(NameChange {
@@ -414,7 +462,7 @@ fn slot_changes(
             }
         }
     }
-    (names, comments, order)
+    Ok((names, comments, order))
 }
 
 /// The closures `ids` as the notice names them, each end as the user made
@@ -422,32 +470,41 @@ fn slot_changes(
 /// which is named by its own identity and what it is shown as now (RS-FX6:
 /// "Main / M4 (now shown as Side / S4)", not "Side / S4 (loop end on
 /// Main)", which reads like a closure across one Side shot).
-fn closures_keep_both(project: &Project, ids: &[ClosureId]) -> Vec<ClosureKeepsBoth> {
+fn closures_keep_both(
+    project: &Project,
+    ids: &[ClosureId],
+    homes: &mut HomeLines,
+) -> Vec<ClosureKeepsBoth> {
     let ids: BTreeSet<ClosureId> = ids.iter().copied().collect();
     project
         .closures
         .iter()
         .filter(|c| ids.contains(&c.id))
         .map(|c| ClosureKeepsBoth {
-            a: closure_end_text(project, c.a, c.a_via),
-            b: closure_end_text(project, c.b, c.b_via),
+            a: closure_end_text(project, c.a, c.a_via, homes),
+            b: closure_end_text(project, c.b, c.b_via, homes),
         })
         .collect()
 }
 
 /// One closure end for [`closures_keep_both`]: `Main / M4 (now shown as
 /// Side / S4)` when a closure archives the end's node, else its slot text.
-fn closure_end_text(project: &Project, node: StationId, via: Option<LineId>) -> String {
+fn closure_end_text(
+    project: &Project,
+    node: StationId,
+    via: Option<LineId>,
+    homes: &mut HomeLines,
+) -> String {
     if !project.is_closure_archived(node) {
         return project.station_text(node, via);
     }
-    let identity = |id: StationId, fallback: Option<LineId>| {
+    let mut identity = |id: StationId, fallback: Option<LineId>| {
         let name = project
             .stations
             .get(&id)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        match project.home_line(id).or(fallback) {
+        match homes.of(project, id).or(fallback) {
             Some(line) => format!("{} / {name}", project.line_label_of(line)),
             None => name,
         }

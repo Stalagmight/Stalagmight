@@ -729,10 +729,11 @@ impl Project {
         };
         // The retired station's native lines: the lines whose own station it
         // was (its records name the others).
+        let named = super::archive::named_lines(&gone);
         let native: Vec<LineId> = junction_lines
             .iter()
             .copied()
-            .filter(|&line| gone.record_for(line).is_none())
+            .filter(|line| !named.contains(line))
             .collect();
 
         for &id in &junction_lines {

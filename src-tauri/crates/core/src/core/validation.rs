@@ -314,12 +314,24 @@ impl Validator {
         line: &Line,
         index: usize,
     ) -> Vec<ValidationWarning> {
+        Self::validate_project_shot_named(project, line, index, || {
+            Self::shot_label(project, line.id, index)
+        })
+    }
+
+    /// [`Self::validate_project_shot`] with the shot named by `shot_label`
+    /// (asked only when a check fires): a whole-project pass names its shots
+    /// through one `SlotTexts` (RS-FX9).
+    pub fn validate_project_shot_named(
+        project: &Project,
+        line: &Line,
+        index: usize,
+        shot_label: impl FnOnce() -> String,
+    ) -> Vec<ValidationWarning> {
         let Some(shot) = line.shots.get(index) else {
             return Vec::new();
         };
-        Self::validate_shot(&geometry(shot), &project.settings.validation, || {
-            Self::shot_label(project, line.id, index)
-        })
+        Self::validate_shot(&geometry(shot), &project.settings.validation, shot_label)
     }
 
     /// A shot as the user reads it: `Main Line: 4 \u{2192} 5`, the line's

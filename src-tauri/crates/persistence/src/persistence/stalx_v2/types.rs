@@ -419,8 +419,10 @@ pub struct DecodeOptions {
     /// When set, the decode stops with [`super::DecodeError::DeadlinePassed`]
     /// once this instant has passed, checked between its phases (the parse,
     /// the file's own invariants, the steps of an earlier file's upgrade,
-    /// the final check), so a phase that has started runs to completion: for
-    /// a reader with a time budget (stalx-reader). The app sets none.
+    /// the final check) and inside the upgrade's long steps (per line or
+    /// junction, RS-FX9), so only the parse and the checks run to
+    /// completion once started: for a reader with a time budget
+    /// (stalx-reader). The app sets none.
     pub deadline: Option<Instant>,
 }
 

@@ -29,12 +29,13 @@
 //!   other slots; then a slot with two or more direct closures lets each of
 //!   its partners see the others ("closure-chain" entries).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{ClosureRef, Coordinates, StationId, StationRef};
 
 use super::super::{
-    AdjustedPositions, ArchivedStation, Project, RawPositions, ShownIndex, StationPositions,
+    AdjustedPositions, ArchivedStation, ClosureId, Project, RawPositions, RecordIndex, ShownIndex,
+    StationPositions,
 };
 
 /// Everything a wire station holds but its coordinates (one state).
@@ -194,9 +195,9 @@ impl SlotRelations {
     /// The wire stations with coordinates from `positions`.
     fn stations(self, project: &Project, positions: &impl StationPositions) -> Vec<crate::Station> {
         let topology = project.topology();
-        // One resolution of the closure archives for every slot.
-        let index = project.shown_index();
-        let mut home_lines: BTreeMap<StationId, Option<crate::LineId>> = BTreeMap::new();
+        // One resolution of the closure archives, the records naming each
+        // slot's line and each shown identity's home line for every slot.
+        let mut shown_of = ShownOf::of(project);
         let Self {
             slots,
             datum,
@@ -209,7 +210,7 @@ impl SlotRelations {
             .zip(closures)
             .map(|(((slot, station), datum), closures)| {
                 let identity = project.stations.get(&station);
-                let shown = project.stations.get(&index.shown(station));
+                let shown = project.stations.get(&shown_of.index.shown(station));
                 let gps = datum.and_then(|d| project.datums.get(d)).map(|d| d.gps);
                 crate::Station {
                     station_ref: slot,
@@ -229,7 +230,7 @@ impl SlotRelations {
                     archived: identity
                         .filter(|s| !s.archived.is_empty())
                         .map(|s| s.archived.iter().map(|r| record_wire(project, r)).collect()),
-                    shown: shown_slot(project, &index, &mut home_lines, slot, station),
+                    shown: shown_of.slot(project, slot, station),
                 }
             })
             .collect()
@@ -252,47 +253,75 @@ pub(super) fn record_wire(
     }
 }
 
-/// [`crate::Station::shown`] of `slot` on `station` (RS 6): `None` when
-/// the slot shows its node's own identity on a native line. `home_lines`
-/// memoises each shown identity's home line.
-fn shown_slot(
-    project: &Project,
-    index: &ShownIndex,
-    home_lines: &mut BTreeMap<StationId, Option<crate::LineId>>,
-    slot: StationRef,
-    station: StationId,
-) -> Option<crate::ShownSlot> {
-    let shown = index.shown(station);
-    let loop_end = shown != station;
-    // Foreign (RS 2): the slot's line is not a native line of the node
-    // holding the shown identity. For a node showing its own identity that
-    // is a record naming the line; the full check runs only on loop ends.
-    let foreign = if loop_end {
-        !project.is_native(shown, slot.line_id)
-    } else {
-        project
-            .stations
-            .get(&station)
-            .is_some_and(|s| s.record_for(slot.line_id).is_some())
-    };
-    let loop_end = loop_end || index.is_archived(station);
-    if !foreign && !loop_end {
-        return None;
+/// What every slot's [`crate::Station::shown`] reads, worked out once for
+/// the list: the closure archives, the records naming each slot's line, the
+/// closure archiving each loop end and each shown identity's home line. Per
+/// slot they cost the closures, the node's records and its lines each time,
+/// lines x records at a hub (pre-PR review, RS-FX9).
+struct ShownOf {
+    index: ShownIndex,
+    records: RecordIndex,
+    closure_of: HashMap<StationId, ClosureId>,
+    home_lines: HashMap<StationId, Option<crate::LineId>>,
+}
+
+impl ShownOf {
+    fn of(project: &Project) -> Self {
+        let mut closure_of = HashMap::new();
+        for closure in &project.closures {
+            if let Some((archived, _)) = closure.archive() {
+                closure_of.entry(archived).or_insert(closure.id);
+            }
+        }
+        Self {
+            index: project.shown_index(),
+            records: RecordIndex::of(project),
+            closure_of,
+            home_lines: HashMap::new(),
+        }
     }
-    let home_line = *home_lines
-        .entry(shown)
-        .or_insert_with(|| project.home_line(shown));
-    Some(crate::ShownSlot {
-        id: shown,
-        home_line,
-        foreign,
-        loop_end,
-        loop_closure: if loop_end {
-            project.archiving_closure(station).map(|c| c.id)
+
+    /// [`crate::Station::shown`] of `slot` on `station` (RS 6): `None` when
+    /// the slot shows its node's own identity on a native line.
+    fn slot(
+        &mut self,
+        project: &Project,
+        slot: StationRef,
+        station: StationId,
+    ) -> Option<crate::ShownSlot> {
+        let shown = self.index.shown(station);
+        let loop_end = shown != station;
+        // Foreign (RS 2): the slot's line is not a native line of the node
+        // holding the shown identity. For a node showing its own identity
+        // that is a record naming the line; the full check runs only on
+        // loop ends.
+        let foreign = if loop_end {
+            project.topology().slot_on(shown, slot.line_id).is_none()
+                || self.records.names(shown, slot.line_id)
         } else {
-            None
-        },
-    })
+            self.records.names(station, slot.line_id)
+        };
+        let loop_end = loop_end || self.index.is_archived(station);
+        if !foreign && !loop_end {
+            return None;
+        }
+        let records = &self.records;
+        let home_line = *self
+            .home_lines
+            .entry(shown)
+            .or_insert_with(|| records.native_lines(project, shown).first().copied());
+        Some(crate::ShownSlot {
+            id: shown,
+            home_line,
+            foreign,
+            loop_end,
+            loop_closure: if loop_end {
+                self.closure_of.get(&station).copied()
+            } else {
+                None
+            },
+        })
+    }
 }
 
 /// A slot's coordinates: its station's XY, its station's depth plus the

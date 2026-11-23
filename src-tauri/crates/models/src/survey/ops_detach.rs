@@ -449,13 +449,16 @@ impl Project {
             return false;
         };
         let lines = self.topology().lines_of(station);
-        lines.contains(&line)
-            && lines.len() > 1
-            && junction.record_for(line).is_none()
+        if !lines.contains(&line) || lines.len() < 2 {
+            return false;
+        }
+        // One walk of the records, not one per line (RS-FX9).
+        let named = super::archive::named_lines(junction);
+        !named.contains(&line)
             && lines
                 .iter()
                 .filter(|&&l| l != line)
-                .all(|&l| junction.record_for(l).is_some())
+                .all(|l| named.contains(l))
     }
 
     /// Case 2's candidates for the remaining lines: the records directly
