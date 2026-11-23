@@ -3,8 +3,9 @@
  * 2026-11-23, RS 7 "Notices"): a merge without a dialog, a delete that brings
  * an archived station back (RS 4.3), a closure removal (RS 5.3) or a promotion
  * may letter a station so no line shows a name twice (rule L), restore an
- * archived station, or make a loop closure's hidden end show its own name
- * again. The backend reports these on `CommandResult.identities`; nothing the
+ * archived station, make a loop closure's hidden end show its own name again,
+ * or hide a comment (a promotion archived its station, RS 12). The backend
+ * reports these on `CommandResult.identities`; nothing the
  * user saw changes name silently (docs/notifications.md), so one toast per
  * action names each. A dialog's own answers are the user's and are not
  * reported; imports report theirs in the receipt only.
@@ -35,6 +36,10 @@ export function identityNoticeMessage(notice: IdentityNotice | undefined, lineNa
   }
   if (notice.unarchived.length > 0) {
     parts.push(i18n.t('notices.identities.unarchived', { count: notice.unarchived.length }));
+  }
+  for (const h of notice.hidden ?? []) {
+    const station = formatStationLabel(h.name, h.home_line === undefined ? null : lineName(h.home_line));
+    parts.push(i18n.t('notices.identities.hiddenComment', { station }));
   }
   return parts.length > 0 ? parts.join(' ') : null;
 }

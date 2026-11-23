@@ -45,6 +45,8 @@ const base = (extra: Partial<DetachLinePreview>): DetachLinePreview => ({
   together: [],
   rest_choices: [],
   collisions: [],
+  shown_elsewhere: [],
+  comments_hidden: [],
   ...extra,
 });
 
@@ -164,5 +166,63 @@ describe('Detach Line from Station under RS', () => {
     );
     expect(screen.queryByTestId('unmerge-stations-comes-back')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-letters-stay')).toBeNull();
+  });
+});
+
+/**
+ * Package RS-FX1 (model review finding 2, farm 647783847b78): the detach
+ * also says which stations elsewhere show another station afterwards (a loop
+ * end whose closure's kept end comes off), every comment it hides (a
+ * promotion its sweep makes), and, when the line keeps the junction, the
+ * junction's own name as what the line shows instead of a loop closure's
+ * station. Injections: dropping `ShownElsewhere` or `HiddenComments` fails
+ * the first case; saying `preview.name` in `shownBefore` fails the second.
+ */
+describe('Detach Line from Station names what changes elsewhere (RS-FX1)', () => {
+  it('lists the stations shown differently elsewhere and the hidden comments', async () => {
+    invokeIpc.mockImplementation(async () =>
+      base({
+        shown_elsewhere: [
+          {
+            station: slot(NORTH, 2),
+            before: { id: 3, name: '3', home_line: MAIN },
+            after: { id: 40, name: '0', home_line: SIDE },
+          },
+        ],
+        comments_hidden: [{ id: 28, name: '7', home_line: NORTH, comment: 'Low air' }],
+      }),
+    );
+    open({ chosenLine: SIDE });
+    expect(await screen.findByTestId('unmerge-stations-shown-elsewhere')).toHaveTextContent(
+      'Elsewhere, a loop closure or a merge the detach makes changes what these stations show:',
+    );
+    expect(screen.getByTestId(`unmerge-stations-shown-elsewhere-${NORTH}-2`)).toHaveTextContent(
+      'North: Side / 0 where it showed Main / 3',
+    );
+    expect(screen.getByTestId('unmerge-stations-comments-hidden-28')).toHaveTextContent(
+      'North / 7\'s comment ("Low air") is hidden. Undo brings it back.',
+    );
+  });
+
+  it("says the junction's own name when the line keeps the junction", async () => {
+    invokeIpc.mockImplementation(async () =>
+      base({
+        name: '0',
+        station_id: 40,
+        kept: true,
+        shown_before: { id: 8, name: '8', home_line: NORTH },
+        lines: [
+          { line_id: MAIN, name: '3', station_id: 3, comes_off: false, joined_with: [] },
+          { line_id: SIDE, name: '0', station_id: 40, comes_off: true, joined_with: [NORTH] },
+          { line_id: NORTH, name: '0', station_id: 40, comes_off: true, joined_with: [SIDE] },
+        ],
+      }),
+    );
+    open({ chosenLine: MAIN });
+    expect(await screen.findByTestId('unmerge-stations-shown-before')).toHaveTextContent(
+      'Main showed North / 8 here through a loop closure; it will show 3.',
+    );
+    expect(screen.queryByTestId('unmerge-stations-shown-elsewhere')).toBeNull();
+    expect(screen.queryByTestId('unmerge-stations-comments-hidden')).toBeNull();
   });
 });

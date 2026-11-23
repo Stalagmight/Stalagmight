@@ -182,6 +182,7 @@ pub struct MergeKeepPreview {
 /// A slot away from a detached junction that shows another station after
 /// the detach (`DetachLinePreview::shown_elsewhere`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(rename = "ShownElsewhere")]
 pub struct ShownElsewhereWire {
     pub station: StationRef,
     /// What it showed before.

@@ -312,6 +312,33 @@ describe('CombineLinesDialog', () => {
     expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ comment_pick: 'both', name_pick: 'kept' });
   });
 
+  // Model review finding 3 (package RS-FX1): the other join station stays
+  // archived for a third line of its own, so its comment stays with it and
+  // the comment choice does not apply; the dialog says why instead of
+  // offering it. Injection: keeping the pick when `join_archived` is set
+  // fails "offers no comment choice".
+  it('says the other join station stays archived for a third line, and offers no comment choice', async () => {
+    lines = [...creditedLines(), { id: 9, name: 'North', color: '#999999', direction: 'in', shots: [] }];
+    stations = [{ station_ref: { line_id: 2, station_index: 3 }, name: 'A3' }];
+    dialogData = {
+      candidate: candidate({
+        comment_a: 'restriction',
+        comment_b: 'sump',
+        plan_keeping_a: quietPlan(2, {
+          join_archived: { id: 40, name: 'B0', comment: 'sump', lines: [9] },
+        }),
+      }),
+    };
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-join-archived')).toHaveTextContent(
+      'North / B0 stays the own station of North, which shows Main-A / A3 from now on; North / B0 and its comment come back with Detach Line from Station, so the comment choice does not apply to it.',
+    );
+    expect(screen.queryByTestId('combine-comment-pick-both')).toBeNull();
+    fireEvent.click(screen.getByTestId('combine-confirm'));
+    await waitFor(() => expect(combineLines).toHaveBeenCalled());
+    expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ comment_pick: 'kept' });
+  });
+
   it('defaults the split halves to their base name, and the new split names too', () => {
     lines = creditedLines().map((s) => ({ ...s, name: s.id === 2 ? 'Main A' : 'Main B' }));
     render(<CombineLinesDialog />);

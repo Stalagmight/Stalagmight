@@ -1,9 +1,10 @@
 /**
  * RS 7 "Notices": what an action did to station names on its own (rule L
  * letters, restored archived stations, closure ends that show their own name
- * again) raises ONE notice per action naming each, under one dedup key. A
- * failed action and an action that did nothing to names raise none.
- * Injection: toasting per letter fails "one notice per action".
+ * again, comments a promotion hid) raises ONE notice per action naming each,
+ * under one dedup key. A failed action and an action that did nothing to
+ * names raise none. Injection: toasting per letter fails "one notice per
+ * action"; dropping the hidden loop fails "names every hidden comment".
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../i18n';
@@ -33,6 +34,7 @@ describe('the identity notice', () => {
         ],
         restored: [{ old_id: 11, station: { id: 40, name: '0', home_line: 2 }, comment_moved: false, comment_hidden: 'Silt' }],
         unarchived: [5n],
+        hidden: [],
       },
       lineName,
     );
@@ -46,12 +48,31 @@ describe('the identity notice', () => {
 
   it('says nothing for an action that did nothing to names', () => {
     expect(identityNoticeMessage(undefined, lineName)).toBeNull();
-    expect(identityNoticeMessage({ lettered: [], restored: [], unarchived: [] }, lineName)).toBeNull();
+    expect(identityNoticeMessage({ lettered: [], restored: [], unarchived: [], hidden: [] }, lineName)).toBeNull();
+  });
+
+  it('names every hidden comment by the station that showed it (RS 12)', () => {
+    const message = identityNoticeMessage(
+      {
+        lettered: [],
+        restored: [],
+        unarchived: [],
+        hidden: [
+          { id: 28, name: '3', home_line: 2, comment: 'Low air' },
+          { id: 7, name: '0', home_line: 1, comment: 'Sump' },
+        ],
+      },
+      lineName,
+    );
+    expect(message).toBe(
+      'The comment of Side / 3 is hidden: Undo brings it back. ' +
+        'The comment of Main / 0 is hidden: Undo brings it back.',
+    );
   });
 
   it('raises one warning toast per action, under its key', () => {
     notifyIdentityChanges(
-      result({ lettered: [{ station_id: 41, line_id: 2, other_id: 12, from: '12', to: '12a' }], restored: [], unarchived: [] }),
+      result({ lettered: [{ station_id: 41, line_id: 2, other_id: 12, from: '12', to: '12a' }], restored: [], unarchived: [], hidden: [] }),
       lineName,
     );
     expect(showToast).toHaveBeenCalledTimes(1);
@@ -64,7 +85,7 @@ describe('the identity notice', () => {
 
   it('raises nothing for a failed action', () => {
     notifyIdentityChanges(
-      result({ lettered: [{ station_id: 41, line_id: 2, other_id: 12, from: '12', to: '12a' }], restored: [], unarchived: [] }, false),
+      result({ lettered: [{ station_id: 41, line_id: 2, other_id: 12, from: '12', to: '12a' }], restored: [], unarchived: [], hidden: [] }, false),
       lineName,
     );
     expect(showToast).not.toHaveBeenCalled();

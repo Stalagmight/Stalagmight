@@ -1231,6 +1231,8 @@
       "offTogether_one": "{{lines}} comes off with {{line}}: they were one station before the merge.",
       "offTogether_other": "{{lines}} come off with {{line}}: they were one station before the merge.",
       "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",
+      "shownElsewhereLead": "Elsewhere, a loop closure or a merge the detach makes changes what these stations show:",
+      "shownElsewhere": "{{line}}: {{after}} where it showed {{before}}",
       "restLead": "The lines that come off show:",
       "restChoice": "{{station}} (Station ID {{id}})",
       "lettersStay": "A name that took a letter earlier because of this station keeps it."
@@ -1319,6 +1321,9 @@
       "archived": "{{station}} is archived.",
       "archivedWithComment": "{{station}} is archived with its comment.",
       "detachBringsBack": "Detach Line from Station brings it back.",
+      "detachBringsBackExcept_one": "Detach Line from Station brings it back on its own lines; {{lines}} keeps showing {{station}}.",
+      "detachBringsBackExcept_other": "Detach Line from Station brings it back on its own lines; {{lines}} keep showing {{station}}.",
+      "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
       "cancel": "Cancel",
       "confirm": "Merge",
       "working": "Merging..."
@@ -1890,7 +1895,9 @@
       "replacedByFormerSnap": "Loop closure <a/> to <b/>, left from a snap whose stations had moved apart, becomes an ordinary loop closure on the same two stations and takes its place.",
       "replacedByClosure": "Loop closure <a/> to <b/>, already there, ties the same two stations and takes its place.",
       "replacedWhy_one": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings this one back.",
-      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back."
+      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back.",
+      "joinArchived_one": "{{station}} stays the own station of {{lines}}, which shows {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it.",
+      "joinArchived_other": "{{station}} stays the own station of {{lines}}, which show {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it."
     },
     "keptStations": {
       "collisionsLead_one": "One name would then repeat on a line. Choose which station takes a new name:",
@@ -1898,7 +1905,8 @@
       "collision": "On {{line}}, {{name}} would name two stations",
       "rename": "Rename {{station}} to {{to}}",
       "shownAsThroughClosure": "shown as {{station}} through a loop closure",
-      "editingDisabled": "Editing is disabled in the current view."
+      "editingDisabled": "Editing is disabled in the current view.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."
     },
     "closure": {
       "keepLead": "Both ends show:",
@@ -4399,7 +4407,8 @@
       "restored": "{{station}} (Station ID {{id}}) is shown again.",
       "commentHidden": "The comment of Station ID {{id}} is hidden: Undo brings it back.",
       "unarchived_one": "A loop closure's hidden end shows its own name again.",
-      "unarchived_other": "{{count}} loop closures' hidden ends show their own names again."
+      "unarchived_other": "{{count}} loop closures' hidden ends show their own names again.",
+      "hiddenComment": "The comment of {{station}} is hidden: Undo brings it back."
     }
   }
 }

@@ -8,6 +8,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
 import { lineNameProblem, lineNameProblemMessage, nextFreeLineName } from '../../utils/nameValidation';
 import { formatLength } from '../../utils/formatStats';
+import { formatStationLabel } from '../../utils/formatters';
 import { defaultConfig } from '../../types/config';
 import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
@@ -205,7 +206,11 @@ export default function CombineLinesDialog() {
 
   const keptText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? b : a) ?? '';
   const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
-  const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b);
+  // The join station not kept stays archived for a third line of its own
+  // (RS 4.4, model review finding 3): its comment stays with it, so the
+  // comment choice does not apply, and the dialog says why instead.
+  const joinArchived = plan?.join_archived ?? null;
+  const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b) && joinArchived === null;
   const blocked =
     candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
   const lineName = (id: LineId) => labels.lineName(id);
@@ -364,6 +369,20 @@ export default function CombineLinesDialog() {
               Swap {otherName}'s left and right walls
             </label>
           </div>
+        )}
+
+        {joinArchived && (
+          <p className="text-sm text-text-secondary" data-testid="combine-join-archived">
+            {t('dialogs.combineSections.joinArchived', {
+              count: joinArchived.lines.length,
+              station: formatStationLabel(
+                joinArchived.name,
+                joinArchived.lines[0] === undefined ? null : lineName(joinArchived.lines[0]),
+              ),
+              lines: listNames(joinArchived.lines),
+              kept: joinLabel,
+            })}
+          </p>
         )}
 
         {commentConflict &&

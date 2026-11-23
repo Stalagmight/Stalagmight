@@ -33,6 +33,8 @@ const preview = (extra: Partial<DetachLinePreview> = {}): DetachLinePreview => (
   together: [],
   rest_choices: [],
   collisions: [],
+  shown_elsewhere: [],
+  comments_hidden: [],
   ...extra,
 });
 

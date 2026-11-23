@@ -175,3 +175,24 @@ export function CollisionRows({
     </div>
   );
 }
+
+/**
+ * The comments an action hides on its own (RS 12): a promotion it makes or a
+ * loop closure end it moves can leave a station with a comment shown nowhere.
+ * Each is the identity as it showed the comment, `Side / 0`; Undo brings it
+ * back. Nothing when there are none.
+ */
+export function HiddenComments({ hidden, testId }: { hidden: readonly StationIdentity[] | undefined; testId: string }) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  if (!hidden || hidden.length === 0) return null;
+  return (
+    <ul className="text-xs text-text-secondary space-y-0.5" data-testid={testId}>
+      {hidden.map((h) => (
+        <li key={h.id} data-testid={`${testId}-${h.id}`}>
+          {t('dialogs.keptStations.commentHidden', { station: label(h), comment: h.comment ?? '' })}
+        </li>
+      ))}
+    </ul>
+  );
+}

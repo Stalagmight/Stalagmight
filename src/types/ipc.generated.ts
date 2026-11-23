@@ -104,6 +104,7 @@ export * from './ipc/StationOwner';
 export * from './ipc/LetteredStation';
 export * from './ipc/RestoredIdentity';
 export * from './ipc/IdentityNotice';
+export * from './ipc/ShownElsewhere';
 export * from './ipc/StationRef';
 export * from './ipc/StationMerge';
 export * from './ipc/ZeroDatum';
