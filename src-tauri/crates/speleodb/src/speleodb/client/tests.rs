@@ -1766,3 +1766,25 @@ fn collaborator_name_lookups_stop_at_their_time_budget() {
     assert!(got.iter().all(|c| c.name.is_none()));
     worker.join().expect("server");
 }
+
+/// Pre-PR review of the X3 round, nit 6: the arm for a middleware failure kept
+/// the error's text, which (unlike every other arm, which strips the URL) may
+/// carry the request URL with the project id in its path. No middleware is
+/// installed, so nothing else is known of such a failure either.
+#[test]
+fn a_middleware_failure_keeps_no_url() {
+    let failure = std::io::Error::other(
+        "GET https://synthetic.example/api/v2/projects/11111111-1111-1111-1111-111111111111/ failed",
+    );
+    let error = api_error::<()>(ApiOpError::Transport(HttpError::Middleware(
+        reqwest_middleware::Error::middleware(failure),
+    )));
+    match error {
+        SpeleoDbError::Transport { cause, detail } => {
+            assert_eq!(cause, TransportCause::Unknown);
+            assert!(!detail.contains("https://"), "{detail}");
+            assert!(!detail.contains("11111111-1111"), "{detail}");
+        }
+        other => panic!("expected a transport failure, got {other:?}"),
+    }
+}
