@@ -1455,3 +1455,40 @@ open".
   key per call would defeat the stack's burst dedup. A notice that lands
   within the burst window of a fresh one is appended to it; the same words
   twice are said once; later notices get their own toast as before.
+
+## Deviations (package RS-INT2)
+
+Decisions the second integration (RS-FX1, RS-FX2 and RS-FX3 merged into
+sg/rs, in that order) took where the packages overlapped, each with its
+reason.
+
+- **One oracle excuse for farm finding dbf19ed85330.** RS-FX1 and RS-FX2
+  each fixed the wire-equivalence oracle for the same migration seed. RS-FX2
+  records an empty 0.6.0 comment as no comment on every slot (an archived
+  loop end's own comment is then none, so a range delete over it lists
+  none). RS-FX1 let a range delete drop any listed slot that shows another
+  station while its node has no comment now. With RS-FX2's excuse in place,
+  RS-FX1's fires only where a non-empty 0.6.0 comment is missing from the
+  port's node: a lost comment, which the oracle must report, not excuse. So
+  RS-FX1's `shows_anothers_comment` retain and its one-seed test
+  `farm_seed_range_delete_over_a_loop_end_lists_no_comment` are gone (that
+  name in RS-FX1's last bullet is superseded); RS-FX2's four-seed test pins
+  35006357 too. The migration CI window passes without the dropped excuse,
+  and the four seeds still fail with RS-FX2's fix reverted on the merged
+  tree.
+- **`reaches` goes with its last caller.** RS-FX2's C2 normalisation walks
+  trees by root (`chain_root`) instead of following `kept_of` per closure;
+  RS-FX1 kept the old helper next to its new `holds_text`. Nothing else
+  calls it.
+- **The e2e mock's Detach preview carries RS-FX1's fields.** RS-FX3 moved
+  the preview into `mockDetachPreview` (shared by the preview and the detach
+  commands' rename checks); it now also returns `shown_elsewhere` and
+  `comments_hidden` (empty: the mock runs no promotion and moves no loop
+  end). RS-FX3's new vitest fixtures (the rest-picker preview, the notice
+  burst) gain the same required fields (`DetachLinePreview`,
+  `IdentityNotice.hidden`).
+- **Two RS-INT items are closed by the fix packages.** RS-INT's "Plan
+  mode's route collapse stays open" is superseded by RS-FX3's collapse
+  (`GasReach::collapse_route`, `AlongLine::path_stations`), and RS-T's
+  follow-up (the Merge and Detach previews did not name what a promotion
+  inside the op hides) by RS-FX1's `comments_hidden` and `shown_elsewhere`.
