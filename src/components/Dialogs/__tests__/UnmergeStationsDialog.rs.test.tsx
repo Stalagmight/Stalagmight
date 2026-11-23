@@ -26,7 +26,7 @@ import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
-import UnmergeStationsDialog from '../UnmergeStationsDialog';
+import UnmergeStationsDialog, { letterTakenEarlier } from '../UnmergeStationsDialog';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -116,13 +116,16 @@ function open(extra: Record<string, unknown> = {}) {
 describe('Detach Line from Station under RS', () => {
   it('preselects the line the user chose and says what comes back with it', async () => {
     open({ chosenLine: SIDE });
-    expect(await screen.findByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 40).');
+    // Rule L's default answer letters the station that comes back.
+    expect(await screen.findByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0a (Station ID 40).');
     expect(screen.getByTestId(`unmerge-station-option-${SIDE}-0`)).toBeChecked();
     expect(screen.getByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent('With its comment: "Silt bank"');
     expect(screen.getByTestId('unmerge-stations-together')).toHaveTextContent(
       'North comes off with Side: they were one station before the merge.',
     );
-    expect(screen.getByTestId('unmerge-stations-letters-stay')).toBeInTheDocument();
+    // No line shows a letter after 0: the note on earlier letters says
+    // nothing true here (RS-FX6, P3-13).
+    expect(screen.queryByTestId('unmerge-stations-letters-stay')).toBeNull();
   });
 
   it('lists the collision and detaches with the chosen answer', async () => {
@@ -224,5 +227,107 @@ describe('Detach Line from Station names what changes elsewhere (RS-FX1)', () =>
     );
     expect(screen.queryByTestId('unmerge-stations-shown-elsewhere')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-comments-hidden')).toBeNull();
+  });
+});
+
+/**
+ * RS-FX6, the real-app capture of the RS redesign:
+ * - P1-1: the two stations of a collision share a name, so each answer names
+ *   the one it renames by its role and Station ID. Before, both read "Rename
+ *   Side / 0 to 0a".
+ * - P2-2: the lead and the After Detach list follow the chosen answer: with
+ *   the other answer the station comes back as 0, not rule L's 0a.
+ * - P3-13: the note on earlier letters shows only when a line the station
+ *   comes back to carries a letter after its name.
+ * - P3-15: the remaining-junction picker draws pills.
+ * - P3-12: a station an earlier merge archived inside the one that comes
+ *   back stays inside it, and the dialog says a second Detach gives it back.
+ * Injections: word the answers by `identityLabelOf` alone (P1-1); print
+ * `preview.name` in `ComesBack` (P2-2); show the note whenever a station is
+ * restored (P3-13); drop `recordsInside` (P3-12).
+ */
+describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
+  it('names each answer by role and Station ID, and the lead follows the answer', async () => {
+    invokeIpc.mockImplementation(async () =>
+      base({
+        ...SIDE_BACK,
+        together: [],
+        name: '0a',
+        lines: [
+          { line_id: MAIN, name: '3', station_id: 3, comes_off: false, joined_with: [] },
+          { line_id: SIDE, name: '0a', station_id: 40, comes_off: true, joined_with: [] },
+        ],
+      }),
+    );
+    open({ chosenLine: SIDE });
+    const letter = await screen.findByTestId('unmerge-stations-collision-0-letter');
+    expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 0, Station ID 40) to 0a');
+    expect(screen.getByTestId('unmerge-stations-collision-0-alternative').parentElement).toHaveTextContent(
+      "Rename Side's own 0 (Station ID 44) to 0a",
+    );
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0a (Station ID 40).');
+    expect(screen.getByTestId(`unmerge-stations-result-${SIDE}`)).toHaveTextContent('Side: 0a, Station ID 40 (comes off)');
+
+    fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 40).');
+    expect(screen.getByTestId(`unmerge-stations-result-${SIDE}`)).toHaveTextContent('Side: 0, Station ID 40 (comes off)');
+  });
+
+  it('notes earlier letters only when a line shows one', async () => {
+    useProjectStore.setState({
+      stations: [
+        { station_ref: slot(MAIN, 3), id: 3, name: '3', merged_with: [slot(SIDE, 0), slot(NORTH, 0)] },
+        { station_ref: slot(SIDE, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(NORTH, 0)] },
+        { station_ref: slot(SIDE, 1), id: 61, name: '0a', merged_with: [] },
+        { station_ref: slot(NORTH, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0)] },
+      ],
+    } as never);
+    invokeIpc.mockImplementation(async () =>
+      base({ lines: [{ line_id: SIDE, name: '0', station_id: 40, comes_off: true, joined_with: [] }] }),
+    );
+    open({ chosenLine: SIDE });
+    expect(await screen.findByTestId('unmerge-stations-letters-stay')).toHaveTextContent(
+      'A name that took a letter earlier because of this station keeps it.',
+    );
+  });
+
+  it('draws the remaining-junction choices as pills', async () => {
+    open({ chosenLine: MAIN });
+    await screen.findByTestId('unmerge-stations-rest');
+    expect(screen.getByTestId('unmerge-stations-rest-50-pill')).toHaveTextContent('North: 9');
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 0 (Station ID 40).');
+  });
+
+  it('says a station archived inside the one that comes back stays inside it', async () => {
+    useProjectStore.setState({
+      stations: [
+        {
+          station_ref: slot(MAIN, 3),
+          id: 3,
+          name: '3',
+          merged_with: [slot(SIDE, 0), slot(NORTH, 0)],
+          archived: [
+            { id: 40, name: '0', lines: [SIDE] },
+            { id: 46, name: '0', into: 40, lines: [NORTH] },
+          ],
+        },
+        { station_ref: slot(SIDE, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(NORTH, 0)] },
+        { station_ref: slot(NORTH, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0)] },
+      ],
+    } as never);
+    invokeIpc.mockImplementation(async () => base({}));
+    open({ chosenLine: SIDE });
+    expect(await screen.findByTestId('unmerge-stations-inside-46')).toHaveTextContent(
+      'North / 0 (Station ID 46) stays archived inside it: detach North again to get it back.',
+    );
+  });
+});
+
+describe('letterTakenEarlier', () => {
+  const names = (line: number) => (line === 1 ? ['0', '1', '0a'] : ['0', '10', '0A', '0-1']);
+  it('finds a letter after the name, and nothing else', () => {
+    expect(letterTakenEarlier('0', [1], names)).toBe(true);
+    expect(letterTakenEarlier('0', [2], names)).toBe(false);
+    expect(letterTakenEarlier('', [1], names)).toBe(false);
   });
 });

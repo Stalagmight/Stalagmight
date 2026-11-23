@@ -32,7 +32,16 @@ describe('the identity notice', () => {
           { station_id: 41, line_id: 2, other_id: 12, from: '12', to: '12a' },
           { station_id: 42, line_id: 2, other_id: 13, from: '13', to: '13a' },
         ],
-        restored: [{ old_id: 11, station: { id: 40, name: '0', home_line: 2 }, comment_moved: false, comment_hidden: 'Silt' }],
+        restored: [
+          {
+            old_id: 11,
+            old_name: '3',
+            old_home_line: 1,
+            station: { id: 40, name: '0', home_line: 2 },
+            comment_moved: false,
+            comment_hidden: 'Silt',
+          },
+        ],
         unarchived: [5n],
         hidden: [],
       },
@@ -41,7 +50,7 @@ describe('the identity notice', () => {
     expect(message).toBe(
       'Renamed Side / 12 to 12a, Side / 13 to 13a so no line shows a name twice. ' +
         'Side / 0 (Station ID 40) is shown again. ' +
-        'The comment of Station ID 11 is hidden: Undo brings it back. ' +
+        'Main / 3\'s comment ("Silt") is hidden: Undo brings it back. ' +
         "A loop closure's hidden end shows its own name again.",
     );
   });
@@ -65,9 +74,37 @@ describe('the identity notice', () => {
       lineName,
     );
     expect(message).toBe(
-      'The comment of Side / 3 is hidden: Undo brings it back. ' +
-        'The comment of Main / 0 is hidden: Undo brings it back.',
+      'Side / 3\'s comment ("Low air") is hidden: Undo brings it back. ' +
+        'Main / 0\'s comment ("Sump") is hidden: Undo brings it back.',
     );
+  });
+
+  // RS-FX6, P2-7: a restore's hidden comment was named "Station ID 54"
+  // only; it is named by its line, its name and its text. A notice from an
+  // older backend without the old name still says the Station ID.
+  // Injection: name it by `old_id` again and the first expectation fails.
+  it("names a restore's hidden comment by line, name and text", () => {
+    const restored = (old_name: string) =>
+      identityNoticeMessage(
+        {
+          lettered: [],
+          restored: [
+            {
+              old_id: 54,
+              old_name,
+              old_home_line: 2,
+              station: { id: 55, name: '0', home_line: 1 },
+              comment_moved: false,
+              comment_hidden: 'Annex end: belay on a flake',
+            },
+          ],
+          unarchived: [],
+          hidden: [],
+        },
+        lineName,
+      );
+    expect(restored('3')).toContain('Side / 3\'s comment ("Annex end: belay on a flake") is hidden: Undo brings it back.');
+    expect(restored('')).toContain('Station ID 54\'s comment ("Annex end: belay on a flake") is hidden');
   });
 
   it('raises one warning toast per action, under its key', () => {

@@ -13,7 +13,13 @@ import { StationBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import {
+  CollisionRows,
+  renamesFromAnswers,
+  StickyDialogFooter,
+  useCollisionAnswers,
+  useIdentityLabel,
+} from './keptStationParts';
 
 interface ClosureChoice {
   closureId: bigint;
@@ -262,11 +268,12 @@ export default function RemoveClosureDialog() {
             answers={answers}
             onAnswer={setAnswer}
             testIdPrefix="remove-closure"
+            subject={naming.comes_back ? { id: naming.comes_back.id, role: 'comesBack' } : undefined}
             disabled={isLoading}
           />
         )}
 
-        <div className="flex justify-end gap-2 pt-2 border-t border-border">
+        <StickyDialogFooter testId="remove-closure-footer">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="remove-closure-cancel">Cancel</Button>
           <Button
             variant="primary"
@@ -276,7 +283,7 @@ export default function RemoveClosureDialog() {
           >
             {isLoading ? 'Removing...' : 'Remove'}
           </Button>
-        </div>
+        </StickyDialogFooter>
       </div>
     </DialogWrapper>
   );

@@ -1226,15 +1226,16 @@
       "confirm": "Detach",
       "working": "Detaching...",
       "failed": "Failed to detach the line",
-      "comesBack": "It gets back {{name}} (Station ID {{id}}).",
+      "comesBack_one": "It gets back {{name}} (Station ID {{id}}).",
+      "comesBack_other": "They get back {{name}} (Station ID {{id}}).",
       "comesBackComment": "With its comment: \"{{comment}}\"",
+      "staysInside": "{{station}} (Station ID {{id}}) stays archived inside it: detach {{line}} again to get it back.",
       "offTogether_one": "{{lines}} comes off with {{line}}: they were one station before the merge.",
       "offTogether_other": "{{lines}} come off with {{line}}: they were one station before the merge.",
       "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",
       "shownElsewhereLead": "Elsewhere, a loop closure or a merge the detach makes changes what these stations show:",
       "shownElsewhere": "{{line}}: {{after}} where it showed {{before}}",
       "restLead": "The lines that come off show:",
-      "restChoice": "{{station}} (Station ID {{id}})",
       "restFailed": "That choice could not be checked, so the lines that come off show the station chosen for them.",
       "lettersStay": "A name that took a letter earlier because of this station keeps it."
     },
@@ -1311,6 +1312,7 @@
       "moves_other": "{{piece}} move {{distance}} m onto {{station}}'s position.",
       "depths": "Depths {{readings}} become {{joined}}: the joined station takes the mean of its depth readings.",
       "depthReading": "{{depth}} ({{line}})",
+      "depthReadings": "{{depth}} ({{line}}, {{count}} readings)",
       "alreadyJoined": "{{station}} is already where {{lines}} meet.",
       "stationA": "Station A:",
       "stationB": "Station B:",
@@ -1321,7 +1323,10 @@
       "renamedLines_other": "{{lines}} will show {{station}}.",
       "archived": "{{station}} is archived.",
       "archivedWithComment": "{{station}} is archived with its comment.",
+      "archivedInside": "{{station}} (Station ID {{id}}), archived inside {{hidden}} by an earlier merge, stays inside it: a second Detach brings it back.",
       "detachBringsBack": "Detach Line from Station brings it back.",
+      "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction with {{home}}'s dot.",
+      "repeatLoopEnd": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, once at a loop end with the loop mark.",
       "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
       "cancel": "Cancel",
       "confirm": "Merge",
@@ -1902,7 +1907,10 @@
       "collisionsLead_one": "One name would then repeat on a line. Choose which station takes a new name:",
       "collisionsLead_other": "{{count}} names would then repeat on a line. Choose which station takes a new name for each:",
       "collision": "On {{line}}, {{name}} would name two stations",
-      "rename": "Rename {{station}} to {{to}}",
+      "rename": "Rename {{station}} (Station ID {{id}}) to {{to}}",
+      "renameComesBack": "Rename the station that comes back ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameKept": "Rename the kept station ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameOwn": "Rename {{line}}'s own {{name}} (Station ID {{id}}) to {{to}}",
       "shownAsThroughClosure": "shown as {{station}} through a loop closure",
       "editingDisabled": "Editing is disabled in the current view.",
       "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."
@@ -2270,7 +2278,7 @@
       "archivedHint": "Stations a merge archived in this one. Each keeps its own name, comment and Station ID, and is shown nowhere until Detach Line from Station on its line brings it back. A station listed under another was archived inside it and comes back with it, still inside it.",
       "recordInside": "Archived inside {{name}}",
       "recordOfLines": "{{name}} (Station ID {{id}}), {{lines}}'s own station",
-      "recordHistory": "{{name}} (Station ID {{id}}), kept for its Station ID",
+      "recordHistory": "{{name}} (Station ID {{id}}), no longer on any line",
       "recordComment": "Comment: {{comment}}",
       "loopEnd": "Loop closure end, shown as {{station}}",
       "loopEndOwn": "Its own station {{name}} (Station ID {{id}}) is hidden. Removing the closure brings it back.",
@@ -4419,12 +4427,13 @@
   "notices": {
     "identities": {
       "letter": "{{station}} to {{to}}",
+      "stationId": "Station ID {{id}}",
       "lettered": "Renamed {{renamed}} so no line shows a name twice.",
       "restored": "{{station}} (Station ID {{id}}) is shown again.",
-      "commentHidden": "The comment of Station ID {{id}} is hidden: Undo brings it back.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back.",
       "unarchived_one": "A loop closure's hidden end shows its own name again.",
       "unarchived_other": "{{count}} loop closures' hidden ends show their own names again.",
-      "hiddenComment": "The comment of {{station}} is hidden: Undo brings it back."
+      "hiddenComment": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back."
     }
   }
 }

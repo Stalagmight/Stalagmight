@@ -5,6 +5,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import type { DetachLinePreview, DetachLineResult } from '../../types/ipc.generated';
+import type { ArchivedStation } from '../../types/ipc/ArchivedStation';
+import type { NameCollision } from '../../types/ipc/NameCollision';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
@@ -14,12 +16,55 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { displayStationName } from '../../utils/formatters';
 import {
+  answeredName,
   CollisionRows,
   HiddenComments,
+  HomeIdentityPill,
   renamesFromAnswers,
+  recordIdentity,
+  StickyDialogFooter,
   useCollisionAnswers,
   useIdentityLabel,
 } from './keptStationParts';
+
+/** A station's name as a detach shows it: after the chosen answers. */
+type NameOf = (id: number, fallback: string) => string;
+
+/** The record's own name before any letter the dialog's answers give: a
+ *  collision names it as it is, else the preview's name. */
+function ownNameOf(id: number, fallback: string, collisions: readonly NameCollision[] | undefined): string {
+  for (const collision of collisions ?? []) {
+    for (const suggestion of [collision.letter, collision.alternative]) {
+      if (suggestion.station.id === id) return suggestion.station.name;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Whether a station on `lines` already carries a letter after `name`
+ * (`0a`, `0b`): a name that took a letter earlier because of the station
+ * that comes back, which the dialog's note is about (RS-FX6, P3-13). Without
+ * one, the note says nothing true and is left out.
+ */
+export function letterTakenEarlier(
+  name: string,
+  lines: readonly number[],
+  lineStationNames: (lineId: number) => readonly string[],
+): boolean {
+  if (name === '') return false;
+  return lines.some((line) =>
+    lineStationNames(line).some(
+      (other) => other.length > name.length && other.startsWith(name) && /^[a-z]+$/.test(other.slice(name.length)),
+    ),
+  );
+}
+
+/** The records a restored station keeps inside it (RS-FX4): those the
+ *  junction archived under it, which a second Detach gives back. */
+export function recordsInside(records: readonly ArchivedStation[] | undefined, id: number): ArchivedStation[] {
+  return (records ?? []).filter((r) => r.into === id && r.lines.length > 0);
+}
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.line_id}:${ref.station_index}`;
@@ -291,6 +336,20 @@ export default function UnmergeStationsDialog() {
   // dialog asks about.
   const targetPreview = target ? previewOf(target.line_id) : null;
   const [answers, setAnswer] = useCollisionAnswers(targetPreview?.collisions);
+  // The names shown follow the chosen answers (RS-FX6, P2-2): the station
+  // that comes back keeps its own name when the other one takes the letter.
+  const nameOf: NameOf = (id, fallback) => answeredName(id, fallback, targetPreview?.collisions, answers);
+  // The junction's records: the ones under the station that comes back stay
+  // inside it (RS-FX6, P3-12).
+  const junctionRecords = stations.find((station) => stationRef && sameStationRef(station.station_ref, stationRef))?.archived;
+  // The note on earlier letters only when one exists (RS-FX6, P3-13).
+  const lettersStay =
+    targetPreview?.restored === true &&
+    letterTakenEarlier(
+      ownNameOf(targetPreview.station_id, targetPreview.name, targetPreview.collisions),
+      targetPreview.lines.filter((r) => r.station_id === targetPreview.station_id).map((r) => r.line_id),
+      labels.lineStationNames,
+    );
 
   const handleConfirm = async () => {
     if (!stationRef || !target) return;
@@ -354,7 +413,7 @@ export default function UnmergeStationsDialog() {
         )}
 
         {same ? (
-          <SameResultBody same={same} />
+          <SameResultBody same={same} nameOf={nameOf} />
         ) : (
           <>
             <p className="text-sm text-text-secondary" data-testid="unmerge-stations-lead">
@@ -406,9 +465,17 @@ export default function UnmergeStationsDialog() {
               </p>
             )}
 
-            {naming && selected && <ComesBack preview={naming} line={selected.line_id} />}
+            {naming && selected && (
+              <ComesBack
+                preview={naming}
+                line={selected.line_id}
+                lines={naming.kept ? otherLines.length : 1}
+                nameOf={nameOf}
+                inside={recordsInside(junctionRecords, naming.station_id)}
+              />
+            )}
 
-            {naming && naming.lines.length > 0 && <DetachResults preview={naming} />}
+            {naming && naming.lines.length > 0 && <DetachResults preview={naming} nameOf={nameOf} />}
 
             {naming && <ShownElsewhere preview={naming} />}
 
@@ -450,17 +517,18 @@ export default function UnmergeStationsDialog() {
             answers={answers}
             onAnswer={setAnswer}
             testIdPrefix="unmerge-stations"
+            subject={targetPreview.restored ? { id: targetPreview.station_id, role: 'comesBack' } : undefined}
             disabled={isLoading}
           />
         )}
 
-        {targetPreview?.restored && (
+        {lettersStay && (
           <p className="text-xs text-text-secondary" data-testid="unmerge-stations-letters-stay">
             {t('dialogs.detachLine.lettersStay')}
           </p>
         )}
 
-        <div className="flex justify-end gap-2 pt-2 border-t border-border">
+        <StickyDialogFooter testId="unmerge-stations-footer">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="unmerge-stations-cancel">
             {t('dialogs.detachLine.cancel')}
           </Button>
@@ -472,7 +540,7 @@ export default function UnmergeStationsDialog() {
           >
             {isLoading ? t('dialogs.detachLine.working') : t('dialogs.detachLine.confirm')}
           </Button>
-        </div>
+        </StickyDialogFooter>
       </div>
     </DialogWrapper>
   );
@@ -483,7 +551,7 @@ export default function UnmergeStationsDialog() {
  *  Under RS a line shows its node's one identity, so no line keeps an alias
  *  of its own; what comes back and the lines that come off together are
  *  `ComesBack`'s, the collision rows `CollisionRows`' (RS 7). */
-function DetachResults({ preview }: { preview: DetachLinePreview }) {
+function DetachResults({ preview, nameOf }: { preview: DetachLinePreview; nameOf: NameOf }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   return (
@@ -493,7 +561,7 @@ function DetachResults({ preview }: { preview: DetachLinePreview }) {
         {orderedResults(preview).map((r) => {
           const params = {
             line: labels.lineName(r.line_id),
-            name: r.name,
+            name: displayStationName(nameOf(r.station_id, r.name)),
             id: r.station_id,
             joined: listNames(r.joined_with.map(labels.lineName), t),
           };
@@ -549,30 +617,60 @@ function ShownElsewhere({ preview }: { preview: DetachLinePreview }) {
 }
 
 /**
- * What comes back on the detached line (RS 4.2, 7): the station's name, its
- * comment when it has one, and its Station ID; the lines that come off with
- * it because they were one station; and, when a loop closure made the line
- * show another station, the name it shows instead afterwards (its own, the
- * one that comes back, or the junction's when it keeps the junction).
+ * What comes back on the detached line (RS 4.2, 7): the station's name (as
+ * the chosen answers leave it, RS-FX6 P2-2), its comment when it has one, and
+ * its Station ID, said of the lines that get it ("They get back" when
+ * several do, P3-15); the stations an earlier merge archived inside it,
+ * which stay inside it (P3-12); the lines that come off with it because they
+ * were one station; and, when a loop closure made the line show another
+ * station, the name it shows instead afterwards (its own, the one that comes
+ * back, or the junction's when it keeps the junction).
  */
-function ComesBack({ preview, line }: { preview: DetachLinePreview; line: number }) {
+function ComesBack({
+  preview,
+  line,
+  lines,
+  nameOf,
+  inside,
+}: {
+  preview: DetachLinePreview;
+  line: number;
+  /** How many lines get the station back. */
+  lines: number;
+  nameOf: NameOf;
+  inside: readonly ArchivedStation[];
+}) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
   const comment = (preview.comment ?? '').trim();
-  const shownAfter = preview.lines.find((r) => r.line_id === line)?.name ?? preview.name;
+  const lineResult = preview.lines.find((r) => r.line_id === line);
+  const shownAfter = lineResult ? nameOf(lineResult.station_id, lineResult.name) : nameOf(preview.station_id, preview.name);
   return (
     <>
       {preview.restored && (
         <div className="text-sm text-text-primary" data-testid="unmerge-stations-comes-back">
           <p>
-            {t('dialogs.detachLine.comesBack', { name: displayStationName(preview.name), id: preview.station_id })}
+            {t('dialogs.detachLine.comesBack', {
+              name: displayStationName(nameOf(preview.station_id, preview.name)),
+              id: preview.station_id,
+              count: lines,
+            })}
           </p>
           {comment !== '' && (
             <p className="text-text-secondary" data-testid="unmerge-stations-comes-back-comment">
               {t('dialogs.detachLine.comesBackComment', { comment })}
             </p>
           )}
+          {inside.map((record) => (
+            <p key={record.id} className="text-text-secondary" data-testid={`unmerge-stations-inside-${record.id}`}>
+              {t('dialogs.detachLine.staysInside', {
+                station: label(recordIdentity(record)),
+                id: record.id,
+                line: labels.lineName(record.lines[0]!),
+              })}
+            </p>
+          ))}
         </div>
       )}
       {(preview.together ?? []).length > 0 && (
@@ -611,7 +709,6 @@ function RestPicker({
   disabled: boolean;
 }) {
   const { t } = useTranslation();
-  const label = useIdentityLabel();
   const chosen = restKeep ?? preview.rest_default ?? preview.station_id;
   return (
     <fieldset className="space-y-1 text-sm" data-testid="unmerge-stations-rest">
@@ -627,7 +724,7 @@ function RestPicker({
             onChange={() => onRestKeep(identity.id)}
             data-testid={`unmerge-stations-rest-${identity.id}`}
           />
-          <span>{t('dialogs.detachLine.restChoice', { station: label(identity), id: identity.id })}</span>
+          <HomeIdentityPill identity={identity} testId={`unmerge-stations-rest-${identity.id}-pill`} />
         </label>
       ))}
     </fieldset>
@@ -637,7 +734,7 @@ function RestPicker({
 /** The whole body when the choice does not change the result (N-2): which
  *  line comes off and what it gets back (its comment too), and which line
  *  keeps the station. */
-function SameResultBody({ same: { off, keeper, preview } }: { same: SameDetachResult }) {
+function SameResultBody({ same: { off, keeper, preview }, nameOf }: { same: SameDetachResult; nameOf: NameOf }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const line = labels.lineName(off.line_id);
@@ -648,7 +745,7 @@ function SameResultBody({ same: { off, keeper, preview } }: { same: SameDetachRe
       <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
         {t('dialogs.detachLine.comesOff', {
           line,
-          name: displayStationName(preview.name),
+          name: displayStationName(nameOf(preview.station_id, preview.name)),
           id: preview.station_id,
           keeper: keeperLine,
           station: labels.station(keeper),

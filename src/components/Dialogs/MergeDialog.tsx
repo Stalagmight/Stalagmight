@@ -16,7 +16,11 @@ import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
 import type { MergePreview } from '../../types/ipc/MergePreview';
 import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
 import type { MergeKeepPreview } from '../../types/ipc/MergeKeepPreview';
+import type { MergeDepthReading } from '../../types/ipc/MergeDepthReading';
+import type { NameRepeat } from '../../types/ipc/NameRepeat';
+import type { ArchivedStation } from '../../types/ipc/ArchivedStation';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
+import { displayStationName } from '../../utils/formatters';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
@@ -25,6 +29,8 @@ import {
   HiddenComments,
   IdentityPill,
   renamesFromAnswers,
+  recordIdentity,
+  StickyDialogFooter,
   useCollisionAnswers,
   useIdentityLabel,
 } from './keptStationParts';
@@ -32,6 +38,35 @@ import {
 /** A move shorter than this (metres) is not worth a sentence: the two
  *  stations already sit on one point, as after a snap. */
 const MOVE_SAID_FROM_M = 0.01;
+
+/**
+ * The depth readings the joined station's mean takes, as the dialog lists
+ * them (RS-FX6, P3-19): a station inside a line has two readings, the shots'
+ * depth out and depth in, usually equal, and listing "7.8 m (Main), 7.8 m
+ * (Main)" read as a repeat. Readings on one line that show the same depth
+ * are one entry with their count, so the list still adds up to the mean.
+ * In the order given (each entry where its first reading was).
+ */
+export function groupDepthReadings(
+  readings: readonly MergeDepthReading[],
+  format: (depthM: number) => string,
+): Array<{ line_id: number; depth: string; count: number }> {
+  const out: Array<{ line_id: number; depth: string; count: number }> = [];
+  for (const reading of readings) {
+    const depth = format(reading.depth_m);
+    const same = out.find((entry) => entry.line_id === reading.line_id && entry.depth === depth);
+    if (same) same.count += 1;
+    else out.push({ line_id: reading.line_id, depth, count: 1 });
+  }
+  return out;
+}
+
+/** The records an archived station keeps inside it (RS-FX4): the node's
+ *  records directly under its identity, which go with it into the merge
+ *  record and come back with it (RS-FX6, P3-12). History records aside. */
+export function recordsDirectlyUnder(records: readonly ArchivedStation[] | undefined): ArchivedStation[] {
+  return (records ?? []).filter((r) => r.into === undefined && r.lines.length > 0);
+}
 
 /** The keep the dialog starts on: the backend's default (a datum holder, else
  *  rule K, RS 4.1) when it offers it, else the one it offers; null without a
@@ -44,7 +79,7 @@ export function defaultKeepOf(preview: MergePreview | undefined): number | null 
 export default function MergeDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { mergeStations, executeBatch } = useProjectStore();
+  const { mergeStations, executeBatch, stations } = useProjectStore();
   // A merge mutates: never from a read-only view (Plan, Export, the Closures
   // Computed View, a read-only project).
   const editingBlocked = useEditingBlocked();
@@ -165,6 +200,16 @@ export default function MergeDialog() {
           <KeepOutcome
             preview={keepPreview}
             kept={candidates.find((c) => c.identity.id === keepPreview.keep) ?? null}
+            inside={recordsDirectlyUnder(
+              stations.find((station) => {
+                const slot = candidates.find((c) => c.identity.id === keepPreview.hidden.id)?.station;
+                return (
+                  slot !== undefined &&
+                  station.station_ref.line_id === slot.line_id &&
+                  station.station_ref.station_index === slot.station_index
+                );
+              })?.archived,
+            )}
           />
         )}
 
@@ -174,6 +219,7 @@ export default function MergeDialog() {
             answers={answers}
             onAnswer={setAnswer}
             testIdPrefix="merge"
+            subject={{ id: keepPreview.keep, role: 'kept' }}
             disabled={isLoading}
           />
         )}
@@ -196,15 +242,14 @@ export default function MergeDialog() {
           />
         )}
 
-        {/* Actions */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        <StickyDialogFooter testId="merge-footer">
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-cancel">
             {t('dialogs.mergeStations.cancel')}
           </Button>
           <Button variant="primary" onClick={handleMerge} disabled={isLoading || editingBlocked} data-testid="merge-confirm">
             {isLoading ? t('dialogs.mergeStations.working') : t('dialogs.mergeStations.confirm')}
           </Button>
-        </div>
+        </StickyDialogFooter>
       </div>
     </DialogWrapper>
   );
@@ -279,14 +324,24 @@ function KeepPicker({
 
 /**
  * What the chosen keep does to names (RS 7): the lines that will show the kept
- * name, the station archived ("with its comment" only when it has one), that
- * it was a loop closure's hidden end (the closure then hides nothing, so the
- * kept station is shown there, RS 1.3), and that Detach Line from Station
- * brings it back (on every line it covered, the stations its earlier merges
- * archived still inside it, RS-FX4). Then every other comment the merge
- * hides (a promotion it makes, RS 12).
+ * name, the station archived ("with its comment" only when it has one) and
+ * the stations an earlier merge archived inside it, which go with it
+ * (RS-FX6, P3-12), that it was a loop closure's hidden end (the closure then
+ * hides nothing, so the kept station is shown there, RS 1.3), and that
+ * Detach Line from Station brings it back (on every line it covered, the
+ * stations its earlier merges archived still inside it, RS-FX4). Then each
+ * name a line will show twice (RS-FX5 allows it; RS-FX6, P2-6) and every
+ * other comment the merge hides (a promotion it makes, RS 12).
  */
-function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepCandidate | null }) {
+function KeepOutcome({
+  preview,
+  kept,
+  inside,
+}: {
+  preview: MergeKeepPreview;
+  kept: KeepCandidate | null;
+  inside: readonly ArchivedStation[];
+}) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
@@ -308,6 +363,15 @@ function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepC
           station: label(preview.hidden),
         })}
       </p>
+      {inside.map((record) => (
+        <p key={record.id} className="text-text-secondary" data-testid={`merge-hidden-inside-${record.id}`}>
+          {t('dialogs.mergeStations.archivedInside', {
+            station: label(recordIdentity(record)),
+            id: record.id,
+            hidden: label(preview.hidden),
+          })}
+        </p>
+      ))}
       {preview.unarchived !== undefined && keptName !== null && (
         <p className="text-xs text-text-secondary" data-testid="merge-loop-end-shown">
           {t('dialogs.mergeStations.loopEndShown', { station: keptName })}
@@ -316,8 +380,39 @@ function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepC
       <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
         {t('dialogs.mergeStations.detachBringsBack')}
       </p>
+      <NameRepeats repeats={preview.repeats ?? []} />
       <HiddenComments hidden={preview.comments_hidden} testId="merge-comments-hidden" />
     </div>
+  );
+}
+
+/**
+ * Each name a line will show twice after the merge (RS-FX6, P2-6): the
+ * line's own station of that name keeps it (RS-FX5, "dotted slots don't
+ * collide"), and the junction shows the kept station by the same name with
+ * its home line's dot (or a loop end with the loop mark). Said before the
+ * user confirms, so a line listing a name twice is no surprise.
+ */
+function NameRepeats({ repeats }: { repeats: readonly NameRepeat[] }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  if (repeats.length === 0) return null;
+  return (
+    <ul className="space-y-0.5 text-text-secondary" data-testid="merge-repeats">
+      {repeats.map((repeat) => (
+        <li
+          key={`${repeat.line_id}:${repeat.station.id}:${repeat.shown.id}`}
+          data-testid={`merge-repeat-${repeat.line_id}-${repeat.station.id}`}
+        >
+          {t(repeat.loop_end ? 'dialogs.mergeStations.repeatLoopEnd' : 'dialogs.mergeStations.repeat', {
+            line: labels.lineName(repeat.line_id),
+            name: displayStationName(repeat.name),
+            id: repeat.station.id,
+            home: repeat.shown.home_line === undefined ? '' : labels.lineName(repeat.shown.home_line),
+          })}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -367,8 +462,14 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
           {t('dialogs.mergeStations.depths', {
             // Every reading, by line, none counted away: a list that stopped
             // at three would hide what the mean takes.
-            readings: preview.depths.readings
-              .map((r) => t('dialogs.mergeStations.depthReading', { depth: depth(r.depth_m), line: labels.lineName(r.line_id) }))
+            readings: groupDepthReadings(preview.depths.readings, depth)
+              .map((r) =>
+                t(r.count > 1 ? 'dialogs.mergeStations.depthReadings' : 'dialogs.mergeStations.depthReading', {
+                  depth: r.depth,
+                  line: labels.lineName(r.line_id),
+                  count: r.count,
+                }),
+              )
               .join(', '),
             joined: depth(preview.depths.joined_m),
           })}
