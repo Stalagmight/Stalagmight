@@ -14,6 +14,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import {
+  answeredName,
   CollisionRows,
   renamesFromAnswers,
   StickyDialogFooter,
@@ -124,11 +125,19 @@ export default function RemoveClosureDialog() {
   }, [selectedClosure]);
   const previewSettled = selectedClosure !== null && settledFor === selectedClosure.closureId.toString();
   const [answers, setAnswer] = useCollisionAnswers(naming?.collisions);
+  // The station that comes back as the chosen answers leave it (RS-FX8, N2,
+  // as Detach's P2-2): with rule L's letter it comes back as L8a, not L8.
+  const comesBack = naming?.comes_back
+    ? { ...naming.comes_back, name: answeredName(naming.comes_back.id, naming.comes_back.name, naming.collisions, answers) }
+    : undefined;
 
-  /** The station a closure hides, by closure id (the rows' "17 comes back"). */
+  /** The station a closure hides, by closure id (the rows' "17 comes back"):
+   *  for the closure chosen, under the name the answers give it. */
   const hiddenOf = (closureId: bigint): string | null => {
     const archive = project?.loop_closures?.find((c) => c.id === closureId)?.archived;
-    return archive ? displayStationName(archive.station.name) : null;
+    if (!archive) return null;
+    const answered = comesBack && naming?.closure_id === closureId && comesBack.id === archive.station.id;
+    return displayStationName(answered ? comesBack.name : archive.station.name);
   };
 
   // The ends of the chosen closure that another closure shows as another
@@ -238,19 +247,19 @@ export default function RemoveClosureDialog() {
           )}
         </div>
 
-        {naming?.comes_back && (
+        {naming && comesBack && (
           <div className="space-y-1 text-sm" data-testid="remove-closure-comes-back">
             <p className="text-text-primary">
               {t(naming.renamed_lines.length > 0 && naming.shown_as ? 'dialogs.removeClosure.comesBack' : 'dialogs.removeClosure.comesBackPlain', {
-                station: identityLabel(naming.comes_back),
+                station: identityLabel(comesBack),
                 shown: naming.shown_as ? identityLabel(naming.shown_as) : '',
                 count: naming.renamed_lines.length,
                 lines: listNames(naming.renamed_lines.map(labels.lineName), t),
               })}
             </p>
-            {(naming.comes_back.comment ?? '').trim() !== '' && (
+            {(comesBack.comment ?? '').trim() !== '' && (
               <p className="text-text-secondary" data-testid="remove-closure-comes-back-comment">
-                {t('dialogs.removeClosure.commentComesBack', { comment: naming.comes_back.comment })}
+                {t('dialogs.removeClosure.commentComesBack', { comment: comesBack.comment })}
               </p>
             )}
           </div>

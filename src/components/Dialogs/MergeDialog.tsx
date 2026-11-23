@@ -25,6 +25,7 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import {
+  answeredName,
   CollisionRows,
   HiddenComments,
   IdentityPill,
@@ -200,6 +201,7 @@ export default function MergeDialog() {
           <KeepOutcome
             preview={keepPreview}
             kept={candidates.find((c) => c.identity.id === keepPreview.keep) ?? null}
+            nameOf={(id, fallback) => answeredName(id, fallback, keepPreview.collisions, answers)}
             inside={recordsDirectlyUnder(
               stations.find((station) => {
                 const slot = candidates.find((c) => c.identity.id === keepPreview.hidden.id)?.station;
@@ -336,16 +338,21 @@ function KeepPicker({
 function KeepOutcome({
   preview,
   kept,
+  nameOf,
   inside,
 }: {
   preview: MergeKeepPreview;
   kept: KeepCandidate | null;
+  /** A station's name as the chosen collision answers leave it (RS-FX8, N2):
+   *  the answer that letters the kept station renames it everywhere. */
+  nameOf: (id: number, fallback: string) => string;
   inside: readonly ArchivedStation[];
 }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
-  const keptName = kept ? label(kept.shown_as ?? kept.identity) : null;
+  const shownKept = kept ? (kept.shown_as ?? kept.identity) : null;
+  const keptName = shownKept ? label({ ...shownKept, name: nameOf(shownKept.id, shownKept.name) }) : null;
   const hasComment = (preview.hidden.comment ?? '').trim() !== '';
   return (
     <div className="space-y-1 text-sm">
@@ -363,6 +370,12 @@ function KeepOutcome({
           station: label(preview.hidden),
         })}
       </p>
+      {/* Detach names the station it brings back, right after the one that
+          is archived, then what travels inside it (RS-FX8, N4: placed after
+          the inside sentence, "brings it back" read as that station). */}
+      <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
+        {t('dialogs.mergeStations.detachBringsBack', { station: label(preview.hidden) })}
+      </p>
       {inside.map((record) => (
         <p key={record.id} className="text-text-secondary" data-testid={`merge-hidden-inside-${record.id}`}>
           {t('dialogs.mergeStations.archivedInside', {
@@ -377,9 +390,6 @@ function KeepOutcome({
           {t('dialogs.mergeStations.loopEndShown', { station: keptName })}
         </p>
       )}
-      <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
-        {t('dialogs.mergeStations.detachBringsBack')}
-      </p>
       <NameRepeats repeats={preview.repeats ?? []} />
       <HiddenComments hidden={preview.comments_hidden} testId="merge-comments-hidden" />
     </div>
