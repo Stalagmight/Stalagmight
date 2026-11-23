@@ -35,12 +35,18 @@ is shown there too, and the dialog says so. The lines that show the kept
 station anew show it with a coloured dot (its own line's colour), and a
 dotted station does not take up its name there: if Side already has a
 station `12` of its own, it keeps it, and Side shows both `12`s, one with
-the dot. Texts without the dot name the dotted one `12 (Main)`. Only when
+the dot; the dialog says so before you merge ("Side already has a station 12
+(Station ID 27); it keeps its name, and Side shows 12 twice, the junction
+with Main's dot"). Texts without the dot name the dotted one `12 (Main)`,
+and so does the data table's Name column, in a lighter colour. Only when
 the merge would make a line show one name for two stations of its own (a
 loop closure it changes, for example) does a row ask how to settle it:
 rename the other station (for example `12` to `12a`) or rename the kept
-one. When the archived station was itself a junction of earlier merges, it
-is archived whole, with the stations archived in it still inside it:
+one. Both stations have one name, so each choice says which it renames, by
+its Station ID ("Rename Side's own 12 (Station ID 27) to 12a", "Rename the
+kept station (Main / 12, Station ID 12) to 12a"). When the archived station
+was itself a junction of earlier merges, it is archived whole, with the
+stations archived in it still inside it, and the dialog names them:
 **Detach Line from Station** on any of its lines gives that junction back on
 all of them. A comment the merge hides in another way (a loop closure the
 merge turns into a junction) is named too; **Undo** brings it back.
@@ -68,7 +74,10 @@ that its zero datum becomes a GPS fix.
   says so ("Main Line / 8 is already where Main Line and Far Room meet"). When
   the two depths differ, it lists every depth reading the joined station
   averages, each with its line: "Depths 4.0 m (Upstream), 12.5 m (Main Line),
-  12.5 m (Far Room) become 9.7 m".
+  12.5 m (Far Room) become 9.7 m". A station inside a line has two readings,
+  the depth out of the shot before it and the depth in of the shot after it;
+  when they are equal the list gives them once, counted: "7.8 m (Main, 2
+  readings)".
 - Which station is kept changes only names: the survey is placed the same
   either way. The archived station keeps its own name and
   [Station ID](../concepts/sections-shots-stations.md#names-and-station-ids)

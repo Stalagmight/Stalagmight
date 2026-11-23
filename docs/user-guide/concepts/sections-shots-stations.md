@@ -115,7 +115,8 @@ A merged station is one station: the one the merge kept, with its name and
 Station ID on every line through it. Where a side line was merged onto
 station `Junction` of the main line and `Junction` was kept, the side line
 shows `Junction` too, with a dot in the main line's colour that says the
-station belongs to another line. The side line's own `0` is archived: it is
+station belongs to another line (hover the dot: "Belongs to Main"; the data
+table's Name column reads `Junction (Main)`). The side line's own `0` is archived: it is
 listed under **Archived here** in the station's **Details**, its name is free
 to use again on the side line, and **Detach Line from Station** brings it
 back. The **Station IDs** and **Station names** labels draw the kept station
@@ -123,4 +124,7 @@ once.
 
 A loop closure can show its two ends as one station in the same way: the
 hidden end keeps its own point on the map, but gets no label, and its slot
-carries a small loop mark. **Remove Closure** brings its name back.
+carries a small loop mark. **Remove Closure** brings its name back. Its
+**Details** show the station it is shown as, then its own point's position;
+a Plan pin on it names it by its own station first: `Loop / L8 (loop end,
+shown as Main / 8)`.
