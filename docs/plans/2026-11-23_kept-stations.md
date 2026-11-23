@@ -1183,3 +1183,64 @@ reason.
   produce them by node), and RS-T did not take it. Collapsing consecutive
   nodes that share a shown identity across a closure edge (section 6) needs
   the gas engine's and the ruler's outputs to change, which is a follow-up.
+
+## Deviations (package RS-FX2)
+
+Decisions the data-paths fixes took where this page is silent or the code
+disagreed, each with its reason.
+
+- **Farm finding dbf19ed85330 is the oracle's.** In the four farm seeds a
+  0.6.0 loop end with an empty comment (`""`) is archived behind its
+  closure's kept end, so the wire shows the kept end's comment there (5.1).
+  A range delete over the loop end takes only the node's own comment, which
+  is none (an empty 0.6.0 comment is no comment, 8.3); the kept end's stays
+  with the kept end. The port's preview lists none, which is right; 0.6.0
+  listed the empty comment, and the wire oracle filtered empty legacy
+  comments only where the slot now shows no comment. The oracle now records
+  every empty legacy comment, whatever the slot shows; the seeds are pinned.
+- **Rule L's letter search is bounded.** The letter is the first free on
+  every line the station is shown on (unchanged), found from per-line
+  cursors that a pass keeps current. When the station's lines take more
+  than 64 letters in a row between them, it is the first letter no slot of
+  the survey shows instead (free on its lines too), so a crafted survey
+  whose lines take letters in turn cannot make every search walk them all.
+  A letter a pass frees (a station lettered away from `5a`) is not offered
+  again in that pass; the next pass sees it. Both only differ from the first
+  free letter in surveys no user makes.
+- **Data-2 covers every quadratic step of the upgrade, not rule L alone.**
+  Decode runs the earlier file's upgrade, and three crafted shapes each hung
+  it: a long line of one name (rule L), 50,000 closures chaining one line
+  (rule K measuring the line per closure, C2 walking each chain in the
+  normalisation and in validate, every slot's shown identity walking it
+  again) and 40,000 junctions whose records win rule K (a topology rebuild
+  and a walk of every datum, closure and placement per re-key). Each is
+  fixed in place (lines measured once, `ShownIndex` resolving each chain
+  once, C2 by roots, `rekey_nodes` in one walk) and pinned with a time
+  bound. The review's alternative, a cap on the collisions an earlier file
+  may bring, was not taken: the same rules run in the 0.6.0 migration,
+  where a cap would refuse real files.
+- **A decode deadline, for readers only.** `DecodeOptions::deadline`
+  (`DecodeError::DeadlinePassed`) is checked between decode's phases (the
+  parse, the file's invariants, the upgrade's steps, the final check),
+  never inside one, as stalx-reader's own deadline is. Only stalx-reader
+  sets it; the app's opens have no deadline, as before.
+- **A hidden comment in the import receipt.** An imported closure's archive
+  entry adds "and its comment is hidden" (and Remove Closure "brings its
+  name and comment back") when the archived end's own comment has text and
+  the kept end shows another one. It stays in the entry's tier (RS-X): a
+  warning for a station the project held before the import, a note for one
+  the file brought, whose comment the user has not seen yet.
+- **Read-only files.** A read-only earlier revision reloaded in place does
+  not load its history into the session (the earlier-version banner), and
+  the cache copy keeps it, as the local open of such a file does. Every
+  read-only file's conversion banner, local or downloaded, takes a new
+  sentence (`ConversionFile::ReadOnly`): it is only shown converted, and
+  the file stays as it is.
+- **Counting records.** An alias row counts once plus once for its line,
+  as a record counts once plus once per line, and a record's lines count
+  as they arrive, so the documented cap holds for both forms and is met
+  before a crafted array is held.
+- **A record a repair leaves with no line is reported.** Salvage names each
+  record that a stale-line clear or A3's repair left with no line
+  (`Repair::ArchivedBecameHistory`), worded like a dropped record: it is
+  history (A5), so nothing brings its name and comment back.
