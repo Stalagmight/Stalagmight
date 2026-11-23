@@ -317,6 +317,17 @@ export function missingPillColorsOf(themeName: string): MissingPillColors {
 
 const missingCache = new Map<string, MissingPillColors>();
 
+/**
+ * A line's colour dot drawn straight on the panel (the Sections panel's
+ * rows), with the pill's ring rule (RS-FX6, P3-17): a near-white line on a
+ * light theme or a near-black one on a dark theme gets a ring in its hue on
+ * the text side, so the dot does not vanish; any other colour none.
+ */
+export function panelDotOf(lineColor: string | null | undefined, themeName: string): PillDot {
+  const theme = pillThemeOf(themeName);
+  return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [theme.panel], theme);
+}
+
 /** The second dot (a station's home line) on a pill already coloured `on`. */
 export function pillMarkOf(markColor: string | null | undefined, on: PillColors, themeName: string): PillDot {
   const theme = pillThemeOf(themeName);
