@@ -294,7 +294,7 @@ impl Project {
     /// merged node the moving identity (RS 4.1 step 3). The stationary
     /// identity becomes a record naming `stationary_native` (its pre-merge
     /// native lines), and the node's id becomes `moving` everywhere.
-    fn reidentify_merged(
+    pub(super) fn reidentify_merged(
         &mut self,
         stationary: StationId,
         moving: StationId,
@@ -434,8 +434,8 @@ impl Project {
         // A promotion the sweep ran may have folded the merged node further.
         let mut node = report.kept;
         for promotion in &outcome.sweep.promoted {
-            if promotion.retired == node {
-                node = promotion.survivor;
+            if promotion.retired == node || promotion.survivor == node {
+                node = promotion.kept;
             }
         }
         let after = copy.raw_positions();

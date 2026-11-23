@@ -270,6 +270,8 @@ impl EditReport {
                 closure: self.pre_edit_closure(p.closure),
                 survivor: self.pre_edit_id(p.survivor),
                 retired: self.pre_edit_id(p.retired),
+                kept: self.pre_edit_id(p.kept),
+                archived: self.pre_edit_id(p.archived),
                 ..p.clone()
             })
             .collect()

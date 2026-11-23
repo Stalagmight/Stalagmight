@@ -354,10 +354,15 @@ fn a_deleted_station_takes_its_comment_datums_and_closures_and_a_junction_stays(
     let promotion = &edited.report.sweep.promoted[0];
     assert_eq!(promotion.survivor, a1);
     assert_eq!(promotion.retired, b2);
-    near(xy(&after, a1), xy(&before, a1), TOL, "A:1 stays");
-    assert_still(&before, &after, TOL, &[st(&p, b, 0), a1]);
-    assert!(p.topology().is_junction(a1));
-    assert_eq!(p.station(a1).unwrap().archived.len(), 1);
+    // RS 5.4: the closure archived nothing, and A:1's name "1" would repeat
+    // on B while B:2's is free on A, so the promotion keeps B:2's station,
+    // on A:1's position (geometry first, then the identity).
+    assert_eq!(promotion.kept, b2);
+    near(xy(&after, b2), xy(&before, a1), TOL, "A:1 stays");
+    assert_still(&before, &after, TOL, &[st(&p, b, 0), b2]);
+    assert!(p.topology().is_junction(b2));
+    assert_eq!(p.station(b2).unwrap().archived.len(), 1);
+    assert_eq!(p.station(b2).unwrap().archived[0].id, a1);
     assert_valid(&p);
 }
 
@@ -739,9 +744,19 @@ fn a_closure_on_the_lines_slot_moves_the_junctions_side_as_today() {
     let before = p.raw_positions();
     let edited = p.delete_shot(b, shot_id(&p, b, 0)).unwrap();
     assert_eq!(edited.report.sweep.promoted, preview.promoted_closures);
+    // RS 5.4: the closure archived nothing, and B:2's name "2" would repeat
+    // on A while the junction's "1" is free on B, so the promotion keeps the
+    // junction's station (on B:2's position: geometry first).
+    let kept = edited.report.sweep.promoted[0].kept;
+    assert_eq!(kept, j);
     let after = p.raw_positions();
-    near(xy(&after, b2), xy(&before, b2), TOL, "B stays");
-    near(xy(&after, b2), [10.0, 20.0], TOL, "A's side moved onto B:2");
+    near(xy(&after, kept), xy(&before, b2), TOL, "B stays");
+    near(
+        xy(&after, kept),
+        [10.0, 20.0],
+        TOL,
+        "A's side moved onto B:2",
+    );
     let shot = old.lines[1].shots[0].id;
     old.remove_shot_with_rewire(b, shot).unwrap();
     assert_like_today(&p, &old);
