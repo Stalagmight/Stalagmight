@@ -163,6 +163,13 @@ pub(super) fn archive_cycle_nodes(kept_of: &BTreeMap<StationId, StationId>) -> H
 pub struct RestoredIdentity {
     /// The node's id before (now a history record's id).
     pub old: StationId,
+    /// The old identity's name, and its home line before the op (the line
+    /// whose departure left the node no native line; filled by the op's
+    /// epilogue from the state before it, `None` where there is none, as in
+    /// salvage): a notice names a hidden comment "Annex / 3", not by its
+    /// Station ID alone (RS-FX6, P2-7).
+    pub old_name: String,
+    pub old_home_line: Option<LineId>,
     /// Its id now: the restored record's.
     pub new: StationId,
     /// The old identity's comment moved with the node (the record had none).
@@ -225,6 +232,11 @@ impl IdentityReport {
     /// Fill [`Self::hidden`] from the comments `after` hides that `before`
     /// showed, leaving out those `restored` already names.
     pub(super) fn with_hidden(mut self, before: &Project, after: &Project) -> Self {
+        for restored in &mut self.restored {
+            if restored.old_home_line.is_none() {
+                restored.old_home_line = before.home_line(restored.old);
+            }
+        }
         let mut hidden = after.hidden_comments(before);
         hidden.retain(|h| {
             !self
@@ -751,9 +763,12 @@ impl Project {
                 station.external = old.external.take();
             }
             let comment_hidden = old.comment.clone().filter(|c| !c.is_empty());
+            let old_name = old.name.clone();
             self.rekey_node(node, record.id);
             out.push(RestoredIdentity {
                 old: node,
+                old_name,
+                old_home_line: None,
                 new: record.id,
                 comment_moved,
                 comment_hidden,

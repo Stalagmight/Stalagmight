@@ -97,6 +97,7 @@ export * from './ipc/RenameSuggestion';
 export * from './ipc/NameCollision';
 export * from './ipc/KeepCandidate';
 export * from './ipc/MergeKeepPreview';
+export * from './ipc/NameRepeat';
 export * from './ipc/ClosureKeepPreview';
 export * from './ipc/KeepRefusalReason';
 export * from './ipc/LoopClosureNaming';
