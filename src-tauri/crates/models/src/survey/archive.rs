@@ -121,6 +121,30 @@ impl IdentityReport {
     }
 }
 
+/// Whose station a slot shows (RS 5.4, U-P2-5): what a rename or a comment
+/// edit through the slot addresses, and the two ways back the prompt
+/// offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotOwner {
+    /// The slot's node.
+    pub node: StationId,
+    /// The identity the slot shows: a rename or comment edit through it
+    /// addresses this one, on every line it is shown on.
+    pub shown: StationId,
+    /// The shown identity's home line (RS 2): "12 belongs to Main Line".
+    pub home_line: Option<LineId>,
+    /// The slot is foreign (RS 2): its line is not a native line of the
+    /// node holding the shown identity.
+    pub foreign: bool,
+    /// The closure archiving the node, when the slot is a loop end: "shown
+    /// as Main / 20 through a loop closure; Remove the closure".
+    pub loop_closure: Option<ClosureId>,
+    /// The line's own station there, archived by a merge (the record naming
+    /// the slot's line at the node): "Detach Side to get back its own
+    /// station 0".
+    pub own_station: Option<StationId>,
+}
+
 /// Whether a comment holds text.
 pub(super) fn has_text(comment: Option<&String>) -> bool {
     comment.is_some_and(|c| !c.is_empty())
@@ -229,6 +253,21 @@ impl Project {
             Some(node) => !self.is_native(self.shown(node), slot.line_id),
             None => false,
         }
+    }
+
+    /// Whose station `slot` shows ([`SlotOwner`], RS 5.4); `None` for a slot
+    /// that does not exist.
+    pub fn slot_owner(&self, slot: StationRef) -> Option<SlotOwner> {
+        let node = self.station_at(slot)?;
+        let shown = self.shown(node);
+        Some(SlotOwner {
+            node,
+            shown,
+            home_line: self.home_line(shown),
+            foreign: !self.is_native(shown, slot.line_id),
+            loop_closure: self.archiving_closure(node).map(|c| c.id),
+            own_station: self.record_naming(node, slot.line_id).map(|r| r.id),
+        })
     }
 
     /// Whether `id` is the id of some station's record.

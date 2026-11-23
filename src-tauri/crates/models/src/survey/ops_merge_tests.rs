@@ -269,7 +269,7 @@ fn hand_moves_datums_and_closure_ends_follow_the_retired_station() {
         .unwrap()
         .hand_moves
         .insert(a2, [0.25, -0.5, 0.0]);
-    ok(p.create_closure(a0, Some(a), a2, Some(a), ClosureStrategy::Batch));
+    ok(p.create_closure(a0, Some(a), a2, Some(a), ClosureStrategy::Batch, None, &[]));
     let out = ok(p.merge_keeping_stationary(a2, b0));
     assert_valid(&p);
     assert_eq!(out.value.kept, b0);
@@ -287,7 +287,7 @@ fn hand_moves_datums_and_closure_ends_follow_the_retired_station() {
 fn a_closure_between_the_merged_stations_is_removed_by_the_sweep() {
     let (mut p, a, b) = two_placed_pieces();
     let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
-    let closure = ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch))
+    let closure = ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
     let out = ok(p.merge_keeping_stationary(a2, b0));
@@ -329,7 +329,7 @@ fn the_merge_check_routes_connected_pairs_to_the_closure_dialog() {
     assert!(check.datum_shift.is_none(), "neither piece is placed");
 
     assert_eq!(p.merge_check(a0, a0).err(), Some(OpError::AlreadyMerged));
-    ok(p.create_closure(a0, None, a2, None, ClosureStrategy::Batch));
+    ok(p.create_closure(a0, None, a2, None, ClosureStrategy::Batch, None, &[]));
     assert_eq!(p.merge_check(a2, a0).err(), Some(OpError::DuplicateClosure));
 
     let (p, a, b) = two_placed_pieces();
@@ -344,7 +344,7 @@ fn two_placed_pieces_joined_by_a_closure_are_connected_for_the_dialog_but_may_me
     // dialog), while the merge itself only refuses a rigid connection.
     let (mut p, a, b) = two_placed_pieces();
     let (a0, a2, b0, b2) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0), at(&p, b, 2));
-    ok(p.create_closure(a0, None, b2, None, ClosureStrategy::Batch));
+    ok(p.create_closure(a0, None, b2, None, ClosureStrategy::Batch, None, &[]));
     let check = p.merge_check(a2, b0).unwrap();
     assert!(check.connected && !check.can_merge);
     let before = xy_all(&p);

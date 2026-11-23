@@ -81,6 +81,20 @@ impl Project {
         }
     }
 
+    /// The comment `node` is shown with: its shown identity's (RS 5.1).
+    pub fn shown_comment(&self, node: StationId) -> Option<&str> {
+        self.shown_station(node)?.comment.as_deref()
+    }
+
+    /// Set the comment of the identity `node` shows (a loop end's edit goes
+    /// to the kept end's identity, RS 5.4); an empty one is none. No checks.
+    pub fn set_shown_comment(&mut self, node: StationId, comment: Option<String>) {
+        let identity = self.shown(node);
+        if let Some(s) = self.stations.get_mut(&identity) {
+            s.comment = comment.filter(|text| !text.is_empty());
+        }
+    }
+
     /// Every `(shown identity, line)` pair of this state, for rule L's "new
     /// on the line".
     pub(super) fn shown_pairs(&self) -> BTreeSet<(StationId, LineId)> {

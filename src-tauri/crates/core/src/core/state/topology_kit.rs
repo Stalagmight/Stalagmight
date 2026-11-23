@@ -117,7 +117,7 @@ pub(super) fn close(
     b: StationRef,
     strategy: ClosureStrategy,
 ) -> ClosureId {
-    p.create_closure_at(a, b, strategy)
+    p.create_closure_at(a, b, strategy, None, &[])
         .unwrap()
         .value
         .closure

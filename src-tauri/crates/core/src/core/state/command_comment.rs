@@ -61,19 +61,24 @@ enum Holder {
     Shot { line: LineId, index: usize },
 }
 
-/// The station Set Station Comment addresses, or 0.6.0's refusal.
+/// The station Set Station Comment addresses, or 0.6.0's refusal: the
+/// identity the slot shows (RS 5.4: a loop end's comment is its closure's
+/// kept end's; RS-UI asks first whose station it is).
 fn commented_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
     let line = project
         .line(slot.line_id)
         .ok_or_else(|| LINE_GONE.to_string())?;
     let last = line.shots.len();
-    project.station_at(slot).ok_or_else(|| {
-        format!(
-            "Station index {} out of range (line has {} stations)",
-            slot.station_index,
-            last + 1
-        )
-    })
+    project
+        .station_at(slot)
+        .map(|station| project.shown(station))
+        .ok_or_else(|| {
+            format!(
+                "Station index {} out of range (line has {} stations)",
+                slot.station_index,
+                last + 1
+            )
+        })
 }
 
 /// Resolve a Move Comment holder, or 0.6.0's refusal.
@@ -85,7 +90,7 @@ fn resolve(project: &Project, holder: &CommentHolder) -> Result<Holder, String> 
             }
             project
                 .station_at(*station_ref)
-                .map(Holder::Station)
+                .map(|station| Holder::Station(project.shown(station)))
                 .ok_or_else(|| format!("Station index {} out of range", station_ref.station_index))
         }
         CommentHolder::Shot { line_id, shot_id } => {

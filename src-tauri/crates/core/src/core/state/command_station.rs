@@ -161,8 +161,17 @@ pub(super) fn apply(
             station_b,
             closure_strategy,
         } => {
+            // RS-W: the command carries the dialog's keep and renames (RS
+            // 5.2); until then a closure archives nothing ("Keep both
+            // names"), so it shows no name twice.
             let outcome = project
-                .create_closure_at(*station_a, *station_b, (*closure_strategy).into())
+                .create_closure_at(
+                    *station_a,
+                    *station_b,
+                    (*closure_strategy).into(),
+                    None,
+                    &[],
+                )
                 .map_err(text_or(NO_SUCH_STATIONS))?;
             let closure = outcome.value.closure;
             tracing::debug!(
@@ -176,7 +185,9 @@ pub(super) fn apply(
             Ok(Applied::default())
         }
         Command::RemoveLoopClosure { closure_id } => {
-            let outcome = project.remove_closure(*closure_id).map_err(text)?;
+            // RS-W: the command carries the dialog's renames (RS 5.3); until
+            // then a name the restored end repeats is lettered by rule L.
+            let outcome = project.remove_closure_auto(*closure_id).map_err(text)?;
             tracing::debug!(
                 closure_id,
                 station_a = outcome.value.a,

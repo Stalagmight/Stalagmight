@@ -24,7 +24,7 @@ fn a_closure_stores_its_ends_hints_and_strategy_and_derives_its_figures() {
     let (mut p, a) = one_line();
     let (a0, a3) = (at(&p, a, 0), at(&p, a, 3));
     let before = xy_all(&p);
-    let out = ok(p.create_closure(a0, Some(a), a3, Some(a), ClosureStrategy::Batch));
+    let out = ok(p.create_closure(a0, Some(a), a3, Some(a), ClosureStrategy::Batch, None, &[]));
     assert_valid(&p);
     assert_eq!(
         out.value.closure,
@@ -54,6 +54,8 @@ fn a_closure_stores_its_ends_hints_and_strategy_and_derives_its_figures() {
         StationRef::new(a, 1),
         StationRef::new(a, 5),
         ClosureStrategy::Move,
+        None,
+        &[],
     ))
     .value
     .closure;
@@ -74,22 +76,32 @@ fn creation_refuses_in_todays_order_with_todays_words() {
     );
     let batch = ClosureStrategy::Batch;
     assert_eq!(
-        p.create_closure(a0, None, 999, None, batch).err(),
+        p.create_closure(a0, None, 999, None, batch, None, &[])
+            .err(),
         Some(OpError::UnknownStation(999))
     );
-    let same = p.create_closure(a0, None, a0, None, batch).err().unwrap();
+    let same = p
+        .create_closure(a0, None, a0, None, batch, None, &[])
+        .err()
+        .unwrap();
     assert_eq!(
         same.to_string(),
         "These stations are already merged. Closures are for unmerged station pairs."
     );
-    let apart = p.create_closure(a0, None, b0, None, batch).err().unwrap();
+    let apart = p
+        .create_closure(a0, None, b0, None, batch, None, &[])
+        .err()
+        .unwrap();
     assert_eq!(apart, OpError::NotConnected);
     assert_eq!(
         apart.to_string(),
         "Stations are not connected. They must be in the same connected group to create a \
          loop closure."
     );
-    let adjacent = p.create_closure(a0, None, a1, None, batch).err().unwrap();
+    let adjacent = p
+        .create_closure(a0, None, a1, None, batch, None, &[])
+        .err()
+        .unwrap();
     assert!(matches!(
         adjacent,
         OpError::AcrossOneShot { line, index: 0, .. } if line == a
@@ -100,17 +112,26 @@ fn creation_refuses_in_todays_order_with_todays_words() {
          shot to zero length. Pick two stations that are not the ends of a single shot."
     );
     assert_eq!(
-        p.create_closure(a0, None, a2, None, ClosureStrategy::ProportionalByLength)
-            .err(),
+        p.create_closure(
+            a0,
+            None,
+            a2,
+            None,
+            ClosureStrategy::ProportionalByLength,
+            None,
+            &[]
+        )
+        .err(),
         Some(OpError::DeferredStrategy)
     );
     assert_eq!(
-        p.create_closure(a0, None, a2, None, ClosureStrategy::Tie)
+        p.create_closure(a0, None, a2, None, ClosureStrategy::Tie, None, &[])
             .err(),
         Some(OpError::TieNotCreatable)
     );
     assert_eq!(
-        p.create_closure(a0, Some(b), a2, None, batch).err(),
+        p.create_closure(a0, Some(b), a2, None, batch, None, &[])
+            .err(),
         Some(OpError::StationNotOnLine {
             station: a0,
             line: b
@@ -118,14 +139,17 @@ fn creation_refuses_in_todays_order_with_todays_words() {
     );
     assert!(p.closures.is_empty());
 
-    ok(p.create_closure(a0, None, a2, None, batch));
+    ok(p.create_closure(a0, None, a2, None, batch, None, &[]));
     assert_eq!(
-        p.create_closure(a2, None, a0, None, batch).err(),
+        p.create_closure(a2, None, a0, None, batch, None, &[]).err(),
         Some(OpError::DuplicateClosure),
         "either way round"
     );
     // a0 and a2 are one knot now: a3 to a0 would squeeze shot 2 (a2 -> a3).
-    let knotted = p.create_closure(a3, None, a0, None, batch).err().unwrap();
+    let knotted = p
+        .create_closure(a3, None, a0, None, batch, None, &[])
+        .err()
+        .unwrap();
     assert!(
         matches!(knotted, OpError::AcrossOneShot { index: 2, .. }),
         "{knotted:?}"
@@ -142,10 +166,10 @@ fn two_placed_pieces_may_be_tied_by_a_closure_and_a_free_one_may_not() {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(30.0, 100.0), None));
     let (a2, b0, c0) = (at(&p, a, 2), at(&p, b, 0), at(&p, c, 0));
-    ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch));
+    ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch, None, &[]));
     assert_valid(&p);
     assert_eq!(
-        p.create_closure(a2, None, c0, None, ClosureStrategy::Batch)
+        p.create_closure(a2, None, c0, None, ClosureStrategy::Batch, None, &[])
             .err(),
         Some(OpError::NotConnected)
     );
@@ -155,16 +179,16 @@ fn two_placed_pieces_may_be_tied_by_a_closure_and_a_free_one_may_not() {
 fn a_closure_is_removed_by_id() {
     let (mut p, a) = one_line();
     let (a0, a2, a4) = (at(&p, a, 0), at(&p, a, 2), at(&p, a, 4));
-    let first = ok(p.create_closure(a0, None, a2, None, ClosureStrategy::Batch))
+    let first = ok(p.create_closure(a0, None, a2, None, ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
-    let second = ok(p.create_closure(a0, None, a4, None, ClosureStrategy::Batch))
+    let second = ok(p.create_closure(a0, None, a4, None, ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
-    let out = ok(p.remove_closure(first.id));
+    let out = ok(p.remove_closure(first.id, &[]));
     assert_eq!(out.value, first);
     assert_eq!(p.closures, vec![second]);
-    let missing = p.remove_closure(first.id).err().unwrap();
+    let missing = p.remove_closure(first.id, &[]).err().unwrap();
     assert_eq!(missing.to_string(), "Loop closure not found");
     assert_eq!(p.counters.next_closure_id, 3, "ids are never reused");
 }
@@ -268,7 +292,7 @@ fn a_sole_bridge_between_two_placed_pieces_is_kept() {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(30.0, 100.0), None));
     let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
-    let id = ok(p.create_closure(a2, None, b0, None, ClosureStrategy::Batch))
+    let id = ok(p.create_closure(a2, None, b0, None, ClosureStrategy::Batch, None, &[]))
         .value
         .closure
         .id;
@@ -321,7 +345,7 @@ fn removing_a_datum_unblocks_a_promotion() {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(30.0, 100.0), None));
     let (a2, b0, b1) = (at(&p, a, 2), at(&p, b, 0), at(&p, b, 1));
-    ok(p.create_closure(a2, None, b0, None, ClosureStrategy::Batch));
+    ok(p.create_closure(a2, None, b0, None, ClosureStrategy::Batch, None, &[]));
     let out = ok(p.remove_datum(1));
     assert_valid(&p);
     assert_eq!(out.sweep.promoted.len(), 1);
@@ -357,7 +381,7 @@ fn a_closure_between_two_datum_held_pieces_has_0_6_0_s_error_percentage() {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(40.0, 0.0), None));
     let (a2, b2) = (at(&p, a, 2), at(&p, b, 2));
-    ok(p.create_closure(a2, Some(a), b2, Some(b), ClosureStrategy::Batch));
+    ok(p.create_closure(a2, Some(a), b2, Some(b), ClosureStrategy::Batch, None, &[]));
     assert_valid(&p);
     let m = p.closures_metrics(&p.raw_positions())[0].clone().unwrap();
     assert!(m.misclosure_distance > 30.0, "{m:?}");
@@ -412,7 +436,7 @@ fn closure_order_decides_the_skip_set() {
         vec![flat(90.0, 10.0), flat(0.0, 10.0), flat(270.0, 9.0)],
     );
     let (s0, s2, s3) = (at(&p, a, 0), at(&p, a, 2), at(&p, a, 3));
-    let first = ok(p.create_closure(s0, None, s2, None, ClosureStrategy::Batch))
+    let first = ok(p.create_closure(s0, None, s2, None, ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
     // A second closure from s0 to s3: Create refuses it (across one shot
@@ -462,7 +486,7 @@ fn adjusted_depth_co_locates_the_ends_of_an_adjusted_closure() {
         vec![shot(0.0, 10.0, 0.0, 1.0), shot(90.0, 10.2, 1.0, 6.0)],
     );
     let (a2, b2) = (at(&p, a, 2), at(&p, b, 2));
-    ok(p.create_closure(a2, None, b2, None, ClosureStrategy::Batch));
+    ok(p.create_closure(a2, None, b2, None, ClosureStrategy::Batch, None, &[]));
     let raw = p.raw_positions();
     let adjusted = p.adjusted_positions(&crate::config::ClosureAdjustmentConfig::default());
     assert_eq!(raw.z(a2), Some(4.0));

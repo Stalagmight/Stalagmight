@@ -685,6 +685,8 @@ fn closures_name_their_ends_when_created_and_removed() {
             StationRef::new(BRANCH, 2),
             StationRef::new(MAIN, 4),
             crate::models::survey::ClosureStrategy::Batch,
+            None,
+            &[],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -705,7 +707,7 @@ fn closures_name_their_ends_when_created_and_removed() {
     let closure_id = survey_of(&o.state).closures[0].id;
     let cmd = Command::RemoveLoopClosure { closure_id };
     record(&o.state, &cmd, |p| {
-        p.remove_closure(closure_id)
+        p.remove_closure(closure_id, &[])
             .map(|_| ())
             .map_err(|e| e.to_string())
     });

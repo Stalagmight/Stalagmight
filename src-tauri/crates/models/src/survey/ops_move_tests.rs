@@ -244,7 +244,7 @@ fn tied_survey() -> (Project, [LineId; 3]) {
     let (a0, d1) = (at(&p, a, 0), at(&p, d, 1));
     p.push_closure(a0, None, d1, None, ClosureStrategy::Tie);
     let (b0, b4) = (at(&p, b, 0), at(&p, b, 4));
-    ok(p.create_closure(b0, None, b4, None, ClosureStrategy::Move));
+    ok(p.create_closure(b0, None, b4, None, ClosureStrategy::Move, None, &[]));
     assert_valid(&p);
     (p, [a, d, b])
 }

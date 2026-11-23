@@ -597,6 +597,8 @@ fn a_removed_closure_names_its_stations_alone_on_the_stack() {
         StationRef::new(0, 3),
         StationRef::new(1, 2),
         crate::models::survey::ClosureStrategy::Batch,
+        None,
+        &[],
     )
     .unwrap();
     let path = write(dir.path(), &p);
@@ -606,7 +608,7 @@ fn a_removed_closure_names_its_stations_alone_on_the_stack() {
     let r = state.run_recorded(
         |p| Record::of(p, &cmd),
         |p, _| {
-            p.remove_closure(closure_id)
+            p.remove_closure(closure_id, &[])
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         },

@@ -236,14 +236,30 @@ fn closure_ends_attached_via_the_line_move_and_others_stay() {
     let (a3, b2) = (at(&p, a, 3), at(&p, b, 2));
     // Two closures from the hub: one attached via a, one via b. Each closes a
     // loop inside the piece now.
-    let via_a = ok(p.create_closure(hub, Some(a), b2, Some(b), super::ClosureStrategy::Batch))
-        .value
-        .closure
-        .id;
-    let via_b = ok(p.create_closure(hub, Some(b), a3, Some(a), super::ClosureStrategy::Batch))
-        .value
-        .closure
-        .id;
+    let via_a = ok(p.create_closure(
+        hub,
+        Some(a),
+        b2,
+        Some(b),
+        super::ClosureStrategy::Batch,
+        None,
+        &[],
+    ))
+    .value
+    .closure
+    .id;
+    let via_b = ok(p.create_closure(
+        hub,
+        Some(b),
+        a3,
+        Some(a),
+        super::ClosureStrategy::Batch,
+        None,
+        &[],
+    ))
+    .value
+    .closure
+    .id;
     let out = ok(p.detach_line(hub, b, &[], None));
     assert_valid(&p);
     assert_eq!(out.value.moved_closure_ends, vec![(via_b, ClosureEnd::A)]);

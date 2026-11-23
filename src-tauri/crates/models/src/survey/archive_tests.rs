@@ -190,7 +190,7 @@ fn merging_the_ends_of_an_archiving_closure_keeps_its_kept_end() {
     ok(p.set_datum_at(StationRef::new(a, 0), origin(), None));
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(30.0, 100.0), None));
     let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
-    let id = ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch))
+    let id = ok(p.create_closure(a2, Some(a), b0, Some(b), ClosureStrategy::Batch, None, &[]))
         .value
         .closure
         .id;
@@ -221,7 +221,7 @@ fn a_closure_archived_station_keeps_showing_its_kept_end_after_a_merge() {
         let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
         let (a0, a3, b0) = (at(&p, a, 0), at(&p, a, 3), at(&p, b, 0));
         // A same-line closure: A:3 shows A:0 ("0" twice on A, one identity).
-        ok(p.create_closure(a3, Some(a), a0, Some(a), ClosureStrategy::Batch));
+        ok(p.create_closure(a3, Some(a), a0, Some(a), ClosureStrategy::Batch, None, &[]));
         p.closures[0].archived = Some(ClosureEnd::A);
         assert_valid(&p);
         assert_eq!(shown(&p, a), ["0", "1", "2", "0"]);
@@ -524,7 +524,15 @@ fn a_range_split_repoints_the_records_of_the_stations_it_moves() {
 fn add_stalx_shifts_records_and_keeps_closure_archives() {
     let (mut source, far, up) = far_room_and_upstream();
     let (u1, u3) = (at(&source, up, 1), at(&source, up, 3));
-    ok(source.create_closure(u3, Some(up), u1, Some(up), ClosureStrategy::Batch));
+    ok(source.create_closure(
+        u3,
+        Some(up),
+        u1,
+        Some(up),
+        ClosureStrategy::Batch,
+        None,
+        &[],
+    ));
     source.closures[0].archived = Some(ClosureEnd::B);
     source.station_mut(u1).unwrap().name = "mid".to_string();
     assert_valid(&source);
@@ -571,11 +579,11 @@ fn a_merge_that_would_cycle_the_closure_archives_drops_the_later_one() {
     ok(p.set_datum_at(StationRef::new(b, 0), gps_at(500.0, 0.0), None));
     ok(p.set_datum_at(StationRef::new(c, 0), gps_at(-500.0, 0.0), None));
     let (x, k, y) = (at(&p, a, 2), at(&p, b, 1), at(&p, c, 2));
-    let c1 = ok(p.create_closure(x, Some(a), k, Some(b), ClosureStrategy::Batch))
+    let c1 = ok(p.create_closure(x, Some(a), k, Some(b), ClosureStrategy::Batch, None, &[]))
         .value
         .closure
         .id;
-    let c2 = ok(p.create_closure(k, Some(b), y, Some(c), ClosureStrategy::Batch))
+    let c2 = ok(p.create_closure(k, Some(b), y, Some(c), ClosureStrategy::Batch, None, &[]))
         .value
         .closure
         .id;
@@ -604,7 +612,7 @@ fn a_same_line_closure_shows_one_identity_twice() {
     let mut p = project();
     let a = free_line(&mut p, [0.0, 0.0], run(90.0, 4, 10.0));
     let (a0, a1, a4) = (at(&p, a, 0), at(&p, a, 1), at(&p, a, 4));
-    ok(p.create_closure(a4, Some(a), a0, Some(a), ClosureStrategy::Batch));
+    ok(p.create_closure(a4, Some(a), a0, Some(a), ClosureStrategy::Batch, None, &[]));
     p.closures[0].archived = Some(ClosureEnd::A);
     assert_valid(&p);
     assert_eq!(shown(&p, a), ["0", "1", "2", "3", "0"]);

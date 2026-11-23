@@ -770,7 +770,9 @@ impl Walk {
                 } else {
                     ClosureStrategy::Move
                 };
-                let r = self.project.create_closure(a, None, b, None, strategy);
+                let r = self
+                    .project
+                    .create_closure(a, None, b, None, strategy, None, &[]);
                 ("create closure", r.is_ok())
             }
             21 => {
@@ -778,7 +780,10 @@ impl Walk {
                 let Some(id) = self.rng.pick(&ids) else {
                     return ("skip", false);
                 };
-                ("remove closure", self.project.remove_closure(id).is_ok())
+                (
+                    "remove closure",
+                    self.project.remove_closure(id, &[]).is_ok(),
+                )
             }
             22 => {
                 let Some(station) = self.station() else {

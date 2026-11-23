@@ -307,7 +307,7 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
                 ClosureStrategy::Move,
                 ClosureStrategy::LeastSquaresWeighted,
             ][rng.below(3)];
-            let result = p.create_closure_at(a, b, strategy);
+            let result = p.create_closure_at(a, b, strategy, None, &[]);
             check(
                 p,
                 &before,
@@ -319,7 +319,7 @@ fn step(p: &mut Project, rng: &mut Rng, next: &mut u64, tag: &mut usize) -> Stri
         5 => {
             let ids: Vec<_> = p.closures.iter().map(|c| c.id).collect();
             let id = rng.pick(&ids).unwrap_or(9999);
-            let result = p.remove_closure(id);
+            let result = p.remove_closure(id, &[]);
             check(
                 p,
                 &before,

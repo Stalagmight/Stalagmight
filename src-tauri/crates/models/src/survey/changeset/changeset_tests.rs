@@ -354,13 +354,21 @@ fn closures_datums_and_placements_are_list_hunks() {
     let (mut before, line) = survey(8);
     let chain = before.line_stations(line).unwrap().to_vec();
     before
-        .create_closure(chain[1], None, chain[6], None, ClosureStrategy::Batch)
+        .create_closure(
+            chain[1],
+            None,
+            chain[6],
+            None,
+            ClosureStrategy::Batch,
+            None,
+            &[],
+        )
         .unwrap();
     let mut after = before.clone();
     after
         .set_datum(chain[0], Some(line), gps(20.5, -87.0), None)
         .unwrap();
-    after.remove_closure(after.closures[0].id).unwrap();
+    after.remove_closure(after.closures[0].id, &[]).unwrap();
     let changes = capture(&before, &after);
     let digest = changes.digest();
     assert_eq!(digest.datums.added.len(), 1);

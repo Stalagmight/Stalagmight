@@ -300,7 +300,7 @@ fn delete_line_drops_a_closure_the_kept_line_doubles() {
     assert_valid(&p);
     assert!(
         p.clone()
-            .create_closure(j, Some(a), f, Some(e), ClosureStrategy::Batch)
+            .create_closure(j, Some(a), f, Some(e), ClosureStrategy::Batch, None, &[])
             .is_err(),
         "the pair is a duplicate once B is gone"
     );
