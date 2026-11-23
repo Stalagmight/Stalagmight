@@ -971,6 +971,7 @@ mod receipt_tests {
             code: "DATABASE_NOT_REOPENED".to_string(),
             message: "File saved, but database could not be reopened.".to_string(),
             severity: WarningSeverity::Warning,
+            parts: None,
         }])
     }
 
@@ -983,6 +984,7 @@ mod receipt_tests {
             code: "LONG_SHOT".to_string(),
             message: "shot 3 is unusually long".to_string(),
             severity: WarningSeverity::Warning,
+            parts: None,
         }]);
 
         let merged = merge_deferred_save_outcome(import_result, degraded_save());

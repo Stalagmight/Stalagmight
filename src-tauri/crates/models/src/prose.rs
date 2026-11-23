@@ -227,6 +227,30 @@ pub fn split(marked: &str) -> (String, Vec<ProsePart>) {
     }
 }
 
+/// `parts` as an optional wire field (`*_parts`): `None` when they name
+/// nothing, so the key stays off the wire.
+pub fn named(parts: Vec<ProsePart>) -> Option<Vec<ProsePart>> {
+    parts.iter().any(ProsePart::is_name).then_some(parts)
+}
+
+/// `part` marked when its words are exactly `plain`, else `plain` itself:
+/// a builder that words a name its own way keeps those words, and gains the
+/// pill only where the part says the same, so its plain string never
+/// changes.
+pub fn mark_as(plain: &str, part: Option<ProsePart>) -> String {
+    match part {
+        Some(part) if part.text() == plain => mark(&part),
+        _ => plain.to_owned(),
+    }
+}
+
+/// `parts` without their session handles ([`ProsePart::without_slot`]): a
+/// text worded before an edit, whose slots may name other stations after
+/// it, or one that outlives the session.
+pub fn without_slots(parts: Vec<ProsePart>) -> Vec<ProsePart> {
+    parts.into_iter().map(ProsePart::without_slot).collect()
+}
+
 /// A line's name as a part: `text` the words plain text has (`Main`, or
 /// `"Main"` when the text quotes it), `name` the name.
 pub fn line_part(line_id: Option<LineId>, name: &str, quoted: bool) -> ProsePart {
@@ -324,6 +348,43 @@ mod tests {
             serde_json::to_string(&line).unwrap(),
             r#"{"kind":"line","text":"Main","line_id":2,"name":"Main"}"#
         );
+    }
+
+    #[test]
+    fn mark_as_marks_a_part_only_when_its_words_are_the_plain_text() {
+        let part = station("Side / 0", "0");
+        assert_eq!(unmark(&mark_as("Side / 0", Some(part.clone()))), "Side / 0");
+        assert_eq!(
+            split(&mark_as("Side / 0", Some(part.clone()))).1,
+            vec![part.clone()]
+        );
+        // Other words: the plain text, no part.
+        assert_eq!(mark_as("Side / 00", Some(part)), "Side / 00");
+        assert_eq!(mark_as("a station", None), "a station");
+    }
+
+    #[test]
+    fn named_leaves_a_text_without_names_off_the_wire() {
+        assert_eq!(named(Vec::new()), None);
+        let words = vec![ProsePart::Text {
+            text: "x".to_owned(),
+        }];
+        assert_eq!(named(words), None);
+        let line = vec![line_part(Some(1), "Main", false)];
+        assert_eq!(named(line.clone()), Some(line));
+    }
+
+    #[test]
+    fn without_slots_drops_every_session_handle() {
+        let parts = without_slots(vec![
+            station("Side / 0", "0"),
+            line_part(Some(1), "Main", false),
+        ]);
+        assert!(parts.iter().all(|p| match p {
+            ProsePart::Station(s) => s.slot.is_none() && s.station_id == Some(42),
+            _ => true,
+        }));
+        assert_eq!(plain(&parts), "Side / 0Main");
     }
 
     #[test]

@@ -63,19 +63,15 @@ pub(super) fn shot_index(project: &Project, line_id: LineId, shot_id: u32) -> Op
         .position(|s| s.id == shot_id)
 }
 
-/// A shot as the user reads it: `Main Line: 4 \u{2192} 5` (the line's
-/// label, then the stations it runs between, a dotted slot or a loop end
-/// qualified: [`Project::shot_text`], RS-FX5).
-pub(super) fn shot_label(project: &Project, line: LineId, index: usize) -> String {
-    project.shot_text(line, index)
-}
-
 /// Every loop closure's two stations as the user read them before an edit
 /// (`Main Line / 4`, each end on its `via` line), so the warnings for the
 /// closures the edit removes name the stations the user created them
 /// between: the edit may delete a station or retire it into an alias, and a
-/// name read afterwards would be gone. Empty (and free) on a project without
-/// closures.
+/// name read afterwards would be gone. Each name is marked
+/// ([`Project::station_marked`], RS-PROSE: the words of
+/// `Project::station_text`), so a warning built from them splits into its
+/// message and its parts ([`ValidationWarning::marked_before_edit`]). Empty
+/// (and free) on a project without closures.
 #[derive(Debug, Default)]
 pub(super) struct ClosureNames(BTreeMap<ClosureId, (String, String)>);
 
@@ -90,8 +86,8 @@ impl ClosureNames {
                     (
                         c.id,
                         (
-                            project.station_text(c.a, c.a_via),
-                            project.station_text(c.b, c.b_via),
+                            project.station_marked(c.a, c.a_via),
+                            project.station_marked(c.b, c.b_via),
                         ),
                     )
                 })
@@ -99,12 +95,13 @@ impl ClosureNames {
         )
     }
 
-    /// `closure`'s two names as recorded, else as `after` reads them.
+    /// `closure`'s two names as recorded, else as `after` reads them;
+    /// marked.
     fn pair(&self, after: &Project, closure: &LoopClosure) -> (String, String) {
         self.0.get(&closure.id).cloned().unwrap_or_else(|| {
             (
-                after.station_text(closure.a, closure.a_via),
-                after.station_text(closure.b, closure.b_via),
+                after.station_marked(closure.a, closure.a_via),
+                after.station_marked(closure.b, closure.b_via),
             )
         })
     }
@@ -116,8 +113,9 @@ pub(super) const ONE_POINT_BY_PROMOTION: &str =
     "another loop closure became a merge, which made its two stations one point.";
 
 /// The warning for a closure a delete removed because it left the closure
-/// across one shot (#737), as 0.6.0 worded it.
-pub(super) fn closure_removed_message(
+/// across one shot (#737), as 0.6.0 worded it, its station names marked
+/// (`prose::unmark` gives the message).
+pub(super) fn closure_removed_marked(
     names: &ClosureNames,
     after: &Project,
     c: &LoopClosure,
@@ -142,11 +140,11 @@ pub(super) fn merged_ends_warnings(
         .iter()
         .map(|c| {
             let (a, b) = names.pair(after, c);
-            ValidationWarning {
-                code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
-                message: format!("Removed loop closure {a} to {b}: {why}"),
-                severity: WarningSeverity::Warning,
-            }
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_MERGED_ENDS,
+                &format!("Removed loop closure {a} to {b}: {why}"),
+                WarningSeverity::Warning,
+            )
         })
         .collect()
 }
@@ -200,11 +198,11 @@ pub(super) fn closure_warnings(
                 purpose = "drop a closure a delete left across one shot",
                 "Removed loop closure that now spans a single shot"
             );
-            ValidationWarning {
-                code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
-                message: closure_removed_message(names, after, c),
-                severity: WarningSeverity::Warning,
-            }
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+                &closure_removed_marked(names, after, c),
+                WarningSeverity::Warning,
+            )
         })
         .collect();
     warnings.extend(merged_ends_warnings(
@@ -218,13 +216,16 @@ pub(super) fn closure_warnings(
 
 /// The create-time validation warnings of the shot at `index` of `line`
 /// (per-project thresholds, #57, so they match the panel), naming the shot
-/// as the user will read it after the insert.
+/// as the user will read it after the insert: `Main Line: 4 \u{2192} 5`,
+/// the line's label, then the stations it runs between, a dotted slot or a
+/// loop end qualified ([`Project::shot_text`], RS-FX5), as its part
+/// ([`Project::shot_marked`], RS-PROSE).
 fn created_shot_warnings(project: &Project, line: LineId, index: usize) -> Vec<ValidationWarning> {
     let Some(shot) = project.line(line).and_then(|l| l.shots.get(index)) else {
         return Vec::new();
     };
     Validator::validate_shot(&shot.to_shot_data(), &project.settings.validation, || {
-        shot_label(project, line, index)
+        project.shot_marked(line, index)
     })
 }
 
