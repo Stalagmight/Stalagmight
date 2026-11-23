@@ -160,14 +160,21 @@ export async function releaseSignOutLocks(projects: SignOutProject[]): Promise<S
   const failed: SignOutProject[] = [];
   for (const project of projects) {
     try {
-      await ownSpeleoRelease(project.summary.id, () => bounded(
-        invokeIpc('speleodb_release_lock', { projectId: project.summary.id }, {
-          purpose: 'hand a lock back before signing out',
+      // The marker sits inside the bound, around the release itself: the bound
+      // gives up on the reply, not on the release, which may still land (delta
+      // review of X4, nit 2). So the marker lasts until the IPC settles, and the
+      // open project's session is marked as ended by this session's hand when the
+      // release lands, bound or no bound: no "Editing stopped" for it.
+      const id = project.summary.id;
+      await bounded(
+        ownSpeleoRelease(id, async () => {
+          await invokeIpc('speleodb_release_lock', { projectId: id }, {
+            purpose: 'hand a lock back before signing out',
+          });
+          if (id === useSpeleoStore.getState().remoteProjectId) markOwnReleaseEnded();
         }),
         'Handing the project back',
-      ));
-      // The open project's lock, handed back here: no "Editing stopped" for it.
-      if (project.summary.id === useSpeleoStore.getState().remoteProjectId) markOwnReleaseEnded();
+      );
     } catch {
       failed.push(project);
     }

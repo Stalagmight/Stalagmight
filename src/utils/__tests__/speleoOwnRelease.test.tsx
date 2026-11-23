@@ -249,6 +249,44 @@ describe('a release this session starts is never "Editing stopped"', () => {
     expect(notice()).toBeNull();
   });
 
+  // Delta review of X4, nit 2: the marker wrapped the sign-out's `bounded(...)`,
+  // whose Promise.race gives up at the bound while the release IPC still runs.
+  // A release that then lands late was read as a loss by the next refresh.
+  it('a sign-out release that lands after its bound ran out is still this session\'s', async () => {
+    vi.useFakeTimers();
+    try {
+      let land!: () => void;
+      routes.speleodb_release_lock = () => new Promise<null>((resolve) => { land = () => resolve(null); });
+      const project = {
+        summary: { id: 'p1', name: 'Synthetic cave', permission: 'READ_AND_WRITE', lock_holder: ME, type_tag: 'stalx', latest_commit_sha: null },
+        holdsLock: true, claimedHere: true, lastEditAt: null,
+      } as const;
+      const pending = releaseSignOutLocks([project]);
+      await vi.advanceTimersByTimeAsync(25_000);
+      // Counted as failed at the bound: the dialog offers Try again.
+      expect((await pending).map((p) => p.summary.id)).toEqual(['p1']);
+      // A refresh while the release is still running...
+      routes.speleodb_link_status = () => {
+        statusCalls += 1;
+        return new Promise<SpeleoLinkStatus>((resolve) => { answerStatus = resolve; });
+      };
+      const during = useSpeleoStore.getState().refreshLinkStatus();
+      // ...and the release lands late; the refresh's reply comes after it.
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+      answerStatus?.(RELEASED);
+      await during;
+      expect(notice()).toBeNull();
+      // And a refresh after it has no edit session to lose.
+      delete routes.speleodb_link_status;
+      await useSpeleoStore.getState().refreshLinkStatus();
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      expect(notice()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a project switch settling the lock, with a status refresh overlapping it', async () => {
     const refresh = overlapping('speleodb_settle_open_lock', {
       success: true, warnings: [], error: null, line_ids: [], lock_release: 'released',
