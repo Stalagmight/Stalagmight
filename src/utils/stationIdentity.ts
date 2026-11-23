@@ -125,11 +125,11 @@ function idIndexOf(data: IdentityData): Map<number, number[]> {
 }
 
 /**
- * Every slot of the station `ref` is on: the slots that share its Station ID.
+ * Every slot of the station `ref` is on: the slots that share its node id.
  * On the station graph a junction is ONE station that two or more lines pass
- * (plan 9.2), so its slots share one id and comment, while each line shows it
- * by the name that line knows it by (plan 5.3 per line); a station on one line
- * has the one slot. `ref` alone when the station is unknown.
+ * (plan 9.2), so its slots share one id, and every line shows its kept
+ * station (RS 4.1); a station on one line has the one slot. `ref` alone when
+ * the station is unknown.
  */
 export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef[] {
   const data = src.surveyData;
