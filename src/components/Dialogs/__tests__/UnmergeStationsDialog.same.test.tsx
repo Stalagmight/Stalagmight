@@ -29,6 +29,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { sameDetachResult } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 0;
 const NORTH = 1;
@@ -84,16 +86,23 @@ beforeEach(() => {
 describe('a detach whose result does not depend on the choice (N-2)', () => {
   it('offers no choice and says which line comes off, from the keeper', async () => {
     openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(SENTENCE);
+    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toContain(SENTENCE);
     expect(screen.queryByTestId(`unmerge-station-option-${MAIN}-3`)).toBeNull();
     expect(screen.queryByTestId(`unmerge-station-option-${NORTH}-0`)).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-lead')).toBeNull();
     expect(screen.queryByText(/the line you clicked/)).toBeNull();
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain(
       'North Passage keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.',
     );
     // No comment comes back: nothing to say about one.
     expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
+    // RS-PROSE: both lines and the keeper's slot are pills, the name that
+    // comes back words; the sentences read as written.
+    const naming = screen.getByTestId('unmerge-stations-naming');
+    expect(accessibleText(naming)).toBe(SENTENCE);
+    expect(pillKinds(naming)).toEqual(['line', 'line', 'station']);
+    expect(pillDrawings(naming)[2]).toBe('3#3');
+    expect(pillKinds(screen.getByTestId('unmerge-stations-explain'))).toEqual(['line']);
   });
 
   it('detaches the line that comes off, never the keeper the user clicked', async () => {
@@ -110,7 +119,7 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
 
   it('reads the same and detaches the same line when opened on the line that comes off', async () => {
     openOn(slot(NORTH, 0), slot(MAIN, 3));
-    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(SENTENCE);
+    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toContain(SENTENCE);
     expect(screen.queryByTestId(`unmerge-station-option-${NORTH}-0`)).toBeNull();
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
@@ -127,7 +136,7 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     );
     project('T-junction, line arrow points out');
     openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(await screen.findByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-comes-back-comment'))).toContain(
       'With its comment: "Silt bank, low visibility"',
     );
     expect(screen.queryByText(/T-junction/)).toBeNull();
@@ -143,14 +152,14 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
       return args.lineId === MAIN ? KEEPS : RESTORES;
     });
     openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(screen.getByTestId('unmerge-stations-lead')).toHaveTextContent('3 is where 2 lines meet.');
+    expect(said(screen.getByTestId('unmerge-stations-lead'))).toContain('3 is where 2 lines meet.');
     expect(screen.queryByTestId(`unmerge-station-option-${MAIN}-3`)).toBeNull();
     expect(screen.getByTestId('unmerge-stations-confirm')).toBeDisabled();
     await act(async () => {
       release();
       await held;
     });
-    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(SENTENCE);
+    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toContain(SENTENCE);
     expect(screen.getByTestId('unmerge-stations-confirm')).toBeEnabled();
   });
 
@@ -218,11 +227,11 @@ describe('the one-sentence lead follows the chosen answer (RS-FX6)', () => {
         : { ...RESTORES, name: '0a', collisions: [collision] },
     );
     openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toContain(
       'North Passage comes off: it gets back 0a (Station ID 9); Main Line keeps station 3.',
     );
     fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
-    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain(
       'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.',
     );
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));

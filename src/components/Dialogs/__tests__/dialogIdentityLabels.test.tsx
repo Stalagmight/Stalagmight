@@ -28,6 +28,7 @@ import DeleteShotChoiceDialog from '../DeleteShotChoiceDialog';
 import SwapCommentsDialog from '../SwapCommentsDialog';
 import ReverseLineDialog from '../ReverseLineDialog';
 import BulkDeleteDialog from '../BulkDeleteDialog';
+import { said } from './proseSentence';
 
 const MAIN = 3;
 const SIDE = 8;
@@ -133,7 +134,8 @@ describe('dialog identity labels', () => {
       mergedStations: [{ line_id: SIDE, station_index: 1 }],
     });
     render(<UnmergeStationsDialog />);
-    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
+    // The sentence draws its names as prose pills; it reads as it was written.
+    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toBe(
       'Side comes off: it gets back S1 (Station ID 9); Main Line keeps station M0.',
     );
     expectNoHandles();

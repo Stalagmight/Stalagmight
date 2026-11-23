@@ -34,6 +34,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import UnmergeStationsDialog, { defaultDetachSlot } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 0;
 const NORTH = 1;
@@ -100,7 +102,7 @@ describe('Detach dialog default (I-7)', () => {
     expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).not.toBeChecked();
     // The clicked line is still named as the one clicked, and listed first.
     expect(screen.getByText('Main Line (the line you clicked)')).toBeInTheDocument();
-    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain(
       'North Passage comes off and gets back the station it had here before the merge.',
     );
   });
@@ -112,14 +114,25 @@ describe('Detach dialog default (I-7)', () => {
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await waitFor(() => expect(screen.getByTestId(`unmerge-station-option-${NORTH}-0`)).toBeChecked());
     expect(screen.getByTestId(`unmerge-station-option-${MAIN}-3`)).not.toBeChecked();
-    // The owner's row says what it does: the others come off together.
+    // The owner's row says what it does: the others come off together. The
+    // row draws its lines as prose pills; the radio's name is the sentence.
     expect(
-      screen.getByText('North Passage and Main Line B, together (Main Line, the line you clicked, keeps this station)'),
-    ).toBeInTheDocument();
+      screen.getByRole('radio', {
+        name: 'North Passage and Main Line B, together (Main Line, the line you clicked, keeps this station)',
+      }),
+    ).toBe(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
+    expect(pillKinds(screen.getByTestId(`unmerge-station-option-${MAIN}-3`).parentElement!)).toEqual(['line', 'line', 'line']);
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
-    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain(
       'Main Line keeps this station, and North Passage and Main Line B come off together: they stay joined.',
     );
+    // RS-PROSE: the three lines are pills; the sentences read as written.
+    const naming = screen.getByTestId('unmerge-stations-naming');
+    expect(accessibleText(naming)).toBe(
+      'Main Line keeps this station, and North Passage and Main Line B come off together: they stay joined.',
+    );
+    expect(pillKinds(naming)).toEqual(['line', 'line', 'line']);
+    expect(pillKinds(screen.getByTestId('unmerge-stations-explain'))).toEqual(['line', 'line', 'line']);
   });
 
   it('keeps the clicked slot when it is the merged line', async () => {
@@ -162,8 +175,8 @@ describe('Detach dialog and the comment that comes back (RS 4.2)', () => {
       args.lineId === NORTH ? { ...RESTORES, comment: 'Silt bank' } : MINTS,
     );
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
-    expect(await screen.findByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 9).');
-    expect(screen.getByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent('With its comment: "Silt bank"');
+    expect(said(await screen.findByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0 (Station ID 9).');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back-comment'))).toContain('With its comment: "Silt bank"');
     // The owner gets a new station: nothing comes back.
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() => expect(screen.queryByTestId('unmerge-stations-comes-back')).toBeNull());
@@ -174,7 +187,7 @@ describe('Detach dialog and the comment that comes back (RS 4.2)', () => {
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain(
       'Main Line keeps this station and its comment.',
     );
     expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();

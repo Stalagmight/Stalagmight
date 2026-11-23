@@ -28,6 +28,7 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import ShownIdentityEditDialog from '../../Dialogs/ShownIdentityEditDialog';
 import { commitStationGridEdits, planStationGridEdits, type StationGridEdit } from '../stationGridEdits';
 import type { Station } from '../../../types/project';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -141,14 +142,19 @@ describe('the batch prompt', () => {
     expect(screen.getByTestId('shown-identity-batch-lead')).toHaveTextContent(
       '2 stations this edit changes are shown on other lines too:',
     );
+    // RS-PROSE: each row draws its slot, stations and lines as prose pills
+    // and reads as plain text wrote it.
     await waitFor(() =>
-      expect(screen.getByTestId('shown-identity-batch-row-0')).toHaveTextContent(
+      expect(accessibleText(screen.getByTestId('shown-identity-batch-row-0'))).toBe(
         'On Side, 3 belongs to Main. The edit changes it on Main and Side.',
       ),
     );
-    expect(screen.getByTestId('shown-identity-batch-row-1')).toHaveTextContent(
+    expect(accessibleText(screen.getByTestId('shown-identity-batch-row-1'))).toBe(
       'On Side, 1 is shown as Main / 1 through a loop closure. The edit changes it on Main and Side.',
     );
+    const pills = (el: Element) => [...el.querySelectorAll('.sh-ppill')].map((p) => p.getAttribute('data-prose-kind'));
+    expect(pills(screen.getByTestId('shown-identity-batch-row-0'))).toEqual(['line', 'station', 'line', 'line', 'line']);
+    expect(pills(screen.getByTestId('shown-identity-batch-row-1'))).toEqual(['line', 'station', 'station', 'line', 'line']);
     expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Apply all 3 edits');
     expect(updateStationComment).not.toHaveBeenCalled();
     await act(async () => {

@@ -22,6 +22,7 @@ import ShownIdentityEditDialog from '../ShownIdentityEditDialog';
 import { proceedNamesLines, proceedText } from '../ShownIdentityPrompt';
 import { buildStationColumns } from '../../SingleSystemView/dataTableStationColumns';
 import type { Station } from '../../../types/project';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -71,10 +72,10 @@ function open(kind: 'name' | 'comment', value: string | null) {
 describe("the data table's whose-station prompt (RS 5.4)", () => {
   it('sends nothing until going on, then renames the shown station', async () => {
     open('name', '12b');
-    expect(await screen.findByTestId('shown-identity-prompt-lead')).toHaveTextContent('12 belongs to Main.');
+    expect(said(await screen.findByTestId('shown-identity-prompt-lead'))).toContain('12 belongs to Main.');
     // The new name is on the button (RS-FX6, P3-11): the cell cursor has
     // moved on by now, so the prompt is where the user reads it.
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(/^Rename Main \/ 12 to 12b/);
+    expect(said(screen.getByTestId('shown-identity-prompt-proceed'))).toMatch(/^Rename Main \/ 12 to 12b/);
     expect(setStationName).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('shown-identity-prompt-proceed'));
@@ -86,7 +87,7 @@ describe("the data table's whose-station prompt (RS 5.4)", () => {
   it('sends the comment edit, or nothing on Cancel', async () => {
     open('comment', 'Arch');
     await screen.findByTestId('shown-identity-prompt-lead');
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Change the comment of Main / 12');
+    expect(said(screen.getByTestId('shown-identity-prompt-proceed'))).toContain('Change the comment of Main / 12');
     fireEvent.click(screen.getByTestId('shown-identity-prompt-cancel'));
     expect(updateStationComment).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();

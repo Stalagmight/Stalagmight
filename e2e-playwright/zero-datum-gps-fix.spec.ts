@@ -13,6 +13,7 @@ import {
   waitForMapIdle,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 const lineSeeds: LineSeed[] = [
   {
@@ -268,8 +269,12 @@ test.describe('Second zero datum in a connected survey (#741)', () => {
 
     const dialog = page.getByTestId('merge-dialog');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(dialog.getByTestId('merge-datum-shift')).toHaveText(
-      'Entrance B is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Entrance B / 0 becomes a GPS fix.'
+    // RS-PROSE: the line and the datum's station are pills; it reads as written.
+    await expectSpoken(
+      dialog.getByTestId('merge-datum-shift'),
+      'Entrance B is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Entrance B / 0 becomes a GPS fix.',
+      { exact: true },
     );
+    expect(await prosePillKinds(dialog.getByTestId('merge-datum-shift'))).toEqual(['line', 'station']);
   });
 });

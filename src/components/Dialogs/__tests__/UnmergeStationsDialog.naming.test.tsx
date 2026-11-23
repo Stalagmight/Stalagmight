@@ -30,6 +30,7 @@ import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import UnmergeStationsDialog from '../UnmergeStationsDialog';
+import { said } from './proseSentence';
 
 const MAIN = 3;
 const SIDE = 8;
@@ -92,8 +93,8 @@ describe('Detach dialog naming', () => {
   it('names the line that comes off when either choice gives the same result', async () => {
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
-    expect(naming).toHaveTextContent('Side comes off: it gets back 0 (Station ID 7); Main keeps station 3a.');
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+    expect(said(naming)).toContain('Side comes off: it gets back 0 (Station ID 7); Main keeps station 3a.');
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain(
       'Side keeps its shots, and a datum or loop closure set on it goes with it.',
     );
     expect(invokeIpc).toHaveBeenCalledWith(
@@ -107,12 +108,12 @@ describe('Detach dialog naming', () => {
     hub();
     render(<UnmergeStationsDialog />);
     const naming = await screen.findByTestId('unmerge-stations-naming');
-    expect(naming).toHaveTextContent('Side comes off and gets back the station it had here before the merge.');
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+    expect(said(naming)).toContain('Side comes off and gets back the station it had here before the merge.');
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain(
       'The line you detach keeps its shots and gets its own station here.',
     );
     // RS 4.2: what comes back, by name and Station ID.
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 7).');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0 (Station ID 7).');
   });
 
   it('follows the chosen line: the junction stays on its own line and the merged lines get their station back', async () => {
@@ -121,15 +122,15 @@ describe('Detach dialog naming', () => {
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+      expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain(
         'Main keeps this station, and Side and Branch come off together: they stay joined.',
       ),
     );
     // What stays and what goes is said the same way round.
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain(
       'Side and Branch keep their shots and come off together on one station of their own here',
     );
-    expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent('Main keeps this station and its comment.');
+    expect(said(screen.getByTestId('unmerge-stations-explain'))).toContain('Main keeps this station and its comment.');
   });
 
   it('says a line gets a new station named as it showed the junction when another line keeps it', async () => {
@@ -138,7 +139,7 @@ describe('Detach dialog naming', () => {
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent('Main comes off with a new station of its own here.'),
+      expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain('Main comes off with a new station of its own here.'),
     );
   });
 
@@ -169,7 +170,7 @@ describe('Detach dialog naming', () => {
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     await waitFor(() => expect(screen.getByTestId('unmerge-stations-results')).toBeInTheDocument());
-    const items = screen.getAllByRole('listitem').map((li) => li.textContent);
+    const items = screen.getAllByRole('listitem').map((li) => said(li));
     expect(items).toEqual([
       'Side: 0, Station ID 7 (comes off with Branch)',
       'Branch: 0b, Station ID 7 (comes off with Side)',
@@ -178,7 +179,7 @@ describe('Detach dialog naming', () => {
     // Branch alone: it gets its own station back, the others stay.
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${BRANCH}-0`));
     await waitFor(() =>
-      expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      expect(screen.getAllByRole('listitem').map((li) => said(li))).toEqual([
         'Branch: 0b, Station ID 12 (comes off)',
         'Main: 3a, Station ID 3 (stays)',
         'Side: 0, Station ID 3 (stays)',

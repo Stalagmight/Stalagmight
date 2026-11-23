@@ -11,8 +11,10 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import '../../../i18n';
-import { answeredName, collisionAnswerText, recordIdentity, StickyDialogFooter } from '../keptStationParts';
+import { answeredName, collisionAnswerProse, collisionAnswerText, recordIdentity, StickyDialogFooter } from '../keptStationParts';
+import { keptProse } from '../keptStationProse';
 import type { NameCollision } from '../../../types/ipc/NameCollision';
+import { proseParts, proseToPlain } from '../../../utils/prose';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -56,6 +58,78 @@ describe('collisionAnswerText', () => {
         collisionAnswerText(collision.alternative, collision, subject, lineName),
       );
     }
+  });
+});
+
+/**
+ * RS-PROSE: the prose variant words an answer exactly as the plain one, its
+ * station and the collision's line as parts; the Station ID the words say is
+ * not drawn again, and the new name stays words. Injection: word the prose
+ * variant apart from `answerWords` (a copy that drifts) fails the first case.
+ */
+describe('collisionAnswerProse', () => {
+  const src = { lines: [{ id: MAIN, name: 'Main' }, { id: SIDE, name: 'Side' }] };
+  const prose = keptProse(src);
+  const subjects = [undefined, { id: 15, role: 'comesBack' as const }, { id: 29, role: 'kept' as const }];
+
+  it('says the same words as collisionAnswerText', () => {
+    for (const subject of subjects) {
+      for (const which of ['letter', 'alternative'] as const) {
+        expect(proseToPlain(collisionAnswerProse(collision[which], collision, subject, prose))).toBe(
+          collisionAnswerText(collision[which], collision, subject, lineName),
+        );
+      }
+    }
+  });
+
+  it("names the station and the line as parts, without the Station ID the words say", () => {
+    const own = proseParts(collisionAnswerProse(collision.alternative, collision, { id: 15, role: 'comesBack' }, prose));
+    expect(own.filter((p) => p.kind !== 'text')).toEqual([
+      { kind: 'station', text: '0', name: '0', line_id: SIDE },
+      { kind: 'line', text: 'Side', name: 'Side', line_id: SIDE },
+    ]);
+    const role = proseParts(collisionAnswerProse(collision.letter, collision, { id: 15, role: 'comesBack' }, prose));
+    expect(role.filter((p) => p.kind !== 'text')).toEqual([
+      { kind: 'station', text: 'Side / 0', name: '0', line_id: SIDE, context: 'Side' },
+    ]);
+    // The new name is words.
+    expect(role[role.length - 1]).toEqual({ kind: 'text', text: ', Station ID 15) to 0a' });
+  });
+});
+
+describe('keptProse', () => {
+  it('keeps an identity\'s Station ID unless the words say it, and names a slot by the words given', () => {
+    const src = {
+      lines: [{ id: MAIN, name: 'Main' }, { id: SIDE, name: 'Side' }],
+      stations: [
+        {
+          station_ref: { line_id: SIDE, station_index: 0 },
+          coordinates: { x: 0, y: 0, z: 0 },
+          is_zero_datum: false,
+          gps_coordinates: null,
+          merged_with: [],
+          id: 11,
+          name: '12',
+          shown: { id: 11, home_line: MAIN, foreign: true, loop_end: false },
+        },
+      ],
+    };
+    const prose = keptProse(src);
+    const identity = { id: 46, name: '0', home_line: MAIN };
+    expect(proseParts(prose.identity(identity))[0]).toMatchObject({ text: 'Main / 0', station_id: 46 });
+    expect(proseParts(prose.identityNoId(identity))[0]).not.toHaveProperty('station_id');
+    expect(proseParts(prose.identityNoId(identity))[0]).toMatchObject({ text: 'Main / 0', context: 'Main' });
+    // A foreign slot by its bare name: the words stay "12", the pill draws
+    // the slot's home-line dot and Station ID (the plain label is "12 (Main)").
+    expect(proseParts(prose.slotName({ line_id: SIDE, station_index: 0 }, '12'))[0]).toEqual({
+      kind: 'station',
+      text: '12',
+      name: '12',
+      line_id: SIDE,
+      slot: { line_id: SIDE, station_index: 0 },
+      home_line: MAIN,
+      station_id: 11,
+    });
   });
 });
 

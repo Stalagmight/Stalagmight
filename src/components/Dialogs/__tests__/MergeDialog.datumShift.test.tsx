@@ -48,6 +48,8 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const A = { line_id: 1, station_index: 5 };
 const B = { line_id: 2, station_index: 5 };
@@ -79,15 +81,21 @@ describe('MergeDialog datum shift (#741)', () => {
   it('names the piece that moves, how far, and the datum that becomes a GPS fix', () => {
     dialogData = { ...dialogData, datumShift: shift() };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-datum-shift'))).toContain(
       'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Second entrance / 0 becomes a GPS fix.'
+    );
+    // RS-PROSE: the piece's line and the datum's station are pills.
+    const notice = screen.getByTestId('merge-datum-shift');
+    expect(pillKinds(notice)).toEqual(['line', 'station']);
+    expect(accessibleText(notice)).toBe(
+      'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Second entrance / 0 becomes a GPS fix.',
     );
   });
 
   it('names the other lines of a moving piece (N-13)', () => {
     dialogData = { ...dialogData, datumShift: shift({ moving_line_ids: [2, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-datum-shift'))).toContain(
       'Second entrance and Side passage are placed by their own GPS. They move 4.3 m'
     );
   });
@@ -96,7 +104,8 @@ describe('MergeDialog datum shift (#741)', () => {
     dialogData = { ...dialogData, datumShift: shift(), preCommands: [] };
     render(<MergeDialog />);
     const notice = screen.getByTestId('merge-datum-shift');
-    expect(notice).toHaveTextContent('The merge moves it to meet the other piece');
-    expect(notice).not.toHaveTextContent('12 m');
+    expect(said(notice)).toContain('The merge moves it to meet the other piece');
+    expect(said(notice)).not.toContain('12 m');
+    expect(pillKinds(notice)).toEqual(['line', 'station']);
   });
 });

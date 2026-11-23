@@ -34,6 +34,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import CommentOverlay from '../../components/Map/CommentOverlay';
 import ShownIdentityEditDialog from '../../components/Dialogs/ShownIdentityEditDialog';
 import type { Station } from '../../types/project';
+import { accessibleText } from '../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -224,7 +225,8 @@ describe('the Move Comment tool on a loop end', () => {
     const closeDialog = vi.fn();
     useUIStore.setState({ activeDialog: dialog, dialogData: data, closeDialog } as never);
     render(<ShownIdentityEditDialog />);
-    expect(await screen.findByTestId('shown-identity-prompt-lead')).toHaveTextContent(
+    // The lead draws the station as a prose pill; it reads as plain text wrote it.
+    expect(accessibleText(await screen.findByTestId('shown-identity-prompt-lead'))).toBe(
       'Shown as Main / 14 through a loop closure.',
     );
     await act(async () => {
