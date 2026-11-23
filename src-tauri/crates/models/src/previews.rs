@@ -124,6 +124,13 @@ pub struct DeleteShotImpact {
     /// If the user picks Split: the largest move of a station, metres.
     #[serde(default)]
     pub split_max_move_m: f64,
+    /// What the delete does to identities on its own (RS 4.3, U-P1-3): the
+    /// archived stations it brings back where a junction loses its own
+    /// lines (with the comment that moves or becomes hidden), and the
+    /// letters rule L gives. Absent when it does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identities: Option<crate::IdentityNotice>,
 }
 
 /// Which structural case a contiguous shot-range deletion falls into. Computed
@@ -190,6 +197,13 @@ pub struct DeleteShotRangeImpact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closures_removed_across_one_shot: Option<Vec<ClosurePair>>,
+    /// What the delete does to identities on its own (RS 4.3, U-P1-3): the
+    /// archived stations it brings back where a junction loses its own
+    /// lines (with the comment that moves or becomes hidden), and the
+    /// letters rule L gives. Absent when it does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identities: Option<crate::IdentityNotice>,
 }
 
 /// Fixed part of the gap warning threshold, in metres (#741 decision 4).

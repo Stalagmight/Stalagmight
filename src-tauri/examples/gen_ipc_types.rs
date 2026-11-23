@@ -52,12 +52,6 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::models::{
-    ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
-    KeepCandidate, LetteredStationWire, LoopClosureNaming, MergeKeepPreview, NameCollisionWire,
-    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot, StationIdentity,
-    StationOwner, StationRename,
-};
-use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
@@ -73,9 +67,15 @@ use stalagmight_lib::models::{
     PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning,
     RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind,
     ShotUpdates, SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide,
-    Station, StationMergeWire, StationPair, StationRef, SurveyCredit,
-    SurveyDirection, TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
+    Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
+    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
     ZeroDatumPreview, ZeroDatumWire,
+};
+use stalagmight_lib::models::{
+    ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
+    KeepCandidate, LetteredStationWire, LoopClosureNaming, MergeKeepPreview, NameCollisionWire,
+    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot, StationIdentity,
+    StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};

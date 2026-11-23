@@ -49,8 +49,8 @@ pub(super) fn apply(
 /// `set_station_name` on the station graph): the identity the slot shows is
 /// renamed (RS: a junction shows its kept station on every line, a loop end
 /// its closure's kept end), so every line it is shown on shows the new name.
-/// RS-W/RS-UI: a foreign or closure-archived slot first asks whose station it
-/// is (RS 5.4). The name the slot already shows is a no-op before any other
+/// `preview_station_identity` says whose station it is and every line the
+/// rename changes; RS-UI asks first on a foreign slot or a loop end (RS 5.4). The name the slot already shows is a no-op before any other
 /// check, as 0.6.0's execute answered it (the pipeline then records nothing
 /// and keeps the redo branch). Otherwise the name must be non-empty, free of
 /// control and invisible formatting characters, and shown for no other

@@ -497,15 +497,18 @@ one the user sees.
 ### Slots
 
 - Per slot `(L, i)` with station `S` (`stations_wire`): `S`'s coordinates
-  (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `S`'s
-  `id` and `comment` (shared by a junction's slots), `name` = the name `L`
-  shows `S` by (`name_on`: a junction's slots differ where an alias names a
-  line, I-3), `aliases` = the
-  ids and names merged into `S`, each with the line that shows it
-  (`StationAliasWire`, TS `StationAlias`;
-  absent when `S` has none, so most stations pay nothing; every slot of a
-  junction carries them, for the station details' "Also on" rows and "Also
-  known as"), `merged_with` =
+  (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `id` = the
+  node `S` (every grouping, command, move, datum and selection keys on it),
+  `name` and `comment` = `S`'s shown identity's (kept and archived stations,
+  plan 2026-11-23 RS 5.1: `S`'s own, or the kept end's when a loop closure
+  archives `S`; one name on every line of a junction), `archived` = `S`'s
+  records (`ArchivedStationWire`, TS `ArchivedStation`: id, name, comment,
+  lines; absent when `S` has none, so most stations pay nothing; every slot
+  of a junction carries them), `shown` = how a foreign slot or a loop end
+  shows `S` (`ShownSlot`: the Station ID shown, the shown identity's home
+  line for the dot, `foreign`, `loop_end`, the archiving closure; absent on
+  every slot that shows `S`'s own identity natively, so a display of the
+  Station ID reads `shown?.id ?? id`), `merged_with` =
   `S`'s other slots (so a junction's slots list each other, transitively,
   like today's merge groups), `is_zero_datum` / `gps_coordinates` = the datum
   the slot's datum dialog edits (`datum_index_for(S, Some(L))`, so every slot
@@ -597,9 +600,37 @@ frontend decoder drops `line_offsets` from `ProjectHeaderBinary`, the
 reconstruction loop and the `Project` literal, and pins
 `EXPECTED_VERSION = 9`; the e2e IPC mock's `load_project_full_binary` builder
 does the same. Semantics the decoder sees change without a layout change:
-`stations_ids`, names and comments are shared by a junction's slots. The same
-unreleased version 9 added the sparse `station_aliases` list (`Station::aliases`
-per slot); a decoder without it reads no aliases.
+`stations_ids`, names and comments are shared by a junction's slots (names
+and comments are the shown identity's). The same unreleased version 9 added
+the sparse `station_archived` (`Station::archived`) and `station_shown`
+(`Station::shown`) lists, per slot; a decoder without them reads none.
+
+### Kept and archived stations (RS 6, 7)
+
+- `LoopClosure.archived` (`ClosureArchive`): the end a closure archives, its
+  own identity (what Remove Closure brings back) and the identity it is
+  shown as; absent when the closure keeps both names.
+- `check_merge_connectivity`'s `MergePreview` carries both stations
+  (`candidates`), the default keep, the closure that forces a keep, and per
+  keep offered (`keeps`) the lines that will show the kept name, the station
+  hidden and every collision with two answers (`NameCollision`: rule L's
+  `letter` and the `alternative` that letters the other station).
+- `preview_detach_line(station_ref, line_id, rest_keep)`: what comes back
+  (name, comment, Station ID), the lines that come off together, the
+  remaining-junction choices, the identity a loop closure showed before, the
+  collisions. `preview_loop_closure` (both ends, allowed keeps, default, one
+  option per allowed end plus "Keep both names"), `preview_remove_loop_closure`
+  (what comes back, on which slot, the collisions) and
+  `preview_station_identity` (whose station a slot shows, every line a rename
+  or comment edit through it changes) are new read-only queries.
+- The station commands take the dialogs' answers: `merge_stations(.., keep,
+  renames)`, `unmerge_stations` and `unmerge_station_pair(.., renames,
+  rest_keep)`, `create_loop_closure(.., keep, renames)`,
+  `remove_loop_closure(.., renames)`. `renames` absent means no dialog asked:
+  rule L letters every collision. `CommandResult.identities`
+  (`IdentityNotice`) names what a command did to identities on its own: the
+  letters, the archived identities a delete restored, the closures whose
+  archive was dropped.
 
 ### Equivalence with today
 

@@ -288,3 +288,31 @@ fn a_foreign_slot_names_its_owner_and_its_own_station() {
     assert!(!native.foreign && native.own_station.is_none());
     assert_eq!(p.records_wire(b0).len(), 1);
 }
+
+/// RS 4.3, U-P1-3: when a delete takes the kept station's own line off a
+/// junction, the archived station of the line left comes back; the Delete
+/// Shot preview names it before the user confirms, with the comment that
+/// becomes hidden. Injection: leave the identities off the impact and the
+/// dialog cannot say it.
+#[test]
+fn the_delete_preview_names_the_station_that_comes_back() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    p.station_mut(b0).unwrap().comment = Some("kept note".to_string());
+    p.station_mut(a2).unwrap().comment = Some("own note".to_string());
+    ok(p.merge_stations_auto(a2, b0, b0));
+    assert_valid(&p);
+    let first = p.line(b).unwrap().shots[0].id;
+    let preview = p.preview_delete_shot(b, first).unwrap();
+    let impact = p.delete_shot_impact(&preview);
+    let notice = impact.identities.expect("the delete restores A's own 2");
+    assert_eq!(notice.restored.len(), 1, "{notice:?}");
+    let restored = &notice.restored[0];
+    assert_eq!(restored.old_id, b0);
+    assert_eq!(restored.station.id, a2);
+    assert_eq!(restored.station.name, "2");
+    assert_eq!(restored.comment_hidden.as_deref(), Some("kept note"));
+    assert!(!restored.comment_moved);
+}

@@ -58,6 +58,7 @@ impl Project {
                 .map(|weld| self.promoted_pairs(&weld.promoted))
                 .unwrap_or_default(),
             split_max_move_m: preview.split_weld.as_ref().map_or(0.0, |w| w.max_move_m),
+            identities: self.preview_identities(&preview.identities),
         }
     }
 
@@ -107,6 +108,7 @@ impl Project {
                 .closures_removed_across_one_shot
                 .as_ref()
                 .map(|closures| self.closure_pairs(closures)),
+            identities: self.preview_identities(&preview.identities),
         }
     }
 
@@ -411,6 +413,16 @@ impl Project {
     pub fn adjustment_report_wire(&self, config: &ClosureAdjustmentConfig) -> AdjustmentReport {
         let adjusted = self.adjusted_positions(config);
         self.adjustment_report(Some(&adjusted))
+    }
+
+    /// A delete preview's identity notice, read on the state before the
+    /// delete (a restored record is named by the record); `None` when empty.
+    fn preview_identities(
+        &self,
+        report: &super::super::IdentityReport,
+    ) -> Option<crate::IdentityNotice> {
+        let notice = self.identity_notice(report);
+        (!notice.is_empty()).then_some(notice)
     }
 
     /// Every slot of the station at `slot` but `slot`, paired with it.

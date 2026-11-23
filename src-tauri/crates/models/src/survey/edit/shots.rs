@@ -134,7 +134,7 @@ pub struct DeleteShotPreview {
     pub split_weld: Option<super::SplitWeld>,
     /// What the delete does to identities (RS 4.3, U-P1-3): every archived
     /// identity it restores (with the comment that moves or becomes hidden),
-    /// and the letters rule L gives. RS-W: the dialog names them.
+    /// and the letters rule L gives (the wire's `identities`).
     pub identities: super::super::IdentityReport,
 }
 
