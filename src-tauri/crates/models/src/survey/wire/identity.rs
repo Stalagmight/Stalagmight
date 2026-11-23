@@ -196,11 +196,12 @@ impl Project {
                 strategy,
                 Some(keep),
             )?;
+            // Never a collision (RS-FX5): the archive makes loop ends only.
+            debug_assert!(naming.collisions.is_empty(), "{:?}", naming.collisions);
             options.push(ClosureKeepPreview {
                 keep: Some(keep),
                 hidden: naming.archived.and_then(|id| self.station_identity(id)),
                 renamed_lines: naming.renamed_lines,
-                collisions: self.collisions_wire(&naming.collisions, &naming.alternatives),
             });
         }
         // "Keep both names" archives nothing, so no name changes; the
@@ -213,7 +214,6 @@ impl Project {
             keep: None,
             hidden: None,
             renamed_lines: Vec::new(),
-            collisions: Vec::new(),
         });
         Ok(LoopClosureNaming {
             ends,
