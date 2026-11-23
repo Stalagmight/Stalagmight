@@ -167,7 +167,9 @@ impl Project {
             // end that does not hold the identity the torn slot showed (RS
             // 4.4); here the fresh station only takes the record naming the
             // torn line (RS 4.3).
-            let fresh = self.detach_ids(d.station, d.line, DetachMode::Tear)?.new_station;
+            let fresh = self
+                .detach_ids(d.station, d.line, DetachMode::Tear)?
+                .new_station;
             renamed.push((d.station, fresh));
             slot_map.insert((d.line, d.station), fresh);
             if d.line == k && d.station == jk {

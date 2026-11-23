@@ -474,7 +474,10 @@ fn open(path: &Path) -> AppState {
 
 /// The entry text with its version swapped for `version`.
 fn with_version(entry: &RawJson, version: u32) -> RawJson {
-    let current = format!("{{\"v\":{},", crate::models::survey::changeset::HISTORY_FORMAT_VERSION);
+    let current = format!(
+        "{{\"v\":{},",
+        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
+    );
     let text = entry
         .as_str()
         .replacen(&current, &format!("{{\"v\":{version},"), 1);
@@ -534,7 +537,10 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
         rewrite_history(&path, |history| {
             let undo = history.undo.pop().unwrap();
             let replaced = match damage {
-                0 => with_version(&undo, crate::models::survey::changeset::HISTORY_FORMAT_VERSION + 1),
+                0 => with_version(
+                    &undo,
+                    crate::models::survey::changeset::HISTORY_FORMAT_VERSION + 1,
+                ),
                 1 => {
                     let text = undo
                         .as_str()
@@ -542,7 +548,10 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
                     RawJson::parse(&text).unwrap()
                 }
                 _ => {
-                    let current = format!("{{\"v\":{},", crate::models::survey::changeset::HISTORY_FORMAT_VERSION);
+                    let current = format!(
+                        "{{\"v\":{},",
+                        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
+                    );
                     let text = undo
                         .as_str()
                         .replacen(&current, &format!("{current}\"zz\":0,"), 1);

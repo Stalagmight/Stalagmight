@@ -52,8 +52,8 @@ use std::fmt;
 use crate::{LineId, StationId};
 
 use super::{
-    AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, IdentityReport,
-    LoopClosure, Project, RawPositions, StaleAttachments, SweepReport, Violation,
+    AnchorReport, AnchorSnapshot, ClosureEnd, ClosureId, EditContext, IdentityReport, LoopClosure,
+    Project, RawPositions, StaleAttachments, SweepReport, Violation,
 };
 
 mod combine;

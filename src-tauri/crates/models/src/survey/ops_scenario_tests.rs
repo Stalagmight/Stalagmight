@@ -32,7 +32,12 @@ fn detaching_a_line_whose_member_held_a_closure_promotes_it_and_the_line_follows
     let before = xy_all(&p);
     let l2_rest: Vec<_> = p.line_stations(l2).unwrap()[1..].to_vec();
 
-    let out = ok(p.unmerge_station_pair(StationRef::new(l1, 1), StationRef::new(l2, 0), crate::survey::NameAnswers::RuleL, None));
+    let out = ok(p.unmerge_station_pair(
+        StationRef::new(l1, 1),
+        StationRef::new(l2, 0),
+        crate::survey::NameAnswers::RuleL,
+        None,
+    ));
     assert_valid(&p);
     let fresh = out.value.new_station;
     assert_eq!(out.value.moved_closure_ends.len(), 1);

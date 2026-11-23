@@ -14,7 +14,7 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 use crate::models::survey::{
-    ClosureStrategy, LineMeta, Project, StartAt, ArchivedStation, ZeroDatum, MAX_COORDINATE_M,
+    ArchivedStation, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum, MAX_COORDINATE_M,
     MAX_MEASUREMENT_M,
 };
 use crate::models::{

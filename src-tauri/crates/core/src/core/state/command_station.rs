@@ -15,9 +15,7 @@ use std::collections::BTreeMap;
 
 use super::commands::{Applied, Record};
 use crate::core::{Command, ValidationWarning, WarningSeverity};
-use crate::models::survey::{
-    ClosureId, LoopClosure, NameAnswers, OpError, Project, SweepReport,
-};
+use crate::models::survey::{ClosureId, LoopClosure, NameAnswers, OpError, Project, SweepReport};
 use crate::models::{StationRef, CLOSURE_REMOVED_MERGED_ENDS};
 
 /// 0.6.0's refusal of a merge between two stations of one line.
@@ -242,13 +240,13 @@ fn merge(
     let outcome = project
         .merge_keeping_stationary(a.station, b.station)
         .map_err(|e| {
-        tracing::warn!(
-            ?station_a,
-            ?station_b,
-            error = %e,
-            purpose = "connect survey lines",
-            "Failed to merge stations"
-        );
+            tracing::warn!(
+                ?station_a,
+                ?station_b,
+                error = %e,
+                purpose = "connect survey lines",
+                "Failed to merge stations"
+            );
             e.to_string()
         })?;
     tracing::debug!(

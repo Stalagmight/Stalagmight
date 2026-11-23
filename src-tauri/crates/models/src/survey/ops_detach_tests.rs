@@ -23,7 +23,12 @@ fn detaching_after_a_merge_gives_two_pieces_where_they_were() {
 
     // Detaching B, the kept station's own line: a record names A, so B keeps
     // the junction and A gets its own station back (RS 4.2 case 2).
-    let out = ok(p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0), NameAnswers::Renames(&[]), None));
+    let out = ok(p.unmerge_station_pair(
+        StationRef::new(a, 2),
+        StationRef::new(b, 0),
+        NameAnswers::Renames(&[]),
+        None,
+    ));
     assert_valid(&p);
     let report = out.value;
     assert_eq!((report.line, report.station), (b, b0));
@@ -53,15 +58,30 @@ fn the_pair_form_needs_one_station_on_two_lines() {
     let b = branch(&mut p, a1, run(0.0, 1, 5.0));
     let before = p.clone();
     assert_eq!(
-        p.unmerge_station_pair(StationRef::new(a, 0), StationRef::new(b, 0), NameAnswers::Renames(&[]), None),
+        p.unmerge_station_pair(
+            StationRef::new(a, 0),
+            StationRef::new(b, 0),
+            NameAnswers::Renames(&[]),
+            None
+        ),
         Err(OpError::NotDirectlyMerged)
     );
     assert_eq!(
-        p.unmerge_station_pair(StationRef::new(a, 1), StationRef::new(a, 1), NameAnswers::Renames(&[]), None),
+        p.unmerge_station_pair(
+            StationRef::new(a, 1),
+            StationRef::new(a, 1),
+            NameAnswers::Renames(&[]),
+            None
+        ),
         Err(OpError::NotDirectlyMerged)
     );
     assert_eq!(
-        p.unmerge_station_pair(StationRef::new(a, 9), StationRef::new(b, 0), NameAnswers::Renames(&[]), None),
+        p.unmerge_station_pair(
+            StationRef::new(a, 9),
+            StationRef::new(b, 0),
+            NameAnswers::Renames(&[]),
+            None
+        ),
         Err(OpError::UnknownSlot(StationRef::new(a, 9)))
     );
     assert_eq!(
@@ -156,7 +176,12 @@ fn unmerging_places_the_detached_piece_on_its_own_gps() {
     let b_stations: Vec<_> = p.line_stations(b).unwrap()[1..].to_vec();
     assert!((xy(&p, b_stations[0])[0]).abs() < 1e-6, "B moved onto A");
 
-    let out = ok(p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0), NameAnswers::Renames(&[]), None));
+    let out = ok(p.unmerge_station_pair(
+        StationRef::new(a, 2),
+        StationRef::new(b, 0),
+        NameAnswers::Renames(&[]),
+        None,
+    ));
     assert_valid(&p);
     assert_eq!(out.value.moved_datums, vec![1]);
     assert_eq!(

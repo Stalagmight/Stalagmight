@@ -164,4 +164,3 @@ pub(super) fn three_line_junction() -> (Project, [LineId; 3]) {
     }
     (p, [l0, l1, l2])
 }
-

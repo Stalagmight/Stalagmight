@@ -982,16 +982,15 @@ impl Project {
             let Some((archived, kept)) = c.archive() else {
                 continue;
             };
-            match archived_by.get(&archived) {
-                Some(&first) => out.push(Violation::StationArchivedTwice {
+            if let Some(&first) = archived_by.get(&archived) {
+                out.push(Violation::StationArchivedTwice {
                     station: archived,
                     first,
                     second: c.id,
-                }),
-                None => {
-                    archived_by.insert(archived, c.id);
-                    kept_of.insert(archived, kept);
-                }
+                });
+            } else {
+                archived_by.insert(archived, c.id);
+                kept_of.insert(archived, kept);
             }
         }
         for c in &self.closures {

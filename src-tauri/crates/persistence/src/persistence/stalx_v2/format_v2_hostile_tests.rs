@@ -205,10 +205,16 @@ fn archived_rows_are_checked() {
     assert!(original.contains(record), "the example names Side");
     for (row, ok) in [
         ("\"archived\":[{\"id\":7,\"name\":\"B0\"}]", true),
-        ("\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"x\",\"lines\":[1]}]", true),
+        (
+            "\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"x\",\"lines\":[1]}]",
+            true,
+        ),
         ("\"archived\":[{\"id\":7,\"lines\":[1]}]", false),
         ("\"archived\":[{\"name\":\"B0\",\"lines\":[1]}]", false),
-        ("\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[\"1\"]}]", false),
+        (
+            "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[\"1\"]}]",
+            false,
+        ),
         ("\"archived\":[[7,\"B0\",1]]", false),
         ("\"aliases\":[[7,\"B0\",1]]", true),
         ("\"aliases\":[[7,null,1]]", true),

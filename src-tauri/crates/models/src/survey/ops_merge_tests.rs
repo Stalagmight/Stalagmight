@@ -170,9 +170,18 @@ fn a_merge_is_refused_for_one_station_unknown_stations_and_one_piece() {
     let (mut p, a, b) = two_free_pieces();
     let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     let before = p.clone();
-    assert_eq!(p.merge_keeping_stationary(a0, a0), Err(OpError::AlreadyMerged));
-    assert_eq!(p.merge_keeping_stationary(a0, a2), Err(OpError::AlreadyConnected));
-    assert_eq!(p.merge_keeping_stationary(a0, 999), Err(OpError::UnknownStation(999)));
+    assert_eq!(
+        p.merge_keeping_stationary(a0, a0),
+        Err(OpError::AlreadyMerged)
+    );
+    assert_eq!(
+        p.merge_keeping_stationary(a0, a2),
+        Err(OpError::AlreadyConnected)
+    );
+    assert_eq!(
+        p.merge_keeping_stationary(a0, 999),
+        Err(OpError::UnknownStation(999))
+    );
     assert_eq!(
         p.merge_stations(a2, b0, a0, &[]),
         Err(OpError::InvalidKeep(a0)),
@@ -224,7 +233,11 @@ fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
         preview.hidden,
         (a2, "2".to_string(), Some("archived note".to_string()))
     );
-    assert_eq!(preview.renamed_lines, vec![a], "A shows the junction as 0 now");
+    assert_eq!(
+        preview.renamed_lines,
+        vec![a],
+        "A shows the junction as 0 now"
+    );
     ok(p.merge_stations(a2, b0, b0, &[(a0, "0a".to_string())]));
     assert_valid(&p);
     assert_eq!(p.stations[&b0].name, "0");
@@ -240,7 +253,7 @@ fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
 
     // Without a dialog rule L letters A's own 0 (shown on one line), never
     // the kept junction (shown on two).
-    let mut auto = before.clone();
+    let mut auto = before;
     let out = ok(auto.merge_stations_auto(a2, b0, b0));
     assert_eq!(out.identities.lettered.len(), 1);
     assert_eq!(out.identities.lettered[0].station, a0);
@@ -385,7 +398,10 @@ fn a_merge_archives_a_split_junction_whole() {
     assert_eq!(p.counters.next_station_id, counter, "nothing minted");
     let archived = &p.stations[&b0].archived;
     assert_eq!(archived.len(), 1);
-    assert_eq!((archived[0].id, archived[0].lines.clone()), (a1, vec![a, a2]));
+    assert_eq!(
+        (archived[0].id, archived[0].lines.clone()),
+        (a1, vec![a, a2])
+    );
     assert_eq!(p.native_lines(b0), vec![b]);
     let out = ok(p.detach_line(b0, a2, &[], None));
     assert_eq!(out.value.new_station, a1);

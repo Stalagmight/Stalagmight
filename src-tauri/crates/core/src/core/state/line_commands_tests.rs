@@ -938,9 +938,14 @@ fn undo_unmerge_restores_converted_closure_and_position() {
     assert_eq!(before.closures.len(), 1);
 
     let r = run_model(&state, "unmerge_station_pair", |p| {
-        p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0), crate::models::survey::NameAnswers::RuleL, None)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station_pair(
+            StationRef::new(a, 2),
+            StationRef::new(b, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     let converted = project(&state);
@@ -974,9 +979,13 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
     let (a, b) = loop_through_a_closure(&state);
     let before = project(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(b, 0), crate::models::survey::NameAnswers::RuleL, None)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(b, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     assert!(project(&state).closures.is_empty());
@@ -1007,9 +1016,13 @@ fn test_unmerge_removes_only_specific_merge() {
     assert_eq!(project(&state).merge_pairs().len(), 2);
 
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1), crate::models::survey::NameAnswers::RuleL, None)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(a, 1),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     let pairs = project(&state).merge_pairs();
@@ -1022,9 +1035,13 @@ fn test_unmerge_undo_restores_merge() {
     let state = new_state();
     let (a, _b) = joined_pair(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1), crate::models::survey::NameAnswers::RuleL, None)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(a, 1),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     assert!(project(&state).merge_pairs().is_empty());

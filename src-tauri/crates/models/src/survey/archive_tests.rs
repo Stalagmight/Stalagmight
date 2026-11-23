@@ -10,9 +10,7 @@ use crate::{ShotKind, StationRef};
 use super::changeset::testkit::{persisted, same_state};
 use super::changeset::{capture, redo, undo};
 use super::ops_detach::DetachMode;
-use super::ops_test_helpers::{
-    assert_valid, free_line, gps_at, ok, origin, run, xy_all, z_all,
-};
+use super::ops_test_helpers::{assert_valid, free_line, gps_at, ok, origin, run, xy_all, z_all};
 use super::test_helpers::{at, project};
 use super::{
     ArchivedStation, ClosureEnd, ClosureStrategy, LineId, Project, RangeDeleteMode, StationId,
@@ -127,7 +125,10 @@ fn a_merge_keeps_either_station_with_a_bit_identical_raw_layout() {
     assert_eq!(moving.placements.len(), 1);
     assert_eq!(moving.placements[0].station, a3, "re-keyed, not dropped");
     assert_eq!(
-        [moving.placements[0].x.to_bits(), moving.placements[0].y.to_bits()],
+        [
+            moving.placements[0].x.to_bits(),
+            moving.placements[0].y.to_bits()
+        ],
         [
             stationary.placements[0].x.to_bits(),
             stationary.placements[0].y.to_bits()
@@ -135,8 +136,14 @@ fn a_merge_keeps_either_station_with_a_bit_identical_raw_layout() {
     );
     // The kept identity is shown everywhere, the other is a record.
     assert_eq!(moving.shown_name(a3), Some("3"));
-    assert_eq!(moving.stations[&a3].archived, vec![record(b0, "0", vec![b])]);
-    assert_eq!(stationary.stations[&b0].archived, vec![record(a3, "3", vec![a])]);
+    assert_eq!(
+        moving.stations[&a3].archived,
+        vec![record(b0, "0", vec![b])]
+    );
+    assert_eq!(
+        stationary.stations[&b0].archived,
+        vec![record(a3, "3", vec![a])]
+    );
     // The previews read depths at the merged node, whatever its id.
     let (ps, pm) = (
         p.merge_preview(a3, b0, b0).unwrap(),
@@ -243,7 +250,11 @@ fn the_default_keep_is_the_datum_holder_else_rule_k() {
     ok(p.merge_stations_auto(s0, j, j));
     let side0 = at(&p, side, 0);
     assert_eq!(p.lines_shown_on(j), vec![long, short]);
-    assert_eq!(p.rule_k_nodes(&[j, side0]), Some(j), "the 500 m line counts");
+    assert_eq!(
+        p.rule_k_nodes(&[j, side0]),
+        Some(j),
+        "the 500 m line counts"
+    );
     assert_eq!(p.merge_default_keep(side0, j), j);
     ok(p.set_datum_at(StationRef::new(side, 0), origin(), None));
     assert_eq!(p.merge_default_keep(side0, j), side0, "the datum holder");
@@ -265,7 +276,11 @@ fn rule_k_takes_the_longest_line_then_the_lowest_id() {
     p.line_mut(b).unwrap().shots[1].kind = ShotKind::Reference;
     assert_eq!(p.line(b).unwrap().measured_length(), 10.0);
     assert_eq!(p.rule_k([(7, vec![a]), (5, vec![b])]), Some(7));
-    assert_eq!(p.rule_k([(1, vec![]), (9, vec![b])]), Some(9), "no line loses");
+    assert_eq!(
+        p.rule_k([(1, vec![]), (9, vec![b])]),
+        Some(9),
+        "no line loses"
+    );
     assert_eq!(p.rule_k(Vec::new()), None);
 }
 
@@ -285,7 +300,7 @@ fn rule_l_never_letters_an_identity_shown_on_more_lines() {
         let mut p = project();
         let mut lines = Vec::new();
         for i in 0..6 {
-            let at_xy = [(i * 200) as f64, 0.0];
+            let at_xy = [f64::from(i * 200), 0.0];
             lines.push(free_line(&mut p, at_xy, run(30.0, 2 + below(4), 5.0)));
         }
         let mut lettered = 0;
@@ -304,7 +319,10 @@ fn rule_l_never_letters_an_identity_shown_on_more_lines() {
                     p.lines_shown_on(letter.station).len(),
                     p.lines_shown_on(letter.other).len(),
                 );
-                assert!(mine <= theirs, "seed {seed}: {letter:?} ({mine} > {theirs})");
+                assert!(
+                    mine <= theirs,
+                    "seed {seed}: {letter:?} ({mine} > {theirs})"
+                );
                 assert!(p.conflicts_with_name(letter.station, &letter.to).is_empty());
             }
         }
@@ -526,7 +544,10 @@ fn add_stalx_shifts_records_and_keeps_closure_archives() {
     let junction = at(&source, far, 3) + base;
     let records = &p.stations[&junction].archived;
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, source.stations[&(junction - base)].archived[0].id + base);
+    assert_eq!(
+        records[0].id,
+        source.stations[&(junction - base)].archived[0].id + base
+    );
     assert_eq!(records[0].lines, vec![line_of(up)]);
     let copied = p.closures.last().unwrap();
     assert_eq!(copied.archived, Some(ClosureEnd::B));
@@ -569,7 +590,10 @@ fn a_merge_that_would_cycle_the_closure_archives_drops_the_later_one() {
     let node = out.value.kept;
     assert_eq!(p.shown(node), k, "c1 still archives the merged node");
     assert_eq!(p.shown(k), k);
-    assert!(p.closures.iter().any(|cl| cl.id == c1 && cl.archived.is_some()));
+    assert!(p
+        .closures
+        .iter()
+        .any(|cl| cl.id == c1 && cl.archived.is_some()));
 }
 
 /// N8 allows two slots of one shown identity on a line (a same-line
@@ -585,7 +609,10 @@ fn a_same_line_closure_shows_one_identity_twice() {
     assert_valid(&p);
     assert_eq!(shown(&p, a), ["0", "1", "2", "3", "0"]);
     assert!(p.is_closure_archived(a4));
-    assert!(!p.is_foreign_slot(StationRef::new(a, 4)), "A is native at A:0");
+    assert!(
+        !p.is_foreign_slot(StationRef::new(a, 4)),
+        "A is native at A:0"
+    );
     assert_eq!(
         p.conflicts_with_name(a1, "0"),
         vec![super::NameConflict { line: a, other: a0 }]
@@ -654,6 +681,9 @@ fn a1_and_a5_hold_for_records() {
     p.station_mut(f3).unwrap().archived[0].lines.clear();
     assert_valid(&p);
     assert!(p.stations[&f3].archived[0].is_history());
-    assert!(!p.nodes_showing(f3).contains(&u0), "history is shown nowhere");
+    assert!(
+        !p.nodes_showing(f3).contains(&u0),
+        "history is shown nowhere"
+    );
     assert!(p.is_archived_id(u0));
 }

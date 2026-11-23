@@ -321,7 +321,11 @@ impl Project {
                 (join.kept_station == join.other_station).then_some(join.kept_station);
             let parts = trial.scratch.datum_held_parts(m, &placements, join_station);
             for (station, toward) in parts {
-                if trial.scratch.detach_ids(station, m, DetachMode::Tear).is_ok() {
+                if trial
+                    .scratch
+                    .detach_ids(station, m, DetachMode::Tear)
+                    .is_ok()
+                {
                     trial.detaches.push(Detach {
                         line: m,
                         station,
@@ -422,7 +426,10 @@ impl Project {
             if !on_f.contains(&s) || is_join {
                 continue;
             }
-            if let Ok(fresh) = scratch.detach_ids(s, m, DetachMode::Tear).map(|r| r.new_station) {
+            if let Ok(fresh) = scratch
+                .detach_ids(s, m, DetachMode::Tear)
+                .map(|r| r.new_station)
+            {
                 if s == jm {
                     jm = fresh;
                 }
@@ -437,7 +444,10 @@ impl Project {
         // Step 2: still connected, so tear the junction nearest M on the path.
         if jm != jf && scratch.topology().connected(jm, jf) {
             if let Some((station, toward)) = scratch.first_junction_off(m, jm, jf) {
-                if let Ok(fresh) = scratch.detach_ids(station, m, DetachMode::Tear).map(|r| r.new_station) {
+                if let Ok(fresh) = scratch
+                    .detach_ids(station, m, DetachMode::Tear)
+                    .map(|r| r.new_station)
+                {
                     if station == jm {
                         jm = fresh;
                     }

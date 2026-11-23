@@ -6,7 +6,7 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 
 use crate::models::survey::{
-    ClosureStrategy, LineMeta, Placement, Project, StartAt, ArchivedStation, ZeroDatum,
+    ArchivedStation, ClosureStrategy, LineMeta, Placement, Project, StartAt, ZeroDatum,
 };
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, NorthReference, Person, Section, ShotData,

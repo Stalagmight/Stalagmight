@@ -448,7 +448,9 @@ impl Project {
         // before the edit).
         let on_stationary_side = |index: usize| {
             stationary_component.is_some()
-                && before.topology.component_of(before.placements[index].station)
+                && before
+                    .topology
+                    .component_of(before.placements[index].station)
                     == stationary_component
         };
         let mut surviving: Vec<Option<(usize, Placement)>> = vec![None; components.len()];

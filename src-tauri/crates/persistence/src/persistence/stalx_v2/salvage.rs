@@ -654,7 +654,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     if stale {
         let dropped = p.drop_stale_attachments();
         repairs.push(Repair::ClearedAttachments {
-            vias: dropped.datum_vias.len() + dropped.closure_vias.len() + dropped.archived_lines.len(),
+            vias: dropped.datum_vias.len()
+                + dropped.closure_vias.len()
+                + dropped.archived_lines.len(),
             hand_moves: dropped.hand_moves.len(),
         });
     }

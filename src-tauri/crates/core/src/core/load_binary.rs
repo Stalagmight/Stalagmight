@@ -772,7 +772,10 @@ mod tests {
         );
         let junction = project.line(main).unwrap().station(1).unwrap();
         let side_start = project.line(side).unwrap().start;
-        let merged = project.merge_keeping_stationary(junction, side_start).unwrap().value;
+        let merged = project
+            .merge_keeping_stationary(junction, side_start)
+            .unwrap()
+            .value;
         let retired_on_main = merged.archived == junction;
         let retired_name = Some(if retired_on_main { "1" } else { "0" }.to_string());
         let retired_line = if retired_on_main { main } else { side };
@@ -793,7 +796,10 @@ mod tests {
         let kept_name = if retired_on_main { "0" } else { "1" };
         let names: std::collections::BTreeMap<u32, String> =
             decoded.station_names.into_iter().collect();
-        assert_eq!((names[&1].as_str(), names[&3].as_str()), (kept_name, kept_name));
+        assert_eq!(
+            (names[&1].as_str(), names[&3].as_str()),
+            (kept_name, kept_name)
+        );
     }
 
     #[test]

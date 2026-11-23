@@ -920,7 +920,10 @@ fn a_pin_on_a_merged_away_station_follows_the_survivor() {
     let side_start = station_at(&project, slot(side, 0));
     let main_end = station_at(&project, slot(main, 3));
     let pinned = anchor(&project, slot(side, 0));
-    let merged = project.merge_keeping_stationary(side_start, main_end).unwrap().value;
+    let merged = project
+        .merge_keeping_stationary(side_start, main_end)
+        .unwrap()
+        .value;
     assert_eq!(
         merged.archived, side_start,
         "the side piece moved onto the main line"

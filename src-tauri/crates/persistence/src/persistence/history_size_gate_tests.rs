@@ -177,14 +177,23 @@ fn actions() -> Vec<(&'static str, Action)> {
             p.merge_keeping_stationary(a, b).map(|_| ()).map_err(err)
         }),
         ("unmerge stations", |p, g| {
-            p.unmerge_station(StationRef::new(g.mid(), 0), crate::models::survey::NameAnswers::RuleL, None)
-                .map(|_| ())
-                .map_err(err)
+            p.unmerge_station(
+                StationRef::new(g.mid(), 0),
+                crate::models::survey::NameAnswers::RuleL,
+                None,
+            )
+            .map(|_| ())
+            .map_err(err)
         }),
         ("unmerge station pair", |p, g| {
             let parent = g.lines[(g.mid_index() - 1) / 2];
             let at = 1 + (g.mid_index() * 7) % (SHOTS_PER_LINE - 1);
-            p.unmerge_station_pair(StationRef::new(parent, at as u32), StationRef::new(g.mid(), 0), crate::models::survey::NameAnswers::RuleL, None)
+            p.unmerge_station_pair(
+                StationRef::new(parent, at as u32),
+                StationRef::new(g.mid(), 0),
+                crate::models::survey::NameAnswers::RuleL,
+                None,
+            )
             .map(|_| ())
             .map_err(err)
         }),

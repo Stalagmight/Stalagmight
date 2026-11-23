@@ -383,7 +383,8 @@ fn test_station_merge_repositioning() {
 
     // Merge station 0:1 (end of A at y=10) with station 1:0 (start of B)
     // Since A has zero datum, B will move to align
-    let result = project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result.is_ok(), "{result:?}");
     assert_valid(&project);
 
@@ -434,7 +435,12 @@ fn test_unmerge_keeps_position() {
         .collect();
 
     project
-        .unmerge_station_pair(StationRef::new(a, 1), StationRef::new(b, 0), survey::NameAnswers::RuleL, None)
+        .unmerge_station_pair(
+            StationRef::new(a, 1),
+            StationRef::new(b, 0),
+            survey::NameAnswers::RuleL,
+            None,
+        )
         .unwrap();
     assert_valid(&project);
 
@@ -473,11 +479,13 @@ fn test_duplicate_merge_rejection() {
     );
 
     // First merge succeeds
-    let result1 = project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result1 =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result1.is_ok());
 
     // Second merge fails: the two slots are one station now
-    let result2 = project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result2 =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result2.is_err());
     assert!(result2.unwrap_err().to_string().contains("already merged"));
 }

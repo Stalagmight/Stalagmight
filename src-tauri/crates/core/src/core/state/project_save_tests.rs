@@ -889,7 +889,14 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     write_legacy_drift(&path, false);
     let state = open(&path);
     let notice = state.take_conversion_notice().expect("the names C shows");
-    assert_eq!(notice.changes, ["Line 3 / 0 is now shown as 1", "Line 3 / 1 is now shown as 1a"], "{notice:?}");
+    assert_eq!(
+        notice.changes,
+        [
+            "Line 3 / 0 is now shown as 1",
+            "Line 3 / 1 is now shown as 1a"
+        ],
+        "{notice:?}"
+    );
     let project = state.get_project_state().unwrap();
     let c = project.lines()[2].id;
     let start = project.line(c).unwrap().start;

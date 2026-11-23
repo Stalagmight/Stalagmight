@@ -461,7 +461,9 @@ impl Project {
         self.stations.insert(new_station, record.to_station());
         let moved_hand_move = self.move_slots(station, new_station, &off);
         let (moved_datums, moved_closure_ends) =
-            self.move_attachments(station, new_station, |via| via.is_some_and(|l| off.contains(&l)));
+            self.move_attachments(station, new_station, |via| {
+                via.is_some_and(|l| off.contains(&l))
+            });
         DetachReport {
             line,
             station,

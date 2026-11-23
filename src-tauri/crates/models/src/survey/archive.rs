@@ -385,7 +385,8 @@ impl Project {
             };
             let record = station.archived.remove(index);
             let mut old = station.as_record(Vec::new());
-            let comment_moved = !has_text(record.comment.as_ref()) && has_text(old.comment.as_ref());
+            let comment_moved =
+                !has_text(record.comment.as_ref()) && has_text(old.comment.as_ref());
             let comment = if comment_moved {
                 old.comment.take()
             } else {

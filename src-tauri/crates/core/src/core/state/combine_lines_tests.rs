@@ -871,7 +871,11 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     p.merge_keeping_stationary(st(&p, o, 0), x1).unwrap();
     assert_eq!(st(&p, o, 0), x1, "X's end survives the merge");
     let own = p.stations.get(&x1).unwrap().name.clone();
-    assert_eq!(p.shown_name(x1), Some(own.as_str()), "O shows the kept name");
+    assert_eq!(
+        p.shown_name(x1),
+        Some(own.as_str()),
+        "O shows the kept name"
+    );
     assert_ne!(own, "0", "the junction's own name is X's");
     p.push_closure(
         k1,

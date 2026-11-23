@@ -94,6 +94,10 @@ pub struct DeleteRangePreview {
     /// Closures the gap-close would remove because it leaves them across one
     /// shot (#737); `None` when no gap-close is offered.
     pub closures_removed_across_one_shot: Option<Vec<LoopClosure>>,
+    /// What the delete does to identities (RS 4.3, U-P1-3): every archived
+    /// identity it restores (with the comment that moves or becomes hidden),
+    /// and the letters rule L gives. RS-W: the dialog names them.
+    pub identities: super::super::IdentityReport,
 }
 
 /// A normalized range.
@@ -524,15 +528,19 @@ impl Project {
         } else {
             Some(copy.run_edit(self, |p| p.gap_close(line, range))?)
         };
+        let mut identities = super::super::IdentityReport::default();
         let (removed_closures, promoted_closures, swept_closures, across) = match edited {
-            // Named in the state before the delete (I-1: a station the delete
-            // gave back its alias identity by its old id).
-            Some(edited) => (
-                edited.value.closures_removed,
-                edited.report.pre_edit_promotions(),
-                edited.report.pre_edit_swept(),
-                edited.report.pre_edit_across_one_shot(),
-            ),
+            // Named in the state before the delete (RS 4.3: a station the
+            // delete gave back an archived identity by its old id).
+            Some(edited) => {
+                identities = edited.report.identities.clone();
+                (
+                    edited.value.closures_removed,
+                    edited.report.pre_edit_promotions(),
+                    edited.report.pre_edit_swept(),
+                    edited.report.pre_edit_across_one_shot(),
+                )
+            }
             None => (
                 self.closures
                     .iter()
@@ -559,6 +567,7 @@ impl Project {
             shift_blocked,
             shift_blocked_reasons: reasons,
             closures_removed_across_one_shot: gap_close_offered.then_some(across),
+            identities,
         })
     }
 }

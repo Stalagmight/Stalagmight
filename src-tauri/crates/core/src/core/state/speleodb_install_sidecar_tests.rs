@@ -354,7 +354,10 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
             let notice = state.take_conversion_notice();
             // RS 8.3: C shows its start by the kept junction's name and its
             // own 1 takes the letter. RS-F: the 8.3 notice.
-            let names = ["Line 3 / 0 is now shown as 1", "Line 3 / 1 is now shown as 1a"];
+            let names = [
+                "Line 3 / 0 is now shown as 1",
+                "Line 3 / 1 is now shown as 1a",
+            ];
             let notice = notice.expect("a notice");
             if !drift {
                 assert_eq!(notice.changes, names, "a clean revision: the names");

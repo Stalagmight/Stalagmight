@@ -217,8 +217,14 @@ fn a_split_shares_the_cut_stations_record_and_moves_the_others() {
         external: None,
         lines,
     };
-    p.station_mut(k).unwrap().archived.push(record(50, "old k", vec![l]));
-    p.station_mut(m3).unwrap().archived.push(record(51, "old 3", vec![l]));
+    p.station_mut(k)
+        .unwrap()
+        .archived
+        .push(record(50, "old k", vec![l]));
+    p.station_mut(m3)
+        .unwrap()
+        .archived
+        .push(record(51, "old 3", vec![l]));
     p.counters.next_station_id = 52;
     assert_valid(&p);
     let second = ok(p.split_line(
@@ -227,13 +233,23 @@ fn a_split_shares_the_cut_stations_record_and_moves_the_others() {
         &options("Front", "Back"),
     ));
     assert_valid(&p);
-    assert_eq!(p.station(m3).unwrap().archived, [record(51, "old 3", vec![second])]);
-    assert_eq!(p.station(k).unwrap().archived, [record(50, "old k", vec![l, second])]);
+    assert_eq!(
+        p.station(m3).unwrap().archived,
+        [record(51, "old 3", vec![second])]
+    );
+    assert_eq!(
+        p.station(k).unwrap().archived,
+        [record(50, "old k", vec![l, second])]
+    );
     assert_eq!(p.counters.next_station_id, 52, "nothing minted");
     let detached = p.detach_line_auto(k, second, None).unwrap().value;
     assert!(detached.restored);
     assert_eq!(detached.new_station, 50);
-    assert_eq!(detached.lines_off, [l, second], "the halves come off together");
+    assert_eq!(
+        detached.lines_off,
+        [l, second],
+        "the halves come off together"
+    );
     assert_eq!(p.station(50).unwrap().name, "old k");
     assert_valid(&p);
 }

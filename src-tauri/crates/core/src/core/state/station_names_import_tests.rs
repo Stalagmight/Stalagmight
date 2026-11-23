@@ -528,7 +528,11 @@ fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     // Every station but the junction and the lettered one keeps the name
     // 0.6.0 showed for it.
     for (i, name) in imported_branch.iter().enumerate().skip(1) {
-        let expected = if i == 12 { "12a".to_string() } else { i.to_string() };
+        let expected = if i == 12 {
+            "12a".to_string()
+        } else {
+            i.to_string()
+        };
         assert_eq!(*name, expected);
     }
 }

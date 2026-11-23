@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::models::survey::{CounterKind, LineMeta, Project, StartAt, ArchivedStation, Violation};
+use crate::models::survey::{ArchivedStation, CounterKind, LineMeta, Project, StartAt, Violation};
 use crate::models::{Person, ShotData, SurveyCredit};
 
 use super::test_helpers::{generate, text_of, SMALL};

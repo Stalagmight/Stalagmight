@@ -177,7 +177,11 @@ impl Project {
             copy.id = shift(station.id);
             for record in &mut copy.archived {
                 record.id = shift(record.id);
-                record.lines = record.lines.iter().filter_map(|&l| record_line(l)).collect();
+                record.lines = record
+                    .lines
+                    .iter()
+                    .filter_map(|&l| record_line(l))
+                    .collect();
             }
             stations.push(copy.id);
             self.insert_station(copy)?;
