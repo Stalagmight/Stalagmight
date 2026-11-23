@@ -770,7 +770,35 @@ impl Walk {
                 } else {
                     ClosureStrategy::Move
                 };
-                let r = self.project.create_closure(a, None, b, None, strategy);
+                // An allowed end kept, or "Keep both names" (RS 5.2); the
+                // collisions answered by the preview's rule-L suggestions,
+                // or (sometimes) not at all, which refuses with nothing
+                // changed.
+                let mut keeps: Vec<Option<StationId>> = vec![None];
+                keeps.extend(
+                    self.project
+                        .closure_keep_choices(a, b)
+                        .allowed
+                        .into_iter()
+                        .map(Some),
+                );
+                let keep = self.rng.pick(&keeps).flatten();
+                let renames: Vec<(StationId, String)> = if self.rng.chance(0.8) {
+                    self.project
+                        .closure_naming((a, None), (b, None), strategy, keep)
+                        .map(|n| {
+                            n.collisions
+                                .into_iter()
+                                .map(|c| (c.station, c.to))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let r = self
+                    .project
+                    .create_closure(a, None, b, None, strategy, keep, &renames);
                 ("create closure", r.is_ok())
             }
             21 => {
@@ -778,7 +806,25 @@ impl Walk {
                 let Some(id) = self.rng.pick(&ids) else {
                     return ("skip", false);
                 };
-                ("remove closure", self.project.remove_closure(id).is_ok())
+                // What comes back answered as the Remove Closure dialog
+                // would (RS 5.3), or (sometimes) not at all.
+                let renames: Vec<(StationId, String)> = if self.rng.chance(0.8) {
+                    self.project
+                        .closure_removal(id)
+                        .map(|n| {
+                            n.collisions
+                                .into_iter()
+                                .map(|c| (c.station, c.to))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                (
+                    "remove closure",
+                    self.project.remove_closure(id, &renames).is_ok(),
+                )
             }
             22 => {
                 let Some(station) = self.station() else {

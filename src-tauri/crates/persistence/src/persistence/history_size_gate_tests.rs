@@ -206,13 +206,15 @@ fn actions() -> Vec<(&'static str, Action)> {
                 b,
                 Some(next),
                 stalagmight_models::survey::ClosureStrategy::Move,
+                None,
+                &[],
             )
             .map(|_| ())
             .map_err(err)
         }),
         ("remove loop closure", |p, _| {
             let id = p.closures.first().ok_or("no closure")?.id;
-            p.remove_closure(id).map(|_| ()).map_err(err)
+            p.remove_closure(id, &[]).map(|_| ()).map_err(err)
         }),
         ("set zero datum (GPS fix)", |p, g| {
             let s = station(p, g.mid(), 20);

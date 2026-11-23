@@ -68,6 +68,13 @@ mod split;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_archive_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
@@ -270,6 +277,8 @@ impl EditReport {
                 closure: self.pre_edit_closure(p.closure),
                 survivor: self.pre_edit_id(p.survivor),
                 retired: self.pre_edit_id(p.retired),
+                kept: self.pre_edit_id(p.kept),
+                archived: self.pre_edit_id(p.archived),
                 ..p.clone()
             })
             .collect()

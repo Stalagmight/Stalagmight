@@ -622,6 +622,8 @@ fn test_loop_detection_simple() {
         StationRef::new(a, 0),
         StationRef::new(b, 2),
         survey::ClosureStrategy::Batch,
+        None,
+        &[],
     );
 
     // This should succeed and create a loop closure
@@ -662,6 +664,8 @@ fn test_loop_closure_error_calculation() {
         StationRef::new(a, 0), // Start of A
         StationRef::new(b, 1), // End of B
         survey::ClosureStrategy::Batch,
+        None,
+        &[],
     );
 
     let created = result.unwrap().value;
@@ -2344,6 +2348,8 @@ fn test_save_load_with_loop_closures() {
             StationRef::new(a, 0),
             StationRef::new(a, 3),
             survey::ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
 

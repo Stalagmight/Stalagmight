@@ -26,7 +26,7 @@ fn detaching_a_line_whose_member_held_a_closure_promotes_it_and_the_line_follows
     let l3 = branch(&mut p, l1_end, run(0.0, 2, 10.0));
     let l2 = branch(&mut p, s, run(0.0, 2, 10.0));
     let x = at(&p, l3, 2);
-    let c = ok(p.create_closure(s, Some(l2), x, Some(l3), ClosureStrategy::Batch))
+    let c = ok(p.create_closure(s, Some(l2), x, Some(l3), ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
     let before = xy_all(&p);

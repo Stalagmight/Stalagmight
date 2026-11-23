@@ -882,6 +882,8 @@ fn merge_allowed_across_inert_closure_but_rejected_when_connected() {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::Batch,
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -919,6 +921,8 @@ fn loop_through_a_closure(state: &AppState) -> (LineId, LineId) {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -1097,6 +1101,8 @@ fn split_converts_orphaned_bridge_closure_immediately() {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -1155,6 +1161,8 @@ fn split_line_does_not_promote_a_bridge_closure_across_two_anchored_components()
             StationRef::new(b, 2),
             StationRef::new(c, 0),
             ClosureStrategy::Batch,
+            None,
+            &[],
         )
         .unwrap();
     });

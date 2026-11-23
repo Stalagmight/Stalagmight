@@ -591,7 +591,7 @@ fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
     p.set_datum_at(slot(a, 0), origin(), None).unwrap();
     p.set_datum_at(slot(b, 0), gps_at(0.0, -20.0), None)
         .unwrap();
-    p.create_closure_at(slot(b, 1), slot(a, 1), ClosureStrategy::Batch)
+    p.create_closure_at(slot(b, 1), slot(a, 1), ClosureStrategy::Batch, None, &[])
         .unwrap();
     let b1 = st(&p, b, 1);
     p.push_closure(a1, Some(c), b1, Some(b), ClosureStrategy::Batch);

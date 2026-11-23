@@ -604,3 +604,87 @@ disagreed, each with its reason.
   route gives stays and a restore may pick another record when the routes'
   promotions differ. They are `#[ignore]`d with that reason until RS-T moves
   T5 to the new rules.
+
+## Deviations (package RS-M2)
+
+Decisions the closures and Combine package took where this page is silent
+or the code disagreed, each with its reason.
+
+- **A tear keeps the junction's position with its other lines.** When a
+  Combine tear applies the `detach_keeps` distribution (the torn line was
+  the junction's only native line), the junction's Station ID goes with
+  the torn line, but its position, and a gauge or placement on it, stays
+  with the other lines: the plan's gauge test and Combine's placement pick
+  follow the position, not the id. The moving line, the layout and the
+  Computed View's hold point are the same as before RS (geometry never
+  changes); only which node carries which id differs, and the Combine
+  oracles now find a torn junction's position on the node its other lines
+  are on. This supersedes RS-M1's "tear of the junction's only native
+  line" bullet: the distribution and the tear closure's archive are in.
+- **When a tear closure archives nothing.** It archives the end that does
+  not hold the identity the torn slot showed, except when neither end holds
+  it, when C1 or C2 refuse the keep, or when that end is the other line's
+  join station (the join folds it into the kept join station, so the
+  combined line shows the kept join station there, as a Combine join always
+  did).
+- **A tear's new station and the prefix plan.** In case 3 the torn line's
+  new station takes the junction's name, and the prefix plan runs before
+  the tear closure archives it, so the plan may rename it as one of the
+  other line's stations. It is hidden behind the tear closure; Remove
+  Closure shows that name (lettered by rule L or answered in the dialog
+  when it repeats).
+- **Shared join where neither line was native.** The record naming the kept
+  line keeps naming the combined line and only the absorbed line is
+  dropped, instead of making the combined line native. Dropping both would
+  remove the dot and make the kept line's own station history; keeping it
+  changes nothing visible and Detach still gives that station back. When
+  either line was native the page's rule applies.
+- **The forced keep at a Combine join.** A closure between the two join
+  stations that archives the kept line's (4.1 step 4) keeps the other join
+  station's identity: the fold keeps the kept station's node for the
+  geometry, then the node is re-identified (its pre-edit id told to the
+  anchor algorithm), the kept join station becomes a record of its native
+  lines but the combined one, and the comment pick applies when it becomes
+  history. `CombineReport::join_keep_forced_by` names the closure.
+- **Dedupe moves an archive only to a closure that has none.** The closure
+  that stays keeps its own archive when it has one; C1 and C2 are then the
+  normalisation's.
+- **Promotions.** A promotion keeps the closure's kept end; for a closure
+  that archives nothing, the kept end of another closure between the same
+  two stations that archives one; else today's survivor, unless the
+  survivor's name is shown by another station on a line through the
+  retired end and the retired end's is not shown by another station on a
+  line through the survivor. `Promotion` reports `kept` and `archived`.
+  Its re-identification is not added to `OpOutcome::reidentified` or
+  `EditReport::reidentified`: the retired id existed before the edit, so
+  `pre_edit_id` would map it wrongly; the promotion itself carries it.
+- **Create and Remove Loop Closure commands.** Until RS-W passes the
+  dialog's answers, the Create Loop Closure command keeps both names
+  (`keep: None`, so it shows no name twice) and Remove Loop Closure letters
+  what comes back by rule L (`remove_closure_auto`). Set Station Comment
+  addresses the identity the slot shows, as Set Station Name already did;
+  RS-UI asks first whose station it is.
+- **Closure previews.** `closure_naming` and `closure_removal` run the op
+  on a copy with every collision lettered by rule L; their suggestions are
+  those letters (the dialog's other answer renames the kept station).
+  `renamed_lines` lists the lines where some station shows another
+  identity afterwards, letters aside. On a tie rule L letters the station
+  that is new on the line, so a restored end takes the letter when the
+  user reused its name.
+- **Keep choices.** `closure_keep_choices` measures rule K over node
+  candidates (every line each end's shown identity is shown on); the
+  allowed ends are listed `a` first. Two ends that show one identity tie
+  on length and go to the lower Station ID.
+- **Edits through a loop end at the model level.** `slot_owner` says whose
+  station a slot shows (its node, shown identity, home line, foreign, the
+  archiving closure, the record naming the slot's line); `set_shown_name`
+  and `set_shown_comment` edit the shown identity; a datum set through a
+  loop end stays on that node and `DatumSet::shown_as` names what it is
+  shown as.
+- **Rule L on third lines.** A junction the prefix plan renames is never
+  lettered on a third line when it is shown on more lines than the station
+  it collides with (before RS the junction took the letter there).
+- **Undo kit.** Create Loop Closure keeps an allowed end or both names at
+  random, and create and remove answer their collisions with the
+  previews' suggestions four times in five; the fifth refuses and must
+  change nothing.

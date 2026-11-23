@@ -572,10 +572,14 @@ impl Project {
             .iter()
             .map(|r| r.closure)
             .collect();
+        let identities = report.identities.clone();
+        let reidentified = report.reidentified.clone();
         Ok(Edited {
             value: report,
             report: EditReport {
                 removed_across_one_shot: removed,
+                identities,
+                reidentified,
                 ..EditReport::default()
             },
         })

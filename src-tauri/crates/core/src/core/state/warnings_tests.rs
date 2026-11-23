@@ -146,7 +146,7 @@ fn issue_loop() -> (Project, LineId, LineId) {
         vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
     );
     let (b3, a2) = (st(&p, b, 3), st(&p, a, 2));
-    p.create_closure(b3, None, a2, None, ClosureStrategy::Batch)
+    p.create_closure(b3, None, a2, None, ClosureStrategy::Batch, None, &[])
         .unwrap();
     (p, a, b)
 }
@@ -759,7 +759,7 @@ fn removing_the_closure_clears_the_warning() {
     assert_eq!(of_code(&warnings(state), CLOSURE_ACROSS_ONE_SHOT).len(), 1);
     state
         .with_project_mut(|p| {
-            p.remove_closure(id)
+            p.remove_closure(id, &[])
                 .map(|_| ())
                 .map_err(|e| format!("{e:?}"))
         })

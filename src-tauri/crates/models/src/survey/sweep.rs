@@ -16,6 +16,16 @@
 //!   promotion would double-anchor, so the closure is kept (invariant 7
 //!   allows it there).
 //!
+//! A promotion is a merge (RS 5.4): geometry first, exactly as above, then
+//! the identity. It keeps the closure's kept end when the closure archives
+//! one (the other end becomes the merge record, RS 4.1 step 4); else the
+//! kept end of another closure between the two that archives one; else the
+//! survivor, unless the survivor's name would repeat on the retired end's
+//! lines and the retired end's would not. When the identity kept is the
+//! retired end's, the merged node is re-identified (RS 4.1 step 3, its
+//! pre-edit id told to the anchor algorithm), so the layout is the same
+//! either way. Names a promotion makes repeat are lettered by rule L.
+//!
 //! A promotion only joins pieces that were apart, so a closure the pass kept
 //! as a loop can never become one station later in the pass, and one pass
 //! settles everything (today's argument). Each promotion runs the anchor
@@ -58,10 +68,15 @@ pub struct Promotion {
     pub closure: LoopClosure,
     /// Where it sat in the closure list when the sweep began.
     pub position: usize,
-    /// The station that stayed (the stationary piece's end).
+    /// The station whose piece stayed (geometry, plan 4.2).
     pub survivor: StationId,
-    /// The moving piece's end, now archived in the survivor (a record).
+    /// The station whose piece moved onto it (geometry).
     pub retired: StationId,
+    /// The station kept (RS 5.4): the identity the merged node shows, and
+    /// the merged node's id after the promotion (`survivor` or `retired`).
+    pub kept: StationId,
+    /// The other one, archived in the merged node (a record).
+    pub archived: StationId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,24 +144,32 @@ impl Project {
                 (true, _, false) | (false, true, _) => (closure.a, closure.b),
                 _ => (closure.b, closure.a),
             };
+            let keep = self.promotion_keep(&closure, survivor, retired);
             let before = self.anchor_snapshot();
             let pre = before_promotions.is_none().then(|| self.clone());
-            // RS-M2: the promotion keeps the closure's kept end (geometry
-            // first, then re-identify, RS 5.4); today's survivor keeps here.
+            let survivor_native = self.native_lines(survivor);
             if self.merge_ids(survivor, retired).is_err() {
                 continue;
             }
             if pre.is_some() {
                 before_promotions = pre;
             }
-            let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
+            let mut ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
+            if keep == retired {
+                // Geometry first, then the identity (RS 4.1 step 3).
+                self.reidentify_merged(survivor, retired, survivor_native);
+                ctx = ctx.with_reidentified(&[(survivor, retired)]);
+            }
             self.settle_anchors(&before, &ctx);
             *fate = Fate::Promoted;
+            let archived = if keep == retired { survivor } else { retired };
             report.promoted.push(Promotion {
                 closure: original[position],
                 position,
                 survivor,
                 retired,
+                kept: keep,
+                archived,
             });
         }
         if let Some(before) = &before_promotions {
@@ -166,5 +189,45 @@ impl Project {
             }
         }
         report
+    }
+
+    /// Which end a promotion of `closure` keeps (module docs): the closure's
+    /// kept end, else the kept end of another closure between the two that
+    /// archives one, else `survivor` unless its name would repeat on
+    /// `retired`'s lines and `retired`'s would not repeat on `survivor`'s.
+    fn promotion_keep(
+        &self,
+        closure: &LoopClosure,
+        survivor: StationId,
+        retired: StationId,
+    ) -> StationId {
+        if let Some((_, kept)) = closure.archive() {
+            return kept;
+        }
+        if let Some((_, kept)) = self.forced_merge_keep(survivor, retired) {
+            return kept;
+        }
+        if self.name_repeats_on(survivor, retired) && !self.name_repeats_on(retired, survivor) {
+            retired
+        } else {
+            survivor
+        }
+    }
+
+    /// Whether the name `kept` shows is shown by another identity (not the
+    /// one `other` shows) on a line through `other`: what keeping `kept` in
+    /// a merge of the two would show twice there.
+    fn name_repeats_on(&self, kept: StationId, other: StationId) -> bool {
+        let (identity, gone) = (self.shown(kept), self.shown(other));
+        let Some(name) = self.shown_name(kept) else {
+            return false;
+        };
+        let topology = self.topology();
+        topology.lines_of(other).into_iter().any(|line| {
+            topology.chain(line).unwrap_or(&[]).iter().any(|&node| {
+                let shown = self.shown(node);
+                shown != identity && shown != gone && self.shown_name(node) == Some(name)
+            })
+        })
     }
 }

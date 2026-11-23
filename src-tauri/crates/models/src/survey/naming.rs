@@ -81,6 +81,20 @@ impl Project {
         }
     }
 
+    /// The comment `node` is shown with: its shown identity's (RS 5.1).
+    pub fn shown_comment(&self, node: StationId) -> Option<&str> {
+        self.shown_station(node)?.comment.as_deref()
+    }
+
+    /// Set the comment of the identity `node` shows (a loop end's edit goes
+    /// to the kept end's identity, RS 5.4); an empty one is none. No checks.
+    pub fn set_shown_comment(&mut self, node: StationId, comment: Option<String>) {
+        let identity = self.shown(node);
+        if let Some(s) = self.stations.get_mut(&identity) {
+            s.comment = comment.filter(|text| !text.is_empty());
+        }
+    }
+
     /// Every `(shown identity, line)` pair of this state, for rule L's "new
     /// on the line".
     pub(super) fn shown_pairs(&self) -> BTreeSet<(StationId, LineId)> {
@@ -173,8 +187,9 @@ impl Project {
     /// Make the names line `line` shows unique in chain order: the first
     /// identity showing a name keeps it, a later one gets a letter suffix
     /// free on every line it is shown on. Returns the renamed identities in
-    /// chain order. RS-M2 (Combine) and RS-F (the 0.6.0 migration) replace
-    /// its chain-order choice by rule L ([`Self::letter_collisions`]).
+    /// chain order. Combine settles its repeats by rule L instead
+    /// ([`Self::letter_collisions`]); RS-F replaces this chain-order choice
+    /// in the 0.6.0 migration too.
     pub fn uniquify_line_names(&mut self, line: LineId) -> Vec<StationId> {
         let Some(chain) = self.topology().chain(line).map(<[StationId]>::to_vec) else {
             return Vec::new();
