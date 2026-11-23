@@ -230,7 +230,11 @@ export default function HeldLockResumeDialog() {
           );
           return;
         }
-        const result = await loadProject(path);
+        // Without the open's automatic Start Editing: the explicit one below is
+        // the resume. The automatic one stops at a lock this run never claimed
+        // (sdbdemo2 issue 3) and would raise its read-only notice over a resume
+        // the user has just asked for.
+        const result = await loadProject(path, { acquireLock: false });
         // loadProject surfaces its own failure; leave the prompt up so the lock is
         // still resolvable.
         if (!result.success) return;
