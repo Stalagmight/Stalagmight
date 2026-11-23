@@ -1276,6 +1276,13 @@ reason.
   join_archived`) names it; its hidden comment is in `identities.hidden`;
   the dialog explains instead of offering the pick. The RS property's
   Combine exemption is narrowed to the case where the pick applies.
+- **The merge preview's renamed lines include every slot shown
+  differently.** Besides the slots of the two merged identities, a line on
+  which any slot shows another identity after the merge is listed (a merge
+  adds and removes no slot, so slots match by line and index): a safety net
+  for a promotion the merge's sweep makes, which merges rarely do (a merge
+  joins pieces, so its closures become loops), and the same check the
+  Detach preview's `shown_elsewhere` makes.
 - **Records still carry no owner link (model review 4).** An owner link
   would change the file format (records gain an owner), the undo changeset
   and the wire; it is left for a follow-up. Until then the merge preview

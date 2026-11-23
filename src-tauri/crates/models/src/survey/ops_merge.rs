@@ -563,7 +563,10 @@ impl Project {
 
     /// The lines whose shown name at the merge changes from this state to
     /// `after`: every slot of a node showing either merged identity before,
-    /// now on `node` (or still on its own node, for a closure subtree).
+    /// now on `node` (or still on its own node, for a closure subtree), and
+    /// every line on which a slot shows another identity after (a promotion
+    /// the merge's sweep makes, RS-FX1; a merge adds and removes no slot, so
+    /// slots match by line and index).
     fn renamed_lines(&self, after: &Project, merged: &[StationId], node: StationId) -> Vec<LineId> {
         let topology = self.topology();
         let mut lines: Vec<(usize, LineId)> = Vec::new();
@@ -581,6 +584,19 @@ impl Project {
                         }
                     }
                 }
+            }
+        }
+        let (before_index, after_index) = (self.shown_index(), after.shown_index());
+        for (position, line) in self.lines.iter().enumerate() {
+            let Some(now) = after.line(line.id) else {
+                continue;
+            };
+            let differs = line
+                .stations()
+                .zip(now.stations())
+                .any(|(was, is)| before_index.shown(was) != after_index.shown(is));
+            if differs {
+                lines.push((position, line.id));
             }
         }
         lines.sort_unstable();
