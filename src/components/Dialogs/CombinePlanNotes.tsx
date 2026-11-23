@@ -1,6 +1,7 @@
 import { Trans, useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { DetailLink } from '../common/DetailLink';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
@@ -339,6 +340,9 @@ function LinePill({ id, name }: { id: LineId; name: string }) {
  * One end of a tie the combine turns into a loop closure: its line and its
  * station (by name, beside its line's pill) as the link pills the Details
  * panel uses. Hovering the station rings it on the map behind the dialog.
+ * The pill draws a dotted slot's dot and loop mark beside its bare name; the
+ * plain text and the spoken name carry the qualifier (`12 (Main)`), the line
+ * pill beside it the line.
  */
 function TieEnd({
   at,
@@ -349,6 +353,7 @@ function TieEnd({
   lineName: (id: LineId) => string;
   stationLabel: (ref: StationRef) => string;
 }) {
+  const labels = useIdentityLabels();
   return (
     <span className="inline-flex flex-wrap items-center gap-1 align-middle">
       <LinePill id={at.line_id} name={lineName(at.line_id)} />
@@ -356,6 +361,7 @@ function TieEnd({
         type="station"
         target={{ lineId: at.line_id, position: at.station_index }}
         displayText={stationLabel(at)}
+        pillLabel={labels.stationPill(at)}
         testId={`combine-tie-station-${at.line_id}-${at.station_index}`}
         onSelect={() => useUIStore.getState().setSelection({ type: 'station', stationRef: at })}
         onHoverStart={() => useUIStore.getState().setHoveredStation(at)}

@@ -14,6 +14,7 @@ import { ProjectStatsActions } from './ProjectStatsActions';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
+import { shotEndMarks } from '../common/shotEndMarks';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure, StationRef } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
@@ -548,7 +549,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   // that shot becomes a pill and the rest follows it.
                   const body = warningMessageBody(labels, warning);
                   if (!showPills || body === warning.message) return warning.message;
-                  const shot = labels.shotAt(warning.lineId, warning.shotIndex);
                   return (
                     <>
                       {/* The shot pill navigates to Details (select + switch tab),
@@ -567,7 +567,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         })}
                         data-testid={warningOpenShotTestId(warning)}
                       >
-                        <EntityBlob entity="shot" lineId={warning.lineId}>{shot}</EntityBlob>
+                        <EntityBlob
+                          entity="shot"
+                          lineId={warning.lineId}
+                          shotEnds={shotEndMarks(labels, warning.lineId, warning.shotIndex)}
+                          plain={labels.shotAt(warning.lineId, warning.shotIndex)}
+                        >
+                          {labels.shotPillAt(warning.lineId, warning.shotIndex)}
+                        </EntityBlob>
                       </button>
                       {' '}
                       {body}
@@ -998,6 +1005,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   target={{ lineId: line.id, position: startStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: startStationIndex })}
                   fullText={labels.station({ line_id: line.id, station_index: startStationIndex }, true)}
+                  pillLabel={labels.stationPill({ line_id: line.id, station_index: startStationIndex })}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
@@ -1012,6 +1020,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   target={{ lineId: line.id, position: endStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: endStationIndex })}
                   fullText={labels.station({ line_id: line.id, station_index: endStationIndex }, true)}
+                  pillLabel={labels.stationPill({ line_id: line.id, station_index: endStationIndex })}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
@@ -1237,6 +1246,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                       target={{ lineId: line.id, position: firstStationPosition }}
                       displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
                       fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
+                      pillLabel={labels.stationPill({ line_id: line.id, station_index: firstStationIndex })}
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
@@ -1254,6 +1264,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         target={{ lineId: line.id, position: firstStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
                       fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
+                        pillLabel={labels.stationPill({ line_id: line.id, station_index: firstStationIndex })}
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
@@ -1268,6 +1279,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         target={{ lineId: line.id, position: lastStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: lastStationIndex })}
                         fullText={labels.station({ line_id: line.id, station_index: lastStationIndex }, true)}
+                        pillLabel={labels.stationPill({ line_id: line.id, station_index: lastStationIndex })}
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}
@@ -1581,7 +1593,7 @@ function ClosuresSection({
                               type="station"
                               target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
                               displayText={labels.station(ref.station_ref, true)}
-                              pillLabel={labels.station(ref.station_ref)}
+                              pillLabel={labels.stationPill(ref.station_ref)}
                               pillContext={labels.lineName(ref.station_ref.line_id)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
@@ -1603,7 +1615,7 @@ function ClosuresSection({
                               type="station"
                               target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
                               displayText={labels.station(ref.station_ref, true)}
-                              pillLabel={labels.station(ref.station_ref)}
+                              pillLabel={labels.stationPill(ref.station_ref)}
                               pillContext={labels.lineName(ref.station_ref.line_id)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
@@ -1618,7 +1630,7 @@ function ClosuresSection({
                                   type="station"
                                   target={{ lineId: ref.via_station.line_id, position: ref.via_station.station_index }}
                                   displayText={labels.station(ref.via_station!, true)}
-                              pillLabel={labels.station(ref.via_station!)}
+                              pillLabel={labels.stationPill(ref.via_station!)}
                               pillContext={labels.lineName(ref.via_station.line_id)}
                                   onSelect={() => onSelectStation(ref.via_station!)}
                                   isMissing={!stationExists(ref.via_station)}

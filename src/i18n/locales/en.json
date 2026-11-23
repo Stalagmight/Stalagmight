@@ -1763,7 +1763,7 @@
       "gapExceeds": "That is more than the {{threshold}} m expected over {{distance}} m of survey from the zero datum that places this survey. Check the GPS reading and the survey; you can still save.",
       "gapExceedsNoDistance": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey; you can still save.",
       "editingDisabled": "Editing is disabled in the current view",
-      "loopEndDatum": "This station is a loop end ({{station}}): the datum goes on its own point."
+      "loopEndDatum": "This station is {{station}}: the datum goes on its own point."
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Line",

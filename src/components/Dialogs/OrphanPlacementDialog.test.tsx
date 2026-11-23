@@ -176,7 +176,12 @@ describe('OrphanPlacementDialog - finishes once (#681)', () => {
 
   it('two Accept clicks in the same task merge once', async () => {
     const mergeStations = vi.fn(ok);
-    useProjectStore.setState({ mergeStations });
+    // The suggestion's stations are named by the project's lines.
+    const line = (id: number, name: string) => ({ id, name, shots: [], direction: 'in', color: '#4a9eff' });
+    useProjectStore.setState({
+      mergeStations,
+      project: { lines: [line(1, 'Orphan'), line(2, 'Mainline'), line(3, 'Second')] } as never,
+    });
     const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second' });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
