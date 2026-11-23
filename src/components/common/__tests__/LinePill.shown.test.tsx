@@ -88,8 +88,9 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
         <StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />
       </>,
     );
-    expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*Station ID\s*11$/);
-    expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*loop end\s*Station ID\s*3$/);
+    // The dot reads "(Main)" to a screen reader (RS-FX6, P2-5).
+    expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*11$/);
+    expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*\(Main\)\s*loop end\s*Station ID\s*3$/);
   });
 
   it('ends a loop end with the shown Station ID and the loop mark', () => {
@@ -147,7 +148,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId(`${id}-from-home-dot`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${id}-to-home-dot`)).toBeNull();
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
-    expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*→\s*1$/);
+    expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*\(Main\)\s*→\s*1$/);
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select shot 12 (Main) → 1');
   });
 
@@ -165,7 +166,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId(`${id}-to-loop-end`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
     expect(screen.getByTestId(`${id}-to-home-dot`)).toBeInTheDocument();
-    expect(screen.getByTestId(id)).toHaveTextContent(/^1\s*→\s*3\s*loop end$/);
+    expect(screen.getByTestId(id)).toHaveTextContent(/^1\s*→\s*3\s*\(Main\)\s*loop end$/);
   });
 
   it("gives a shot pill (EntityBlob) the same marks through shotEndMarks", () => {

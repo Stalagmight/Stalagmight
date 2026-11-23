@@ -235,7 +235,12 @@ describe('the home-line mark (prepared for the archived-station model, not wired
     const expected = pillMarkOf(SIDE_COLOR, pillColorsOf(MAIN_COLOR, 'dark'), 'dark');
     expect(cssVar(mark, '--mark-dot')).toBe(expected.dot);
     expect(cssVar(mark, '--mark-ring')).toBe(expected.ring ?? 'transparent');
-    expect(mark).toHaveAttribute('aria-hidden', 'true');
+    // RS-FX6, P2-5: the dot says whose station it is in words too, a
+    // tooltip and screen-reader text ("St1 (Side)"), as the loop mark does.
+    // Injection: render the mark `aria-hidden` with no words again.
+    expect(mark).toHaveAttribute('title', 'Belongs to Side');
+    expect(mark).not.toHaveAttribute('aria-hidden');
+    expect(mark.querySelector('.sr-only')?.textContent).toBe(' (Side)');
     // Right after the name, before the Station ID.
     expect(mark.previousElementSibling).toHaveClass('sh-lpill-main');
     expect(mark.nextElementSibling).toHaveClass('sh-lpill-sid');
@@ -252,7 +257,8 @@ describe('the home-line mark (prepared for the archived-station model, not wired
       />,
     );
     const main = screen.getByTestId(`shot-${MAIN}-2-link`).querySelector('.sh-lpill-main')!;
-    expect(main.textContent).toBe('St1 → St2');
+    // The end's dot reads "(Side)" to a screen reader (RS-FX6, P2-5).
+    expect(main.textContent).toBe('St1 → St2 (Side)');
     expect(screen.queryByTestId(`shot-${MAIN}-2-link-from-home-dot`)).toBeNull();
     const to = screen.getByTestId(`shot-${MAIN}-2-link-to-home-dot`);
     expect(to.previousSibling?.textContent).toBe('St2');
@@ -267,7 +273,8 @@ describe('the home-line mark (prepared for the archived-station model, not wired
         </EntityBlob>
       </>,
     );
-    expect(screen.getByTestId('st-home-dot')).toBeInTheDocument();
+    expect(screen.getByTestId('st-home-dot')).toHaveAttribute('title', 'Belongs to Side');
+    expect(screen.getByTestId('sh-from-home-dot')).toHaveAttribute('title', 'Belongs to Side');
     expect(screen.getByTestId('sh-from-home-dot').previousSibling?.textContent).toBe('St0');
     expect(screen.queryByTestId('sh-to-home-dot')).toBeNull();
   });
@@ -277,5 +284,14 @@ describe('the home-line mark (prepared for the archived-station model, not wired
       <PillParts testId="p" context="Main Line" main="St0" stationId={40} />,
     );
     expect(container.querySelector('.sh-lpill-mark')).toBeNull();
+  });
+});
+
+describe('a home-line mark without a line name (RS-FX6)', () => {
+  it('stays a silent dot when the line is unknown', () => {
+    render(<PillParts testId="p" main="St0" mark={{ dot: '#f00', ring: null }} />);
+    const mark = screen.getByTestId('p-home-dot');
+    expect(mark).toHaveAttribute('aria-hidden', 'true');
+    expect(mark).not.toHaveAttribute('title');
   });
 });

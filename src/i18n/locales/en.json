@@ -2094,6 +2094,8 @@
     "stationColumns": {
       "index": "Stn",
       "name": "Name",
+      "homeQualifier": "({{line}})",
+      "loopEndQualifier": "(loop end)",
       "stationId": "Station ID",
       "x": "X",
       "y": "Y",
@@ -4422,6 +4424,8 @@
     "loopEnd": "loop end",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
     "loopEndPinLabel": "{{station}} (loop end)",
+    "homeMarkTitle": "Belongs to {{line}}",
+    "homeMarkLabel": "({{line}})",
     "foreignLabel": "{{station}} ({{home}})"
   },
   "notices": {

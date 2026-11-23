@@ -54,6 +54,28 @@ export function stationRenameToSend(value: unknown, station: Pick<Station, 'name
 const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
 
+/**
+ * The muted words after a dotted row's name in the Name column (RS-FX6,
+ * P2-5): a line may show one name twice (RS-FX5), its own station and the
+ * junction showing another line's station, and the Name column read "12"
+ * twice. A foreign slot reads "(Main)", its home line, as plain text names
+ * it ("12 (Main)"); a loop end "(loop end)". Null for a native row, or
+ * without labels.
+ */
+export function nameQualifier(
+  station: Pick<Station, 'station_ref' | 'shown'>,
+  labels: Pick<IdentityLabels, 'lineName'> | undefined,
+  t: TFunction,
+): string | null {
+  const shown = station.shown;
+  if (!shown || !labels) return null;
+  if (shown.loop_end) return t('dataTable.stationColumns.loopEndQualifier');
+  if (shown.foreign && shown.home_line !== undefined && shown.home_line !== station.station_ref.line_id) {
+    return t('dataTable.stationColumns.homeQualifier', { line: labels.lineName(shown.home_line) });
+  }
+  return null;
+}
+
 export function buildStationColumns(ctx: StationColumnContext): GridColumn<Station>[] {
   const { t, precision, geometryReadOnly } = ctx;
 
@@ -97,6 +119,27 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       width: 72,
       kind: 'text',
       getValue: (r) => displayStationName(r.name),
+      // A dotted row says whose station it shows (P2-5); the edit, the copy
+      // and the sort read the bare name.
+      render: (r) => {
+        const name = displayStationName(r.name);
+        const qualifier = nameQualifier(r, ctx.labels, t);
+        if (qualifier === null) {
+          return (
+            <span className="sg-cell-text" title={name || undefined}>
+              {name}
+            </span>
+          );
+        }
+        return (
+          <span className="sg-cell-text" title={`${name} ${qualifier}`}>
+            {name}{' '}
+            <span className="text-text-secondary" data-testid={`station-name-qualifier-${r.station_ref.line_id}-${r.station_ref.station_index}`}>
+              {qualifier}
+            </span>
+          </span>
+        );
+      },
       editable: !geometryReadOnly,
       // An empty name is not a name: skip the write rather than send it.
       parse: (raw) => (raw.trim() === '' ? undefined : raw.trim()),
