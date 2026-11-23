@@ -258,8 +258,11 @@ impl AppState {
                     }
                 }
                 project.settle_anchors(&before, &ctx);
-                record.label =
-                    super::labels::create_line_at_label(project, built.id, target_station);
+                record.set_label(super::labels::create_line_at_label(
+                    project,
+                    built.id,
+                    target_station,
+                ));
                 record.refs = HistoryRefs {
                     lines: capped([built.id, target_station.line_id]),
                     stations: capped(built.junction.map(|(_, s, _)| s)),
@@ -437,7 +440,10 @@ impl AppState {
             },
             |project, record| {
                 let outcome = import_funnel::import_lines(project, &request)?;
-                record.label = super::labels::import_lines_label(project, &outcome.labelled_lines);
+                record.set_label(super::labels::import_lines_label(
+                    project,
+                    &outcome.labelled_lines,
+                ));
                 record.refs = HistoryRefs {
                     lines: capped(outcome.line_ids.iter().copied()),
                     stations: capped(outcome.junctions.iter().copied()),

@@ -39,6 +39,17 @@ pub struct UndoHistoryItem {
     pub index: usize,
     /// Human-readable description of the action
     pub description: String,
+    /// `description` as prose parts (RS-PROSE): the entry's persisted
+    /// `label_parts` (`HistoryEntry::label_parts`), each station, shot or
+    /// line the label names as a part the history row draws as a pill.
+    /// `prose::plain` of the parts is `description`, byte for byte; absent
+    /// when the label names nothing, was cut, or comes from an entry of an
+    /// earlier history format. Never carries a slot (the parts are persisted
+    /// with stable ids only). Plain-text sinks (the row's tooltip, the undo
+    /// toasts) read `description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description_parts: Option<Vec<crate::models::ProsePart>>,
     /// ISO 8601 timestamp or null for legacy entries
     pub timestamp: Option<String>,
     /// Command type for icon mapping (e.g., "create_line", "update_shot")
@@ -147,6 +158,10 @@ pub fn history_item(index: usize, entry: &HistoryEntry) -> UndoHistoryItem {
     UndoHistoryItem {
         index,
         description: entry.label.clone(),
+        // Defensive: the entry keeps parts only when they say its label.
+        description_parts: (crate::models::prose::plain(&entry.label_parts) == entry.label)
+            .then(|| crate::models::prose::named(entry.label_parts.clone()))
+            .flatten(),
         timestamp: Some(entry.timestamp.to_rfc3339()),
         command_type: entry.kind.clone(),
         preview_data: Some(preview(entry)),

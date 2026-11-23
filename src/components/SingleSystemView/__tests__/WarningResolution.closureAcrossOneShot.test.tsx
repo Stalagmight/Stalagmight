@@ -18,6 +18,9 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { ProjectWarning } from '../../../types/commands';
 import type { Line, Shot } from '../../../types/project';
+import type { ProsePart } from '../../../types/ipc/ProsePart';
+import { partsToPlain } from '../../../utils/prose';
+import { accessibleText } from '../../../test/accessibleText';
 
 const line = { id: 0, name: 'A', shots: [] } as unknown as Line;
 const shot = {
@@ -119,6 +122,31 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     renderResolution(acrossOneShot);
     const message = screen.getByTestId('warning-resolution-message');
     expect(message.textContent).toMatch(/^Shot Main Line: A1 \u2192 A2 has both ends joined/);
+  });
+
+  it('draws the names the message says as prose pills and reads its words (RS-PROSE)', () => {
+    useUIStore.setState({ syntacticLevel: 'full', resolvedTheme: 'dark' } as never);
+    const parts: ProsePart[] = [
+      { kind: 'text', text: 'Shot ' },
+      { kind: 'shot', text: 'Main Line: A1 \u2192 A2', line_id: 0, context: 'Main Line', from: { name: 'A1' }, to: { name: 'A2' } },
+      { kind: 'text', text: ' has both ends joined by loop closure ' },
+      { kind: 'station', text: 'Main Line / A1', line_id: 0, context: 'Main Line', name: 'A1', station_id: 11 },
+      { kind: 'text', text: ' to ' },
+      { kind: 'station', text: 'Main Line / A2', line_id: 0, context: 'Main Line', name: 'A2', station_id: 12 },
+      {
+        kind: 'text',
+        text: ', which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
+      },
+    ];
+    expect(partsToPlain(parts)).toBe(acrossOneShot.message);
+    renderResolution({ ...acrossOneShot, messageParts: parts });
+    const message = screen.getByTestId('warning-resolution-message');
+    expect([...message.querySelectorAll('.sh-ppill')].map((p) => p.getAttribute('data-prose-kind'))).toEqual([
+      'shot',
+      'station',
+      'station',
+    ]);
+    expect(accessibleText(message)).toBe(acrossOneShot.message);
   });
 
   it('removes exactly the closure the warning names', async () => {

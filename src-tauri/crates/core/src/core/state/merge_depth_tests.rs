@@ -268,6 +268,17 @@ fn a_junction_whose_readings_disagree_is_a_warning() {
         "{}",
         row.message
     );
+    // RS-PROSE: the junction is a station part, with its line.
+    let parts = row
+        .message_parts
+        .as_deref()
+        .expect("the message names the junction");
+    assert_eq!(crate::models::prose::plain(parts), row.message);
+    assert!(parts.iter().any(|part| matches!(
+        part,
+        crate::models::ProsePart::Station(s)
+            if s.text == "Far Room / 2" && s.line_id == Some(far) && s.name == "2"
+    )));
 
     state
         .save_resolved_warning_gated(&ResolvedWarning {

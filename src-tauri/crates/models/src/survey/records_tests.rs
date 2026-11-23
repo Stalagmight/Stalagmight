@@ -171,6 +171,7 @@ fn undo_and_redo_restore_record_owners() {
             timestamp: chrono::DateTime::UNIX_EPOCH,
             kind: "merge_stations".to_string(),
             label: "step".to_string(),
+            label_parts: Vec::new(),
             refs: HistoryRefs::default(),
             preview: RecordedPreview::default(),
             changes: capture(from, to),

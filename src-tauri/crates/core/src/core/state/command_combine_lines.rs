@@ -24,7 +24,14 @@ const EMPTY_NAME: &str = "A line name cannot be empty";
 /// A station as the user reads it on its slot, `Line name / station name`
 /// (the name that line shows it by, I-3), `a station of Line name` when the
 /// slot names no station, `a station` when its line is gone too. Never the
-/// positional `line:index` handle.
+/// positional `line:index` handle. Marked as the slot's part
+/// ([`Project::slot_part`], RS-PROSE) where the part says these words.
+fn station_marked(project: &Project, at: StationRef) -> String {
+    let plain = station_text(project, at);
+    crate::models::prose::mark_as(&plain, project.slot_part(at, true))
+}
+
+/// The plain words of [`station_marked`].
 fn station_text(project: &Project, at: StationRef) -> String {
     if project.line(at.line_id).is_none() {
         return "a station".to_string();
@@ -66,8 +73,8 @@ pub(super) fn combine_removed_warnings(
         .iter()
         .map(|removed| {
             let (a, b) = (
-                station_text(before, removed.station_a),
-                station_text(before, removed.station_b),
+                station_marked(before, removed.station_a),
+                station_marked(before, removed.station_b),
             );
             let what = match removed.kind {
                 CombineRemovedKind::Merge => format!("the merge of {a} and {b}"),
@@ -79,13 +86,13 @@ pub(super) fn combine_removed_warnings(
                 }
                 CombineRemovedKind::LoopClosure => format!("loop closure {a} to {b}"),
             };
-            ValidationWarning {
-                code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
-                message: format!(
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+                &format!(
                     "Removed {what}: combining the lines left its two stations at the two ends of one shot."
                 ),
-                severity: WarningSeverity::Warning,
-            }
+                WarningSeverity::Warning,
+            )
         })
         .collect()
 }
@@ -208,18 +215,19 @@ impl AppState {
                     .filter(|&id| project.line(id).is_some())
                     .collect();
                 lines.sort_unstable();
-                Record {
+                let mut record = Record {
                     kind: "batch".to_string(),
-                    // Both lines by the names they have before the combine
-                    // (the other one is gone after it, and the kept one may
-                    // be renamed).
-                    label: combine_lines_label(project, kept, other, &options.name),
                     refs: HistoryRefs {
                         lines,
                         ..HistoryRefs::default()
                     },
-                    preview: RecordedPreview::default(),
-                }
+                    ..Record::default()
+                };
+                // Both lines by the names they have before the combine
+                // (the other one is gone after it, and the kept one may be
+                // renamed).
+                record.set_label(combine_lines_label(project, kept, other, &options.name));
+                record
             },
             |project, record, before| {
                 // The combined line's name replaces both lines' names: refused

@@ -18,11 +18,13 @@
 //!    differently ([`IdentityChanges`]).
 //!
 //! The change lists are survey content: for the conversion notice only,
-//! never logged.
+//! never logged nor persisted. Beside each name they keep the stable ids
+//! (line ids, Station IDs) the notice's prose parts draw it with (RS-PROSE).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
 
+use crate::models::prose::{self, ProsePart, ProseStation};
 use crate::models::survey::{ClosureEnd, ClosureId, LetteredStation, Project, RecordIndex};
 use crate::models::{LineId, StationId};
 
@@ -55,6 +57,14 @@ pub struct NameChange {
     /// For a slot that shows another station: the line that station belongs
     /// to (its home line), by name, so the notice can say "Main / 12".
     pub kept_line: Option<String>,
+    /// The slot's line (`line`'s id), for the pill's colour.
+    pub line_id: LineId,
+    /// `kept_line`'s id.
+    pub kept_line_id: Option<LineId>,
+    /// The identity (Station ID) whose name the file showed at the slot.
+    pub from_identity: StationId,
+    /// The identity the slot shows now.
+    pub to_identity: StationId,
 }
 
 /// One slot whose own comment the file showed there is now hidden: the slot
@@ -64,6 +74,8 @@ pub struct NameChange {
 pub struct CommentHidden {
     /// The slot's line, by the name the converted project gives it.
     pub line: String,
+    /// `line`'s id, for the pill's colour.
+    pub line_id: LineId,
     /// The station's name as the file showed it at that slot.
     pub station: String,
     /// The identity (Station ID) whose comment the slot showed: one station
@@ -80,6 +92,11 @@ pub struct ClosureKeepsBoth {
     pub a: String,
     /// End `b`.
     pub b: String,
+    /// `a` as prose parts (RS-PROSE): the same words, each station a part
+    /// without a slot; empty when no part says them.
+    pub a_parts: Vec<ProsePart>,
+    /// `b` as prose parts.
+    pub b_parts: Vec<ProsePart>,
 }
 
 /// What lines show differently after an identity upgrade: the conversion
@@ -435,21 +452,23 @@ fn slot_changes<E>(
             let comment_hidden = has_text(was.comment.as_ref()) && now.comment != was.comment;
             if name_changed {
                 let lettered = identity == was.identity;
-                let kept_line = (!lettered)
-                    .then(|| homes.of(project, identity))
-                    .flatten()
-                    .map(&mut label);
+                let kept_line_id = (!lettered).then(|| homes.of(project, identity)).flatten();
                 names.push(NameChange {
                     line: label(line.id),
                     from: was.name.clone(),
                     to: now.name.clone(),
                     lettered,
-                    kept_line,
+                    kept_line: kept_line_id.map(&mut label),
+                    line_id: line.id,
+                    kept_line_id,
+                    from_identity: was.identity,
+                    to_identity: identity,
                 });
             }
             if comment_hidden {
                 comments.push(CommentHidden {
                     line: label(line.id),
+                    line_id: line.id,
                     station: was.name.clone(),
                     identity: was.identity,
                 });
@@ -480,23 +499,31 @@ fn closures_keep_both(
         .closures
         .iter()
         .filter(|c| ids.contains(&c.id))
-        .map(|c| ClosureKeepsBoth {
-            a: closure_end_text(project, c.a, c.a_via, homes),
-            b: closure_end_text(project, c.b, c.b_via, homes),
+        .map(|c| {
+            let (a, a_parts) = closure_end_text(project, c.a, c.a_via, homes);
+            let (b, b_parts) = closure_end_text(project, c.b, c.b_via, homes);
+            ClosureKeepsBoth {
+                a,
+                b,
+                a_parts,
+                b_parts,
+            }
         })
         .collect()
 }
 
 /// One closure end for [`closures_keep_both`]: `Main / M4 (now shown as
-/// Side / S4)` when a closure archives the end's node, else its slot text.
+/// Side / S4)` when a closure archives the end's node, else its slot text;
+/// with its prose parts (no slots), empty when they would name nothing.
 fn closure_end_text(
     project: &Project,
     node: StationId,
     via: Option<LineId>,
     homes: &mut HomeLines,
-) -> String {
+) -> (String, Vec<ProsePart>) {
     if !project.is_closure_archived(node) {
-        return project.station_text(node, via);
+        let (text, parts) = prose::split(&project.station_marked(node, via));
+        return (text, prose::without_slots(parts));
     }
     let mut identity = |id: StationId, fallback: Option<LineId>| {
         let name = project
@@ -504,15 +531,27 @@ fn closure_end_text(
             .get(&id)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        match homes.of(project, id).or(fallback) {
-            Some(line) => format!("{} / {name}", project.line_label_of(line)),
-            None => name,
-        }
+        let line = homes.of(project, id).or(fallback);
+        let context = line.map(|line| project.line_label_of(line));
+        prose::mark(&ProsePart::Station(ProseStation {
+            text: match &context {
+                Some(context) => format!("{context} / {name}"),
+                None => name.clone(),
+            },
+            line_id: line,
+            context,
+            name,
+            home_line: None,
+            loop_end: None,
+            station_id: Some(id),
+            slot: None,
+        }))
     };
     let shown = project.shown(node);
-    format!(
+    let marked = format!(
         "{} (now shown as {})",
         identity(node, via),
         identity(shown, None)
-    )
+    );
+    prose::split(&marked)
 }

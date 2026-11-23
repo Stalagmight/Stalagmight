@@ -518,6 +518,7 @@ impl AppState {
                             code: "delete_project_persist_failed".to_string(),
                             message: format!("Project deleted, but the recent-projects list could not be saved: {e}"),
                             severity: WarningSeverity::Warning,
+                            parts: None,
                         });
                     }
                 }
@@ -561,6 +562,7 @@ impl AppState {
                          from the held-lock prompt or on the SpeleoDB website."
                     ),
                     severity: WarningSeverity::Warning,
+                    parts: None,
                 });
             }
         }

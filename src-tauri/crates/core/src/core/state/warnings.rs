@@ -28,6 +28,12 @@
 //!   leaving it, under the `_START` code), naming the station so "Go to
 //!   station" finds it.
 //!
+//! A warning that names a shot, a station or a line carries the message's
+//! words as prose parts too (RS-PROSE, [`ProjectWarning::message_parts`]):
+//! each producer words its message with marked names (`prose::mark`) and the
+//! row splits it (`prose::split`), so the plain `message` is the string the
+//! producer always wrote and the marked string never leaves this module.
+//!
 //! Ignored warnings are survey content now (plan 6.5): the file's
 //! `ignored_warnings` member, held in memory (`FileState`), keyed by the
 //! shot's persistent uuid and the code. A shot keeps its uuid through every
@@ -50,6 +56,7 @@ use anyhow::Result;
 use super::open_file::FileState;
 use super::AppState;
 use crate::core::{Validator, WarningSeverity};
+use crate::models::prose;
 use crate::models::survey::{AdjustmentFailure, Project, RawPositions, SlotTexts};
 use crate::models::{
     datum_gap_ignore_code, severity_for_code, warning_is_ignorable, DatumGap, DatumRole, LineId,
@@ -125,14 +132,17 @@ pub(super) fn opened_project_warnings(
 }
 
 /// A warning row on shot `shot_index` of `line_id`, about nothing else.
+/// `marked` is its message with any name it says marked (`prose::mark`):
+/// split here into the plain `message` and its `message_parts`.
 fn row(
     project: &Project,
     line_id: LineId,
     shot_index: usize,
     code: &str,
-    message: String,
+    marked: &str,
 ) -> Option<ProjectWarning> {
     let shot = project.line(line_id)?.shots.get(shot_index)?;
+    let (message, parts) = prose::split(marked);
     Some(ProjectWarning {
         line_id,
         shot_id: shot.id,
@@ -145,12 +155,29 @@ fn row(
         datum_station_index: None,
         datum_refs: None,
         closure_id: None,
+        message_parts: prose::named(parts),
     })
+}
+
+/// A marked name (one part) bounded as file text (`sanitize_display_text`
+/// to `MAX_FILE_NAME_LEN`, as every receipt string): the part as it is when
+/// its words are already within bounds, else the bounded words alone, so
+/// the plain message is the bounded text either way.
+fn bounded_name(marked: &str) -> String {
+    let plain = prose::unmark(marked);
+    let bounded =
+        crate::models::sanitize_display_text(&plain, crate::core::command::MAX_FILE_NAME_LEN);
+    if bounded == plain {
+        marked.to_owned()
+    } else {
+        bounded
+    }
 }
 
 /// Every shot's own checks, in line list order. The shots are named through
 /// one [`SlotTexts`], so a hub named on each of its lines costs its lines,
-/// not its lines times its records (RS-FX9).
+/// not its lines times its records (RS-FX9); each as its part, which the
+/// validator splits out of the message (`message_parts`).
 fn shot_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
     let mut out = Vec::new();
     let mut texts: Option<SlotTexts<'_>> = None;
@@ -159,7 +186,7 @@ fn shot_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
             let named = || {
                 texts
                     .get_or_insert_with(|| SlotTexts::new(project))
-                    .shot_text(line.id, shot_index)
+                    .shot_marked(line.id, shot_index)
             };
             for warning in Validator::validate_project_shot_named(project, line, shot_index, named)
             {
@@ -176,6 +203,7 @@ fn shot_warnings(project: &Project, ignored: &Ignored) -> Vec<ProjectWarning> {
                     datum_station_index: None,
                     datum_refs: None,
                     closure_id: None,
+                    message_parts: warning.parts,
                 });
             }
         }
@@ -219,7 +247,7 @@ fn gps_gap_warnings(
                 gap.slot.line_id,
                 shot_index,
                 gap.code,
-                datum_gps_gap_message(&gap.gap),
+                &datum_gps_gap_message(&gap.gap),
             )?;
             // The ignore names this datum's GPS too (#741 U2).
             let stored = datum_gap_ignore_code(gap.code, &datum.gps);
@@ -237,7 +265,8 @@ fn gps_gap_warnings(
 /// (#737), on the shot it collapses: the Closures Computed View skips such a
 /// closure, and without this the user would only see the loop stay open.
 /// Carries the closure id so the Resolve view can remove exactly it. Never
-/// ignorable. The ends are named on their `via` lines.
+/// ignorable. The ends are named on their `via` lines, the shot and the ends
+/// as parts.
 fn closure_across_one_shot_warnings(project: &Project, raw: &RawPositions) -> Vec<ProjectWarning> {
     if project.closures.is_empty() {
         return Vec::new();
@@ -253,11 +282,11 @@ fn closure_across_one_shot_warnings(project: &Project, raw: &RawPositions) -> Ve
             let texts = texts.get_or_insert_with(|| SlotTexts::new(project));
             let message = format!(
                 "Shot {} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
-                texts.shot_text(line_id, shot_index),
-                texts.station_text(closure.a, closure.a_via),
-                texts.station_text(closure.b, closure.b_via),
+                texts.shot_marked(line_id, shot_index),
+                texts.station_marked(closure.a, closure.a_via),
+                texts.station_marked(closure.b, closure.b_via),
             );
-            let mut warning = row(project, line_id, shot_index, CLOSURE_ACROSS_ONE_SHOT, message)?;
+            let mut warning = row(project, line_id, shot_index, CLOSURE_ACROSS_ONE_SHOT, &message)?;
             warning.closure_id = Some(skipped.closure_id);
             Some(warning)
         })
@@ -268,7 +297,8 @@ fn closure_across_one_shot_warnings(project: &Project, raw: &RawPositions) -> Ve
 /// the solve's anchor station (station 0 -> shot 0, station `i` -> shot
 /// `i - 1`), else the first shot of the component's first line that has one.
 /// The primary surface is the notice drawn with the adjusted view itself;
-/// this row is where the user reads which part and why.
+/// this row is where the user reads which part and why. The shot is a part
+/// ([`Project::shot_marked`]: the words of [`Validator::shot_label`]).
 fn adjustment_failure_warnings(
     project: &Project,
     failures: &[AdjustmentFailure],
@@ -291,12 +321,12 @@ fn adjustment_failure_warnings(
             let lines = failure.lines.len();
             let message = format!(
                 "Shot {} is in a part of the survey ({lines} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
-                Validator::shot_label(project, line_id, shot_index),
+                project.shot_marked(line_id, shot_index),
                 if lines == 1 { "line" } else { "lines" },
                 failure.error.user_reason(),
             );
             let mut warning =
-                row(project, line_id, shot_index, CLOSURE_ADJUSTMENT_FAILED, message)?;
+                row(project, line_id, shot_index, CLOSURE_ADJUSTMENT_FAILED, &message)?;
             warning.is_resolved = warning.shot_uuid.as_deref().is_some_and(|uuid| {
                 ignored.covers(uuid, CLOSURE_ADJUSTMENT_FAILED, CLOSURE_ADJUSTMENT_FAILED)
             });
@@ -313,7 +343,8 @@ fn adjustment_failure_warnings(
 /// once the receipt is closed (in a project with none, every piece floats
 /// and the receipt is the only record). On the first shot of the piece's
 /// first line (list order) that has one, so an Ignore keys on that shot; a
-/// piece of shot-less lines gets no row.
+/// piece of shot-less lines gets no row. The line is named in quotes, as its
+/// part (`"Main"`, the pill without the quotes).
 ///
 /// 0.6.0's pieces were its rigid groups, which also followed aligned loop
 /// closures; on the station graph a closure joins two pieces only when both
@@ -356,10 +387,12 @@ fn unconnected_piece_warnings(project: &Project, ignored: &Ignored) -> Vec<Proje
                 crate::core::command::MAX_FILE_NAME_LEN,
             );
             let others = lines.len() - 1;
+            // `"Main"`: the quoted words, as a line part (RS-PROSE).
+            let line_name = prose::mark(&prose::line_part(Some(line.id), &name, true));
             let piece = match others {
-                0 => format!("Line \"{name}\" is"),
-                1 => format!("Line \"{name}\" and 1 line merged with it are"),
-                n => format!("Line \"{name}\" and {n} lines merged with it are"),
+                0 => format!("Line {line_name} is"),
+                1 => format!("Line {line_name} and 1 line merged with it are"),
+                n => format!("Line {line_name} and {n} lines merged with it are"),
             };
             let message = format!(
                 "{piece} not connected to the rest of the survey and {} no zero datum, so \
@@ -367,7 +400,7 @@ fn unconnected_piece_warnings(project: &Project, ignored: &Ignored) -> Vec<Proje
                 if others == 0 { "has" } else { "have" },
                 if others == 0 { "it" } else { "them" },
             );
-            let mut warning = row(project, line.id, 0, LINE_NOT_CONNECTED, message)?;
+            let mut warning = row(project, line.id, 0, LINE_NOT_CONNECTED, &message)?;
             warning.is_resolved = warning
                 .shot_uuid
                 .as_deref()
@@ -387,7 +420,7 @@ fn unconnected_piece_warnings(project: &Project, ignored: &Ignored) -> Vec<Proje
 /// station and only shot 0 leaves a line's start, so no two rows share an
 /// Ignore key. `datum_station_index` names the junction's slot on the row's
 /// line for "Go to station". A non-finite reading has its own error
-/// (`NON_FINITE_VALUE`) and raises none here.
+/// (`NON_FINITE_VALUE`) and raises none here. The station is a part.
 fn junction_depth_spread_warnings(
     project: &Project,
     raw: &RawPositions,
@@ -430,11 +463,10 @@ fn junction_depth_spread_warnings(
         }) else {
             continue;
         };
-        let name = crate::models::sanitize_display_text(
+        let name = bounded_name(
             &texts
                 .get_or_insert_with(|| SlotTexts::new(project))
-                .station_text(station, Some(slot.line_id)),
-            crate::core::command::MAX_FILE_NAME_LEN,
+                .station_marked(station, Some(slot.line_id)),
         );
         let mean = raw.z(station).unwrap_or(f64::NAN);
         let message = format!(
@@ -443,7 +475,7 @@ fn junction_depth_spread_warnings(
              Check the depths of the shots that meet here.",
             slots.len(),
         );
-        let Some(mut warning) = row(project, slot.line_id, shot_index, code, message) else {
+        let Some(mut warning) = row(project, slot.line_id, shot_index, code, &message) else {
             continue;
         };
         warning.is_resolved = warning

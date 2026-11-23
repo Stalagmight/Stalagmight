@@ -48,6 +48,8 @@ describe('checkFileStatus', () => {
       source: 'old_format',
       changes: ['3 stations moved by up to 0.42 m'],
       details: [],
+      change_parts: [[]],
+      detail_parts: [],
       brings_back: false,
       file: 'not_yet_saved',
     };
@@ -131,6 +133,8 @@ describe('the converting save', () => {
     source: 'old_format',
     changes: ['1 station moved by 0.40 m'],
     details: [],
+    change_parts: [[]],
+    detail_parts: [],
     brings_back: false,
     file: 'not_yet_saved',
   };

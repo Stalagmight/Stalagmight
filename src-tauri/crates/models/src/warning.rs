@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::prose::ProsePart;
 use crate::{LineId, ShotId, StationRef};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -212,4 +213,14 @@ pub struct ProjectWarning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub closure_id: Option<u64>,
+    /// `message` as prose parts (RS-PROSE, [`crate::prose`]): the same
+    /// words, each shot, station or line the message names as a part the
+    /// Warnings tab draws as a pill. [`crate::prose::plain`] of the parts is
+    /// `message`, byte for byte. Absent when the message names nothing. A
+    /// station part's `slot` is the open project's slot when the warnings
+    /// were computed (a session handle, never persisted). Plain-text sinks
+    /// (logs, the clipboard, aria labels) read `message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message_parts: Option<Vec<ProsePart>>,
 }

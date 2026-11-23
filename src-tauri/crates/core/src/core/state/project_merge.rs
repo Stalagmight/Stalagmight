@@ -227,6 +227,7 @@ impl AppState {
                 code: "SURFACE_ELEVATION_MISMATCH".to_string(),
                 message,
                 severity: WarningSeverity::Warning,
+                parts: None,
             });
         }
         // A source converted as it was read (RS 8.2, 8.3) says so: the
@@ -240,6 +241,7 @@ impl AppState {
                         notice,
                     ),
                     severity: WarningSeverity::Warning,
+                    parts: None,
                 });
             }
         }

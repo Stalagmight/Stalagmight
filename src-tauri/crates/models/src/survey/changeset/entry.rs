@@ -2,19 +2,25 @@
 //! value per entry, the format's `history.undo` / `history.redo` element.
 //!
 //! ```text
-//! {"v":1,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot",
-//!  "label":"Update shot Main: 4 -> 5","refs":{"lines":[3],"shots":["..."]},
+//! {"v":3,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot",
+//!  "label":"Update shot Main: 4 -> 5",
+//!  "label_parts":[{"kind":"text","text":"Update shot "},{"kind":"shot",...}],
+//!  "refs":{"lines":[3],"shots":["..."]},
 //!  "preview":{"rows":[["Length","3.50","4.00"]]},"ops":{...}}
 //! ```
 //!
-//! - `v` is [`HISTORY_FORMAT_VERSION`]. An entry of any other version does
-//!   not decode ([`EntryError::Version`]); the caller drops the history whole
-//!   with the existing banner, as #808 did.
+//! - `v` is [`HISTORY_FORMAT_VERSION`]. This build also reads entries of
+//!   [`OLDEST_HISTORY_FORMAT_VERSION`] and later: a version 2 entry is the
+//!   same layout without `label_parts`, and its label reads plain. An entry
+//!   of any other version does not decode ([`EntryError::Version`]); the
+//!   caller drops the history whole with the existing banner, as #808 did.
 //! - `t` is the push time, RFC 3339 UTC with nanoseconds (the format reads it
 //!   for the SpeleoDB watermark cut).
 //! - `k` is the command kind (the icon mapping), `label` the record-time
-//!   label, `refs` the stable ids the label and preview name, `preview` any
-//!   rows worded at record time (a batch's sub-commands), `ops` the
+//!   label, `label_parts` the same words as prose parts (RS-PROSE, see
+//!   [`HistoryEntry::label_parts`]; absent when the label names nothing),
+//!   `refs` the stable ids the label and preview name, `preview` any rows
+//!   worded at record time (a batch's sub-commands), `ops` the
 //!   [`Changeset`].
 //!
 //! The forward `Command` is never persisted: its payload holds session shot
@@ -29,6 +35,7 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::prose::{self, ProsePart};
 use crate::{LineId, SectionId, StationId};
 
 use super::super::{ClosureId, MAX_SHOT_UUID_CHARS};
@@ -38,7 +45,14 @@ use super::{shape, Changeset};
 /// change to the entry or changeset layout, or to the line hash.
 ///
 /// 2: archived station records replace aliases (RS 10).
-pub const HISTORY_FORMAT_VERSION: u32 = 2;
+/// 3: the label's prose parts, `label_parts` (RS-PROSE).
+pub const HISTORY_FORMAT_VERSION: u32 = 3;
+
+/// The oldest entry format this build reads: version 2 is version 3 without
+/// `label_parts` (the changeset layout and the line hash are the same), so
+/// its entries read as they are, their labels plain. A file may hold both: a
+/// save copies a decoded entry's text unchanged.
+pub const OLDEST_HISTORY_FORMAT_VERSION: u32 = 2;
 
 /// One persisted undo or redo step.
 #[derive(Debug, Clone)]
@@ -48,6 +62,15 @@ pub struct HistoryEntry {
     pub kind: String,
     /// The label, resolved with the names the project held at record time.
     pub label: String,
+    /// The label as prose parts (RS-PROSE, [`crate::prose`]): the same words,
+    /// each station, shot or line it names as a part the history list draws
+    /// as a pill. [`prose::plain`] of the parts is `label`, byte for byte;
+    /// empty when the label names nothing, when it was cut to fit the
+    /// limits, or for an entry of an earlier version. Persisted (the entry's
+    /// `label_parts`) WITHOUT slots: a part names stable ids only (a line id,
+    /// a Station ID), never a session handle. [`HistoryEntry::fit_limits`]
+    /// and [`decode_entry`] keep that true.
+    pub label_parts: Vec<ProsePart>,
     /// The stable ids the label and preview name.
     pub refs: HistoryRefs,
     /// Preview rows worded at record time (what the changeset cannot say).
@@ -74,7 +97,14 @@ impl HistoryEntry {
             }
         };
         cut(&mut self.kind);
+        let label = self.label.clone();
         cut(&mut self.label);
+        // Never parts whose words are not the label's: a cut label drops
+        // them, and so do parts past the limits; none keeps a slot.
+        let parts = std::mem::take(&mut self.label_parts);
+        if self.label == label {
+            self.label_parts = fitted_parts(parts, &self.label, limits).unwrap_or_default();
+        }
         let refs = &mut self.refs;
         refs.shots
             .retain(|u| u.chars().count() <= MAX_SHOT_UUID_CHARS);
@@ -95,6 +125,36 @@ impl HistoryEntry {
             cut(&mut row.new);
         }
     }
+}
+
+/// `parts` as an entry keeps them: without slots, and only when they say
+/// exactly `label`'s words and every string is within
+/// [`EntryLimits::max_text_chars`] (so are the parts: no more of them than
+/// that). `None` when they do not fit, or name nothing (the label then reads
+/// plain).
+fn fitted_parts(
+    parts: Vec<ProsePart>,
+    label: &str,
+    limits: &EntryLimits,
+) -> Option<Vec<ProsePart>> {
+    let long = |s: &str| s.chars().count() > limits.max_text_chars;
+    let fits = parts.len() <= limits.max_text_chars
+        && parts.iter().any(ProsePart::is_name)
+        && prose::plain(&parts) == label
+        && parts.iter().all(|part| match part {
+            ProsePart::Text { text } => !long(text),
+            ProsePart::Station(s) => {
+                !long(&s.text) && !long(&s.name) && !s.context.as_deref().is_some_and(long)
+            }
+            ProsePart::Shot(s) => {
+                !long(&s.text)
+                    && !long(&s.from.name)
+                    && !long(&s.to.name)
+                    && !s.context.as_deref().is_some_and(long)
+            }
+            ProsePart::Line(l) => !long(&l.text) && !long(&l.name),
+        });
+    fits.then(|| prose::without_slots(parts))
 }
 
 /// Entities an entry names, by stable id (never session ids or slots).
@@ -241,7 +301,8 @@ impl fmt::Display for EntryError {
             Self::Syntax(e) => write!(f, "history entry is unreadable: {e}"),
             Self::Version(v) => write!(
                 f,
-                "history entry has format version {v}; this build reads {HISTORY_FORMAT_VERSION}"
+                "history entry has format version {v}; this build reads \
+                 {OLDEST_HISTORY_FORMAT_VERSION} to {HISTORY_FORMAT_VERSION}"
             ),
             Self::Time(t) => write!(f, "history entry time {t:?} is not RFC 3339"),
             Self::Shape(e) => write!(f, "history entry is malformed: {e}"),
@@ -259,6 +320,8 @@ struct WireOut<'a> {
     t: String,
     k: &'a str,
     label: &'a str,
+    #[serde(skip_serializing_if = "<[ProsePart]>::is_empty")]
+    label_parts: &'a [ProsePart],
     #[serde(skip_serializing_if = "HistoryRefs::is_empty")]
     refs: &'a HistoryRefs,
     #[serde(skip_serializing_if = "RecordedPreview::is_empty")]
@@ -273,6 +336,11 @@ struct WireIn {
     t: String,
     k: String,
     label: String,
+    /// Read as any JSON and converted after: parts this build cannot read
+    /// (a hand edit, a kind it does not know) cost the entry its pills,
+    /// never the history.
+    #[serde(default)]
+    label_parts: Option<serde_json::Value>,
     #[serde(default)]
     refs: HistoryRefs,
     #[serde(default)]
@@ -297,6 +365,7 @@ pub fn encode_entry(entry: &HistoryEntry) -> Result<String, EntryError> {
         t: entry.timestamp.to_rfc3339_opts(SecondsFormat::Nanos, true),
         k: &entry.kind,
         label: &entry.label,
+        label_parts: &entry.label_parts,
         refs: &entry.refs,
         preview: &entry.preview,
         ops: &entry.changes,
@@ -306,18 +375,22 @@ pub fn encode_entry(entry: &HistoryEntry) -> Result<String, EntryError> {
 
 /// Read an entry back (untrusted input): size first, then the version, then
 /// the layout, the limits and the changeset's structural rules. The
-/// changeset carries no session ids: a step mints them.
+/// changeset carries no session ids: a step mints them. The label's parts
+/// are kept only when they fit ([`fitted_parts`]: the label's exact words,
+/// within the limits, without slots); a version 2 entry has none.
 pub fn decode_entry(text: &str, limits: &EntryLimits) -> Result<HistoryEntry, EntryError> {
     if text.len() > limits.max_bytes {
         return Err(EntryError::TooLarge(text.len()));
     }
     let version: VersionOnly =
         serde_json::from_str(text).map_err(|e| EntryError::Syntax(e.to_string()))?;
-    if version.v != u64::from(HISTORY_FORMAT_VERSION) {
+    if !(u64::from(OLDEST_HISTORY_FORMAT_VERSION)..=u64::from(HISTORY_FORMAT_VERSION))
+        .contains(&version.v)
+    {
         return Err(EntryError::Version(version.v));
     }
     let wire: WireIn = serde_json::from_str(text).map_err(|e| EntryError::Syntax(e.to_string()))?;
-    let _ = wire.v;
+    let with_parts = wire.v >= 3;
     let timestamp = DateTime::parse_from_rfc3339(&wire.t)
         .map(|t| t.with_timezone(&Utc))
         .map_err(|_| EntryError::Time(wire.t.clone()))?;
@@ -352,10 +425,17 @@ pub fn decode_entry(text: &str, limits: &EntryLimits) -> Result<HistoryEntry, En
         return Err(EntryError::Limit("preview rows"));
     }
     shape::check(&wire.ops).map_err(EntryError::Shape)?;
+    let label_parts = wire
+        .label_parts
+        .filter(|_| with_parts)
+        .and_then(|value| serde_json::from_value::<Vec<ProsePart>>(value).ok())
+        .and_then(|parts| fitted_parts(parts, &wire.label, limits))
+        .unwrap_or_default();
     Ok(HistoryEntry {
         timestamp,
         kind: wire.k,
         label: wire.label,
+        label_parts,
         refs: wire.refs,
         preview: wire.preview,
         changes: wire.ops,

@@ -27,8 +27,12 @@ impl Validator {
     /// Validate a shot and return any warnings, each opening with the shot as
     /// the user reads it: `Shot Main Line: 4 → 5 has zero length`, never the
     /// positional `line:position` handle. `shot_label` names the shot
-    /// (`Main Line: 4 → 5`, `Project::shot_label_at`) and is asked only when a
+    /// (`Main Line: 4 → 5`, `Project::shot_text`) and is asked only when a
     /// check fires, so a whole-project pass pays for no names on clean shots.
+    /// It may give the shot marked (`Project::shot_marked`, RS-PROSE): each
+    /// message is split here into its plain words and its parts
+    /// ([`ValidationWarning::marked`]), the plain words those of the plain
+    /// label.
     pub fn validate_shot(
         shot: &ShotData,
         config: &ValidationConfig,
@@ -44,10 +48,12 @@ impl Validator {
         // gate, and the map coloring can never disagree on a code's class.
         findings
             .into_iter()
-            .map(|(code, body)| ValidationWarning {
-                code: code.to_string(),
-                message: format!("Shot {label} {body}"),
-                severity: severity_for_code(code),
+            .map(|(code, body)| {
+                ValidationWarning::marked(
+                    code,
+                    &format!("Shot {label} {body}"),
+                    severity_for_code(code),
+                )
             })
             .collect()
     }
@@ -308,20 +314,21 @@ impl Validator {
     /// Shot `index` of `line` checked against the project's own thresholds
     /// (`settings.validation`, #57: stored in the file, authoritative over
     /// the global config), each warning naming the shot by
-    /// [`Self::shot_label`].
+    /// [`Self::shot_label`], with the shot as its part
+    /// (`Project::shot_marked`, RS-PROSE).
     pub fn validate_project_shot(
         project: &Project,
         line: &Line,
         index: usize,
     ) -> Vec<ValidationWarning> {
         Self::validate_project_shot_named(project, line, index, || {
-            Self::shot_label(project, line.id, index)
+            project.shot_marked(line.id, index)
         })
     }
 
     /// [`Self::validate_project_shot`] with the shot named by `shot_label`
-    /// (asked only when a check fires): a whole-project pass names its shots
-    /// through one `SlotTexts` (RS-FX9).
+    /// (asked only when a check fires, plain or marked): a whole-project
+    /// pass names its shots through one `SlotTexts` (RS-FX9).
     pub fn validate_project_shot_named(
         project: &Project,
         line: &Line,
@@ -414,6 +421,8 @@ mod tests {
         assert!(warnings
             .iter()
             .all(|w| w.message.starts_with("Shot Main: 4 \u{2192} 5 ")));
+        // A plain label names nothing: no parts.
+        assert!(warnings.iter().all(|w| w.parts.is_none()));
     }
 
     fn default_config() -> ValidationConfig {
@@ -1462,6 +1471,20 @@ mod tests {
             long[0].message,
             "Shot Main: 0 \u{2192} 1 length 9.5m above maximum threshold 8.0m"
         );
+        // RS-PROSE: the shot is a part, and the parts say the message's words.
+        let parts = long[0]
+            .parts
+            .as_deref()
+            .expect("the message names its shot");
+        assert_eq!(crate::models::prose::plain(parts), long[0].message);
+        assert!(matches!(
+            parts,
+            [
+                crate::models::ProsePart::Text { .. },
+                crate::models::ProsePart::Shot(_),
+                crate::models::ProsePart::Text { .. }
+            ]
+        ));
         let lrud = Validator::validate_project_shot(&project, &line, 1);
         assert_eq!(lrud.len(), 1);
         assert_eq!(lrud[0].code, "NEGATIVE_LRUD");

@@ -32,6 +32,9 @@ use crate::models::survey::{HistoryEntry, Project};
 pub(crate) struct Record {
     pub(crate) kind: String,
     pub(crate) label: String,
+    /// `label` as prose parts (RS-PROSE, `HistoryEntry::label_parts`): set
+    /// with the label by [`Self::set_label`]; empty for a plain label.
+    pub(crate) label_parts: Vec<crate::models::ProsePart>,
     pub(crate) refs: HistoryRefs,
     pub(crate) preview: RecordedPreview,
 }
@@ -39,12 +42,20 @@ pub(crate) struct Record {
 impl Record {
     /// The record of `cmd` on `project` before it runs.
     pub(crate) fn of(project: &Project, cmd: &Command) -> Self {
+        let label = super::labels::entry_label(project, cmd);
         Self {
             kind: crate::core::command_kind(cmd).to_string(),
-            label: super::labels::entry_label(project, cmd),
+            label: label.text,
+            label_parts: label.parts,
             refs: super::labels::command_refs(project, cmd),
             preview: super::labels::command_preview(project, cmd),
         }
+    }
+
+    /// Word the record with `label` and its parts (a recipe's label).
+    pub(crate) fn set_label(&mut self, label: super::labels::Label) {
+        self.label = label.text;
+        self.label_parts = label.parts;
     }
 }
 
@@ -333,6 +344,7 @@ impl AppState {
             timestamp: chrono::Utc::now(),
             kind: record.kind,
             label: record.label,
+            label_parts: record.label_parts,
             refs: record.refs,
             preview: record.preview,
             changes,

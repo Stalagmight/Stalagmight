@@ -30,9 +30,13 @@ pub const MARK_OPEN: char = '\u{1}';
 pub const MARK_CLOSE: char = '\u{2}';
 
 /// One piece of a text that names stations, shots and lines.
+// `export_to` without `export` (as on `StationRef`): no export test writes
+// the file, but a member-crate type exported to `src-tauri/bindings/` (the
+// conversion notice's view) lists these as ts-rs dependencies, and its
+// import path needs the same base.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "../../bindings/ProsePart.ts")]
 pub enum ProsePart {
     /// Words between the names.
     Text { text: String },
@@ -47,6 +51,7 @@ pub enum ProsePart {
 
 /// A station named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/ProseStation.ts")]
 pub struct ProseStation {
     /// The words plain text has here: `12`, `Side / 12 (Main)`, `Main / 12
     /// (loop end on Side)`.
@@ -85,6 +90,7 @@ pub struct ProseStation {
 
 /// One end of a shot named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/ProseShotEnd.ts")]
 pub struct ProseShotEnd {
     /// The bare name.
     pub name: String,
@@ -100,6 +106,7 @@ pub struct ProseShotEnd {
 
 /// A shot named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/ProseShot.ts")]
 pub struct ProseShot {
     /// The words plain text has here: `Side: 12 (Main) \u{2192} 13`.
     pub text: String,
@@ -117,6 +124,7 @@ pub struct ProseShot {
 
 /// A line named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/ProseLine.ts")]
 pub struct ProseLine {
     /// The words plain text has here: `Main`, or with its quotes `"Main"`.
     pub text: String,
@@ -227,6 +235,30 @@ pub fn split(marked: &str) -> (String, Vec<ProsePart>) {
     }
 }
 
+/// `parts` as an optional wire field (`*_parts`): `None` when they name
+/// nothing, so the key stays off the wire.
+pub fn named(parts: Vec<ProsePart>) -> Option<Vec<ProsePart>> {
+    parts.iter().any(ProsePart::is_name).then_some(parts)
+}
+
+/// `part` marked when its words are exactly `plain`, else `plain` itself:
+/// a builder that words a name its own way keeps those words, and gains the
+/// pill only where the part says the same, so its plain string never
+/// changes.
+pub fn mark_as(plain: &str, part: Option<ProsePart>) -> String {
+    match part {
+        Some(part) if part.text() == plain => mark(&part),
+        _ => plain.to_owned(),
+    }
+}
+
+/// `parts` without their session handles ([`ProsePart::without_slot`]): a
+/// text worded before an edit, whose slots may name other stations after
+/// it, or one that outlives the session.
+pub fn without_slots(parts: Vec<ProsePart>) -> Vec<ProsePart> {
+    parts.into_iter().map(ProsePart::without_slot).collect()
+}
+
 /// A line's name as a part: `text` the words plain text has (`Main`, or
 /// `"Main"` when the text quotes it), `name` the name.
 pub fn line_part(line_id: Option<LineId>, name: &str, quoted: bool) -> ProsePart {
@@ -242,7 +274,7 @@ pub fn line_part(line_id: Option<LineId>, name: &str, quoted: bool) -> ProsePart
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "tests")]
+#[expect(clippy::unwrap_used, clippy::panic, reason = "tests")]
 mod tests {
     use super::*;
 
@@ -324,6 +356,43 @@ mod tests {
             serde_json::to_string(&line).unwrap(),
             r#"{"kind":"line","text":"Main","line_id":2,"name":"Main"}"#
         );
+    }
+
+    #[test]
+    fn mark_as_marks_a_part_only_when_its_words_are_the_plain_text() {
+        let part = station("Side / 0", "0");
+        assert_eq!(unmark(&mark_as("Side / 0", Some(part.clone()))), "Side / 0");
+        assert_eq!(
+            split(&mark_as("Side / 0", Some(part.clone()))).1,
+            vec![part.clone()]
+        );
+        // Other words: the plain text, no part.
+        assert_eq!(mark_as("Side / 00", Some(part)), "Side / 00");
+        assert_eq!(mark_as("a station", None), "a station");
+    }
+
+    #[test]
+    fn named_leaves_a_text_without_names_off_the_wire() {
+        assert_eq!(named(Vec::new()), None);
+        let words = vec![ProsePart::Text {
+            text: "x".to_owned(),
+        }];
+        assert_eq!(named(words), None);
+        let line = vec![line_part(Some(1), "Main", false)];
+        assert_eq!(named(line.clone()), Some(line));
+    }
+
+    #[test]
+    fn without_slots_drops_every_session_handle() {
+        let parts = without_slots(vec![
+            station("Side / 0", "0"),
+            line_part(Some(1), "Main", false),
+        ]);
+        assert!(parts.iter().all(|p| match p {
+            ProsePart::Station(s) => s.slot.is_none() && s.station_id == Some(42),
+            _ => true,
+        }));
+        assert_eq!(plain(&parts), "Side / 0Main");
     }
 
     #[test]

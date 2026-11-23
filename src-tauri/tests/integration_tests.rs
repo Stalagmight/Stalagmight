@@ -167,6 +167,7 @@ fn entry_for(kind: &str, before: &Project, after: &Project) -> HistoryEntry {
         timestamp: chrono::Utc::now(),
         kind: kind.to_string(),
         label: format!("Test {kind}"),
+        label_parts: Vec::new(),
         refs: HistoryRefs::default(),
         preview: RecordedPreview::default(),
         changes: capture(before, after),
