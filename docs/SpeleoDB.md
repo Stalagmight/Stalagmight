@@ -652,6 +652,9 @@ was lost (the #193 recovery), recognised by what this session recorded when it
 sent it (`core/state/speleodb_own_uploads.rs`: the revisions its uploads were
 answered with, and every upload whose answer never came, with its base and
 description, until an answer or an adoption settles it), never by the email. A
+revision with no description counts as that upload only on a server that keeps no
+descriptions at all: the upload always carries one, so where the history shows
+them, an undescribed revision on the base is someone else's. A
 retry sent while an earlier upload's fate was unknown keeps both: the earlier one
 may land late, under the retry, and is still this session's (F4R3-locks-push-5). Anything else there uploads nothing: Save Changes, Finish editing and
 the exit and sign-out uploads get `divergence_needed`, the divergence prompt

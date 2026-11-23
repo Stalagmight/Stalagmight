@@ -357,8 +357,10 @@ lock first overwrite the one that inherited it.
   it sat on and its description. `classify_ancestry` takes a gap commit as ours
   only when it is one of those, or a revision directly on an unanswered upload's
   BASE (each accounts for one), by our account, whose stored description matches
-  ours (`normalize_like_server`; a history without descriptions matches on BASE
-  and account). Anything else between BASE and HEAD is `Diverged`: nothing is
+  ours (`normalize_like_server`; a history without any descriptions matches on
+  BASE and account, and an undescribed revision in a history that has them is
+  not ours: amended after the X3 pre-PR review, should-fix 4). Anything else
+  between BASE and HEAD is `Diverged`: nothing is
   uploaded and the existing divergence prompt opens (`DivergenceNeeded`, already
   routed from Save Changes, Done and the close, quit and sign-out uploads).
 - The record lives in `AppState::speleodb_own_uploads`
@@ -422,7 +424,8 @@ or in the older-version confirmation (its close and quit cases).
 ### Left
 
 - Our unanswered upload and another session's revision with the same description
-  on the same BASE are told apart by nothing.
+  on the same BASE are told apart by nothing, and neither is anything on our BASE
+  by our account on a server that keeps no descriptions at all.
 - A quit that waits for an upload started elsewhere (Save Changes, then Quit)
   quits after it; a replaced report from that upload is only in the log. (The
   `released`-with-newer-edits arm no longer replaces the report: it has its own
@@ -1002,3 +1005,67 @@ each reproduced first by a test that fails on e9df1b642 (named with each item).
     state when the user leaves. A backend flag on the release result (the claim was
     unbound before the release) would also cover a session that reached the prompt
     some other way; not needed by any path today.
+
+### The X3 pre-PR review
+
+The pre-PR review of 54db7c016..438676e91 (the stack through the second
+capture's round) asked for one must-fix, three should-fixes and two nits. Each
+fix has a test that fails on 438676e91 (or, where the test needs a new API, an
+injection that puts the old rule back).
+
+- **Must-fix 1: a release this session started showed "Editing stopped".**
+  "Discard and hand back the lock" (`SpeleoDiscardChangesDialog` ->
+  `discardChanges(false)`): the backend released, shut the gate
+  (`speleodb_push.rs:582-587`) and returned null; the frontend skipped
+  `routeStartEditingResult`, so the link stayed 'editing', and the tree
+  replacement's status re-read (no holder, editing off) went through
+  `speleoLockLostMessage` beside the success toast. Any status reply that
+  overlaps a release this session makes reads the same way.
+  - Fix: every release the frontend starts runs under an own-release marker
+    (`ownSpeleoRelease`: Discard, Done, Switch to Read Only, the held-lock
+    prompt's and the sign-out's per-project releases, the revert's upload and
+    unwind, the switch and quit's settle, Close), and `refreshLinkStatus` raises
+    no lost notice for a reply that overlapped one. Where this session's own
+    release of the open project's lock lands (Discard's null, the held-lock
+    prompt's or the sign-out's release of the open project), the session is
+    marked read-only (`markOwnReleaseEnded`), so a later refresh has no edit
+    session to lose; Done and Switch to Read Only already did.
+  - *Rejected:* setting read-only before the release (a failed Switch to Read
+    Only returns the same session to editing, and a failed release keeps the
+    lock), and a flag on the backend's status (the status cannot tell whose
+    release freed the lock either).
+  - Tests: `speleoOwnRelease.test.tsx`, one case per path with the reply the
+    review saw; all ten fail on 438676e91, and a real loss (the control) still
+    says "Editing stopped".
+- **Should-fix 2: an add taken back with Undo did not count as clean.** The
+  CHANGELOG, saving.md and SpeleoDB.md said an edit taken back by hand or with
+  Undo and saved counts as clean, but the digest hashed `counters`, and Undo never
+  hands an id back. The claim is now true: the digest leaves `counters` out (rule
+  2, its own domain string, so a rule-1 digest never matches and the copy keeps
+  its mark until its next download or upload). Safe for the question the digest
+  answers: every id the body uses is below its counter, so counters ahead of
+  BASE's over BASE's body name ids nothing uses, and the copy's next download
+  installs BASE's counters with BASE's body. Test:
+  `an_added_section_undone_and_saved_counts_as_clean` (fails on 438676e91: the
+  mark stays).
+- **Should-fix 3: the open over this account's lock forgot the kept-changes
+  sentence.** The own-account `locked_by` branch
+  (`autoAcquireSpeleoLock.ts:103-106`) ran before the un-uploaded check; it now
+  has a variant that says the changes are kept. Test: the autoAcquire case over
+  un-uploaded work.
+- **Should-fix 4: an undescribed revision on our BASE counted as our upload.**
+  `UnansweredUpload::made` matched a revision with no description, by our account,
+  on our BASE, on any server, and could clear the dirty mark over work that never
+  reached SpeleoDB. Our upload always carries a description (the upload verbs
+  put in a default), and a server that stores descriptions shows it, so an
+  undescribed revision now matches only where the history carries no
+  descriptions at all (`history_records_descriptions`): an older server, the
+  documented residue. `classify_ancestry` and `not_our_own` (the replaced report)
+  both read it from the full history. Test:
+  `an_undescribed_revision_is_ours_only_where_the_server_keeps_no_descriptions`
+  (the mixed-history case is Landed on 438676e91; the residue is pinned).
+- **Nit 5:** `stalx_v2.rs`'s module doc said nothing in the app used it; it is
+  the app's format, and a 0.6.0 SQLite file is only read.
+- **Nit 6:** `api_error`'s middleware arm kept the error text, which may carry
+  the request URL; it keeps a fixed detail now (no middleware is installed).
+  Test: `a_middleware_failure_keeps_no_url`.
