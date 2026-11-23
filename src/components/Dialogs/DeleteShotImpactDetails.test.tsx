@@ -7,6 +7,7 @@ import { beforeEach, describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import DeleteShotImpactDetails, { type ShotImpactRelationships } from './DeleteShotImpactDetails';
 import { useProjectStore } from '../../store/projectStore';
+import { accessibleText } from '../../test/accessibleText';
 
 // Names that differ from the positional indices: a label built from the
 // handles (`0:1`) can never pass for one built from the names.
@@ -132,11 +133,17 @@ describe('DeleteShotImpactDetails - station names and comments (RS-FX1)', () => 
         }}
       />
     );
-    expect(screen.getByTestId('impact-identities')).toHaveTextContent(
+    // Each station is a prose pill (RS-PROSE); the sentence reads as plain
+    // text wrote it.
+    const sentence = (id: string) => screen.getByTestId(id).querySelector('p:not(.font-medium)')!;
+    expect(sentence('impact-identities').querySelector('.sh-ppill[data-prose-kind="station"]')).not.toBeNull();
+    expect(accessibleText(sentence('impact-identities'))).toBe(
       'Main Line / A5\'s comment ("Sump") is hidden: Undo brings it back.'
     );
-    expect(screen.getByTestId('impact-split-identities')).toHaveTextContent(
-      'If you choose Split Line instead' + 'Main Line / A1\'s comment ("Low air") is hidden: Undo brings it back.'
+    expect(screen.getByTestId('impact-split-identities')).toHaveTextContent('If you choose Split Line instead');
+    expect(sentence('impact-split-identities').querySelector('.sh-ppill[data-prose-kind="station"]')).not.toBeNull();
+    expect(accessibleText(sentence('impact-split-identities'))).toBe(
+      'Main Line / A1\'s comment ("Low air") is hidden: Undo brings it back.'
     );
   });
 

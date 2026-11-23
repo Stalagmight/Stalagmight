@@ -3,6 +3,7 @@ import type { StationRef } from '../../types/project';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { identityNoticeMessage } from '../../utils/identityNotice';
 import { StationBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 
 /**
  * A station as the line pill (Full level) or plain text: `Main Line / 17`.
@@ -37,7 +38,7 @@ function Pair({ a, b }: { a: StationRef; b: StationRef }) {
  * What the delete does to station names and comments on its own (RS 4.3,
  * 12: an archived station it brings back, a letter, a comment a promotion
  * hides) is said in the notice's words, for the delete and, when Split is
- * offered too, for Split.
+ * offered too, for Split, each station as a prose pill (RS-PROSE).
  */
 export type ShotImpactRelationships = Pick<DeleteShotImpact, 'removed_merges' | 'removed_closures' | 'closure_to_merge'> &
   Partial<Pick<DeleteShotRangeImpact, 'closures_removed_across_one_shot' | 'identities' | 'split_identities'>>;
@@ -135,14 +136,18 @@ export default function DeleteShotImpactDetails({
         {names !== null && (
           <div data-testid="impact-identities">
             <p className="font-medium">Station names and comments</p>
-            <p>{names}</p>
+            <p>
+              <Prose text={names} />
+            </p>
           </div>
         )}
 
         {splitNames !== null && (
           <div data-testid="impact-split-identities">
             <p className="font-medium">If you choose Split Line instead</p>
-            <p>{splitNames}</p>
+            <p>
+              <Prose text={splitNames} />
+            </p>
           </div>
         )}
 

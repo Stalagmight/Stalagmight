@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { identityNoticeMessage, notifyIdentityChanges } from '../identityNotice';
+import { hasProse, proseToPlain } from '../prose';
 import { TOAST_KEYS } from '../toastKeys';
 import type { CommandResult } from '../../types/commands';
 
@@ -47,7 +48,8 @@ describe('the identity notice', () => {
       },
       lineName,
     );
-    expect(message).toBe(
+    expect(hasProse(message!)).toBe(true);
+    expect(proseToPlain(message!)).toBe(
       'Renamed Side / 12 to 12a, Side / 13 to 13a so no line shows a name twice. ' +
         'Side / 0 (Station ID 40) is shown again. ' +
         'Main / 3\'s comment ("Silt") is hidden: Undo brings it back. ' +
@@ -73,7 +75,8 @@ describe('the identity notice', () => {
       },
       lineName,
     );
-    expect(message).toBe(
+    expect(hasProse(message!)).toBe(true);
+    expect(proseToPlain(message!)).toBe(
       'Side / 3\'s comment ("Low air") is hidden: Undo brings it back. ' +
         'Main / 0\'s comment ("Sump") is hidden: Undo brings it back.',
     );
@@ -103,8 +106,8 @@ describe('the identity notice', () => {
         },
         lineName,
       );
-    expect(restored('3')).toContain('Side / 3\'s comment ("Annex end: belay on a flake") is hidden: Undo brings it back.');
-    expect(restored('')).toContain('Station ID 54\'s comment ("Annex end: belay on a flake") is hidden');
+    expect(proseToPlain(restored('3')!)).toContain('Side / 3\'s comment ("Annex end: belay on a flake") is hidden: Undo brings it back.');
+    expect(proseToPlain(restored('')!)).toContain('Station ID 54\'s comment ("Annex end: belay on a flake") is hidden');
   });
 
   it('raises one warning toast per action, under its key', () => {
@@ -113,11 +116,13 @@ describe('the identity notice', () => {
       lineName,
     );
     expect(showToast).toHaveBeenCalledTimes(1);
-    expect(showToast).toHaveBeenCalledWith(
+    const [sent, key, kind] = showToast.mock.calls[0] as [string, string, string];
+    // The message holds the station as a prose token; its plain words are the sentence.
+    expect(hasProse(sent)).toBe(true);
+    expect(proseToPlain(sent)).toBe(
       'Renamed Side / 12 to 12a so no line shows a name twice.',
-      TOAST_KEYS.STATION_IDENTITIES,
-      'warning',
     );
+    expect([key, kind]).toEqual([TOAST_KEYS.STATION_IDENTITIES, 'warning']);
   });
 
   it('raises nothing for a failed action', () => {
