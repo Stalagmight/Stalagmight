@@ -7,10 +7,39 @@
 //! Synthetic verifications only.
 
 use super::conversion_notice::{ConversionFile, ConversionNotice, ConversionSource, NAMES_INLINE};
+use crate::models::prose;
+use crate::models::{ProsePart, ProseStation};
 use crate::persistence::migrate::{
     Axis, ClassStats, ClosureKeepsBoth, CommentHidden, ExpectedClass, IdentityChanges, Mismatch,
     NameChange, Verification,
 };
+
+/// RS-PROSE: the parts lists are index-aligned with the clauses, each says
+/// its clause's words, and a clause that names nothing has none.
+fn assert_parts_align(view: &super::ConversionNoticeView) {
+    for (clauses, parts) in [
+        (&view.changes, &view.change_parts),
+        (&view.details, &view.detail_parts),
+    ] {
+        assert_eq!(clauses.len(), parts.len(), "{view:?}");
+        for (clause, parts) in clauses.iter().zip(parts) {
+            if !parts.is_empty() {
+                assert_eq!(&prose::plain(parts), clause);
+                assert!(parts.iter().any(ProsePart::is_name), "{parts:?}");
+            }
+            assert!(!clause.contains(prose::MARK_OPEN), "{clause:?}");
+        }
+    }
+}
+
+/// The names a clause's parts draw, by words.
+fn named(parts: &[ProsePart]) -> Vec<&str> {
+    parts
+        .iter()
+        .filter(|p| p.is_name())
+        .map(ProsePart::text)
+        .collect()
+}
 
 fn mismatch(station_index: u32, axis: Axis, displacement_m: f64) -> Mismatch {
     Mismatch {
@@ -47,6 +76,7 @@ fn shown_as(line: &str, from: &str, kept_line: &str, to: &str) -> NameChange {
         to: to.to_owned(),
         lettered: false,
         kept_line: Some(kept_line.to_owned()),
+        ..NameChange::default()
     }
 }
 
@@ -58,6 +88,7 @@ fn lettered(line: &str, from: &str, to: &str) -> NameChange {
         to: to.to_owned(),
         lettered: true,
         kept_line: None,
+        ..NameChange::default()
     }
 }
 
@@ -68,6 +99,7 @@ fn identity(names: Vec<NameChange>, hidden: &[(&str, &str)]) -> IdentityChanges 
         .enumerate()
         .map(|(i, (line, station))| CommentHidden {
             line: (*line).to_owned(),
+            line_id: 0,
             station: (*station).to_owned(),
             identity: u32::try_from(i).unwrap_or(u32::MAX),
         })
@@ -223,6 +255,19 @@ fn changes_are_named_by_line_and_a_long_list_goes_behind_details() {
             "East Loop / 2 is now shown as 2a",
         ]
     );
+    // RS-PROSE: every station the clauses name is a part.
+    assert_parts_align(&view);
+    assert_eq!(
+        view.change_parts
+            .iter()
+            .map(|p| named(p))
+            .collect::<Vec<_>>(),
+        [
+            vec!["North Passage / 0", "Main / 3"],
+            vec!["North Passage / 0"],
+            vec!["East Loop / 2", "2a"],
+        ]
+    );
     assert!(view.details.is_empty());
     assert!(view.brings_back);
 
@@ -237,6 +282,7 @@ fn changes_are_named_by_line_and_a_long_list_goes_behind_details() {
     many.closures_keep_both.push(ClosureKeepsBoth {
         a: "Side / 17".to_owned(),
         b: "Main / 3".to_owned(),
+        ..ClosureKeepsBoth::default()
     });
     let view = ConversionNotice::of_migration(&report, &many)
         .expect("a notice")
@@ -267,6 +313,44 @@ fn changes_are_named_by_line_and_a_long_list_goes_behind_details() {
         view.details.last().map(String::as_str),
         Some("the loop closure between Side / 17 and Main / 3 keeps both names")
     );
+    // The counts name nothing; a closure end without parts stays words.
+    assert_parts_align(&view);
+    assert!(view.change_parts.iter().all(Vec::is_empty));
+    assert!(view.detail_parts.last().is_some_and(Vec::is_empty));
+}
+
+/// A closure end with its parts is drawn by them (RS-PROSE); words a part
+/// does not say stay words.
+#[test]
+fn a_closure_that_keeps_both_names_draws_its_ends() {
+    let side = ProsePart::Station(ProseStation {
+        text: "Side / 17".to_owned(),
+        line_id: Some(2),
+        context: Some("Side".to_owned()),
+        name: "17".to_owned(),
+        home_line: None,
+        loop_end: None,
+        station_id: Some(17),
+        slot: None,
+    });
+    let mut changes = IdentityChanges::default();
+    changes.closures_keep_both.push(ClosureKeepsBoth {
+        a: "Side / 17".to_owned(),
+        b: "Main / 3".to_owned(),
+        a_parts: vec![side.clone()],
+        // Parts that say other words are not used.
+        b_parts: vec![side],
+    });
+    let report = crate::persistence::migrate::MigrationReport::default();
+    let view = ConversionNotice::of_migration(&report, &changes)
+        .expect("a notice")
+        .view(false);
+    assert_eq!(
+        view.changes,
+        ["the loop closure between Side / 17 and Main / 3 keeps both names"]
+    );
+    assert_parts_align(&view);
+    assert_eq!(named(&view.change_parts[0]), ["Side / 17"]);
 }
 
 /// Letters alone bring nothing back: the banner says nothing of Detach Line
@@ -369,11 +453,13 @@ fn one_station_on_two_lines_hides_one_comment() {
             comments_hidden: vec![
                 CommentHidden {
                     line: "Main".to_owned(),
+                    line_id: 1,
                     station: "M4".to_owned(),
                     identity: 4,
                 },
                 CommentHidden {
                     line: "Annex".to_owned(),
+                    line_id: 2,
                     station: "M4".to_owned(),
                     identity: 4,
                 },
@@ -398,6 +484,25 @@ fn one_station_on_two_lines_hides_one_comment() {
         .filter(|d| d.starts_with("the comment of"))
         .collect();
     assert_eq!(hidden, ["the comment of M4 on Main and Annex is hidden"]);
+    // RS-PROSE: the station and both lines are parts of that clause.
+    let at = view
+        .details
+        .iter()
+        .position(|d| d.starts_with("the comment of"))
+        .expect("listed");
+    let names: Vec<(&str, &str)> = view.detail_parts[at]
+        .iter()
+        .filter_map(|p| match p {
+            ProsePart::Station(s) => Some(("station", s.text.as_str())),
+            ProsePart::Line(l) => Some(("line", l.text.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [("station", "M4"), ("line", "Main"), ("line", "Annex")]
+    );
+    assert_parts_align(&view);
     // Listed under the first line it is on, after that line's names.
     assert_eq!(
         view.details[..3],
