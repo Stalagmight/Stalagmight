@@ -133,6 +133,11 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Side will show Main / 3.');
     // No collision rows: the dotted 3 repeats no name.
     await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
+    // RS-FX6, P2-6: the dialog says Side will list 3 twice, before the user
+    // confirms (shot 01 said only "Side will show Main / 3").
+    await expect(page.getByTestId(`merge-repeat-${sideId}-${sideId * 100_000 + 1}`)).toHaveText(
+      `Side already has a station 3 (Station ID ${sideId * 100_000 + 1}); it keeps its name, and Side shows 3 twice, the junction with Main's dot.`,
+    );
 
     await page.getByTestId('merge-confirm').click();
     await expect(page.getByTestId('merge-dialog')).toBeHidden();
@@ -158,7 +163,8 @@ test.describe('Kept and archived stations (RS)', () => {
     await page.getByTestId('data-table-columns-menu').click();
     await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3');
+    // RS-FX6, P2-5: the dotted one says whose it is, muted.
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3 (Main)');
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('3');
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toBeVisible();
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
@@ -175,6 +181,10 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('merge-hidden')).toHaveText('Main / 3 is archived.');
     await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Main will show Side / 0.');
     await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
+    // RS-FX6, P2-6: Main's own 0 keeps its name beside the dotted 0.
+    await expect(page.getByTestId(`merge-repeat-${mainId}-${mainId * 100_000}`)).toHaveText(
+      `Main already has a station 0 (Station ID ${mainId * 100_000}); it keeps its name, and Main shows 0 twice, the junction with Side's dot.`,
+    );
 
     await page.getByTestId('merge-confirm').click();
     await expect(page.getByTestId('merge-dialog')).toBeHidden();
@@ -205,14 +215,26 @@ test.describe('Kept and archived stations (RS)', () => {
     await page.getByTestId(`detail-unmerge-${sideId}-0`).click();
     const dialog = page.getByTestId('unmerge-stations-dialog');
     await expect(dialog).toBeVisible();
+    const row = page.getByTestId('unmerge-stations-collision-0');
+    await expect(row).toContainText('On Side, 0 would name two stations');
+    // RS-FX6, P1-1: the two answers rename two stations named 0; each says
+    // which, by its role and Station ID (both read "Rename Side / 0 to 0a").
+    await expect(page.getByTestId('unmerge-stations-collision-0-letter').locator('..')).toHaveText(
+      `Rename the station that comes back (Side / 0, Station ID ${sideId * 100_000}) to 0a`,
+    );
+    await expect(page.getByTestId('unmerge-stations-collision-0-alternative').locator('..')).toHaveText(
+      `Rename Side's own 0 (Station ID ${sideId * 100_000 + 1}) to 0a`,
+    );
+    // RS-FX6, P2-2: the lead follows the answer: rule L's letter first, then
+    // the station's own name once the other one takes the letter.
+    await expect(page.getByTestId('unmerge-stations-naming')).toContainText(
+      `Side comes off: it gets back 0a (Station ID ${sideId * 100_000})`,
+    );
+    // Rename the station that reused the name instead.
+    await page.getByTestId('unmerge-stations-collision-0-alternative').click();
     await expect(page.getByTestId('unmerge-stations-naming')).toContainText(
       `Side comes off: it gets back 0 (Station ID ${sideId * 100_000})`,
     );
-    const row = page.getByTestId('unmerge-stations-collision-0');
-    await expect(row).toContainText('On Side, 0 would name two stations');
-    await expect(row).toContainText('Rename Side / 0 to 0a');
-    // Rename the station that reused the name instead.
-    await page.getByTestId('unmerge-stations-collision-0-alternative').click();
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(dialog).toBeHidden();
 
@@ -267,6 +289,11 @@ test.describe('Kept and archived stations (RS)', () => {
     );
     await expect(page.getByTestId('unmerge-stations-together')).toHaveText(
       'Side comes off with Third: they were one station before the merge.',
+    );
+    // RS-FX6, P3-12: Third's own station stays inside the one that comes
+    // back, and a second Detach gives it back.
+    await expect(page.getByTestId(`unmerge-stations-inside-${thirdId! * 100_000}`)).toHaveText(
+      `Third / 0 (Station ID ${thirdId! * 100_000}) stays archived inside it: detach Third again to get it back.`,
     );
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(dialog).toBeHidden();
@@ -489,5 +516,77 @@ test.describe('Kept and archived stations (RS)', () => {
       (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.gasPlanStore.getState().setEndpoint(at);
     }, ref(sideId, 2));
     await expect(page.getByTestId('gas-endpoint-readout')).toHaveText('Side / 2 (loop end, shown as Main / 1)');
+  });
+});
+
+/**
+ * RS-FX6, P3-18 (shot 52 of the RS capture): at 1024x640 the Detach dialog's
+ * body scrolled with Cancel and Detach at its end, below the fold. The four
+ * kept-station dialogs pin their action row to the bottom of the body, so
+ * both buttons are on screen however long the body is.
+ */
+test.describe('Kept-station dialogs at 1024x640 (RS-FX6)', () => {
+  test.use({ viewport: { width: 1024, height: 640 } });
+
+  test('Merge, Detach, Create Loop Closure and Remove Closure keep their buttons in view', async ({ page }) => {
+    const [mainId, sideId] = await setUp(page);
+    const inView = async (...ids: string[]) => {
+      for (const id of ids) await expect(page.getByTestId(id)).toBeInViewport({ ratio: 1 });
+    };
+
+    await seedNames(page, [[sideId, 1, '3']]);
+    await openMerge(page, ref(sideId, 0), ref(mainId, 3));
+    await inView('merge-cancel', 'merge-confirm');
+    await page.getByTestId('merge-confirm').click();
+    await expect(page.getByTestId('merge-dialog')).toBeHidden();
+
+    // Reuse Side's archived 0 so the Detach body carries a collision too.
+    await seedNames(page, [[sideId, 2, '0']]);
+    await page.evaluate((at) => {
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore
+        .getState()
+        .setSelection({ type: 'station', stationRef: at });
+    }, ref(mainId, 3));
+    await page.getByTestId(`detail-unmerge-${sideId}-0`).click();
+    await expect(page.getByTestId('unmerge-stations-dialog')).toBeVisible();
+    await expect(page.getByTestId('unmerge-stations-collision-0')).toBeVisible();
+    await inView('unmerge-stations-cancel', 'unmerge-stations-confirm');
+    // A shorter window makes the body scroll for sure: scrolled to its top,
+    // it still shows the action row.
+    await page.setViewportSize({ width: 1024, height: 420 });
+    const body = page.getByTestId('unmerge-stations-dialog-body');
+    await expect.poll(() => body.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    await body.evaluate((el) => el.scrollTo(0, 0));
+    await inView('unmerge-stations-cancel', 'unmerge-stations-confirm');
+    await page.setViewportSize({ width: 1024, height: 640 });
+    await page.getByTestId('unmerge-stations-cancel').click();
+    await expect(page.getByTestId('unmerge-stations-dialog')).toBeHidden();
+
+    await page.evaluate(
+      ({ a, b }) => {
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore.getState().openDialog('closure', {
+          stationA: a,
+          stationB: b,
+          preview: { path_length: 20, misclosure_distance: 0.4, error_percentage: 2, horizontal_misclosure: 0.3, vertical_misclosure: 0.2 },
+        });
+      },
+      { a: ref(mainId, 1), b: ref(sideId, 2) },
+    );
+    await expect(page.getByTestId('closure-keep')).toBeVisible();
+    await inView('closure-cancel', 'closure-create');
+    await page.getByTestId('closure-create').click();
+    await expect(page.getByTestId('closure-dialog')).toBeHidden();
+
+    await page.evaluate(
+      ({ anchor, other }) => {
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore.getState().openDialog('remove-closure', {
+          anchorStation: anchor,
+          closures: [{ closureId: 1n, stationRef: other }],
+        });
+      },
+      { anchor: ref(mainId, 1), other: ref(sideId, 2) },
+    );
+    await expect(page.getByTestId('remove-closure-comes-back')).toBeVisible();
+    await inView('remove-closure-cancel', 'remove-closure-confirm');
   });
 });
