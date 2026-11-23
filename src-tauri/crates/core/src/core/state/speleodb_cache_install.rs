@@ -162,7 +162,7 @@ impl PreparedDownload {
         let Self {
             mut project,
             extras,
-            history_dropped,
+            mut history_dropped,
             legacy_parity,
             conversion,
             upgrade_pending,
@@ -173,7 +173,18 @@ impl PreparedDownload {
         file.legacy_parity = legacy_parity;
         file.conversion = conversion;
         file.upgrade_pending = upgrade_pending;
-        let history = file.saved_history.clone();
+        let mut history = file.saved_history.clone();
+        // A read-only earlier revision (RS 8.2) opens upgraded over a copy
+        // that still holds the earlier survey: its history (the Unwind's
+        // waiver keeps one) describes that survey, so it is not loaded (the
+        // banner says so) and the copy keeps it, as a local open of such a
+        // file does (data review finding data-4).
+        if upgrade_pending {
+            if !history.is_empty() {
+                history_dropped = Some(HistoryDropped::EarlierVersion);
+            }
+            history = History::default();
+        }
         Opened {
             project,
             file,

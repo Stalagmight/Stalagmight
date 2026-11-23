@@ -2942,6 +2942,7 @@
       "saved": "Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
       "savedAsNewFile": "Saved in the new format as a new file; the original file is unchanged.",
       "downloaded": "This computer's copy is already converted; the original revision is unchanged on SpeleoDB, in the project's Revision history.",
+      "readOnly": "It is only shown converted: the file is open read-only, so nothing is saved and the file stays as it is.",
       "details": "Details",
       "hideDetails": "Hide details",
       "dismiss": "Dismiss"

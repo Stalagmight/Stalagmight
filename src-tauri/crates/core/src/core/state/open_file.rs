@@ -41,7 +41,7 @@ use crate::persistence::stalx_v2::{
     WriteError,
 };
 
-use super::conversion_notice::{ConversionNotice, ConversionNoticeView};
+use super::conversion_notice::{ConversionFile, ConversionNotice, ConversionNoticeView};
 use super::AppState;
 
 /// Coded-failure prefix of a save refused because the file on disk changed
@@ -588,11 +588,19 @@ impl AppState {
     /// The conversion notice of a legacy open or an earlier version 2 file's
     /// upgrade, taken once, as the banner shows it: a project opened from a
     /// version 2 file this build's rules wrote (a closed 0.6.0 file a Recents
-    /// rename or link strip upgraded) is already saved in the new format.
+    /// rename or link strip upgraded) is already saved in the new format,
+    /// and one open read-only is never saved (data review finding data-4).
     pub fn take_conversion_notice(&self) -> Option<ConversionNoticeView> {
         self.with_file(|file| {
             let saved = file.origin == FileOrigin::V2 && !file.upgrade_pending;
-            file.conversion.take().map(|n| n.view(saved))
+            let read_only = file.extras.read_only.is_some();
+            file.conversion.take().map(|n| {
+                let mut view = n.view(saved);
+                if read_only {
+                    view.file = ConversionFile::ReadOnly;
+                }
+                view
+            })
         })
     }
 

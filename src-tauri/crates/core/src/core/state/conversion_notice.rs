@@ -47,6 +47,10 @@ pub enum ConversionFile {
     /// already converted, and the original revision is unchanged on SpeleoDB
     /// (Revision history).
     Downloaded,
+    /// A file open read-only (made with a newer Stalagmight) is shown
+    /// converted, but never saved: the file itself stays as it is, local or
+    /// downloaded.
+    ReadOnly,
 }
 
 /// Which older file the notice is about (the banner's lead).

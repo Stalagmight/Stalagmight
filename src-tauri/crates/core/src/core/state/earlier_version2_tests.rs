@@ -301,3 +301,57 @@ fn add_and_merge_say_an_earlier_source_was_converted() {
     }
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
+
+/// An earlier file that also requires a feature this build does not know:
+/// it opens read-only, upgraded in memory only.
+fn read_only_earlier_text(name: &str) -> String {
+    earlier_text(name).replacen("\"requires\":[]", "\"requires\":[\"future-thing\"]", 1)
+}
+
+/// Data review finding data-4: a read-only earlier SpeleoDB revision
+/// reloaded in place with the Unwind's waiver (its undo history kept) opens
+/// upgraded over a copy that still holds the earlier survey, so its history
+/// describes another model. It is not loaded, with the earlier-version
+/// banner, as a local open of such a file does; the copy keeps it. And no
+/// banner promises a save a read-only file never gets. Injection: on
+/// 333e24ac5 the history is loaded and the banner says the next save
+/// converts the file.
+#[test]
+fn a_read_only_earlier_revision_opens_without_its_history_or_a_save_promise() {
+    crate::test_helpers::with_isolated_config(|| {
+        crate::app_dirs::init_for_test();
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("download.stalx");
+        std::fs::write(&source, read_only_earlier_text("download")).unwrap();
+        let state = AppState::new().unwrap();
+        let prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://example.com", false),
+                InheritedUndo::Keep,
+                &DecodeOptions::default(),
+            )
+            .unwrap();
+        assert!(
+            !prepared.extras.history.is_empty(),
+            "the copy keeps the revision's history"
+        );
+        let (_, fingerprint) = stalx_v2::Fingerprint::read(&source, u64::MAX).unwrap();
+        let opened = prepared.into_opened(source.clone(), fingerprint);
+        assert!(opened.history.is_empty(), "{:?}", opened.history);
+        assert_eq!(
+            opened.history_dropped,
+            Some(crate::core::HistoryDropped::EarlierVersion)
+        );
+        assert!(!opened.file.saved_history.is_empty());
+
+        // Local or downloaded, the banner of a read-only earlier file says
+        // the file stays as it is.
+        let local = dir.path().join("local.stalx");
+        std::fs::write(&local, read_only_earlier_text("local")).unwrap();
+        let state = open(&local);
+        assert!(state.read_only_reason().is_some());
+        let notice = state.take_conversion_notice().expect("a notice");
+        assert_eq!(notice.file, ConversionFile::ReadOnly);
+    });
+}
