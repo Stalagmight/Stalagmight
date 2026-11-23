@@ -28,8 +28,9 @@ fn line_credit_summary(line: &Line) -> LineCreditSummary {
 }
 
 /// The `(name, Station ID)` of each station of `line`'s chain, by index: the
-/// name the line shows it by (a junction by the name that line knows it by),
-/// the junction's one Station ID.
+/// name every line shows it by (a junction's kept station, RS 4.1), the
+/// node's Station ID. RS-X: the shown Station ID for a closure-archived end
+/// (RS 9).
 fn station_columns(project: &Project, line: &Line) -> Vec<(String, u32)> {
     line.stations()
         .map(|id| {
