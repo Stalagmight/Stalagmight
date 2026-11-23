@@ -111,6 +111,22 @@ describe('a release this session starts is never "Editing stopped"', () => {
     expect(notice()?.kind).toBe('lockLost');
   });
 
+  // Delta review of X4, should-fix 1: the marker was project-blind, so releasing
+  // a stale lock on ANOTHER project (the held-lock prompt, the sign-out loop)
+  // while a refresh of the open project was in flight swallowed that project's
+  // genuine "Editing stopped" - and once the reply turned it read-only, for good.
+  it('a release of another project does not swallow the open project\'s real loss', async () => {
+    // p1 is open and editing; another session of the account hands its lock back.
+    // The held-lock prompt releases a stale lock on p2 while p1's refresh is out.
+    const refresh = overlapping('speleodb_release_lock', null);
+    await act(async () => {
+      await useSpeleoStore.getState().releaseLock('p2');
+      await refresh;
+    });
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(notice()?.kind).toBe('lockLost');
+  });
+
   // The review's trace: SpeleoDiscardChangesDialog -> discardChanges(false); the
   // backend hands the lock back and returns null, and the tree replacement's
   // status re-read sees no holder.
@@ -231,6 +247,44 @@ describe('a release this session starts is never "Editing stopped"', () => {
       await useSpeleoStore.getState().refreshLinkStatus();
     });
     expect(notice()).toBeNull();
+  });
+
+  // Delta review of X4, nit 2: the marker wrapped the sign-out's `bounded(...)`,
+  // whose Promise.race gives up at the bound while the release IPC still runs.
+  // A release that then lands late was read as a loss by the next refresh.
+  it('a sign-out release that lands after its bound ran out is still this session\'s', async () => {
+    vi.useFakeTimers();
+    try {
+      let land!: () => void;
+      routes.speleodb_release_lock = () => new Promise<null>((resolve) => { land = () => resolve(null); });
+      const project = {
+        summary: { id: 'p1', name: 'Synthetic cave', permission: 'READ_AND_WRITE', lock_holder: ME, type_tag: 'stalx', latest_commit_sha: null },
+        holdsLock: true, claimedHere: true, lastEditAt: null,
+      } as const;
+      const pending = releaseSignOutLocks([project]);
+      await vi.advanceTimersByTimeAsync(25_000);
+      // Counted as failed at the bound: the dialog offers Try again.
+      expect((await pending).map((p) => p.summary.id)).toEqual(['p1']);
+      // A refresh while the release is still running...
+      routes.speleodb_link_status = () => {
+        statusCalls += 1;
+        return new Promise<SpeleoLinkStatus>((resolve) => { answerStatus = resolve; });
+      };
+      const during = useSpeleoStore.getState().refreshLinkStatus();
+      // ...and the release lands late; the refresh's reply comes after it.
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+      answerStatus?.(RELEASED);
+      await during;
+      expect(notice()).toBeNull();
+      // And a refresh after it has no edit session to lose.
+      delete routes.speleodb_link_status;
+      await useSpeleoStore.getState().refreshLinkStatus();
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      expect(notice()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a project switch settling the lock, with a status refresh overlapping it', async () => {

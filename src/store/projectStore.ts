@@ -1431,7 +1431,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Default: release a held SpeleoDB lock (never over un-uploaded edits -
         // the backend keeps it). The exit prompt's "Keep the lock" passes
         // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
-        const close = (releaseLock: boolean, discardLocal = false) => ownSpeleoRelease(() => invokeIpc<CommandResult>('close_project',
+        const close = (releaseLock: boolean, discardLocal = false) => ownSpeleoRelease(closeContext.remoteProjectId, () => invokeIpc<CommandResult>('close_project',
           { releaseLock, discardLocal }, { purpose: 'close project and release resources' }));
         let result = await close(opts?.releaseLock ?? true, opts?.discardLocal === true);
         // A release that failed or is uncertain closed nothing: ask (Retry / Close and keep the lock / Cancel).

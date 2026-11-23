@@ -26,7 +26,7 @@ export async function releaseOpenProjectLock(): Promise<void> {
     if (!current()) return;
     if (pending()) throw new Error('Save your changes using Save Changes before switching to read-only mode.');
     if (!access?.release_context) throw new Error('The project or account changed. Try again.');
-    await ownSpeleoRelease(() => invokeIpc('speleodb_release_current_lock', { expected: access.release_context }));
+    await ownSpeleoRelease(speleo.remoteProjectId, () => invokeIpc('speleodb_release_current_lock', { expected: access.release_context }));
     if (!current()) return;
     useSpeleoStore.setState((state) => ({ link: state.link ? {
       ...state.link, editState: 'read-only', lockHolder: null, lockedByOther: false,

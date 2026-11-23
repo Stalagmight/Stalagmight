@@ -172,8 +172,11 @@ impl UnansweredUpload {
 }
 
 /// Whether the server keeps revision descriptions on this history: any revision
-/// in it carries one. [`UnansweredUpload::made`] matches an undescribed revision
-/// only where it does not.
+/// in it carries one. The history client reads an empty or blank description,
+/// which is what an older server that keeps none sends, as none. So this is
+/// false for such a server's history and true wherever descriptions are kept.
+/// [`UnansweredUpload::made`] matches an undescribed revision only where it is
+/// false.
 #[must_use]
 pub fn history_records_descriptions(commits: &[RevisionCommit]) -> bool {
     commits.iter().any(|commit| commit.message.is_some())

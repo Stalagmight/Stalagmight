@@ -258,7 +258,7 @@ export function useSpeleoActions(): SpeleoActions {
       );
       const busyToken = beginBusy();
       try {
-        const result = await ownSpeleoRelease(() => invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
+        const result = await ownSpeleoRelease(issuedFor.projectId, () => invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
           keepLock,
           acknowledged: true,
         }));
@@ -499,7 +499,7 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await ownSpeleoRelease(() => invokeIpc<DoneResult>('speleodb_done', {
+        const result = await ownSpeleoRelease(issuedFor.projectId, () => invokeIpc<DoneResult>('speleodb_done', {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         }));

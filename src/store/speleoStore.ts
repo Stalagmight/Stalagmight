@@ -939,6 +939,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       const requestedLink = get().link;
       const requestedGeneration = get().sessionGeneration;
       const releaseMark = ownReleaseMark();
+      const requestedProject = get().remoteProjectId;
       try {
         const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
         if (get().sessionGeneration !== requestedGeneration) return;
@@ -954,7 +955,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // handed it back, someone else holds it, access changed) says so.
         // Not when this session's own release overlapped the refresh: that lock was
         // given back here, not lost (pre-PR review, must-fix 1).
-        const lost = ownReleaseSince(releaseMark)
+        // Keyed by the project the status is about (its own answer, else the
+        // one open when the refresh was issued): a release of another project's
+        // lock is no reason to stay quiet about this one's.
+        const lost = ownReleaseSince(releaseMark, status.project_id ?? requestedProject)
           ? null
           : speleoLockLostMessage(requestedLink, status, get().session?.userEmail ?? null);
         get().seedFromStatus(status);
@@ -1090,7 +1094,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
-    await ownSpeleoRelease(() => invokeIpc<null>('speleodb_release_lock', { projectId }));
+    await ownSpeleoRelease(projectId, () => invokeIpc<null>('speleodb_release_lock', { projectId }));
     // The OPEN project's own lock, released here: its edit session is over by this
     // session's hand, not lost (pre-PR review, must-fix 1).
     if (projectId === get().remoteProjectId) markOwnReleaseEnded();
