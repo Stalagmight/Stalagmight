@@ -297,14 +297,32 @@ impl Project {
     /// line the lettered identity is shown on, so no letter makes a new
     /// collision and the pass ends. Returns each letter, in the order given.
     pub fn letter_collisions(&mut self, before: &Project) -> Vec<LetteredStation> {
+        self.letter_collisions_with(|| before.shown_pairs())
+    }
+
+    /// [`Self::letter_collisions`] where "already shown on the line" is
+    /// given as the `(identity, line)` pairs the state before showed,
+    /// computed only once a collision is found: for an upgrade whose state
+    /// before is not a model of this kind (a 0.6.0 file's slots, an earlier
+    /// version 2 file's per-line names, plan 2026-11-23 RS 8.2 and 8.3).
+    pub fn letter_collisions_with(
+        &mut self,
+        before: impl FnOnce() -> BTreeSet<(StationId, LineId)>,
+    ) -> Vec<LetteredStation> {
         let mut out = Vec::new();
+        let mut before = Some(before);
         let mut before_pairs: Option<BTreeSet<(StationId, LineId)>> = None;
         loop {
             let collisions = self.name_collisions();
             if collisions.is_empty() {
                 break;
             }
-            let pairs = before_pairs.get_or_insert_with(|| before.shown_pairs());
+            if before_pairs.is_none() {
+                before_pairs = before.take().map(|f| f());
+            }
+            let Some(pairs) = before_pairs.as_ref() else {
+                break;
+            };
             let mut changed = false;
             for collision in collisions {
                 // An earlier letter of this pass may have settled it.

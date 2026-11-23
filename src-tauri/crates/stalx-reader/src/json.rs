@@ -23,7 +23,7 @@ pub(crate) fn read(
     remaining(expires)?;
     // The copy is already capped at `max_file_bytes`.
     let bytes = std::fs::read(copy)?;
-    let decoded = decode(
+    let mut decoded = decode(
         &bytes,
         &DecodeOptions {
             max_file_bytes: options.max_file_bytes,
@@ -32,6 +32,10 @@ pub(crate) fn read(
     )
     .map_err(decode_error)?;
     drop(bytes);
+    // A file an earlier build of version 2 wrote reads as the app shows it
+    // (plan 2026-11-23 RS 8.2): its junctions and closures by the kept
+    // stations rules, not as written.
+    decoded.upgrade();
     remaining(expires)?;
     after_load();
     survey_of(&decoded, options, expires)
@@ -82,7 +86,7 @@ fn survey_of(
 fn decoder_limits(limits: CountLimits) -> stalx_v2::CountLimits {
     stalx_v2::CountLimits {
         stations: limits.station_ids,
-        aliases: limits.aliases,
+        archived: limits.archived,
         lines: limits.sections,
         shots: limits.shots,
         hand_moves: limits.hand_moves,
@@ -103,7 +107,7 @@ fn reader_limit(limit: stalx_v2::Limit) -> Limit {
     use stalx_v2::Limit as L;
     match limit {
         L::Stations => Limit::StationIds,
-        L::Aliases => Limit::Aliases,
+        L::Archived => Limit::Archived,
         L::Lines => Limit::Sections,
         L::Shots => Limit::Shots,
         L::HandMoves => Limit::HandMoves,

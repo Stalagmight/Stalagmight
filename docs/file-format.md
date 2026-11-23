@@ -39,7 +39,10 @@ Contents:
   recomputed by the reader (section 9).
 - Stations are entities with stable integer ids. A line (survey run) is a
   chain of stations: its `start`, then the `to` of each shot. A station on two
-  or more lines is a junction (what older versions called a merge).
+  or more lines is a junction (what older versions called a merge). A
+  junction shows one station on every line; the stations merged into it are
+  archived inside it, not deleted (5.8), and a loop closure may show one end
+  as the other (5.12).
 - Floats are written in their shortest exact form, `-0.0` included; NaN and
   infinity are never written. Times are RFC 3339 UTC with nanoseconds.
 - `requires` names the features a reader must understand; `conventions` fixes
@@ -123,8 +126,17 @@ comment.
 | `conventions` | Units and sign conventions, fixed for version 2 (below). | refuses any other value, a missing key or an extra key. |
 | `generator` | Who wrote the survey, e.g. `"Stalagmight 0.6.0"`. | may show it; nothing depends on it. |
 
-Version 2.0 defines no `requires` features; files written by this version have
-`"requires":[]`. A later writer adds a feature name whenever it stores
+Version 2 defines one feature, `archived-stations`: the file follows the
+kept-stations rules. A junction shows one station, its own, on every line,
+and the stations merged into it are archived inside it (5.8); a loop closure
+may show one end as the other (5.12, `archived`); and the name rule of
+section 6 (rule 8) is read with those shown stations. Every file Stalagmight
+writes lists it, whatever the file holds, so its first line ends
+`"requires":["archived-stations"],`. A version 2 file whose `requires` does
+not list it was written by an earlier build of version 2, which showed each
+line of a junction by the name that line knew it by (`aliases`, 5.8) and both
+ends of every closure by their own names: Stalagmight upgrades such a file as
+it opens it (section 12). A later writer adds a feature name whenever it stores
 something an older reader would misread (a new meaning, a member that
 references ids, or a relaxed rule of section 6), and bumps `version` only for
 changes no older reader could open at all. A reader that meets an unknown
@@ -265,7 +277,7 @@ A line or project without a reference uses `{"north":"magnetic","correction":0.0
 ### 5.4 `counters`
 
 The next id each allocator hands out. Ids are never reused, so a counter is
-above every id of its kind ever issued, deleted ones and aliases included.
+above every id of its kind ever issued, deleted and archived ones included.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -315,31 +327,52 @@ physical line, in panel order.
 One row per station, in ascending id order:
 
 ```json
-[2,"A2",{"comment":"tie-off on a rock","aliases":[[7,"B0",1]]}]
+[2,"A2",{"comment":"tie-off on a rock","archived":[{"id":7,"name":"B0","comment":"Side's tie-off","lines":[1]}]}]
 ```
 
 | Position | Type | Meaning |
 |---|---|---|
 | 0 | integer | Station id: the "Station ID" users see. Unique, never reused. |
-| 1 | string | Station name: the name every line the station is on shows it by, except a line one of its aliases names, which shows the alias's name (rule 8 of section 6). |
+| 1 | string | Station name. |
 | 2 | object, opt | Extras, written only when one is set. |
 
-Extras keys: `comment` (string), `aliases` (ids merged into this station,
-oldest first; an alias id is never a live station's id), `external` (string:
-the identity an importer gave the station, e.g. a Compass or Walls station
-name or an Ariane station ID; an attribute only).
+Extras keys: `comment` (string), `archived` (the stations archived in this
+one, below), `external` (string: the identity an importer gave the station,
+e.g. a Compass or Walls station name or an Ariane station ID; an attribute
+only).
 
-An alias is `[id]`, `[id, "name"]`, or `[id, "name", line]` / `[id, null,
-line]` when the line that knew the station by that alias is known (the line
-the merged station was on; a `null` name only before a line). That line must
-pass through the station (rule 2 of section 6). That line shows the station by
-the alias's name, not the station's own (the latest alias naming the line
-wins; a `null` name shows the station's own), as a 0.6.0 merge kept each
-line's own name for its member, and that name is held unique on the line
-(rule 8). Detaching that line from the station gives it its own station back
-with the alias's id and name. A reader that knows nothing of aliases still
-reads every station's own name; it then shows a merged line's junction by the
-survivor's name.
+**Archived stations** (feature `archived-stations`). When two stations are
+merged into a junction the user keeps one of them; the other is archived in
+the kept one, with its own identity, instead of being deleted. Each entry of
+`archived` is an object:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `id` | integer | Its Station ID: never a live station's id, and unique across live and archived ids. |
+| `name` | string | Its name. |
+| `comment` | string, opt | Its comment. |
+| `external` | string, opt | Its importer identity, as above. |
+| `lines` | array of integers, opt | Its **own lines**: the lines whose station it was here, each passing through this station, each named by at most one archived station of it. Left out when empty: the entry is then history, kept only so its id is never reused, and nothing brings it back. |
+
+The junction shows its own name, Station ID and comment on every line through
+it, its archived stations' own lines included (Stalagmight marks those slots
+with the colour of the line the kept station belongs to). An archived station
+is shown nowhere, and its name does not count toward a line's name rule
+(section 6, rule 8): the user may reuse it. Stalagmight brings an archived
+station back, with its id, name and comment, when its line is detached from
+the junction ("Detach Line from Station"), or when a delete leaves the
+junction only on lines one archived station names. A line through a station
+that none of its archived stations names is a **native line** of the station;
+a station always has one (rule 11).
+
+**Earlier form.** A version 2 file written before the `archived-stations`
+feature holds `aliases` instead of `archived`: each `[id]`, `[id, "name"]` or
+`[id, "name", line]` / `[id, null, line]`, oldest first. The line showed the
+station by that alias's name (the latest alias naming a line wins; a `null`
+name is the station's own), and the station's one comment was shown on every
+line. Stalagmight reads such a file through its load-time upgrade (section
+12) and never writes `aliases`; a reader that knows the feature may treat
+`aliases` as unknown content.
 
 ### 5.9 `lines`
 
@@ -447,9 +480,21 @@ Loop closures between two stations, in list order (significant).
 | `a`, `b` | integer | The two stations (different). |
 | `a_via`, `b_via` | integer, opt | The line each end was set on (it passes through that end). |
 | `strategy` | string | Read as `"batch"` when absent. `"batch"`: a soft loop closure, adjusted only by the least-squares view. `"move"`: a snap; rigid while its ends are less than 1 cm apart. `"tie"`: a rigid tie (converted old files only). `"least_squares_weighted"`, `"proportional_by_length"`, `"equal_distribution"`: legacy names, read like `"batch"`. |
+| `archived` | `"a"` or `"b"`, opt | The end the closure archives (feature `archived-stations`): left out when it archives neither. |
 
 Closure metrics (misclosure, error percentage, path length) are not stored;
 they are derived.
+
+**The shown station.** A closure that archives an end shows that end as its
+other end, the kept end: every slot of the archived end shows the kept end's
+name, Station ID and comment, and its own are shown nowhere (its name does
+not count toward rule 8) until the closure is removed. The archived end stays
+a station of its own, with its own position, datums and shots; Stalagmight
+draws its point without a label. The station a slot **shows** is its
+station, or, when a closure archives that station, the station its kept end
+shows (follow the chain; rule 12 keeps it finite). Everything that names a
+station to the user uses the shown station; positions, pieces and every
+other rule of this document use the station itself.
 
 ### 5.13 `ignored_warnings`
 
@@ -501,14 +546,15 @@ refused as made with a newer version instead, without the repair (section 3).
 The rules:
 
 1. Ids are unique: station ids, line ids, shot uuids (project-wide), closure
-   ids, Section ids. Alias ids are not live station ids and appear once.
-   Station ids, alias ids included, and Section ids are below 2^31; line ids
-   are at most 42948; closure ids are below 2^53 - 1; a line holds at most
+   ids, Section ids. Archived station ids are not live station ids and appear
+   once. Station ids, archived ones included, and Section ids are below 2^31;
+   line ids are at most 42948; closure ids are below 2^53 - 1; a line holds at most
    99,999 shots (Stalagmight numbers a line's shots in its session by
    `line id * 100000 + index`).
 2. Every reference resolves: a line's `start`, a shot's `to`, every datum,
-   placement and closure station, every `via` line and every alias's `line`
-   (which must pass through that station), every hand-move station (on that
+   placement and closure station, every `via` line and every line an
+   archived station names (which must pass through that station, named by
+   at most one archived station of it), every hand-move station (on that
    line), every line's `section`.
 3. A line never passes the same station twice.
 4. Every station is on at least one line (a line with no shots holds just its
@@ -520,11 +566,11 @@ The rules:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. No line shows two stations by one name. A line shows a station by the
-   name of the (latest) alias that names the line, when one does, else by
-   the station's own name (a converted 0.6.0 merge, or a merge, keeps every
-   line's own name this way and renames nothing). Section names are unique
-   in the project (compared exactly).
+8. No line shows two stations by one name: on each line, slots that show
+   different stations (the shown station of 5.12) have different names. Two
+   slots that show one station (the two ends of a closure on one line) may.
+   Archived stations and the own names of closure-archived ends do not
+   count. Section names are unique in the project (compared exactly).
 9. Counters are above every id in use; the station and Section counters
    are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
    the ids are used up, and Stalagmight refuses an edit that needs another).
@@ -534,6 +580,14 @@ The rules:
     1,000,000 m in magnitude, and a placement's `x` and `y`, a datum's
     `correction` and a hand move at most 100,000,000 m. Angles, temperatures
     and thresholds are only required to be finite.
+11. A station on a line has at least one native line (5.8): its archived
+    stations never name every line through it.
+12. A station is the archived end of at most one closure, and following
+    "archived end -> kept end" from a station never comes back to it.
+
+A file without the `archived-stations` feature is checked after its upgrade
+(section 12): its own rule 8 was per line name, and the upgrade settles what
+rules 8, 11 and 12 need.
 
 ## 7. Unknown content
 
@@ -648,8 +702,11 @@ guide](survey-model.md) for the details and the least-squares view).
 A minimal reader, standard library only. It refuses what a reader must refuse
 (section 3: another major version, other conventions), tells the caller when
 the file requires features it does not know (then the caller must not modify
-the survey), and reads an unknown shot `kind` as `"reference"`, never as a
-swimmable leg (section 7).
+the survey), reads an unknown shot `kind` as `"reference"`, never as a
+swimmable leg (section 7), and gives the station each slot shows (5.12). It
+ignores the `aliases` of an earlier version 2 file (a file without
+`archived-stations`), which then shows each junction by its own name on every
+line.
 
 ```python
 import json
@@ -660,7 +717,7 @@ CONVENTIONS = {
     "inclination": "+down", "depth": "+down", "local": "enu-m",
     "gps": "wgs84-deg", "temperature": "degC",
 }
-KNOWN_FEATURES = set()                    # version 2.0 defines none
+KNOWN_FEATURES = {"archived-stations"}
 KINDS = {"normal", "jump", "reference"}
 
 def read_stalx(path):
@@ -700,7 +757,23 @@ def read_stalx(path):
     stations = {}
     for row in doc.get("stations", []):
         extras = row[2] if len(row) > 2 else {}
-        stations[row[0]] = {"name": row[1], **extras}
+        stations[row[0]] = {"id": row[0], "name": row[1], **extras}
+
+    # A closure that archives an end shows that end as its other end (5.12).
+    kept_end = {}
+    for closure in doc.get("closures", []):
+        if closure.get("archived") == "a":
+            kept_end[closure["a"]] = closure["b"]
+        elif closure.get("archived") == "b":
+            kept_end[closure["b"]] = closure["a"]
+
+    def shown(station_id):
+        """The station (name, Station ID, comment) a slot at `station_id` shows."""
+        seen = set()
+        while station_id in kept_end and station_id not in seen:
+            seen.add(station_id)
+            station_id = kept_end[station_id]
+        return stations[station_id]
 
     lines = []
     for element in doc.get("lines", []):
@@ -723,7 +796,7 @@ def read_stalx(path):
             "comment": extras.get("comment"),
             "credit": extras["credit"] if "credit" in extras else line.get("credit"),
         })
-    return doc, stations, lines, unknown_features
+    return doc, stations, lines, shown, unknown_features
 ```
 
 Python's `json` parses `-0` (no fraction) as the integer 0. Stalagmight always
@@ -732,8 +805,8 @@ writes `-0.0`, which Python reads as the float `-0.0`.
 ## 11. Limits
 
 Stalagmight refuses, while it reads (before holding them in memory), files
-over 256 MiB and files holding more than 2,100,000 stations or aliases or
-hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
+over 256 MiB and files holding more than 2,100,000 stations, archived stations
+(each counted once plus once per line it names), hand moves or datums, 100,000 lines, placements or Sections, 2,000,000 shots,
 ignored warnings, import hashes or credited people, 50,000 closures, 10,000
 preserved unknown keys and members (tier 2, section 7, and `requires` names)
 in all, or an object with more than 10,100 members (known and unknown keys
@@ -792,6 +865,19 @@ For context; nothing here changes the format. The app's side is
   the original is kept in the app's data folder
   (`backups/<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, one self-contained file; the path key is a short hash of the file's full path, so same-named projects in different folders never share an original).
   Until that save the file is untouched. Its undo history is not converted.
+- **A version 2 file without `archived-stations`** (an earlier build of
+  version 2 wrote it) is upgraded in memory when opened, as a legacy file is
+  converted: each junction keeps the station on its longest line (its
+  measured length, Reference shots excluded; a tie keeps the lowest Station
+  ID), the others archived, each naming the line that knew it, and the
+  junction's one comment stays with the kept station; each loop closure
+  archives the end that is not on the longest line, in list order, unless
+  rule 12 refuses, and then neither; a name a line now shows for two
+  stations takes a letter suffix (`12` -> `12a`) on the station shown on
+  fewer lines. Stalagmight lists what is shown differently. Until the first
+  save the file is untouched but for the local-only rewrites below, which
+  keep it as it is; that save keeps the original in the backups folder as for
+  a legacy file, and the file's undo history is dropped.
 - **Repair** of a damaged version 2 file copies it to `<name>.stalx.backup` (or
   the next free `.backup.N`) first, then writes the salvaged survey in its
   place, without history.
@@ -800,15 +886,16 @@ For context; nothing here changes the format. The app's side is
 
 ## 13. A complete example
 
-A project with two lines meeting at a junction (station 2), a datum, a second
-piece placed by a placement, a closure, a Section, a credit shared by most of
-a line, an alias, a SpeleoDB link and one undo entry. This is byte for byte
+A project with two lines meeting at a junction (station 2) with an archived
+station, a datum, a second piece placed by a placement, a closure that shows
+one end as the other, a Section, a credit shared by most of a line, a
+SpeleoDB link and one undo entry. This is byte for byte
 what Stalagmight writes for it (a test keeps it so).
 
 <!-- example:begin -->
 
 ```json
-{"format":"stalx","version":2,"solver":1,"requires":[],
+{"format":"stalx","version":2,"solver":1,"requires":["archived-stations"],
 "conventions":{"length":"m","angles":"deg","azimuth":"cw-from-north","inclination":"+down","depth":"+down","local":"enu-m","gps":"wgs84-deg","temperature":"degC"},
 "generator":"Stalagmight 0.6.0",
 "summary":{"name":"Cenote Example","lines":3,"stations":7,"shots":5,"length":33.75,"center":[-87.25,20.5],"bounds":[-87.25,20.5,-87.25,20.5],"speleodb":"0f6c1d2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5"},
@@ -823,7 +910,7 @@ what Stalagmight writes for it (a test keeps it so).
 "stations":[
 [0,"A0"],
 [1,"A1"],
-[2,"A2",{"comment":"tie-off on a rock","archived":[{"id":7,"name":"B0","lines":[1]}]}],
+[2,"A2",{"comment":"tie-off on a rock","archived":[{"id":7,"name":"B0","comment":"Side's tie-off","lines":[1]}]}],
 [3,"A3"],
 [4,"B1"],
 [5,"C0"],
@@ -846,7 +933,7 @@ what Stalagmight writes for it (a test keeps it so).
 {"station":5,"x":40.0,"y":-12.5}
 ],
 "closures":[
-{"id":1,"a":4,"a_via":1,"b":3,"strategy":"batch"}
+{"id":1,"a":4,"a_via":1,"b":3,"strategy":"batch","archived":"a"}
 ],
 "ignored_warnings":[
 {"shot":"5f0c2a1e-0000-4000-8000-000000000003","code":"SHORT_SHOT","at":"2025-11-20T12:50:00.000000000Z","comment":"checked on the dive"}
@@ -861,7 +948,10 @@ what Stalagmight writes for it (a test keeps it so).
 Reading it: line `Main` runs A0 -> A1 -> A2 -> A3; line `Side` starts at the
 junction A2 (station 2) and runs to B1. The third shot of `Main` has no credit
 (`"credit":null`); the others take the header's. Station 2 used to be two
-stations, and the one merged into it had id 7 and the name `B0`. The datum on
-A0 is the frame and places the first piece; the second piece (C0 -> C1) holds
-no datum, so a placement puts C0 at 40 m east, 12.5 m south. The closure ties
-B1 to A3 as a soft loop closure.
+stations: A2 was kept, and Side's own station there is archived in it (id 7,
+the name `B0`, its own comment), so both lines show A2 and its comment there,
+and detaching Side from A2 brings B0 back. The datum on A0 is the frame and
+places the first piece; the second piece (C0 -> C1) holds no datum, so a
+placement puts C0 at 40 m east, 12.5 m south. The closure ties B1 to A3 as a
+soft loop closure and archives B1 (`"archived":"a"`): line Side shows A3 at
+B1's slot, while B1 keeps its own position.

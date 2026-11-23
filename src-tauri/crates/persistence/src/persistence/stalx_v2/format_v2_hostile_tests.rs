@@ -201,7 +201,8 @@ fn a_finite_but_absurd_distance_is_refused() {
 fn archived_rows_are_checked() {
     let (p, extras) = super::format_v2_doc_tests::example();
     let original = String::from_utf8(encode(&p, &extras, Mode::Normal).unwrap()).unwrap();
-    let record = "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[1]}]";
+    let record =
+        "\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"Side's tie-off\",\"lines\":[1]}]";
     assert!(original.contains(record), "the example names Side");
     for (row, ok) in [
         ("\"archived\":[{\"id\":7,\"name\":\"B0\"}]", true),

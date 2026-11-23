@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::models::survey::{
-    ClosureId, ClosureStrategy, CounterKind, LoopClosure, Placement, Project, Station, Violation,
-    MAX_CLOSURE_ID,
+    ClosureEnd, ClosureId, ClosureStrategy, CounterKind, LoopClosure, Placement, Project, Station,
+    Violation, MAX_CLOSURE_ID,
 };
 use crate::models::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
@@ -51,9 +51,28 @@ pub enum Repair {
     DroppedSection {
         id: SectionId,
     },
-    DroppedAlias {
+    /// An archived station (RS 3) whose id collides or is out of range was
+    /// dropped: its name and comment are lost.
+    DroppedArchived {
         station: StationId,
-        alias: StationId,
+        archived: StationId,
+    },
+    /// A3: a later record of a station no longer names a line an earlier
+    /// one names.
+    UnnamedArchivedLine {
+        station: StationId,
+        archived: StationId,
+        line: LineId,
+    },
+    /// A4: a station with no native line took back the archived identity
+    /// naming its lines (RS 4.3); its own became history.
+    RestoredArchived {
+        from: StationId,
+        to: StationId,
+    },
+    /// C1 or C2: a loop closure no longer archives an end (RS 5.4).
+    UnarchivedClosure {
+        id: ClosureId,
     },
     ReMintedShotUuid {
         line: LineId,
@@ -137,8 +156,25 @@ impl fmt::Display for Repair {
             Self::DroppedLine { id } => write!(f, "dropped a second line {id}"),
             Self::RenumberedClosure { from, to } => write!(f, "a closure {from} is now {to}"),
             Self::DroppedSection { id } => write!(f, "dropped Section {id}"),
-            Self::DroppedAlias { station, alias } => {
-                write!(f, "dropped archived station {alias} of station {station}")
+            Self::DroppedArchived { station, archived } => write!(
+                f,
+                "dropped archived station {archived} of station {station} (its name and comment \
+                 are lost)"
+            ),
+            Self::UnnamedArchivedLine {
+                station,
+                archived,
+                line,
+            } => write!(
+                f,
+                "archived station {archived} of station {station} no longer names line {line}"
+            ),
+            Self::RestoredArchived { from, to } => write!(
+                f,
+                "station {from} shows its archived station {to} again (its own is kept as history)"
+            ),
+            Self::UnarchivedClosure { id } => {
+                write!(f, "closure {id} no longer shows one end as the other")
             }
             Self::ReMintedShotUuid { line, index, uuid } => {
                 write!(f, "shot {index} of line {line} has the new uuid {uuid}")
@@ -175,7 +211,7 @@ impl fmt::Display for Repair {
             } => write!(
                 f,
                 "shot {index} of line {line} now ends at the new station {new_station}, tied to \
-                 {station} by closure {closure}"
+                 {station} by closure {closure} and shown as it"
             ),
             Self::AddedPlacement { station } => {
                 write!(f, "placed the piece of station {station} at the origin")
@@ -200,6 +236,9 @@ pub struct SalvageReport {
     /// The file's extras, when it parsed.
     pub extras: Option<Extras>,
     pub notes: Vec<DecodeNote>,
+    /// What the load-time upgrade did, for a file an earlier build of
+    /// version 2 wrote (RS 8.2): the repaired project is the upgraded one.
+    pub upgrade: Option<super::UpgradeReport>,
 }
 
 pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
@@ -211,6 +250,7 @@ pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
             return (None, report);
         }
     };
+    let mut earlier = doc.earlier;
     let (mut project, extras, notes) = match doc.assemble(Some(&mut report.repairs)) {
         Ok(parts) => parts,
         Err(error) => {
@@ -218,10 +258,21 @@ pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
             return (None, report);
         }
     };
+    // A file an earlier build of version 2 wrote: its own damage is repaired
+    // first, then the load-time upgrade runs (it settles what such a file
+    // shows per line, RS 8.2), then whatever is left is repaired.
     report.extras = Some(extras);
     report.notes = notes;
     for _ in 0..MAX_PASSES {
-        let violations = project.validate();
+        let mut violations = project.validate();
+        if earlier {
+            violations.retain(|v| !super::upgrade::settles(v));
+            if violations.is_empty() {
+                earlier = false;
+                report.upgrade = Some(super::upgrade::run(&mut project));
+                continue;
+            }
+        }
         if violations.is_empty() {
             return (Some(project), report);
         }
@@ -290,7 +341,7 @@ struct Pass {
     next_station: StationId,
     next_closure: ClosureId,
     next_line: LineId,
-    aliases: BTreeSet<StationId>,
+    archived: BTreeSet<StationId>,
     uuids: HashSet<String>,
     /// Positions of each line id in the line list.
     positions: HashMap<LineId, Vec<usize>>,
@@ -312,7 +363,7 @@ impl Pass {
                 .map(|l| l.id.saturating_add(1))
                 .max()
                 .unwrap_or(0),
-            aliases: p
+            archived: p
                 .stations
                 .values()
                 .flat_map(|s| s.archived.iter().map(|r| r.id))
@@ -378,6 +429,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     let mut drop_placements = BTreeSet::new();
     let mut drop_closures = BTreeSet::new();
     let mut stale = false;
+    let (mut normalised, mut restored, mut lettered) = (false, false, false);
     // Within a pass, act on each line at most once for chain repairs (later
     // violations about it are re-checked next pass).
     let mut touched_lines = BTreeSet::new();
@@ -437,9 +489,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if let Some(s) = p.stations.get_mut(station) {
                     if let Some(i) = s.archived.iter().position(|r| r.id == *archived) {
                         s.archived.remove(i);
-                        repairs.push(Repair::DroppedAlias {
+                        repairs.push(Repair::DroppedArchived {
                             station: *station,
-                            alias: *archived,
+                            archived: *archived,
                         });
                     }
                 }
@@ -520,16 +572,18 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 drop_closures.insert(*closure);
             }
             Violation::StationArchivedTwice { .. } | Violation::ClosureArchiveCycle { .. } => {
-                p.normalise_closure_archives();
+                if !normalised {
+                    normalised = true;
+                    for id in p.normalise_closure_archives() {
+                        repairs.push(Repair::UnarchivedClosure { id });
+                    }
+                }
             }
             Violation::StaleDatumVia { .. }
             | Violation::StaleClosureVia { .. }
             | Violation::StaleArchivedLine { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
-            // RS-F: salvage's repairs for A3, A4, C1 and C2 (with their
-            // reports); here the minimal ones: the later record naming a line
-            // drops it, a station with no native line makes its records
-            // history, and the closure archives are normalised.
+            // A3: the later record naming a line no longer names it.
             Violation::LineNamedTwice {
                 station,
                 line,
@@ -538,16 +592,28 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             } => {
                 if let Some(s) = p.stations.get_mut(station) {
                     for record in &mut s.archived {
-                        if record.id == *second {
+                        if record.id == *second && record.lines.contains(line) {
                             record.lines.retain(|l| l != line);
+                            repairs.push(Repair::UnnamedArchivedLine {
+                                station: *station,
+                                archived: *second,
+                                line: *line,
+                            });
                         }
                     }
                 }
             }
-            Violation::NoNativeLine { station } => {
-                if let Some(s) = p.stations.get_mut(station) {
-                    for record in &mut s.archived {
-                        record.lines.clear();
+            // A4: the station takes back the identity of the record naming
+            // its lines (RS 4.3, rule K when several do), once per pass for
+            // every such station.
+            Violation::NoNativeLine { .. } => {
+                if !restored {
+                    restored = true;
+                    for r in p.restore_archived_identities() {
+                        repairs.push(Repair::RestoredArchived {
+                            from: r.old,
+                            to: r.new,
+                        });
                     }
                 }
             }
@@ -604,7 +670,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                             b: *to,
                             b_via: None,
                             strategy: ClosureStrategy::Batch,
-                            archived: None, // RS-F: 8.3 / 8.2 give closures an archived end
+                            // The new end shows the old one (RS 5.1), as
+                            // the shot did: nothing a line shows changes.
+                            archived: Some(ClosureEnd::A),
                         });
                         repairs.push(Repair::BrokeCycle {
                             line: *line,
@@ -626,11 +694,20 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     station: *lowest_station,
                 });
             }
-            Violation::DuplicateStationName { second, .. } => {
-                // The later identity's name, free on every line it is shown
-                // on. RS-F: rule L (never the junction shown on more lines).
-                if let Some(name) = p.uniquify_station_name(*second) {
-                    repairs.push(Repair::RenamedStation { id: *second, name });
+            Violation::DuplicateStationName { .. } => {
+                // Rule L, once per pass for every collision: of the
+                // identities sharing a name on a line, the ones shown on
+                // fewer lines take a letter free on every line they are
+                // shown on (never the junction shown on more lines); a tie
+                // keeps the lowest Station ID.
+                if !lettered {
+                    lettered = true;
+                    for l in p.letter_collisions_with(BTreeSet::new) {
+                        repairs.push(Repair::RenamedStation {
+                            id: l.station,
+                            name: l.to,
+                        });
+                    }
                 }
             }
             Violation::DuplicateSectionName { name, second, .. } => {
@@ -808,7 +885,7 @@ fn restore_chain_station(
     if p.stations.contains_key(&id) {
         return;
     }
-    if id < MAX_STATION_ID && !pass.aliases.contains(&id) {
+    if id < MAX_STATION_ID && !pass.archived.contains(&id) {
         p.stations.insert(id, Station::new(id, id.to_string()));
         p.observe_station_id(id);
         pass.next_station = pass.next_station.max(id.saturating_add(1));

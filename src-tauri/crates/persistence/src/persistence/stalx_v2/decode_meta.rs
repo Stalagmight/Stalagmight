@@ -672,8 +672,8 @@ pub(super) fn read_closure(
             ClosureStrategy::Batch
         }),
     };
-    // RS 8.1: the end the closure archives, "a" or "b" (left out when it
-    // archives nothing). RS-F: the `requires` feature and the reader docs.
+    // RS 8.1 (feature `archived-stations`): the end the closure archives,
+    // "a" or "b" (left out when it archives nothing).
     let archived = match f.opt::<String>("archived")?.as_deref() {
         None => None,
         Some("a") => Some(ClosureEnd::A),

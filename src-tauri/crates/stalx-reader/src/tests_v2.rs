@@ -304,7 +304,11 @@ fn a_rule_broken_under_an_unknown_feature_is_newer_not_corrupt() {
         .to_string();
     let dangling = closure_line.replacen("\"b\":", "\"b\":999999,\"was_b\":", 1);
     let broken = edited(&bytes, &closure_line, &dangling);
-    let newer = edited(&broken, "\"requires\":[]", "\"requires\":[\"zz-future\"]");
+    let newer = edited(
+        &broken,
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"zz-future\"]",
+    );
     let err = read_bytes(&newer, &ReadOptions::default()).unwrap_err();
     assert_eq!(
         invalid_kind(&err),
@@ -368,8 +372,8 @@ fn an_unknown_required_feature_is_read_and_flagged() {
     let (project, _) = hub_project();
     let bytes = edited(
         &encoded(&project),
-        "\"requires\":[]",
-        "\"requires\":[\"from-the-future\"]",
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"from-the-future\"]",
     );
 
     let survey = read_bytes(&bytes, &ReadOptions::default()).unwrap();
@@ -460,4 +464,35 @@ fn an_old_file_and_its_json_conversion_read_the_same() {
         s
     };
     assert_eq!(same(&from_sqlite), same(&from_json));
+}
+
+/// A version 2 file an earlier build wrote (no `archived-stations`, a U1
+/// alias row) reads as the app upgrades it: the junction keeps the station
+/// on its longest line (Main, 30 m) on both sections, and Side's own "M2",
+/// which the earlier build showed beside the junction's alias "S0", takes a
+/// letter (rule L: it is shown on one section, the junction on two).
+#[test]
+fn an_earlier_version_2_file_reads_upgraded() {
+    let text = "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n\
+        \"conventions\":{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+        \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\
+        \"gps\":\"wgs84-deg\",\"temperature\":\"degC\"},\n\
+        \"project\":{\"name\":\"Earlier\",\"created\":\"2026-11-01T00:00:00Z\",\
+        \"modified\":\"2026-11-01T00:00:00Z\"},\n\
+        \"counters\":{\"station\":20,\"closure\":1,\"section\":0},\n\
+        \"stations\":[\n[0,\"M0\"],\n[1,\"M1\"],\n\
+        [2,\"M2\",{\"aliases\":[[9,\"S0\",1]]}],\n[3,\"M2\"],\n[4,\"S2\"]\n],\n\
+        \"lines\":[\n\
+        {\"id\":0,\"name\":\"Main\",\"color\":\"#f00\",\"start\":0},\n\
+        [\"u1\",1,15.0,0.0,0.0,0.0,0.0],\n[\"u2\",2,15.0,0.0,0.0,0.0,0.0],\n\
+        {\"id\":1,\"name\":\"Side\",\"color\":\"#0f0\",\"start\":2},\n\
+        [\"u3\",3,5.0,90.0,90.0,0.0,0.0],\n[\"u4\",4,5.0,90.0,90.0,0.0,0.0]\n],\n\
+        \"placements\":[\n{\"station\":0,\"x\":0.0,\"y\":0.0}\n],\n\
+        \"end\":true}\n";
+    let survey = read_bytes(text.as_bytes(), &ReadOptions::default()).unwrap();
+    assert_eq!(survey.newer_content, None);
+    let (main, side) = (survey.sections[0].id, survey.sections[1].id);
+    assert_eq!(name_at(&survey, at(main, 2)), "M2");
+    assert_eq!(name_at(&survey, at(side, 0)), "M2");
+    assert_eq!(name_at(&survey, at(side, 1)), "M2a");
 }

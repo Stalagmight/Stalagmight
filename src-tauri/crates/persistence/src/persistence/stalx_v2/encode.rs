@@ -22,7 +22,9 @@ use super::types::{Extras, History, IgnoredWarning, LocalState, Mode, PushOption
 use super::write::{
     boolean, date, float, integer, normalized_date, signed, small, string, time, Obj,
 };
-use super::{CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION};
+use super::{
+    ARCHIVED_STATIONS, CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION,
+};
 use crate::models::UndoMode;
 
 /// What an encode did beside writing the survey.
@@ -149,7 +151,10 @@ fn write_head(
     out.extend_from_slice(b",\"solver\":");
     small(out, SOLVER);
     out.extend_from_slice(b",\"requires\":");
+    // RS 8.1: every file this build writes follows the kept-stations rules
+    // and says so, whatever it holds (U-P2-12).
     let mut requires: Vec<&str> = extras.requires.iter().map(String::as_str).collect();
+    requires.push(ARCHIVED_STATIONS);
     requires.sort_unstable();
     requires.dedup();
     strings(out, requires);
@@ -501,8 +506,8 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
             string(o.key("external"), external);
         }
         if !station.archived.is_empty() {
-            // RS 8.1: each record an object `{id, name, comment?, external?,
-            // lines?}`. RS-F: the `requires` feature and the docs.
+            // RS 8.1 (feature `archived-stations`): each record an object
+            // `{id, name, comment?, external?, lines?}`.
             let b = o.key("archived");
             b.push(b'[');
             for (i, record) in station.archived.iter().enumerate() {

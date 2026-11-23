@@ -104,6 +104,10 @@ pub(super) struct Shape {
     pub(super) rich: bool,
 }
 
+/// The `requires` member every file this build writes (RS 8.1), as text: a
+/// test adds a feature by replacing it with a longer list.
+pub(super) const REQUIRES: &str = "\"requires\":[\"archived-stations\"]";
+
 pub(super) const SMALL: Shape = Shape {
     lines: 6,
     max_shots: 5,

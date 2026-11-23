@@ -39,7 +39,9 @@ fn an_empty_project_round_trips() {
     let p = Project::new_at("Empty", None, Utc.timestamp_opt(0, 0).single().unwrap());
     let bytes = assert_round_trip(&p, &Extras::default());
     let text = text_of(&bytes);
-    assert!(text.starts_with("{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n"));
+    assert!(text.starts_with(
+        "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[\"archived-stations\"],\n"
+    ));
     assert!(text.ends_with(",\n\"end\":true}\n"));
     assert!(!text.contains("\"lines\":["), "empty members are omitted");
     assert!(!text.contains("\"history\""), "empty members are omitted");
