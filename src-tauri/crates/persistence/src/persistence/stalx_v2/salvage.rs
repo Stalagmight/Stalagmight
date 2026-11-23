@@ -463,6 +463,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     // Within a pass, act on each line at most once for chain repairs (later
     // violations about it are re-checked next pass).
     let mut touched_lines = BTreeSet::new();
+    let mut owners: BTreeMap<StationId, HashSet<StationId>> = BTreeMap::new();
     for v in violations.iter().filter(|v| stage(v) == first) {
         match v {
             Violation::StationKeyMismatch { key, id } => {
@@ -639,7 +640,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     }
                 }
             }
-            // A6: the record goes directly under the station's identity.
+            // A6: the record goes directly under the station's identity
+            // (applied after the loop, one walk per station).
             Violation::DanglingArchivedOwner {
                 station, archived, ..
             }
@@ -647,18 +649,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 station, archived, ..
             }
             | Violation::ArchivedOwnerCycle { station, archived } => {
-                if let Some(record) = p
-                    .stations
-                    .get_mut(station)
-                    .and_then(|s| s.archived.iter_mut().find(|r| r.id == *archived))
-                {
-                    if record.into.take().is_some() {
-                        repairs.push(Repair::ArchivedOwnerCleared {
-                            station: *station,
-                            archived: *archived,
-                        });
-                    }
-                }
+                owners.entry(*station).or_default().insert(*archived);
             }
             // A4: the station takes back the identity of the record naming
             // its lines (RS 4.3, rule K when several do), once per pass for
@@ -784,6 +775,18 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     apply_line_edits(p, edits);
     if !remap.is_empty() {
         remap_stations(p, &remap);
+    }
+    for (station, ids) in owners {
+        if let Some(s) = p.stations.get_mut(&station) {
+            for record in &mut s.archived {
+                if ids.contains(&record.id) && record.into.take().is_some() {
+                    repairs.push(Repair::ArchivedOwnerCleared {
+                        station,
+                        archived: record.id,
+                    });
+                }
+            }
+        }
     }
     if stale {
         let dropped = p.drop_stale_attachments();

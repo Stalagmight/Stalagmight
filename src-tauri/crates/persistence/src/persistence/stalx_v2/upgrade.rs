@@ -67,8 +67,10 @@ impl UpgradeReport {
 /// The violations the upgrade itself settles, which an earlier file may
 /// hold before it: N8 (a line showed the junction by another name than one
 /// of its own stations' under this build's rule), A4 (a junction whose every
-/// line knew it by an alias), and C1 / C2 (step 3 normalises the closures).
-/// Every other violation is the file's own damage.
+/// line knew it by an alias), C1 / C2 (step 3 normalises the closures) and
+/// A6 (no earlier build knew record owners: step 2 puts every record under
+/// its node's own identity, RS-FX4). Every other violation is the file's own
+/// damage.
 pub(super) fn settles(violation: &Violation) -> bool {
     matches!(
         violation,
@@ -76,6 +78,9 @@ pub(super) fn settles(violation: &Violation) -> bool {
             | Violation::NoNativeLine { .. }
             | Violation::StationArchivedTwice { .. }
             | Violation::ClosureArchiveCycle { .. }
+            | Violation::DanglingArchivedOwner { .. }
+            | Violation::ArchivedUnderHistory { .. }
+            | Violation::ArchivedOwnerCycle { .. }
     )
 }
 

@@ -120,10 +120,10 @@ pub(super) fn owner_faults(records: &[ArchivedStation]) -> Vec<(usize, OwnerFaul
         };
         match index.get(&owner) {
             Some(&o) if o != i => {
-                if records[o].is_history() {
-                    out.push((i, OwnerFault::History));
-                } else if on_cycle[i] {
+                if on_cycle[i] {
                     out.push((i, OwnerFault::Cycle));
+                } else if records[o].is_history() {
+                    out.push((i, OwnerFault::History));
                 }
             }
             _ => out.push((i, OwnerFault::Dangling)),
