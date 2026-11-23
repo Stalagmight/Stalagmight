@@ -17,6 +17,7 @@ import { OfflineIndicator } from '../common/OfflineIndicator';
 import { MapAttribution } from '../Map/MapAttribution';
 import Toolbar from './Toolbar';
 import { SpeleoBanner } from './SpeleoBanner';
+import { publishChromeMetrics } from './chromeMetrics';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import { GasPlanPanel } from './GasPlanPanel';
@@ -546,10 +547,12 @@ export default function SingleSystemView() {
     }
   }, [focusedLineId, focusedLineExists, project, exitLineFocus]);
 
-  // Fullscreen data table: the overlay's top edge tracks the live toolbar
-  // height (it can change with wrapping/zoom), published as a CSS var on the
-  // root so the fixed-position wrapper can reference it. useLayoutEffect so the
-  // var is set before the overlay's first paint.
+  // Fullscreen data table: the overlay's top edge tracks the live toolbar's
+  // bottom edge (its height changes with wrapping/zoom, and a banner above it
+  // moves it down), published as CSS vars on the root so the fixed-position
+  // wrapper can reference them (`publishChromeMetrics`). useLayoutEffect so
+  // the vars are set before the overlay's first paint. A banner appearing or
+  // growing above shrinks the root, so observing the root catches the move.
   const rootRef = useRef<HTMLDivElement | null>(null);
   const projectLoaded = project != null;
   useLayoutEffect(() => {
@@ -560,13 +563,11 @@ export default function SingleSystemView() {
     if (!root || !toolbar) return undefined;
     // Expose the chrome heights so floating menus (e.g. data-table dropdowns) can
     // stay clear of the top toolbar and the bottom status bar when they flip.
-    const apply = () => {
-      root.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
-      if (statusBar) root.style.setProperty('--statusbar-h', `${statusBar.offsetHeight}px`);
-    };
+    const apply = () => publishChromeMetrics(root, toolbar, statusBar ?? null);
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(toolbar);
+    ro.observe(root);
     if (statusBar) ro.observe(statusBar);
     return () => ro.disconnect();
   }, [projectLoaded]);
