@@ -2,11 +2,15 @@
 //! station-graph model: the renderer (`super::super::image`) fed a sketch
 //! read off the station graph.
 //!
-//! - One wire station per drawn slot, with the shared Station ID and name, so
-//!   a junction's slots label as one point. The comment sits on the
-//!   station's first drawn slot only and the datum star on the datum's slot
-//!   (its `via` line's, else the first drawn one), so each is drawn once per
-//!   station.
+//! - One wire station per drawn slot, with the shared Station ID and name (a
+//!   junction shows its kept station, RS 4.1), so a junction's slots label
+//!   as one point. The comment sits on the station's first drawn slot only
+//!   and the datum star on the datum's slot (its `via` line's, else the
+//!   first drawn one), so each is drawn once per station.
+//! - A loop end a closure archives (RS 6) is drawn as a point of its own, in
+//!   either geometry, but never labelled: no name, no Station ID and no
+//!   comment, and it never represents a point (`Sketch::unlabelled`). Its
+//!   identity is the kept end's, which labels itself.
 //! - Colocated slots: every junction's drawn slots, then the two ends of each
 //!   closure aligned in this state (`closure_alignment` on the raw layout).
 //! - Distances along the whole survey (hidden Sections included), from the
@@ -139,6 +143,8 @@ fn sketch(
         }
     }
 
+    let shown = project.shown_index();
+    let mut unlabelled = HashSet::new();
     let mut lines = Vec::new();
     let mut stations = Vec::new();
     for line in project.lines().iter().filter(|l| !hidden.contains(&l.id)) {
@@ -168,12 +174,17 @@ fn sketch(
             let z = z + line.hand(id)[2];
             let mut wire = Station::with_coordinates(slot, Coordinates::new(x, y, z));
             wire.id = id;
-            if let Some(station) = project.station(id) {
-                // The name every line shows (RS 4.1: a junction's kept
-                // station). RS-X: no label at a closure-archived end (RS 9).
-                wire.name = project
-                    .shown_name(id)
-                    .map_or_else(|| station.name.clone(), str::to_string);
+            if shown.is_archived(id) {
+                // A loop end a closure archives: its point, no label and no
+                // comment (RS 6); the kept end carries both.
+                if let Some(kept) = project.station(shown.shown(id)) {
+                    wire.name.clone_from(&kept.name);
+                }
+                unlabelled.insert(slot);
+            } else if let Some(station) = project.station(id) {
+                // Its own identity is the one every line shows (RS 4.1: a
+                // junction's kept station).
+                wire.name.clone_from(&station.name);
                 if first_drawn(id) == Some(slot) {
                     wire.comment = station.comment.clone().filter(|c| !c.is_empty());
                 }
@@ -206,6 +217,7 @@ fn sketch(
         lines,
         stations,
         colocated,
+        unlabelled,
     }
 }
 

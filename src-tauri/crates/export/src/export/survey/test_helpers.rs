@@ -4,7 +4,7 @@
 
 use chrono::{TimeZone, Utc};
 
-use crate::models::survey::{ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
+use crate::models::survey::{ClosureEnd, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
 use crate::models::{GpsCoordinates, LineId, ShotData, StationId};
 
 /// A v4-shaped uuid derived from `n` (so the SpeleoDB sidecar keeps it).
@@ -295,6 +295,16 @@ impl Survey {
         let (sa, sb) = (self.station(a.0, a.1), self.station(b.0, b.1));
         self.project
             .push_closure(sa, Some(a.0), sb, Some(b.0), strategy);
+    }
+
+    /// A loop closure between the slots `kept` and `archived` that archives
+    /// the station at `archived` (RS 5): that station shows the one at
+    /// `kept` while it stays a point of its own.
+    pub(crate) fn closure_keeping(&mut self, kept: At, archived: At, strategy: ClosureStrategy) {
+        self.closure(kept, archived, strategy);
+        if let Some(closure) = self.project.closures.last_mut() {
+            closure.archived = Some(ClosureEnd::B);
+        }
     }
 
     /// Set the comment of the station at `at`.

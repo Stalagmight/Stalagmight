@@ -4,10 +4,10 @@
 
 use chrono::{TimeZone, Utc};
 
-use super::super::test_helpers::{cave, meta, project, run, Cave};
+use super::super::test_helpers::{cave, flat, meta, project, run, Cave, Survey};
 use super::{json_export, write_csv, write_json};
 use crate::export::CSV_HEADER;
-use crate::models::survey::{Project, StartAt};
+use crate::models::survey::{ClosureStrategy, Project, StartAt};
 use crate::models::{Person, SurveyCredit};
 
 fn csv(project: &Project) -> String {
@@ -49,22 +49,12 @@ fn csv_rows_name_a_junction_once_on_every_line() {
 /// A line merged onto another line's station shows the kept station (RS 4.1):
 /// both lines' rows print the kept name and the junction's one Station ID
 /// (Side's own station 2 took the letter). Injection: print a line's archived
-/// record name and Side's first row reads "0". RS-X: the exporters' shown
-/// ids for closure-archived ends (RS 9).
+/// record name and Side's first row reads "0".
 #[test]
 fn csv_rows_name_a_junction_by_its_kept_name() {
-    use super::super::test_helpers::Survey;
     let mut s = Survey::new("Merged");
-    let main = s.named(
-        "Main",
-        "#ff0000",
-        vec![super::super::test_helpers::flat(10.0, 90.0); 2],
-    );
-    let side = s.named(
-        "Side",
-        "#00ff00",
-        vec![super::super::test_helpers::flat(5.0, 0.0); 2],
-    );
+    let main = s.named("Main", "#ff0000", vec![flat(10.0, 90.0); 2]);
+    let side = s.named("Side", "#00ff00", vec![flat(5.0, 0.0); 2]);
     s.merge((side, 0), (main, 2));
     let project = s.build();
     let junction = project.line(main).unwrap().station(2).unwrap();
@@ -90,6 +80,69 @@ fn csv_rows_name_a_junction_by_its_kept_name() {
     let side_shots = &json["lines"][1]["shots"];
     assert_eq!(side_shots[0]["from"], "2", "{side_shots}");
     assert_eq!(side_shots[0]["from_id"], junction, "{side_shots}");
+}
+
+/// A loop end a closure archives is written under its kept end's name and
+/// Station ID (RS 9): Side's station 2 shows Main's "M3", so Side's rows name
+/// "M3" with Main's id there, which is how a name- or id-tying reader ties
+/// the loop; its own name "2" and Station ID are written nowhere. Injection:
+/// write node ids, and Side's second row ends at Side's own id.
+#[test]
+fn a_closure_archived_end_is_written_as_its_kept_end() {
+    let mut s = Survey::new("Loop");
+    let main = s.named("Main", "#ff0000", vec![flat(10.0, 90.0); 3]);
+    let side = s.branch(meta("Side", "#00ff00"), (main, 0), vec![flat(5.0, 0.0); 3]);
+    s.rename((main, 3), "M3");
+    s.closure_keeping((main, 3), (side, 2), ClosureStrategy::Batch);
+    let project = s.build();
+    let at = |line, i| project.line(line).unwrap().station(i).unwrap();
+    let (kept, archived) = (at(main, 3), at(side, 2));
+    assert_eq!(project.shown(archived), kept);
+    let text = csv(&project);
+    let rows: Vec<&str> = text.lines().collect();
+    assert!(
+        rows[5].starts_with(&format!("Side,1,M3,{},{kept},", at(side, 1))),
+        "{}",
+        rows[5]
+    );
+    assert!(
+        rows[6].starts_with(&format!("Side,M3,3,{kept},{},", at(side, 3))),
+        "{}",
+        rows[6]
+    );
+    assert!(
+        !text.contains(&format!(",{archived},")),
+        "the archived end's own Station ID is written nowhere:\n{text}"
+    );
+    let json =
+        serde_json::to_value(json_export(&project, Utc.timestamp_opt(0, 0).unwrap())).unwrap();
+    let side_shots = &json["lines"][1]["shots"];
+    assert_eq!(side_shots[1]["to"], "M3", "{side_shots}");
+    assert_eq!(side_shots[1]["to_id"], kept, "{side_shots}");
+    assert_eq!(side_shots[2]["from_id"], kept, "{side_shots}");
+}
+
+/// A closure whose two ends are on one line lists the kept end's name and
+/// Station ID twice on that line (RS 9): Main's station 4 shows station 1.
+#[test]
+fn a_same_line_closure_lists_one_id_twice_on_its_line() {
+    let mut s = Survey::new("Loop");
+    let main = s.named("Main", "#ff0000", vec![flat(10.0, 90.0); 4]);
+    s.closure_keeping((main, 1), (main, 4), ClosureStrategy::Batch);
+    let project = s.build();
+    let at = |i| project.line(main).unwrap().station(i).unwrap();
+    let text = csv(&project);
+    let rows: Vec<&str> = text.lines().collect();
+    assert!(
+        rows[1].starts_with(&format!("Main,0,1,{},{},", at(0), at(1))),
+        "{}",
+        rows[1]
+    );
+    assert!(
+        rows[4].starts_with(&format!("Main,3,1,{},{},", at(3), at(1))),
+        "{}",
+        rows[4]
+    );
 }
 
 /// The legacy layout: fixed decimals, LRUD, the kind label, an escaped

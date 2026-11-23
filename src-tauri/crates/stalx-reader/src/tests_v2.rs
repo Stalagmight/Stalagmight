@@ -4,7 +4,9 @@
 
 #![expect(clippy::unwrap_used, reason = "test assertions")]
 
-use stalagmight_models::survey::{ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
+use stalagmight_models::survey::{
+    ClosureEnd, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum,
+};
 use stalagmight_models::{GpsCoordinates, ShotData};
 use stalagmight_persistence::persistence::stalx_v2::{self, Extras, Mode};
 use tempfile::TempDir;
@@ -167,6 +169,7 @@ fn reads_every_part_of_a_json_file() {
         .map(|c| (c.station, c.text.as_str()))
         .collect();
     assert_eq!(comments, [(hub_at, "hub"), (at(hub.side, 2), "lead")]);
+    assert!(survey.shown_as.is_empty(), "no closure archives an end");
 
     assert_eq!(survey.zero_datums.len(), 1);
     assert_eq!(survey.zero_datums[0].station, at(hub.main, 0));
@@ -207,6 +210,49 @@ fn reads_every_part_of_a_json_file() {
         .unwrap();
     assert_eq!((loose_start.x, loose_start.y), (500.0, 250.0));
     assert!(survey.zero_datums[0].residual_m.unwrap() < 1e-9);
+}
+
+/// A loop end a closure archives (RS 9): its positions keep its own Station
+/// ID (it is a point of its own), they show the kept end's name, its own
+/// comment is hidden, and `shown_as` maps it to the kept end. Injection: read
+/// node names, and Side 2 reads its own name.
+#[test]
+fn a_closure_archived_end_reads_as_its_kept_end() {
+    let (mut project, hub) = hub_project();
+    let closure = project
+        .closures
+        .iter_mut()
+        .find(|c| c.id == hub.closure)
+        .unwrap();
+    closure.archived = Some(ClosureEnd::B);
+    let (kept, archived) = (closure.a, closure.b);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    assert_ne!(project.station(archived).unwrap().name, "17");
+
+    let survey = read_bytes(&encoded(&project), &with_stations()).unwrap();
+
+    let side = survey.sections.iter().find(|s| s.id == hub.side).unwrap();
+    assert_eq!(side.station_ids[2], archived);
+    assert_eq!(name_at(&survey, at(hub.side, 2)), "17");
+    assert_eq!(name_at(&survey, at(hub.main, 4)), "17");
+    assert_eq!(
+        survey.shown_as,
+        std::collections::BTreeMap::from([(archived, kept)])
+    );
+    let comments: Vec<(StationId, &str)> = survey
+        .station_comments
+        .iter()
+        .map(|c| (c.station, c.text.as_str()))
+        .collect();
+    assert_eq!(comments, [(at(hub.main, 2), "hub")]);
+    assert_eq!(survey.loop_closures.len(), 1);
+    super::tests::assert_names_unique_per_section(&survey);
+    let stations = survey.stations.unwrap();
+    let own = stations
+        .iter()
+        .find(|p| p.station == at(hub.side, 2))
+        .unwrap();
+    assert_eq!(own.station_id, archived, "its own point");
 }
 
 #[test]

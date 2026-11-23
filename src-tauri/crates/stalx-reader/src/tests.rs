@@ -142,34 +142,34 @@ pub(super) fn name_at(survey: &Survey, at: StationId) -> String {
         .unwrap_or_default()
 }
 
-/// Station names are unique among the stations of every section, except a
-/// junction's name repeating a name on a section it joins (one that knows it
-/// by an alias: review findings D-migration-upgrade-8 and UX-3). The names a
-/// section's own stations (on that section alone) hold never repeat.
+/// On every section, positions that show different stations have different
+/// names (the app's invariant N8): a junction shows its one name on every
+/// section through it, a loop end a closure archives shows the name of the
+/// station `shown_as` maps it to, and only a station shown twice on one
+/// section (a closure with both ends on it) repeats a name there.
 pub(super) fn assert_names_unique_per_section(survey: &Survey) {
-    let id_at = |at: StationId| {
+    let shown_at = |at: StationId| {
         let section = survey.sections.iter().find(|s| s.id == at.section_id)?;
-        section.station_ids.get(at.index as usize).copied()
-    };
-    let sections_of = |id: u32| {
-        survey
-            .sections
-            .iter()
-            .filter(|s| s.station_ids.contains(&id))
-            .count()
+        let id = *section.station_ids.get(at.index as usize)?;
+        Some(survey.shown_as.get(&id).copied().unwrap_or(id))
     };
     for section in &survey.sections {
-        let mut names: Vec<&str> = survey
+        let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        for name in survey
             .station_names
             .iter()
             .filter(|n| n.station.section_id == section.id)
-            .filter(|n| id_at(n.station).is_some_and(|id| sections_of(id) == 1))
-            .map(|n| n.name.as_str())
-            .collect();
-        let count = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), count, "section {}: {names:?}", section.id);
+        {
+            let Some(shown) = shown_at(name.station) else {
+                continue;
+            };
+            let first = *seen.entry(name.name.as_str()).or_insert(shown);
+            assert_eq!(
+                first, shown,
+                "section {}: {:?} names two stations",
+                section.id, name.name
+            );
+        }
     }
 }
 

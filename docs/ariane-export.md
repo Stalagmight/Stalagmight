@@ -359,6 +359,13 @@ IDs are Station IDs, so they are stable across exports and need not start at
 - CLOSURE rows, then each GPS fix's START and its tying CLOSURE (one pair per
   fix), are numbered from the highest Station ID + 1, in that order.
 
+IDs are node ids (the station graph's vertices), not the identity the app
+shows (kept and archived stations, RS 9): Ariane keys geometry by id and
+writes no station names. A junction is one node, so it has its kept
+station's Station ID; a loop end a closure archives (shown in the app as its
+kept end) is a point of its own, so it keeps its own Station ID as its node
+number although the app shows that id nowhere.
+
 In a valid project every `ID` is unique: each line is walked once, from the
 one station it shares with the lines walked before it (the forest invariant),
 so each station ends exactly one row (or stands under one START), and the
@@ -408,8 +415,10 @@ in `.tml`. To round-trip both `shot.comment` and the station comment
 `<Comment>`:
 
 - Each station comment is attached to the one REAL or VIRTUAL row that ends at
-  the station (its `ID` is the station's), so a junction's one comment is
-  written once (plan Deviations X4).
+  the station (its `ID` is the station's), so a junction's one comment, its
+  kept station's, is written once (plan Deviations X4). A loop end a closure
+  archives writes no comment: its own comment is hidden in the app (RS 9),
+  and the kept end's is written at the kept end.
 - Shot vs station lines inside the resulting Comment are distinguished by a
   zero-width-space (`U+200B`) prefix: lines prefixed with `ZWSP` are shot
   comments; lines without the prefix are station comments.
@@ -501,6 +510,13 @@ dropped or capped.
 | Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
 
 ## Limitations
+
+- Kept and archived stations do not round-trip (declared, RS 9): Ariane has
+  no names, so a re-imported file has no archived stations (the identities
+  a merge archived are not written) and no closure archives (every closure
+  re-imports archiving an end by the import's own rule). Ariane ids follow
+  the nodes, so they change once where an upgrade or a merge kept the moving
+  station.
 
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`

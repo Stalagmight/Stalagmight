@@ -53,7 +53,8 @@ pub(super) fn station_name_label(name: Option<&str>) -> Option<String> {
 /// index (docs/SPEC.md 4.2, Labels; the map's `labelMergeGroups.ts` picks the
 /// same). So a branch merged onto the main line is labelled with the main
 /// line's station, not the branch's `0`. A point with no accepted station has
-/// no entry.
+/// no entry. The caller's `has_label` refuses a loop end a closure archives
+/// (RS 6), so such a station never labels a point.
 pub(super) fn point_representatives(
     lines: &[SketchLine],
     stations: &[Station],

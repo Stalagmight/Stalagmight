@@ -1,8 +1,18 @@
 //! CSV and JSON on the station-graph model: one row (record) per shot, in line
 //! order then shot order, exactly 0.6.0's layouts (`super::super::csv`,
 //! `super::super::json`), with each shot's two stations read through the
-//! chain. A junction is one station, so every line through it names it with
-//! the same name and Station ID.
+//! chain.
+//!
+//! Stations are written by their **shown identity** (RS 9): the name and the
+//! Station ID the app shows for them.
+//! - A junction is one station, so every line through it names it by the
+//!   kept station's name and Station ID; the stations a merge archived are
+//!   not written.
+//! - A loop end a closure archives is written under its kept end's name and
+//!   Station ID. These files hold readings only (no coordinates, no
+//!   closures), so a shared name and id is how a name- or id-tying reader
+//!   ties the loop. A closure whose two ends are on one line lists that one
+//!   name and id twice on the line.
 
 use std::io::Write;
 use std::path::Path;
@@ -10,7 +20,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use crate::models::survey::{Line, Project, Shot};
+use crate::models::survey::{Line, Project, Shot, ShownIndex};
 use crate::models::{LineCreditSummary, SurveyCredit, EMPTY_CREDIT};
 
 use super::super::atomic_write::write_atomic;
@@ -27,16 +37,16 @@ fn line_credit_summary(line: &Line) -> LineCreditSummary {
     LineCreditSummary::from_credits(line.shots.iter().map(shot_credit))
 }
 
-/// The `(name, Station ID)` of each station of `line`'s chain, by index: the
-/// name every line shows it by (a junction's kept station, RS 4.1), the
-/// node's Station ID. RS-X: the shown Station ID for a closure-archived end
-/// (RS 9).
-fn station_columns(project: &Project, line: &Line) -> Vec<(String, u32)> {
+/// The `(name, Station ID)` of each station of `line`'s chain, by index: its
+/// shown identity's (module docs), read through `shown` (the project's
+/// closure archives, [`Project::shown_index`]).
+fn station_columns(project: &Project, shown: &ShownIndex, line: &Line) -> Vec<(String, u32)> {
     line.stations()
-        .map(|id| {
+        .map(|node| {
+            let id = shown.shown(node);
             let name = project
-                .shown_name(id)
-                .map(str::to_string)
+                .station(id)
+                .map(|s| s.name.clone())
                 .unwrap_or_default();
             (name, id)
         })
@@ -53,9 +63,10 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
 /// Write the CSV document to `out`.
 pub fn write_csv(project: &Project, out: &mut impl Write) -> Result<()> {
     writeln!(out, "{CSV_HEADER}")?;
+    let shown = project.shown_index();
     for line in project.lines() {
         let line_name = line.name.as_deref().unwrap_or("");
-        let stations = station_columns(project, line);
+        let stations = station_columns(project, &shown, line);
         for (index, shot) in line.shots.iter().enumerate() {
             let (from, from_id) = &stations[index];
             let (to, to_id) = &stations[index + 1];
@@ -107,6 +118,7 @@ pub fn write_json(
 
 /// The JSON records of the project (0.6.0's [`JsonExport`] layout).
 pub fn json_export(project: &Project, exported_at: DateTime<Utc>) -> JsonExport {
+    let shown = project.shown_index();
     JsonExport {
         project: JsonProjectMeta {
             name: project.name.clone(),
@@ -116,16 +128,16 @@ pub fn json_export(project: &Project, exported_at: DateTime<Utc>) -> JsonExport 
         lines: project
             .lines()
             .iter()
-            .map(|line| json_line(project, line))
+            .map(|line| json_line(project, &shown, line))
             .collect(),
     }
 }
 
-fn json_line(project: &Project, line: &Line) -> JsonLine {
+fn json_line(project: &Project, shown: &ShownIndex, line: &Line) -> JsonLine {
     let summary = line_credit_summary(line);
     let surveyors = summary.surveyor_people();
     let first_date = summary.date_min;
-    let stations = station_columns(project, line);
+    let stations = station_columns(project, shown, line);
     JsonLine {
         name: line.name.clone(),
         surveyor: crate::models::join_names(&surveyors),
