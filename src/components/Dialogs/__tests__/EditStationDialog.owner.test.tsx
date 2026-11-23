@@ -119,19 +119,17 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     await save();
     expect(mutations()).toEqual([]);
     expect(await screen.findByTestId('shown-identity-prompt-lead')).toHaveTextContent('12 belongs to Main.');
-    await waitFor(() =>
-      expect(screen.getByTestId('shown-identity-prompt-lines')).toHaveTextContent(
-        'A new name changes it on every line it is on.',
-      ),
-    );
     // RS-FX6, P3-11: the button says what it renames, to what, and where,
     // worded as the loop-end variant is ("Rename it on every line" named
     // neither). Injection: drop `newName` from the prompt.
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(
-      'Rename Main / 12 to 12b on Main and Side',
+    await waitFor(() =>
+      expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(
+        'Rename Main / 12 to 12b on Main and Side',
+      ),
     );
-    // RS-FX8, N6: the lines are named once, on the button.
-    expect(screen.getByTestId('shown-identity-prompt-lines')).not.toHaveTextContent('Main and Side');
+    // RS-FX8, N6: the lines are named once, on the button; RS-FX10: so the
+    // sentence saying it changes on every line is left out.
+    expect(screen.queryByTestId('shown-identity-prompt-lines')).toBeNull();
     expect(screen.getByTestId('shown-identity-prompt-detach')).toHaveTextContent(
       'Detach Side to get back its own station 0',
     );

@@ -442,6 +442,12 @@ test.describe('Kept and archived stations (RS)', () => {
     const northRecord = northId! * 100_000;
     await expect(page.getByTestId(`unmerge-stations-rest-${sideRecord}`)).toBeChecked();
     await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText('S (Station ID');
+    // RS-FX10: the picker sits above what it decides, under the sentence it
+    // answers.
+    const top = async (testId: string) => (await page.getByTestId(testId).boundingBox())?.y ?? Number.NaN;
+    expect(await top('unmerge-stations-naming')).toBeLessThan(await top('unmerge-stations-rest'));
+    expect(await top('unmerge-stations-rest')).toBeLessThan(await top('unmerge-stations-comes-back'));
+    expect(await top('unmerge-stations-comes-back')).toBeLessThan(await top('unmerge-stations-results'));
 
     // Pick North's, leave the line and come back: the default is back on screen.
     await page.getByTestId(`unmerge-stations-rest-${northRecord}`).click();

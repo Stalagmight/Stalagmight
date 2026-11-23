@@ -436,6 +436,8 @@ test.describe('Stations grid at a junction', () => {
     await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText(
       'Rename Stations Test Line / 3 to J on Stations Test Line and Side Line',
     );
+    // The button names the lines, so no sentence repeats it (RS-FX10).
+    await expect(page.getByTestId('shown-identity-prompt-lines')).toHaveCount(0);
     await expect(page.getByTestId('shown-identity-prompt-detach')).toHaveText(
       'Detach Side Line to get back its own station 0',
     );
