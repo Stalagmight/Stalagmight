@@ -3,10 +3,12 @@
  * Main / 12 is kept at a junction with Branch, so Branch's start shows "12"
  * with Main's dot, and Branch's own 13th station keeps its surveyed name "12";
  * no letter. The data table's stations view shows both "12"s on Branch: the
- * Name column reads the shown name of each, the gutter pill of the foreign
- * slot carries Main's home dot and the native one none, and the Station ID
- * column reads the two different shown Station IDs. Below Full, the gutter's
- * plain text says whose station the foreign slot shows.
+ * Name column reads the shown name of each, the dotted one followed by a
+ * muted "(Main)" (RS-FX6, P2-5), the gutter pill of the foreign slot carries
+ * Main's home dot (which reads "(Main)" to a screen reader) and the native
+ * one none, and the Station ID column reads the two different shown Station
+ * IDs. Below Full, the gutter's plain text says whose station the foreign
+ * slot shows.
  *
  * Injection: a gutter pill named by the qualified label ("12 (Main)") fails
  * "shows both 12s"; dropping the default home mark fails it too.
@@ -126,11 +128,11 @@ const pill = (index: number) => `data-table-station-pill-${BRANCH}-${index}`;
 describe('two "12"s on one line, one of them dotted (RS-FX5)', () => {
   it('shows both 12s: the Name cells, the dot on the foreign slot only, two Station IDs', () => {
     openBranchStations();
-    expect(cell(0, 'name')).toHaveTextContent(/^12$/);
+    expect(cell(0, 'name')).toHaveTextContent(/^12 \(Main\)$/);
     expect(cell(12, 'name')).toHaveTextContent(/^12$/);
 
     // The gutter pills name both bare; the foreign slot's carries Main's dot.
-    expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*Station ID\s*112$/);
+    expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*112$/);
     expect(screen.getByTestId(pill(12))).toHaveTextContent(/^12\s*Station ID\s*312$/);
     expect(screen.getByTestId(`${pill(0)}-home-dot`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${pill(12)}-home-dot`)).toBeNull();
