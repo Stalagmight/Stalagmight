@@ -23,6 +23,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import RemoveClosureDialog from '../RemoveClosureDialog';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -84,13 +85,13 @@ beforeEach(() => {
 describe('Remove Closure under RS', () => {
   it('says what comes back on the row and for the closure chosen', async () => {
     render(<RemoveClosureDialog />);
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17 comes back)');
     // The preview's collision: by default rule L letters the station that
     // comes back, so it comes back as 17a (RS-FX8, N2).
-    expect(await screen.findByTestId('remove-closure-comes-back')).toHaveTextContent(
+    expect(said(await screen.findByTestId('remove-closure-comes-back'))).toContain(
       'Side / 17a comes back: Side shows it again instead of Main / 3.',
     );
-    expect(screen.getByTestId('remove-closure-comes-back-comment')).toHaveTextContent('Its comment comes back too: "Arch"');
+    expect(said(screen.getByTestId('remove-closure-comes-back-comment'))).toContain('Its comment comes back too: "Arch"');
     expect(invokeIpc).toHaveBeenCalledWith('preview_remove_loop_closure', { closureId: 5 }, expect.anything());
   });
 
@@ -100,8 +101,8 @@ describe('Remove Closure under RS', () => {
   it('names each answer by role and Station ID', async () => {
     render(<RemoveClosureDialog />);
     const letter = await screen.findByTestId('remove-closure-collision-0-letter');
-    expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 17, Station ID 17) to 17a');
-    expect(screen.getByTestId('remove-closure-collision-0-alternative').parentElement).toHaveTextContent(
+    expect(said(letter.parentElement)).toContain('Rename the station that comes back (Side / 17, Station ID 17) to 17a');
+    expect(said(screen.getByTestId('remove-closure-collision-0-alternative').parentElement)).toContain(
       "Rename the 17 that is on Side now (Station ID 71) to 17a",
     );
   });
@@ -140,7 +141,7 @@ describe('Remove Closure under RS', () => {
       ],
     });
     render(<RemoveClosureDialog />);
-    expect(await screen.findByTestId('remove-closure-rename-problem')).toHaveTextContent(
+    expect(said(await screen.findByTestId('remove-closure-rename-problem'))).toContain(
       'A name cannot contain control characters or invisible formatting characters.',
     );
     expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
@@ -153,7 +154,7 @@ describe('Remove Closure under RS', () => {
   it('says no name changes for a closure that hides nothing', async () => {
     invokeIpc.mockResolvedValue({ closure_id: 5n, renamed_lines: [], collisions: [] });
     render(<RemoveClosureDialog />);
-    expect(await screen.findByTestId('remove-closure-nothing-back')).toHaveTextContent(
+    expect(said(await screen.findByTestId('remove-closure-nothing-back'))).toContain(
       'Both ends already show their own names, so no name changes.',
     );
   });
@@ -170,11 +171,11 @@ describe('Remove Closure names what comes back as the answers leave it (RS-FX8)'
   it('says 17a for the letter, 17 when the other station takes it', async () => {
     render(<RemoveClosureDialog />);
     const sentence = await screen.findByTestId('remove-closure-comes-back');
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17a comes back)');
-    expect(sentence).toHaveTextContent('Side / 17a comes back: Side shows it again instead of Main / 3.');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17a comes back)');
+    expect(said(sentence)).toContain('Side / 17a comes back: Side shows it again instead of Main / 3.');
     fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
-    expect(screen.getByTestId('remove-closure-comes-back')).toHaveTextContent('Side / 17 comes back');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17 comes back)');
+    expect(said(screen.getByTestId('remove-closure-comes-back'))).toContain('Side / 17 comes back');
   });
 });
 
@@ -191,9 +192,9 @@ describe('closure ids of mixed number and bigint', () => {
     invokeIpc.mockResolvedValue({ ...NAMING, closure_id: 5 });
     render(<RemoveClosureDialog />);
     await screen.findByTestId('remove-closure-comes-back');
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17a comes back)');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17a comes back)');
     fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17 comes back)');
   });
 
   it('the chosen closure and the ends another closure shows match by value', async () => {
@@ -211,7 +212,7 @@ describe('closure ids of mixed number and bigint', () => {
       },
     }) as never);
     render(<RemoveClosureDialog />);
-    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17');
-    expect(await screen.findByTestId('remove-closure-comes-back')).toHaveTextContent('Side / 17a comes back');
+    expect(said(screen.getByTestId('remove-closure-option-5-back'))).toContain('(17');
+    expect(said(await screen.findByTestId('remove-closure-comes-back'))).toContain('Side / 17a comes back');
   });
 });

@@ -63,6 +63,7 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
+import { said } from './proseSentence';
 
 const A = { line_id: 1, station_index: 5 };
 const B = { line_id: 2, station_index: 5 };
@@ -95,7 +96,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('names the piece that moves, how far, and the station it joins', () => {
     dialogData = { ...dialogData, mergePreview: preview() };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent("Upstream moves 24 m onto Second entrance / B4's position.");
+    expect(said(screen.getByTestId('merge-preview-move'))).toContain("Upstream moves 24 m onto Second entrance / B4's position.");
     expect(screen.queryByTestId('merge-preview-depths')).not.toBeInTheDocument();
     expect(screen.queryByTestId(/^merge-preview-junction/)).not.toBeInTheDocument();
   });
@@ -120,10 +121,10 @@ describe('MergeDialog says what the merge does (I-4)', () => {
       }),
     };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-depths'))).toContain(
       'Depths 4.0 m (Upstream), 12.5 m (Second entrance), 12.5 m (Far room) become 9.7 m: the joined station takes the mean of its depth readings.'
     );
-    expect(screen.getByTestId('merge-preview-junction-2-5')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-junction-2-5'))).toContain(
       'Second entrance / B4 is already where Second entrance and Far room meet.'
     );
   });
@@ -131,7 +132,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('says the depths when the two stations disagree', () => {
     dialogData = { ...dialogData, mergePreview: preview({ depths: depths(15, 4, 9.5) }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-depths'))).toContain(
       'Depths 15.0 m (Upstream), 4.0 m (Second entrance) become 9.5 m: the joined station takes the mean of its depth readings.'
     );
   });
@@ -142,7 +143,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('names the other lines of a moving piece', () => {
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-move'))).toContain(
       "Upstream and Side passage move 4.3 m onto Second entrance / B4's position."
     );
   });
@@ -150,13 +151,13 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('names three lines, then counts the rest', () => {
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3, 4], shift_m: 4.26 }) };
     const { unmount } = render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-move'))).toContain(
       'Upstream, Side passage and Sump move 4.3 m'
     );
     unmount();
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3, 4, 5, 6], shift_m: 4.26 }) };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-move'))).toContain(
       'Upstream, Side passage, Sump and 2 more move 4.3 m'
     );
   });
@@ -181,7 +182,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toBeInTheDocument();
     expect(screen.queryByTestId('merge-preview-move')).not.toBeInTheDocument();
-    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent('Depths 3.0 m (Upstream), 5.0 m (Second entrance) become 4.0 m');
+    expect(said(screen.getByTestId('merge-preview-depths'))).toContain('Depths 3.0 m (Upstream), 5.0 m (Second entrance) become 4.0 m');
   });
 
   it('gives no distance after a snap-to-merge drag, which moved the piece first', () => {

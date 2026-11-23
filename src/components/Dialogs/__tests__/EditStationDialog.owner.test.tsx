@@ -23,6 +23,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { Project, Station } from '../../../types/project';
 import type { StationOwner } from '../../../types/ipc/StationOwner';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -118,19 +119,19 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     fireEvent.change(screen.getByTestId('station-name-input'), { target: { value: '12b' } });
     await save();
     expect(mutations()).toEqual([]);
-    expect(await screen.findByTestId('shown-identity-prompt-lead')).toHaveTextContent('12 belongs to Main.');
+    expect(said(await screen.findByTestId('shown-identity-prompt-lead'))).toContain('12 belongs to Main.');
     // RS-FX6, P3-11: the button says what it renames, to what, and where,
     // worded as the loop-end variant is ("Rename it on every line" named
     // neither). Injection: drop `newName` from the prompt.
     await waitFor(() =>
-      expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent(
+      expect(said(screen.getByTestId('shown-identity-prompt-proceed'))).toContain(
         'Rename Main / 12 to 12b on Main and Side',
       ),
     );
     // RS-FX8, N6: the lines are named once, on the button; RS-FX10: so the
     // sentence saying it changes on every line is left out.
     expect(screen.queryByTestId('shown-identity-prompt-lines')).toBeNull();
-    expect(screen.getByTestId('shown-identity-prompt-detach')).toHaveTextContent(
+    expect(said(screen.getByTestId('shown-identity-prompt-detach'))).toContain(
       'Detach Side to get back its own station 0',
     );
     await act(async () => {
@@ -165,16 +166,16 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
   it('says a loop end is shown as its kept end, with Remove the closure', async () => {
     ipc(LOOP_OWNER);
     open(SIDE2);
-    expect(screen.getByTestId('edit-station-id')).toHaveTextContent('3');
+    expect(said(screen.getByTestId('edit-station-id'))).toContain('3');
     fireEvent.change(screen.getByTestId('station-comment-input'), { target: { value: 'Arch' } });
     await save();
     await waitFor(() =>
-      expect(screen.getByTestId('shown-identity-prompt-lead')).toHaveTextContent(
+      expect(said(screen.getByTestId('shown-identity-prompt-lead'))).toContain(
         'Shown as Main / 3 through a loop closure.',
       ),
     );
-    expect(screen.getByTestId('shown-identity-prompt-proceed')).toHaveTextContent('Change the comment of Main / 3');
-    expect(screen.getByTestId('shown-identity-prompt-remove-closure')).toHaveTextContent('Remove the closure');
+    expect(said(screen.getByTestId('shown-identity-prompt-proceed'))).toContain('Change the comment of Main / 3');
+    expect(said(screen.getByTestId('shown-identity-prompt-remove-closure'))).toContain('Remove the closure');
     expect(screen.queryByTestId('shown-identity-prompt-detach')).toBeNull();
   });
 
@@ -182,7 +183,7 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     ipc(LOOP_OWNER);
     open(SIDE2);
     fireEvent.click(screen.getByTestId('station-zero-datum-input'));
-    expect(screen.getByTestId('station-datum-loop-end')).toHaveTextContent(
+    expect(said(screen.getByTestId('station-datum-loop-end'))).toContain(
       'This station is Main / 3 (loop end on Side): the datum goes on its own point.',
     );
   });

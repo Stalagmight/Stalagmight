@@ -27,6 +27,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { letterTakenEarlier } from '../UnmergeStationsDialog';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -117,10 +118,10 @@ describe('Detach Line from Station under RS', () => {
   it('preselects the line the user chose and says what comes back with it', async () => {
     open({ chosenLine: SIDE });
     // Rule L's default answer letters the station that comes back.
-    expect(await screen.findByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0a (Station ID 40).');
+    expect(said(await screen.findByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0a (Station ID 40).');
     expect(screen.getByTestId(`unmerge-station-option-${SIDE}-0`)).toBeChecked();
-    expect(screen.getByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent('With its comment: "Silt bank"');
-    expect(screen.getByTestId('unmerge-stations-together')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-comes-back-comment'))).toContain('With its comment: "Silt bank"');
+    expect(said(screen.getByTestId('unmerge-stations-together'))).toContain(
       'North comes off with Side: they were one station before the merge.',
     );
     // No line shows a letter after 0: the note on earlier letters says
@@ -131,7 +132,7 @@ describe('Detach Line from Station under RS', () => {
   it('lists the collision and detaches with the chosen answer', async () => {
     open({ chosenLine: SIDE });
     const row = await screen.findByTestId('unmerge-stations-collision-0');
-    expect(row).toHaveTextContent('On Side, 0 would name two stations');
+    expect(said(row)).toContain('On Side, 0 would name two stations');
     fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
@@ -143,7 +144,7 @@ describe('Detach Line from Station under RS', () => {
   it("offers the remaining junction's station and sends the pick", async () => {
     open({ chosenLine: MAIN });
     const picker = await screen.findByTestId('unmerge-stations-rest');
-    expect(picker).toHaveTextContent('The lines that come off show:');
+    expect(said(picker)).toContain('The lines that come off show:');
     expect(screen.getByTestId('unmerge-stations-rest-40')).toBeChecked();
     fireEvent.click(screen.getByTestId('unmerge-stations-rest-50'));
     await waitFor(() =>
@@ -198,7 +199,7 @@ describe('Detach Line from Station under RS', () => {
       base({ name: '3', station_id: 60, restored: false, shown_before: { id: 8, name: '8', home_line: NORTH } }),
     );
     open({ chosenLine: SIDE });
-    expect(await screen.findByTestId('unmerge-stations-shown-before')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-shown-before'))).toContain(
       'Side showed North / 8 here through a loop closure; it will show 3.',
     );
     expect(screen.queryByTestId('unmerge-stations-comes-back')).toBeNull();
@@ -230,13 +231,13 @@ describe('Detach Line from Station names what changes elsewhere (RS-FX1)', () =>
       }),
     );
     open({ chosenLine: SIDE });
-    expect(await screen.findByTestId('unmerge-stations-shown-elsewhere')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-shown-elsewhere'))).toContain(
       'Elsewhere, a loop closure or a merge the detach makes changes what these stations show:',
     );
-    expect(screen.getByTestId(`unmerge-stations-shown-elsewhere-${NORTH}-2`)).toHaveTextContent(
+    expect(said(screen.getByTestId(`unmerge-stations-shown-elsewhere-${NORTH}-2`))).toContain(
       'North: Side / 0 where it showed Main / 3',
     );
-    expect(screen.getByTestId('unmerge-stations-comments-hidden-28')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-comments-hidden-28'))).toContain(
       'North / 7\'s comment ("Low air") is hidden. Undo brings it back.',
     );
   });
@@ -256,7 +257,7 @@ describe('Detach Line from Station names what changes elsewhere (RS-FX1)', () =>
       }),
     );
     open({ chosenLine: MAIN });
-    expect(await screen.findByTestId('unmerge-stations-shown-before')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-shown-before'))).toContain(
       'Main showed North / 8 here through a loop closure; it will show 3.',
     );
     expect(screen.queryByTestId('unmerge-stations-shown-elsewhere')).toBeNull();
@@ -295,16 +296,16 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
     );
     open({ chosenLine: SIDE });
     const letter = await screen.findByTestId('unmerge-stations-collision-0-letter');
-    expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 0, Station ID 40) to 0a');
-    expect(screen.getByTestId('unmerge-stations-collision-0-alternative').parentElement).toHaveTextContent(
+    expect(said(letter.parentElement)).toContain('Rename the station that comes back (Side / 0, Station ID 40) to 0a');
+    expect(said(screen.getByTestId('unmerge-stations-collision-0-alternative').parentElement)).toContain(
       "Rename the 0 that is on Side now (Station ID 44) to 0a",
     );
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0a (Station ID 40).');
-    expect(screen.getByTestId(`unmerge-stations-result-${SIDE}`)).toHaveTextContent('Side: 0a, Station ID 40 (comes off)');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0a (Station ID 40).');
+    expect(said(screen.getByTestId(`unmerge-stations-result-${SIDE}`))).toContain('Side: 0a, Station ID 40 (comes off)');
 
     fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 40).');
-    expect(screen.getByTestId(`unmerge-stations-result-${SIDE}`)).toHaveTextContent('Side: 0, Station ID 40 (comes off)');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0 (Station ID 40).');
+    expect(said(screen.getByTestId(`unmerge-stations-result-${SIDE}`))).toContain('Side: 0, Station ID 40 (comes off)');
   });
 
   it('notes earlier letters only when a line shows one', async () => {
@@ -320,7 +321,7 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
       base({ lines: [{ line_id: SIDE, name: '0', station_id: 40, comes_off: true, joined_with: [] }] }),
     );
     open({ chosenLine: SIDE });
-    expect(await screen.findByTestId('unmerge-stations-letters-stay')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-letters-stay'))).toContain(
       'A name that took a letter earlier because of this station keeps it.',
     );
   });
@@ -328,8 +329,8 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
   it('draws the remaining-junction choices as pills', async () => {
     open({ chosenLine: MAIN });
     await screen.findByTestId('unmerge-stations-rest');
-    expect(screen.getByTestId('unmerge-stations-rest-50-pill')).toHaveTextContent('North: 9');
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 0 (Station ID 40).');
+    expect(said(screen.getByTestId('unmerge-stations-rest-50-pill'))).toContain('North: 9');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('They get back 0 (Station ID 40).');
   });
 
   it('says a station archived inside the one that comes back stays inside it', async () => {
@@ -351,7 +352,7 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
     } as never);
     invokeIpc.mockImplementation(async () => base({}));
     open({ chosenLine: SIDE });
-    expect(await screen.findByTestId('unmerge-stations-inside-46')).toHaveTextContent(
+    expect(said(await screen.findByTestId('unmerge-stations-inside-46'))).toContain(
       'North / 0 (Station ID 46) stays archived inside it: detach North again to get it back.',
     );
   });

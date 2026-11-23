@@ -34,7 +34,9 @@ import type { StationRef } from '../../types/project';
 import type { StationOwner } from '../../types/ipc/StationOwner';
 import type { StationGridEdit } from '../SingleSystemView/stationGridEdits';
 import { Button } from '../common/Button';
+import { Prose } from '../common/Prose';
 import { useIdentityLabel } from './keptStationParts';
+import { useKeptProse } from './keptStationProse';
 
 /** What the edit changes: the name, the comment, or both. */
 export type ShownEdit = 'name' | 'comment' | 'both';
@@ -97,6 +99,7 @@ export function ShownIdentityPrompt({
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
+  const prose = useKeptProse();
   const stations = useProjectStore((s) => s.stations);
   // Every way on edits (ui-5): the read-only gate disables them; Cancel stays.
   const editingBlocked = useEditingBlocked();
@@ -119,7 +122,9 @@ export function ShownIdentityPrompt({
   const loopEnd = owner ? owner.loop_closure !== undefined : shown?.loop_end === true;
   const loopClosure = owner?.loop_closure ?? shown?.loop_closure;
   const name = owner ? displayStationName(owner.shown.name) : displayStationName(labels.stationName(stationRef));
+  // The go-on button's words are plain (a control); the lead's are prose.
   const shownLabel = owner ? label(owner.shown) : labels.station(stationRef, true);
+  const shownProse = owner ? prose.identity(owner.shown) : prose.station(stationRef, true);
   const homeLine = owner?.shown.home_line ?? shown?.home_line;
   const line = labels.lineName(stationRef.line_id);
   const lines = owner && owner.lines.length > 0 ? listNames(owner.lines.map(labels.lineName), t) : null;
@@ -143,12 +148,16 @@ export function ShownIdentityPrompt({
   return (
     <div className="space-y-3 text-sm" data-testid="shown-identity-prompt">
       <p className="text-text-primary" data-testid="shown-identity-prompt-lead">
-        {loopEnd
-          ? t('dialogs.shownIdentity.loopEnd', { station: shownLabel })
-          : t('dialogs.shownIdentity.belongs', {
-              name,
-              line: homeLine !== undefined ? labels.lineName(homeLine) : line,
-            })}
+        <Prose
+          text={
+            loopEnd
+              ? t('dialogs.shownIdentity.loopEnd', { station: shownProse })
+              : t('dialogs.shownIdentity.belongs', {
+                  name: prose.slotName(stationRef, name),
+                  line: prose.line(homeLine ?? stationRef.line_id),
+                })
+          }
+        />
       </p>
       {lines !== null && !proceedNamesLines(edit, newName?.trim(), lines) && (
         <p className="text-text-secondary" data-testid="shown-identity-prompt-lines">
@@ -211,7 +220,7 @@ export function ShownIdentityBatchPrompt({
 }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   const editingBlocked = useEditingBlocked();
   // One row per station asked about, in the commit's order.
   const asked: StationRef[] = [];
@@ -258,22 +267,23 @@ export function ShownIdentityBatchPrompt({
           const shown = labels.shown(ref);
           const loopEnd = owner ? owner.loop_closure !== undefined : shown?.loop_end === true;
           const home = owner?.shown.home_line ?? shown?.home_line;
+          const name = prose.slotName(ref, displayStationName(labels.stationName(ref)));
           const lead = loopEnd
             ? t('dialogs.shownIdentity.batchLoopEnd', {
-                line: labels.lineName(ref.line_id),
-                name: displayStationName(labels.stationName(ref)),
-                station: owner ? label(owner.shown) : labels.station(ref, true),
+                line: prose.line(ref.line_id),
+                name,
+                station: owner ? prose.identity(owner.shown) : prose.station(ref, true),
               })
             : t('dialogs.shownIdentity.batchBelongs', {
-                line: labels.lineName(ref.line_id),
-                name: displayStationName(labels.stationName(ref)),
-                home: home !== undefined ? labels.lineName(home) : labels.lineName(ref.line_id),
+                line: prose.line(ref.line_id),
+                name,
+                home: prose.line(home ?? ref.line_id),
               });
-          const lines = owner && owner.lines.length > 0 ? listNames(owner.lines.map(labels.lineName), t) : null;
+          const lines =
+            owner && owner.lines.length > 0 ? listNames(owner.lines.map((id) => prose.line(id)), t) : null;
           return (
             <li key={`${ref.line_id}:${ref.station_index}`} data-testid={`shown-identity-batch-row-${i}`}>
-              {lead}
-              {lines !== null && ` ${t('dialogs.shownIdentity.batchLines', { lines })}`}
+              <Prose text={lines === null ? lead : `${lead} ${t('dialogs.shownIdentity.batchLines', { lines })}`} />
             </li>
           );
         })}

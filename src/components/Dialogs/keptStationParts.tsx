@@ -29,6 +29,8 @@ import type { StationIdentity } from '../../types/ipc/StationIdentity';
 import type { StationRename } from '../../types/ipc/StationRename';
 import { stationNameProblemMessage, stationRenameProblem } from '../../utils/nameValidation';
 import i18n from '../../i18n';
+import { Prose } from '../common/Prose';
+import { useKeptProse, type KeptProse } from './keptStationProse';
 
 /** Which of a collision's two answers the user picked. */
 export type CollisionAnswer = 'letter' | 'alternative';
@@ -173,6 +175,36 @@ export function answeredName(
   return fallback;
 }
 
+/** How an answer names its station and the collision's line: plain labels or prose tokens. */
+interface AnswerNames {
+  /** A station by its home line (`Side / 0`), its Station ID said in words. */
+  identity: (identity: StationIdentity) => string;
+  line: (lineId: number) => string;
+  /** The collision line's own station by its bare name ("the 0 that is on Side now"). */
+  own: (identity: StationIdentity) => string;
+}
+
+function answerWords(
+  suggestion: RenameSuggestion,
+  collision: NameCollision,
+  subject: CollisionSubject | undefined,
+  names: AnswerNames,
+): string {
+  const station = suggestion.station;
+  const params = { station: names.identity(station), id: station.id, to: suggestion.to };
+  if (subject && station.id === subject.id) {
+    return i18n.t(subject.role === 'kept' ? 'dialogs.keptStations.renameKept' : 'dialogs.keptStations.renameComesBack', params);
+  }
+  if (station.home_line === collision.line_id) {
+    return i18n.t('dialogs.keptStations.renameOwn', {
+      ...params,
+      line: names.line(collision.line_id),
+      name: names.own(station),
+    });
+  }
+  return i18n.t('dialogs.keptStations.rename', params);
+}
+
 /**
  * One answer's words (RS-FX6, P1-1): both stations of a collision have one
  * name, so each answer says which it renames, by its role and Station ID.
@@ -187,19 +219,29 @@ export function collisionAnswerText(
   subject: CollisionSubject | undefined,
   lineName: (lineId: number) => string,
 ): string {
-  const station = suggestion.station;
-  const params = { station: identityLabelOf(station, lineName), id: station.id, to: suggestion.to };
-  if (subject && station.id === subject.id) {
-    return i18n.t(subject.role === 'kept' ? 'dialogs.keptStations.renameKept' : 'dialogs.keptStations.renameComesBack', params);
-  }
-  if (station.home_line === collision.line_id) {
-    return i18n.t('dialogs.keptStations.renameOwn', {
-      ...params,
-      line: lineName(collision.line_id),
-      name: displayStationName(station.name),
-    });
-  }
-  return i18n.t('dialogs.keptStations.rename', params);
+  return answerWords(suggestion, collision, subject, {
+    identity: (identity) => identityLabelOf(identity, lineName),
+    line: lineName,
+    own: (identity) => displayStationName(identity.name),
+  });
+}
+
+/**
+ * {@link collisionAnswerText} as prose (RS-PROSE): the same words, the
+ * station it renames and the collision's line as pills. The new name stays
+ * text, and so does the Station ID, which the words say.
+ */
+export function collisionAnswerProse(
+  suggestion: RenameSuggestion,
+  collision: NameCollision,
+  subject: CollisionSubject | undefined,
+  prose: Pick<KeptProse, 'identityNoId' | 'line'>,
+): string {
+  return answerWords(suggestion, collision, subject, {
+    identity: (identity) => prose.identityNoId(identity),
+    line: (lineId) => prose.line(lineId),
+    own: (identity) => prose.identityNoId(identity, false),
+  });
 }
 
 /**
@@ -270,7 +312,7 @@ export function CollisionRows({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
+  const prose = useKeptProse();
   if (!collisions || collisions.length === 0) return null;
   const problem = renamesProblem(renamesFromAnswers(collisions, answers));
   return (
@@ -282,7 +324,7 @@ export function CollisionRows({
         return (
           <fieldset key={`${collision.line_id}:${collision.name}:${i}`} className="p-2 rounded border border-border space-y-1" data-testid={name}>
             <legend className="px-1 text-text-primary">
-              {t('dialogs.keptStations.collision', { line: labels.lineName(collision.line_id), name: collision.name })}
+              <Prose text={t('dialogs.keptStations.collision', { line: prose.line(collision.line_id), name: collision.name })} />
             </legend>
             {(['letter', 'alternative'] as const).map((which) => {
               const suggestion = collision[which];
@@ -297,7 +339,11 @@ export function CollisionRows({
                     onChange={() => onAnswer(i, which)}
                     data-testid={`${name}-${which}`}
                   />
-                  <span>{collisionAnswerText(suggestion, collision, subject, labels.lineName)}</span>
+                  {/* A sentence beside the radio: its names as pills, while the
+                      radio's accessible name stays the plain sentence. */}
+                  <span>
+                    <Prose text={collisionAnswerProse(suggestion, collision, subject, prose)} />
+                  </span>
                 </label>
               );
             })}
@@ -321,13 +367,13 @@ export function CollisionRows({
  */
 export function HiddenComments({ hidden, testId }: { hidden: readonly StationIdentity[] | undefined; testId: string }) {
   const { t } = useTranslation();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   if (!hidden || hidden.length === 0) return null;
   return (
     <ul className="text-xs text-text-secondary space-y-0.5" data-testid={testId}>
       {hidden.map((h) => (
         <li key={h.id} data-testid={`${testId}-${h.id}`}>
-          {t('dialogs.keptStations.commentHidden', { station: label(h), comment: h.comment ?? '' })}
+          <Prose text={t('dialogs.keptStations.commentHidden', { station: prose.identity(h), comment: h.comment ?? '' })} />
         </li>
       ))}
     </ul>

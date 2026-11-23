@@ -26,6 +26,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import MergeDialog, { defaultKeepOf, groupDepthReadings } from '../MergeDialog';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -100,22 +101,22 @@ beforeEach(() => {
 describe('Merge Stations keeps one station (RS 4.1)', () => {
   it('offers both stations with the default checked, and says what the keep does', () => {
     open(preview());
-    expect(screen.getByTestId('merge-keep')).toHaveTextContent('Keep (the station kept is shown on every line):');
+    expect(said(screen.getByTestId('merge-keep'))).toContain('Keep (the station kept is shown on every line):');
     expect(screen.getByTestId('merge-keep-12')).toBeChecked();
     expect(screen.getByTestId('merge-keep-40')).not.toBeChecked();
-    expect(screen.getByTestId('merge-keep-12-datum')).toHaveTextContent('(zero datum)');
-    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12.');
-    expect(screen.getByTestId('merge-hidden')).toHaveTextContent('Side / 0 is archived with its comment.');
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent('Detach Line from Station brings Side / 0 back.');
+    expect(said(screen.getByTestId('merge-keep-12-datum'))).toContain('(zero datum)');
+    expect(said(screen.getByTestId('merge-renamed-lines'))).toContain('Side will show Main / 12.');
+    expect(said(screen.getByTestId('merge-hidden'))).toContain('Side / 0 is archived with its comment.');
+    expect(said(screen.getByTestId('merge-hidden-back'))).toContain('Detach Line from Station brings Side / 0 back.');
     // The geometry is the same for either keep.
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent("Side moves 24 m onto Main / 12's position.");
+    expect(said(screen.getByTestId('merge-preview-move'))).toContain("Side moves 24 m onto Main / 12's position.");
   });
 
   it('follows the other keep: other lines, the other archived station, no comment', () => {
     open(preview());
     fireEvent.click(screen.getByTestId('merge-keep-40'));
-    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Main will show Side / 0.');
-    expect(screen.getByTestId('merge-hidden')).toHaveTextContent(/^Main \/ 12 is archived\.$/);
+    expect(said(screen.getByTestId('merge-renamed-lines'))).toContain('Main will show Side / 0.');
+    expect(said(screen.getByTestId('merge-hidden'))).toMatch(/^Main \/ 12 is archived\.$/);
     expect(screen.queryByTestId('merge-collisions')).toBeNull();
   });
 
@@ -126,12 +127,12 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
   it('lists a collision with its two answers, the letter first and checked, each by role and Station ID', () => {
     open(preview());
     const row = screen.getByTestId('merge-collision-0');
-    expect(row).toHaveTextContent('On Side, 12 would name two stations');
+    expect(said(row)).toContain('On Side, 12 would name two stations');
     expect(screen.getByTestId('merge-collision-0-letter')).toBeChecked();
-    expect(screen.getByTestId('merge-collision-0-letter').parentElement).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-collision-0-letter').parentElement)).toContain(
       "Rename the 12 that is on Side now (Station ID 41) to 12a",
     );
-    expect(screen.getByTestId('merge-collision-0-alternative').parentElement).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-collision-0-alternative').parentElement)).toContain(
       'Rename the kept station (Main / 12, Station ID 12) to 12a',
     );
   });
@@ -170,7 +171,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
         keeps: [{ keep: 12, renamed_lines: [SIDE], collisions: [], hidden: side0, comments_hidden: [], repeats: [] }],
       }),
     );
-    expect(screen.getByTestId('merge-keep-forced')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-keep-forced'))).toContain(
       'A loop closure already shows these two stations as one, so its kept station stays.',
     );
     expect(screen.getByTestId('merge-keep-12')).toBeChecked();
@@ -186,9 +187,9 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
         ],
       }),
     );
-    expect(screen.getByTestId('merge-keep-40-shown-as')).toHaveTextContent('shown as Main / 3 through a loop closure');
+    expect(said(screen.getByTestId('merge-keep-40-shown-as'))).toContain('shown as Main / 3 through a loop closure');
     // Its pill names its own station, not what the closure shows it as.
-    expect(screen.getByTestId('merge-keep-40-pill')).toHaveTextContent('Side: 0');
+    expect(said(screen.getByTestId('merge-keep-40-pill'))).toContain('Side: 0');
   });
 
   it('keeps the old rows and sends no answers without a keep preview', async () => {
@@ -248,11 +249,11 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
         ],
       }),
     );
-    expect(screen.getByTestId('merge-loop-end-shown')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-loop-end-shown'))).toContain(
       'It was the hidden end of a loop closure: the closure stays, and Main / 12 is shown at that end too.',
     );
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings Side \/ 0 back\.$/);
-    expect(screen.getByTestId('merge-comments-hidden-28')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-hidden-back'))).toMatch(/^Detach Line from Station brings Side \/ 0 back\.$/);
+    expect(said(screen.getByTestId('merge-comments-hidden-28'))).toContain(
       'Main / 3\'s comment ("Low air") is hidden. Undo brings it back.',
     );
   });
@@ -261,7 +262,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     open(preview());
     expect(screen.queryByTestId('merge-loop-end-shown')).toBeNull();
     expect(screen.queryByTestId('merge-comments-hidden')).toBeNull();
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings Side \/ 0 back\.$/);
+    expect(said(screen.getByTestId('merge-hidden-back'))).toMatch(/^Detach Line from Station brings Side \/ 0 back\.$/);
   });
 });
 
@@ -299,7 +300,7 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
         ],
       }),
     );
-    expect(screen.getByTestId(`merge-repeat-${SIDE}-41`)).toHaveTextContent(
+    expect(said(screen.getByTestId(`merge-repeat-${SIDE}-41`))).toContain(
       "Side already has a station 12 (Station ID 41); it keeps its name, and Side shows 12 twice, the junction with Main's dot.",
     );
     // The other keep makes no repeat: nothing is said.
@@ -324,13 +325,13 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
       ],
     } as never);
     open(preview());
-    expect(screen.getByTestId('merge-hidden-inside-46')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-hidden-inside-46'))).toContain(
       'Main / 0 (Station ID 46), archived inside Side / 0 by an earlier merge, stays inside it: a second Detach brings it back.',
     );
     // RS-FX8, N4: Detach names the station it brings back and comes before
     // the inside sentence, so no "it" points at the station inside.
     const back = screen.getByTestId('merge-hidden-back');
-    expect(back).toHaveTextContent('Detach Line from Station brings Side / 0 back.');
+    expect(said(back)).toContain('Detach Line from Station brings Side / 0 back.');
     expect(back.compareDocumentPosition(screen.getByTestId('merge-hidden-inside-46')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // A history record (no line) is not said.
     expect(screen.queryByTestId('merge-hidden-inside-47')).toBeNull();
@@ -351,7 +352,7 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
         },
       }),
     );
-    expect(screen.getByTestId('merge-preview-depths')).toHaveTextContent(
+    expect(said(screen.getByTestId('merge-preview-depths'))).toContain(
       'Depths 6.0 m (Side), 7.8 m (Main, 2 readings) become 7.2 m',
     );
   });
@@ -386,8 +387,8 @@ describe('groupDepthReadings', () => {
 describe('Merge Stations names the kept station as the answers leave it (RS-FX8)', () => {
   it('says Main / 12a once the kept station takes the letter', () => {
     open(preview());
-    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12.');
+    expect(said(screen.getByTestId('merge-renamed-lines'))).toContain('Side will show Main / 12.');
     fireEvent.click(screen.getByTestId('merge-collision-0-alternative'));
-    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12a.');
+    expect(said(screen.getByTestId('merge-renamed-lines'))).toContain('Side will show Main / 12a.');
   });
 });

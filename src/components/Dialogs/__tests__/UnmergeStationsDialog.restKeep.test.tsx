@@ -34,6 +34,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { recordsInside } from '../UnmergeStationsDialog';
+import { said } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -134,7 +135,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
     await screen.findByTestId('unmerge-stations-rest');
     fireEvent.click(screen.getByTestId('unmerge-stations-rest-50'));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).'),
+      expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('They get back 9a (Station ID 50).'),
     );
     expect(screen.getByTestId('unmerge-stations-collision-0')).toBeInTheDocument();
 
@@ -142,7 +143,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${SIDE}-0`));
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     expect(await screen.findByTestId('unmerge-stations-rest-40')).toBeChecked();
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 0 (Station ID 40).');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('They get back 0 (Station ID 40).');
     expect(screen.queryByTestId('unmerge-stations-collision-0')).toBeNull();
 
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
@@ -160,7 +161,7 @@ describe('the remaining-junction pick and the preview on screen', () => {
 
     resolvePicked!(MAIN_PICKED);
     await waitFor(() => expect(screen.getByTestId('unmerge-stations-confirm')).not.toBeDisabled());
-    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).');
+    expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('They get back 9a (Station ID 50).');
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(unmergeStations).toHaveBeenCalledWith(slot(MAIN, 3), {
@@ -244,21 +245,21 @@ describe('what stays archived inside the remaining junction (RS-FX8)', () => {
     await screen.findByTestId('unmerge-stations-rest');
     // Default pick 40: 41 was inside it and is directly inside the station
     // they get back now; North / 9 goes with the lines too.
-    expect(screen.getByTestId('unmerge-stations-inside-41')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-inside-41'))).toContain(
       'Twig / 7 (Station ID 41) stays archived inside it: detach Twig again to get it back.',
     );
-    expect(screen.getByTestId('unmerge-stations-inside-50')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-inside-50'))).toContain(
       'North / 9 (Station ID 50) stays archived inside it: detach North again to get it back.',
     );
     expect(screen.queryByTestId('unmerge-stations-inside-60')).toBeNull();
 
     fireEvent.click(screen.getByTestId('unmerge-stations-rest-50'));
     await waitFor(() =>
-      expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).'),
+      expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('They get back 9a (Station ID 50).'),
     );
     // Picked 50: Side / 0 stays archived in it, with Twig / 7 still inside
     // Side / 0, and nothing names 50 itself or the history record.
-    expect(screen.getByTestId('unmerge-stations-inside-40')).toHaveTextContent(
+    expect(said(screen.getByTestId('unmerge-stations-inside-40'))).toContain(
       'Side / 0 (Station ID 40) stays archived inside it, with Twig / 7 (Station ID 41) archived inside Side / 0: ' +
         'detach Side again to get it back.',
     );
