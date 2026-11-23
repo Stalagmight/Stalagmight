@@ -711,3 +711,45 @@ function firstClearLevel(
   }
   return from;
 }
+
+/**
+ * The labels a build would drop (`reveal` {@link REVEAL_NEVER}) whose box,
+ * at the build zoom, overlaps a label of `kind` (RS-FX8, N1). Line names
+ * place first at every zoom from z10, so a station label under one never
+ * clears and is not emitted; a toggle of that kind reruns the reveal over the
+ * EMITTED set only, so the station label could not come back when line names
+ * are turned off. The controller emits these too (hidden, at an unreachable
+ * reveal), and the rerun lets them win once the kind is off. Grid-bucketed,
+ * so the cost is linear in the labels; `kind`'s own labels are never listed.
+ */
+export function shadowedByKind(
+  descriptors: readonly LabelDescriptor[],
+  extents: readonly (ExtentEm | null)[],
+  reveal: ArrayLike<number>,
+  kind: LabelKind,
+  zoom: number,
+  worldPixelScale: number,
+  cellSize: number = DEFAULT_CELL_PX,
+): Set<number> {
+  const out = new Set<number>();
+  const box = (i: number): ScreenBox | null => {
+    const extent = extents[i];
+    if (!extent) return null;
+    const desc = descriptors[i]!;
+    const style = LABEL_KIND_STYLE[desc.kind];
+    return revealScreenBox(desc, extent, worldPixelScale, interpolateStops(zoom, style.size), style.haloWidth);
+  };
+  const grid: BoxGrid = new Map();
+  for (let i = 0; i < descriptors.length; i++) {
+    if (descriptors[i]!.kind !== kind) continue;
+    const b = box(i);
+    if (b) insertBox(grid, b, cellSize);
+  }
+  if (grid.size === 0) return out;
+  for (let i = 0; i < descriptors.length; i++) {
+    if (reveal[i] !== REVEAL_NEVER || descriptors[i]!.kind === kind) continue;
+    const b = box(i);
+    if (b && !fits(grid, b, cellSize)) out.add(i);
+  }
+  return out;
+}

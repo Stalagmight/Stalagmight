@@ -62,6 +62,24 @@ function junctionsOf(data: SurveyData): number[][] {
   return junctions;
 }
 
+const junctionSlotCache = new WeakMap<Uint32Array, ReadonlySet<number>>();
+
+/**
+ * The global index of every slot that is part of a junction (its Station ID
+ * on two or more slots of the SoA), built once per `stationIds` array like
+ * {@link junctionsOf}. A line name avoids anchoring on one: there the
+ * junction's station label sits, and the name would take its spot (RS-FX8,
+ * N1).
+ */
+export function junctionSlots(data: SurveyData): ReadonlySet<number> {
+  const cached = junctionSlotCache.get(data.stationIds);
+  if (cached) return cached;
+  const slots = new Set<number>();
+  for (const group of junctionsOf(data)) for (const g of group) slots.add(g);
+  junctionSlotCache.set(data.stationIds, slots);
+  return slots;
+}
+
 /**
  * The representative of every merge group. `lineFirst` / `lineLast` give each
  * line's first and last station index in the SoA (the FIRST_IN_LINE predicate
