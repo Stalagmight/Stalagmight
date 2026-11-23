@@ -911,7 +911,12 @@ pub fn get_revisions(
                         id: v.id,
                         parent_ids: v.parent_ids,
                         author_email: v.author_email,
-                        message: Some(v.message),
+                        // An older server that keeps no descriptions sends an
+                        // empty one: no description, which is what tells the
+                        // authorship check that the history has none
+                        // (`sync::history_records_descriptions`; delta review of
+                        // X4, nit 3). Our uploads never carry a blank one.
+                        message: Some(v.message).filter(|m| !m.trim().is_empty()),
                     })
                 })
                 .collect::<Result<_, SpeleoDbError>>()?,

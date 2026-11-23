@@ -82,7 +82,9 @@ pub struct RevisionCommit {
     /// neither form.
     #[serde(default)]
     pub authored_date: Option<String>,
-    /// [#218] Commit message, for the history view. `None` if the server omits it.
+    /// [#218] Commit message, for the history view. `None` if the server omits it
+    /// or sends an empty (or blank) one, as an older server that keeps no
+    /// descriptions does (`client::get_revisions`).
     #[serde(default)]
     pub message: Option<String>,
 }
@@ -111,7 +113,7 @@ pub struct SpeleoRevision {
     /// with no zone (see [`RevisionCommit::authored_date`]); `None` when there is
     /// no time to show.
     pub authored_date: Option<String>,
-    /// Commit message, or `None` if the server omitted it.
+    /// Commit message, or `None` if the server omitted it or sent a blank one.
     pub message: Option<String>,
 }
 

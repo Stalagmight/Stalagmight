@@ -1060,7 +1060,9 @@ injection that puts the old rule back).
   put in a default), and a server that stores descriptions shows it, so an
   undescribed revision now matches only where the history carries no
   descriptions at all (`history_records_descriptions`): an older server, the
-  documented residue. `classify_ancestry` and `not_our_own` (the replaced report)
+  documented residue. Such a server sends an empty description, which the history
+  client reads as none (amended after the X4 delta review, nit 3: the client
+  used to keep it as `Some("")`, so the fallback never ran outside tests). `classify_ancestry` and `not_our_own` (the replaced report)
   both read it from the full history. Test:
   `an_undescribed_revision_is_ours_only_where_the_server_keeps_no_descriptions`
   (the mixed-history case is Landed on 438676e91; the residue is pinned).

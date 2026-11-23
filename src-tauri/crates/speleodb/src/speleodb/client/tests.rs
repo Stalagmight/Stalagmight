@@ -1788,3 +1788,33 @@ fn a_middleware_failure_keeps_no_url() {
         "a transport failure with no URL in its detail: {error:?}"
     );
 }
+
+/// Delta review of X4, nit 3: the history always came back with
+/// `message: Some(..)`, so the "server keeps no descriptions" rule
+/// (`sync::history_records_descriptions`) only ever ran in tests. An older
+/// server that keeps no descriptions sends an empty one: that, or one of
+/// whitespace alone, is no description.
+#[test]
+fn an_empty_revision_description_reaches_the_history_as_none() {
+    let mut empty = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    empty["message"] = json!("");
+    let mut blank = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    blank["message"] = json!(" \n\t");
+    let described = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    let s = Server::json(json!({"project":pre_iso_project(),"commits":[empty, blank, described]}));
+    let history = get_revisions(&s.base, "t", false, ID).unwrap();
+    s.finish();
+    let messages: Vec<_> = history
+        .commits
+        .iter()
+        .map(|c| c.message.as_deref())
+        .collect();
+    assert_eq!(messages, [None, None, Some("Synthetic")]);
+    // A history of such revisions keeps no descriptions: the fallback runs.
+    assert!(!super::super::sync::history_records_descriptions(
+        &history.commits[..2]
+    ));
+    assert!(super::super::sync::history_records_descriptions(
+        &history.commits
+    ));
+}
