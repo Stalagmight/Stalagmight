@@ -60,10 +60,21 @@ export function letterTakenEarlier(
   );
 }
 
-/** The records a restored station keeps inside it (RS-FX4): those the
- *  junction archived under it, which a second Detach gives back. */
-export function recordsInside(records: readonly ArchivedStation[] | undefined, id: number): ArchivedStation[] {
-  return (records ?? []).filter((r) => r.into === id && r.lines.length > 0);
+/** The records the station that comes back keeps inside it (RS-FX4), each
+ *  of which a second Detach gives back: those the junction archived under
+ *  it, and, when the detached line keeps the junction (RS 4.2 case 2), every
+ *  other record directly under the junction's identity too, since they go
+ *  with the lines that come off (RS-FX8, N7: picking Twig / 0 as the
+ *  remaining junction's station left Lower / 3 archived in it unsaid).
+ *  History records stay with the junction and are never listed. */
+export function recordsInside(
+  records: readonly ArchivedStation[] | undefined,
+  id: number,
+  kept = false,
+): ArchivedStation[] {
+  return (records ?? []).filter(
+    (r) => r.lines.length > 0 && r.id !== id && (r.into === id || (kept && r.into === undefined)),
+  );
 }
 
 function stationRefKey(ref: StationRef): string {
@@ -471,7 +482,7 @@ export default function UnmergeStationsDialog() {
                 line={selected.line_id}
                 lines={naming.kept ? otherLines.length : 1}
                 nameOf={nameOf}
-                inside={recordsInside(junctionRecords, naming.station_id)}
+                inside={recordsInside(junctionRecords, naming.station_id, naming.kept)}
               />
             )}
 
