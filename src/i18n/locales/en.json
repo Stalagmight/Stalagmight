@@ -1904,8 +1904,12 @@
     "closure": {
       "keepLead": "Both ends show:",
       "keepBoth": "Keep both names",
-      "ruleKNotAllowed": "The end on the longer line is already a loop end of another closure, so it cannot be kept here.",
+      "ruleKOtherEndArchived": "{{keep}} cannot be kept here: it would hide {{other}}, which another loop closure already shows as {{shown}}.",
+      "ruleKShowsOtherEnd": "{{keep}} cannot be kept here: a loop closure already shows it as {{other}}.",
+      "ruleKNotAllowed": "{{keep}} cannot be kept here because of another loop closure at these ends.",
       "keepsBoth": "Each end keeps its own name.",
+      "keepsBothShown": "No name changes.",
+      "staysShownAs": "{{station}} stays shown as {{shown}} through another loop closure.",
       "hidden": "{{station}} is hidden: its point stays on the map, without a label. Remove Closure brings it back.",
       "hiddenWithComment": "{{station}} and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.",
       "renamedLines_one": "{{lines}} will show the kept station there.",
@@ -1917,6 +1921,7 @@
       "comesBack_other": "{{station}} comes back: {{lines}} show it again instead of {{shown}}.",
       "commentComesBack": "Its comment comes back too: \"{{comment}}\"",
       "nothingBack": "Both ends already show their own names, so no name changes.",
+      "nothingBackShown": "No name changes.",
       "comesBackPlain": "{{station}} comes back."
     },
     "shownIdentity": {

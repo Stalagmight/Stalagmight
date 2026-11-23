@@ -125,6 +125,24 @@ export default function RemoveClosureDialog() {
     return archive ? displayStationName(archive.station.name) : null;
   };
 
+  // The ends of the chosen closure that another closure shows as another
+  // station (ui-6): removing one that hides nothing leaves them so, which
+  // "both ends show their own names" would deny.
+  const staysShown: string[] = [];
+  const chosen = project?.loop_closures?.find((c) => c.id === selectedClosure?.closureId);
+  for (const end of chosen ? [chosen.station_a, chosen.station_b] : []) {
+    const by = labels.shown(end)?.loop_closure;
+    const archive = by === undefined ? undefined : project?.loop_closures?.find((c) => c.id === by)?.archived;
+    if (by !== undefined && by !== chosen?.id && archive) {
+      staysShown.push(
+        t('dialogs.closure.staysShownAs', {
+          station: identityLabel(archive.station),
+          shown: identityLabel(archive.shown_as),
+        }),
+      );
+    }
+  }
+
   const getStationDisplayLabel = (ref: StationRef): ReactNode => (
     <StationBlob station={ref} withLine />
   );
@@ -233,7 +251,9 @@ export default function RemoveClosureDialog() {
         )}
         {naming && naming.comes_back === undefined && (
           <p className="text-sm text-text-secondary" data-testid="remove-closure-nothing-back">
-            {t('dialogs.removeClosure.nothingBack')}
+            {staysShown.length === 0
+              ? t('dialogs.removeClosure.nothingBack')
+              : [t('dialogs.removeClosure.nothingBackShown'), ...staysShown].join(' ')}
           </p>
         )}
         {naming && (
