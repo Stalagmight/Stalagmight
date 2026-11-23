@@ -517,3 +517,82 @@ fn a_decode_deadline_stops_between_phases() {
         assert!(decode(text.as_bytes(), &later).is_ok());
     }
 }
+
+/// Data review finding data-5: the archived-station cap counts a record once
+/// plus once per line it names, and an earlier build's U1 alias row the
+/// same (its one line, if any), so the two forms of the same stations meet
+/// the cap alike: here two stations of line 0 each keep one naming line 0
+/// (4 against a cap of 3). Injection: on 333e24ac5 an alias row counted 1
+/// whatever its line, and the alias form passed.
+#[test]
+fn alias_rows_count_like_records_against_the_archived_cap() {
+    let record = |id: u64| (1..=2).contains(&id).then(|| format!("r{id}"));
+    let records = Crafted {
+        shots: 3,
+        sides: &[],
+        name: &own_name,
+        record: &record,
+        closures: &[],
+        earlier: true,
+    }
+    .text();
+    let aliases = records
+        .replace(
+            "{\"archived\":[{\"id\":4,\"name\":\"r1\",\"lines\":[0]}]}",
+            "{\"aliases\":[[4,\"r1\",0]]}",
+        )
+        .replace(
+            "{\"archived\":[{\"id\":5,\"name\":\"r2\",\"lines\":[0]}]}",
+            "{\"aliases\":[[5,\"r2\",0]]}",
+        );
+    assert_eq!(aliases.matches("\"aliases\"").count(), 2, "{aliases}");
+    let mut options = DecodeOptions::default();
+    for text in [&records, &aliases] {
+        options.limits.archived = 4;
+        let decoded = decode(text.as_bytes(), &options);
+        assert!(decoded.is_ok(), "{:?} {text}", decoded.err());
+        options.limits.archived = 3;
+        assert!(
+            matches!(
+                decode(text.as_bytes(), &options),
+                Err(DecodeError::TooComplex {
+                    limit: Limit::Archived,
+                    max: 3
+                })
+            ),
+            "{text}"
+        );
+    }
+}
+
+/// Data review finding data-6: a record's `lines` array counts against the
+/// archived-station cap as it streams, like every other array, so a crafted
+/// record whose array fills the file is refused before it is held: here the
+/// cap is passed long before the array's bad last element. Injection: on
+/// 333e24ac5 the array was read whole first, and the bad element refused it
+/// as malformed instead.
+#[test]
+fn record_lines_are_counted_as_they_arrive() {
+    let record = |id: u64| (id == 1).then(|| "r1".to_string());
+    let text = Crafted {
+        shots: 3,
+        sides: &[],
+        name: &own_name,
+        record: &record,
+        closures: &[],
+        earlier: false,
+    }
+    .text();
+    let flood = format!("\"lines\":[{}\"x\"]", "0,".repeat(50));
+    let text = text.replacen("\"lines\":[0]", &flood, 1);
+    assert!(text.contains(&flood));
+    let mut options = DecodeOptions::default();
+    options.limits.archived = 10;
+    assert!(matches!(
+        decode(text.as_bytes(), &options),
+        Err(DecodeError::TooComplex {
+            limit: Limit::Archived,
+            max: 10
+        })
+    ));
+}

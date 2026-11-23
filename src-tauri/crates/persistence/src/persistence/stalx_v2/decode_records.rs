@@ -459,10 +459,13 @@ impl<'de> Visitor<'de> for ArchivedSeed<'_, '_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        // Each record counts once here; its lines count as they arrive
+        // (`RecordLinesSeed`), so a crafted `lines` array is refused before
+        // it is held.
         while let Some(record) = seq.next_element_seed(ArchivedRecordSeed {
             ctx: &mut *self.ctx,
         })? {
-            self.ctx.count(Limit::Archived, 1 + record.lines.len())?;
+            self.ctx.count(Limit::Archived, 1)?;
             self.out.push(record);
         }
         Ok(())
@@ -509,7 +512,14 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
                 1 => name = Some(value::<String, _>(&mut map, ctx, "archived name")?),
                 2 => comment = Some(value::<String, _>(&mut map, ctx, "archived comment")?),
                 3 => external = Some(value::<String, _>(&mut map, ctx, "archived external")?),
-                _ => lines = value::<Vec<LineId>, _>(&mut map, ctx, "archived lines")?,
+                _ => {
+                    ctx.field = "archived lines";
+                    map.next_value_seed(RecordLinesSeed {
+                        ctx: &mut *ctx,
+                        out: &mut lines,
+                    })?;
+                    ctx.field = "";
+                }
             }
         }
         let id = id.ok_or_else(|| ctx.missing("archived id"))?;
@@ -521,6 +531,37 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
             external,
             lines,
         })
+    }
+}
+
+/// A record's `lines`, each counted against the archived-station cap as it
+/// arrives.
+struct RecordLinesSeed<'c, 'l> {
+    ctx: &'c mut Ctx<'l>,
+    out: &'c mut Vec<LineId>,
+}
+
+impl<'de> DeserializeSeed<'de> for RecordLinesSeed<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RecordLinesSeed<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array of line ids")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(line) = seq.next_element::<LineId>()? {
+            self.ctx.count(Limit::Archived, 1)?;
+            self.out.push(line);
+        }
+        Ok(())
     }
 }
 
@@ -545,10 +586,12 @@ impl<'de> Visitor<'de> for AliasesSeed<'_, '_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        // As a record counts: once, plus once for the line it names.
         while let Some(alias) = seq.next_element_seed(AliasSeed {
             ctx: &mut *self.ctx,
         })? {
-            self.ctx.count(Limit::Archived, 1)?;
+            self.ctx
+                .count(Limit::Archived, 1 + usize::from(alias.line.is_some()))?;
             self.out.push(alias);
         }
         Ok(())
