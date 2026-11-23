@@ -604,3 +604,92 @@ disagreed, each with its reason.
   route gives stays and a restore may pick another record when the routes'
   promotions differ. They are `#[ignore]`d with that reason until RS-T moves
   T5 to the new rules.
+
+## Deviations (package RS-F)
+
+Decisions the format and upgrade package took where this page is silent or
+the code disagreed, each with its reason.
+
+- **Decode prepares the 8.2 upgrade; `Decoded::upgrade` applies it.** For a
+  file without the feature, `decode` reads the file as written (`Decoded::
+  project`; U1 alias rows already as records naming their lines, which is
+  step 1 and the private form of U-P2-13g), runs steps 2 to 5 on a copy and
+  validates that copy, so a file the upgrade cannot settle is refused at
+  decode as the file's own damage; the copy and its report wait in
+  `Decoded::earlier`. Decode still never changes the model it returns, and
+  every site that hands a survey to the app calls `upgrade()`: the open
+  (and so Add .stalx, Merge Projects and the open after a Restore), the
+  download install, the geometry preview and stalx-reader. The violations
+  the upgrade settles are N8, A4, C1 and C2; any other refuses.
+- **Every earlier file is pending, even when nothing reads differently.** The
+  first save adds the feature, after which an earlier build opens the file
+  read-only, so that save always keeps the original in Recovery and the
+  status bar always says the file is the older one; the notice appears only
+  when a line shows something differently.
+- **Status bar wording.** Both routes show the existing "Old format:
+  converted when you save" (one string; 8.2 quotes it as "Older format").
+- **The history of an earlier file** is dropped explicitly at the open (not
+  left to the history format check), with the `EarlierVersion` banner when
+  it held entries; until the first save, local-only rewrites copy the
+  file's history verbatim, so an earlier build can still undo it.
+- **Closed-file rewrites leave an earlier file earlier.** A Recents rename
+  and a SpeleoDB link strip of a closed earlier file are byte-preserving
+  rewrites that copy `requires`, as for any version 2 file; unlike a closed
+  0.6.0 file, which they convert, it is upgraded at its next open.
+- **Downloads.** An earlier SpeleoDB revision is converted on install, as a
+  0.6.0 revision is (its notice uses the downloaded sentence; history kept
+  by the Unwind waiver is dropped with the banner). A read-only one keeps
+  its bytes and opens pending.
+- **Rule K for a closure end in the upgrades** measures every line through
+  the end's node (its identity is shown on all of them), not lines its
+  identity reaches through other closures: the per-line candidate of M-P2-5.
+  The list-order C1/C2 pass is the model's `normalise_closure_archives`
+  (already on the base); a closure an earlier file already archived keeps
+  that end unless the pass drops it.
+- **Rule L in the upgrades** judges "already shown on the line" by what the
+  file showed there (the record naming the line, else the node; for 0.6.0
+  each member on its own line), never by chain order. Salvage letters with
+  no such state: its ties go to the lowest Station ID.
+- **The 8.3 oracle's rule L check.** "No identity shown on two or more
+  lines is ever lettered" is checked as rule L states it: a lettered
+  station shown on two or more lines must yield to a station of its former
+  name shown on at least as many lines. Two junctions sharing a name on a
+  line (possible in a crafted 0.6.0 file) cannot both keep it.
+- **Migration ids.** The migration still claims Station IDs by the map's
+  label representative, then rule K re-keys the junction node to the kept
+  member's id, so every 0.6.0 Station ID still names the member it named;
+  the verification maps by slot and is unaffected. Records keep their
+  members' own comments; an empty 0.6.0 comment is none, as before.
+- **The notice's lists.** Comments are compared with what each slot showed
+  (U1: the junction's one comment on every line), so an earlier file's
+  junction reports no hidden comment, while a closure-archived end does. A
+  slot that now shows another station under the same name is not listed as
+  a name change (only its hidden comment, if any). Each entry names its line
+  first; a station shown as another names the kept station by its home line
+  ("Side / 0 is now shown as Main / 12"); the details are in line order
+  (names, then hidden comments, per line), closures last; over three
+  entries the banner counts them by kind. The sentence that Detach Line from
+  Station or Remove Closure brings each back shows only when a station is
+  shown as another or a comment is hidden. The lead and that sentence are
+  en.json strings (`ConversionNoticeView::source`, `brings_back`); the
+  clauses stay worded in Rust, as before.
+- **Feature files with alias rows, earlier files with records.** A file
+  listing the feature but holding U1 `aliases` reads them as records (no
+  writer of the feature writes them; nothing is lost), not as unknown
+  content. An earlier file holding `archived` records or closure archives
+  (only RS-M1 development builds wrote them) is upgraded by the U1 rules; a
+  record with its own comment keeps it with its identity.
+- **Salvage.** An earlier file's own damage is repaired first, then the
+  upgrade runs (`SalvageReport::upgrade`), and Repair and Export
+  Salvageable Data say the file was upgraded. A shot cycle salvage breaks
+  now ties the new station to the old one by a closure that archives the new
+  end, so the line shows what it showed.
+- **API names for the integrator.** `MigratedExtras::names_changed` is now
+  `changes` (`IdentityChanges`, shared with `UpgradeReport::changes`);
+  `MigrationReport` drops `comments_joined` and renames `aliases_created` to
+  `members_archived` and `alias_ids_minted` to `record_ids_minted`, adding
+  `kept_by_length`, `closures_archived`, `closures_keep_both`,
+  `shown_as_other` and `comments_hidden`; the decoder's and stalx-reader's
+  `CountLimits::aliases` and `Limit::Aliases` are `archived` (nothing
+  published reads version 2 yet). stalx-reader reads an earlier file
+  upgraded; its names are still each node's own until RS-X.

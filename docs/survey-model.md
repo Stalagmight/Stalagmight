@@ -36,13 +36,14 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 | File | Contents |
 |------|----------|
 | `survey.rs` | Module root: `Project` (fields as plan 1.2), the private `lines` field and the cache (`topology`, `shot_uuids`), re-exports. |
-| `survey/types.rs` | `Station`, `StationAlias`, `Line`, `LineMeta`, `Shot`, `ZeroDatum`, `Placement`, `LoopClosure`, `ClosureStrategy` (shared variants plus `Tie`), `ProjectSettings`, `Counters`, `ClosureId`, `MAX_SHOT_UUID_CHARS`, `MAX_SHOTS_PER_LINE`. |
+| `survey/types.rs` | `Station`, `ArchivedStation`, `ClosureEnd`, `Line`, `LineMeta`, `Shot`, `ZeroDatum`, `Placement`, `LoopClosure`, `ClosureStrategy` (shared variants plus `Tie`), `ProjectSettings`, `Counters`, `ClosureId`, `MAX_SHOT_UUID_CHARS`, `MAX_SHOTS_PER_LINE`. |
 | `survey/topology.rs` | `Topology` (chains, slots, components) and `ShotUuidIndex`. |
 | `survey/build.rs` | Construction API, id minting, slot lookups, `drop_stale_attachments`, `BuildError`, `StartAt`, `StaleAttachments`. |
 | `survey/validate.rs` | `Project::validate` and `Violation` (plan section 2). |
 | `survey/positions.rs` | Solver v1 raw positions and depth: `RawPositions`, `Anchor`, `SlotPosition`, `PositionIssue`, `closure_is_aligned`. |
 | `survey/anchors.rs` | `AnchorSnapshot`, `EditContext`, `settle_anchors`, `correction_to_hold`, `AnchorReport` (plan 4.1, 4.3). |
-| `survey/naming.rs` | Station-name uniqueness on every line of a station, the letter-suffix rule, shot-uuid helpers. |
+| `survey/archive.rs` | Kept and archived stations ([plan](plans/2026-11-23_kept-stations.md)): the shown identity (`ShownIndex`, `shown`, closure archives resolved with a bound), native lines, foreign slots, home line, rule K (`rule_k`, `rule_k_nodes`), `rekey_node`, the A4 restore (`restore_archived_identities`, `RestoredIdentity`, `IdentityReport`) and the closure normalisation (`normalise_closure_archives`). |
+| `survey/naming.rs` | Shown names, N8 collisions, rule L (`letter_collisions`), the letter-suffix rule, shot-uuid helpers. |
 | `survey/edit.rs`, `survey/edit/` | Line and shot operations (stream M1): create, update, delete and split shots, lines, ranges, reverse, Split Line Here, Combine Lines (`edit/combine/`), and their previews. |
 | `survey/ops.rs`, `survey/ops_*.rs` | Topology, closure, datum and move commands (stream M2): merge, detach, closures, datums, Move Segment / Line / Station. |
 | `survey/sweep.rs` | The orphan-closure sweep (plan 5.5). |
@@ -61,7 +62,8 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
 
 ## Data and ids
 
-- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, aliases, external }`; `StationAlias { id, name, line }`, where `line` is the line that knew the station by that alias (a 0.6.0 merge member's line, a merge's moving line, a line an import joined onto it, the second half of a split), checked like a `via` hint, re-pointed by Split, range splits and Combine, remapped by Add, cleared when stale. That line shows the station by the alias's name (`name_on`, I-3: the per-line name invariant 8 holds unique); every other line shows the station's own name. Detach gives that line the alias's id and name back, and a delete or detach that leaves the station only on lines whose aliases name it gives it the first such alias's identity (`restore_alias_identities`, I-1).
+- `Project.stations: BTreeMap<StationId, Station>`; `Station { id, name, comment, external, archived }`; `archived: Vec<ArchivedStation>`, each `ArchivedStation { id, name, comment, external, lines }`: a station a merge put away inside this one (kept and archived stations, [plan](plans/2026-11-23_kept-stations.md) section 3), with the lines whose own station it was (a 0.6.0 merge member's line, a merge's retired lines, a line an import joined onto it). Its lines are checked like a `via` hint (A2), each named by at most one record of a station (A3), carried by Split, range moves and Combine, remapped by Add, cleared when stale; a record with no line is history (A5). A line through a station that no record names is a **native line**; a station with a slot keeps one (A4: the epilogue's restore gives a station that lost its last native line the identity of the record naming its lines, rule K among several, `restore_archived_identities`). The station's own identity is shown on every line through it, records nowhere; Detach Line from Station gives a record's lines their station back.
+- The **shown identity** of a node is its own, unless a loop closure archives it (`LoopClosure::archived`), then the shown identity of that closure's kept end (`shown`, `ShownIndex`; C1 and C2 keep the chain finite and acyclic). Names, Station IDs and comments shown to the user are the shown identity's (`shown_name`, `shown_station`); geometry, the solve and every grouping use node ids.
 - `Project.lines` is private: read it with `lines()`, `line(id)`, `line_position(id)`;
   change it with `lines_mut()` / `line_mut(id)`, which drop the cached
   topology and shot-uuid index. Every other field is public and feeds no cache.
@@ -75,7 +77,7 @@ runs one post-edit anchor algorithm (`Project::settle_anchors`) and
   `Shot::vector(reference)` is today's walk vector bit for bit (tested against
   the legacy `Shot`).
 - `ZeroDatum { station, via, gps, accuracy_m, entrance, correction }`;
-  `Placement { station, x, y }`; `LoopClosure { id, a, a_via, b, b_via, strategy }`.
+  `Placement { station, x, y }`; `LoopClosure { id, a, a_via, b, b_via, strategy, archived: Option<ClosureEnd> }`, `archived` naming the end shown as the other (kept) end.
 - `Counters { next_station_id, next_closure_id (starts at 1), next_section_id }`.
   `next_line_id()` is derived (`max + 1`).
 - Session shot ids are `line_id * FEATURE_ID_STRIDE + index`
@@ -107,8 +109,8 @@ logic. Callers build, then `validate()` (and commands also `settle_anchors`).
 
 - `Project::new(name, location)`, `Project::new_at(name, location, created_at)`, `touch()`.
 - Ids: `mint_station_id`, `mint_station(name)`, `insert_station(station)`
-  (keeps its id, raises the counter past it and its aliases),
-  `observe_station_id`, `is_alias_id`, `mint_closure_id`, `mint_section_id`,
+  (keeps its id, raises the counter past it and its archived ids),
+  `observe_station_id`, `is_archived_id`, `mint_closure_id`, `mint_section_id`,
   `next_line_id`.
 - Lines: `add_line(meta, StartAt::New | StartAt::Station(id), shots)` mints a
   station per shot named by the seed rule (chain index, letter-suffixed when
@@ -126,16 +128,21 @@ logic. Callers build, then `validate()` (and commands also `settle_anchors`).
 ## Invariants (`validate.rs`)
 
 `project.validate() -> Vec<Violation>` checks plan section 2 in a fixed order:
-ids (station keys, id ranges, alias collisions and alias ids below 2^31,
+ids (station keys, id ranges, archived ids unique across live and archived
+ids, below 2^31 and below the station counter (A1),
 duplicate line / closure / Section ids, at most `MAX_SHOTS_PER_LINE` shots per
 line, empty, overlong or repeated shot uuids), references (line starts,
 shot targets, datum / placement / closure stations, `via` hints, hand-move
 keys, Sections), simple chains, orphan stations, the forest (the shot that
 closes a cycle), one anchor per component, closures (`a != b`; across pieces
-only between two datum-held pieces), the names each line shows (`name_on`:
-no line shows two stations by one name), Section names in the project,
-counters
-above every id in use (aliases included), the station and Section
+only between two datum-held pieces), records (A2 a record's lines pass its
+station, A3 a line named by at most one record, A4 a native line), closure
+archives (C1 a node archived by at most one closure, C2 no cycle; checked
+before names), the names each line shows (N8: on each line, slots showing
+different shown identities have different names; two slots of one shown
+identity, a same-line closure, may share one), Section names in the
+project, counters
+above every id in use (archived ids included), the station and Section
 counters at most 2^31 and closure ids and the closure counter within
 `MAX_CLOSURE_ID` (2^53 - 1, the file's integers), finite numbers (shots, quality,
 azimuth corrections, hand moves, datums, placements, elevation, validation
@@ -252,9 +259,10 @@ Shared cores (one copy each):
 
 | Core | Used by |
 |---|---|
-| `merge_ids(survivor, retired, comment)` (`ops_merge.rs`): one station replaced by another everywhere, aliases (the retired one naming each line that showed it by its own name: the retired id for the first, a fresh id for the others, so every line keeps its names and nothing is renamed), the comment rule (`Join`, or Combine's pick), `external` | Merge Stations, the sweep's promotions, Combine's join |
-| `detach_ids(station, line, restore)` (`ops_detach.rs`): a line's slot gets a new station named as the line showed the junction (with `restore`, the junction's alias naming the line gives it its id and name back; and when every other line knows the junction by an alias, the line keeps it and those lines get the first alias's identity back, `detach_others`, `DetachReport::kept`; `detach_keeps` is that test, which the history label also reads to name the lines that come off); `via` datums, closure ends and the hand move follow | Detach / Unmerge (restore), Combine's torn junctions (fresh id) |
-| `restore_alias_identities(before)` (`ops_detach.rs`): a station the edit took a line off and left only on lines whose aliases name it takes the first such alias's id and name; slots, hand moves, datums, closure ends and the placement follow, and the anchor algorithm is told (`EditContext::reidentified`) | The epilogue of every edit and command (`finish_edit`, `run_op`), not Combine (I-1) |
+| `merge_ids(stationary, moving)` (`ops_merge.rs`): the moving node folded into the stationary one everywhere; the retired node archived whole (one record with its native lines; its own records move over); no comment joined. When the moving station is kept, the node is re-identified in the same op (`rekey_node`, `EditContext::with_reidentified`; kept-stations plan 4.1 step 3) | Merge Stations, the sweep's promotions, Combine's join |
+| `detach_ids(station, line, ...)` (`ops_detach.rs`): the kept-stations plan's three cases of 4.2: a record naming the line gives the line its identity back (with every line it names: they come off together); a native line whose other lines are all named by records keeps the junction and the rest get a record's identity (`rest_keep`, default rule K; `detach_keeps` is that test); a line beside another native line gets a fresh station with the junction's own name. `via` datums, closure ends (and a closure's `archived` marker) and the hand move follow | Detach / Unmerge, Combine's torn junctions |
+| `restore_archived_identities()` (`archive.rs`, kept-stations plan 4.3): a node with no native line takes the identity of the record naming its lines (rule K over own lines among several); its old comment and external move when the record has none, the rest stays a history record; slots, hand moves, datums, closure ends and the placement follow, and the anchor algorithm is told (`EditContext::reidentified`) | The epilogue of every edit and command (`finish_edit`, `run_op`), Combine's safety net, salvage |
+| The epilogue (kept-stations plan 3): drop stale attachments (record lines included), the A4 restore, settle the anchors, the sweep, the #737 removal, the closure normalisation (`normalise_closure_archives`, once), rule L (`letter_collisions`) for what the op did not answer with renames, validate. Every op reports what it restored or lettered (`IdentityReport`) | Every edit and command |
 | `sweep_orphan_closures()` (`sweep.rs`) | Merge, detach, datum removal, every delete |
 | The across-one-shot skip set (`closures.rs`) | The solve; the #737 removals (`skipped_closure_ids`, `remove_closures_newly_across_one_shot`); the creation refusal (`closure_spans_one_shot`) |
 | `solve_hold(station)` (`adjust.rs`) | The Computed View's own partition; Combine's gauge rule |
@@ -278,8 +286,8 @@ Shared cores (one copy each):
 | File | Commands and queries |
 |---|---|
 | `ops.rs` | `OpError`, `OpOutcome`, `run_op`, `station_of_slot`, `station_text`. |
-| `ops_merge.rs` | `merge_stations(a, b)` (plan 5.1/4.2: survivor = stationary side, retired id -> alias naming its line, comments joined, true clashes lettered on the moving lines (the line that knows the survivor by the new alias keeps its names), `via` hints kept), `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
-| `ops_detach.rs` | `detach_line(station, line)`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction), `detach_naming` (what the line would get, for the dialog); the `detach_ids` core. |
+| `ops_merge.rs` | `merge_stations(a, b, keep, renames)` (plan 5.1/4.2, kept-stations 4.1: geometry as `merge_direction` says, then the kept identity shown on every line, the other archived; a collision `renames` do not answer refuses with `NameTaken`; a closure-forced keep wins and is reported), `merge_stations_auto` (rule L, no dialog), `merge_keeping_stationary` (the command until it carries the dialog's keep), `merge_preview(a, b, keep)` (both candidates, default and forced keep, lines that change name, collisions with rule-L suggestions, what is hidden), `merge_default_keep`, `forced_merge_keep`, `merge_refusal`, `merge_direction`, `merge_datum_shift`, `merge_check` (today's `check_merge_connectivity`), `piece_lines`, `placement_datum_of`; the `merge_ids` core. |
+| `ops_detach.rs` | `detach_line(station, line, renames, rest_keep)` and `detach_line_auto`, `unmerge_station_pair(a, b)` (detaches `b`'s line), `unmerge_station(slot)` (no-op off a junction), `detach_naming` (what comes back, its comment, the lines that come off together, the rest-keep choices, the collisions, for the dialog), `detach_keeps`; the `detach_ids` core. |
 | `ops_closures.rs` | `create_closure(a, a_via, b, b_via, strategy)` (reports `closure_metrics_via` of the picked slots), `create_closure_at(slot, slot, strategy)`, `remove_closure(id)`, `closure_refusal`, `closure_preview`, `closure_between`. |
 | `sweep.rs` | `sweep_orphan_closures() -> SweepReport` (plan 5.5): one pass in list order; `a == b` removed; a sole bridge promoted by a merge (end `a`'s piece moves unless it is placed and `b`'s is not), kept between two placed pieces. `sweep_orphan_closures_moving(ends)` (the deletes): the named closures first, the named end's piece moving. |
 | `ops_datums.rs` | `set_datum(station, via, gps, accuracy)` / `set_datum_at(slot, ...)` (append, accuracy-only edit, or GPS edit through the anchor algorithm), `remove_datum(index)` / `remove_datum_at(slot)` (sweeps), `set_datum_entrance`, `datum_entrance`, `datum_index_for(station, via)` (the datum a slot has), `preview_zero_datum`. |
@@ -385,7 +393,7 @@ undo(&mut project, &entry.changes)?;           // Err: refused, project untouche
 | Part | Form |
 |---|---|
 | Project fields | `[before, after]` per changed field (settings whole). |
-| Stations | whole images of the stations only one side has (`add`, `del`), and per field (`name`, `comment`, `aliases`, `external`) one column `[id runs, [before...], [after...]]`. |
+| Stations | whole images of the stations only one side has (`add`, `del`), and per field (`name`, `comment`, `archived`, `external`) one column `[id runs, [before...], [after...]]`; a record carries every field. `HISTORY_FORMAT_VERSION` is 2 (kept stations): an entry of version 1 is dropped with the banner. |
 | Line order | list hunks over the line ids (create, delete, reorder). |
 | Lines | per touched line, ascending id: field-level metadata `[before, after]` pairs; and when its shots changed (or it exists on one side only), a **side** per state: shot count, content hash, the line image for a side-only line, and **segments**. |
 | Segments | a copy run `[line, at, n, mode, anchor, {edits}]` takes `n` shots of a touched line of the other state from `at` (forwards, or backwards for the reversed modes), transforms them (`0` as they are, `1` reversed, `2` reversed and flipped as Reverse Line flips a shot, `3` the same with left and right swapped), then writes the field-level exceptions; literal rows `{"u": [uuids], "f": {columns}}` carry shots the other state does not hold. A run out of another line records its first shot's uuid as an anchor, checked on apply. |
@@ -498,14 +506,12 @@ one the user sees.
 
 - Per slot `(L, i)` with station `S` (`stations_wire`): `S`'s coordinates
   (depth plus `L`'s hand-move z, exactly `RawPositions::slots`), `S`'s
-  `id` and `comment` (shared by a junction's slots), `name` = the name `L`
-  shows `S` by (`name_on`: a junction's slots differ where an alias names a
-  line, I-3), `aliases` = the
-  ids and names merged into `S`, each with the line that shows it
-  (`StationAliasWire`, TS `StationAlias`;
-  absent when `S` has none, so most stations pay nothing; every slot of a
-  junction carries them, for the station details' "Also on" rows and "Also
-  known as"), `merged_with` =
+  `id` (the node), `name` and `comment` = `S`'s shown identity's (its own,
+  or a closure's kept end's; shared by a junction's slots), `aliases` =
+  `S`'s archived records, one entry per line a record names
+  (`StationAliasWire`, TS `StationAlias`; absent when `S` has none; RS-W
+  replaces it with the shown-identity fields of the kept-stations plan,
+  section 6), `merged_with` =
   `S`'s other slots (so a junction's slots list each other, transitively,
   like today's merge groups), `is_zero_datum` / `gps_coordinates` = the datum
   the slot's datum dialog edits (`datum_index_for(S, Some(L))`, so every slot
@@ -597,9 +603,10 @@ frontend decoder drops `line_offsets` from `ProjectHeaderBinary`, the
 reconstruction loop and the `Project` literal, and pins
 `EXPECTED_VERSION = 9`; the e2e IPC mock's `load_project_full_binary` builder
 does the same. Semantics the decoder sees change without a layout change:
-`stations_ids`, names and comments are shared by a junction's slots. The same
-unreleased version 9 added the sparse `station_aliases` list (`Station::aliases`
-per slot); a decoder without it reads no aliases.
+`stations_ids`, names and comments are shared by a junction's slots (the
+shown identity's names and comments). The same unreleased version 9 added the
+sparse `station_aliases` list (a slot's archived records); a decoder without
+it reads none.
 
 ### Equivalence with today
 
@@ -664,18 +671,22 @@ the model:
 | `command_line.rs` | CreateLine, DeleteLine, UpdateLineMetadata, ReverseLine | `create_line`, `delete_line`, `update_line_meta`, `reverse_line` |
 | `command_shot.rs` | CreateShot, UpdateShot, DeleteShot, SetShotKind | `create_shot`, `update_shot`, `delete_shot`, `set_shot_kind` |
 | `command_station.rs` | MergeStations, UnmergeStations, UnmergeStationPair, CreateLoopClosure, RemoveLoopClosure, SetZeroDatum, RemoveZeroDatum | `merge_stations`, `unmerge_station`, `unmerge_station_pair`, `create_closure_at`, `remove_closure`, `set_datum_at` (+ `set_datum_entrance`), `remove_datum_at` |
-| `command_station_name.rs`, `command_comment.rs` | SetStationName, SetStationComment, MoveComment | the name the slot's line shows (`set_name_on`, `conflicts_with_name_on`) and the station's one comment |
+| `command_station_name.rs`, `command_comment.rs` | SetStationName, SetStationComment, MoveComment | the shown identity's name (`set_shown_name`, `conflicts_with_name`) and comment |
 | `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
 | `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
 | `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
-| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction; a different name the file gives it becomes an alias on the new line under a minted retired id, which the line shows the junction by, so the line's own stations are named around it and keep the file's names; without such an alias a new station whose file name is the junction's is suffixed and reported in the receipt), `append_project` |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction that keeps the project's station on every line; a different name the file gives it is archived as a record naming the new line under a minted Station ID, so Detach gives the file's station back; a new station whose file name the junction shows is lettered by rule L and reported in the receipt), `append_project` |
 
 Subsystems ported onto the model and the v2 file:
 
 - **Open, save, create** (`project_load.rs`, `project_io.rs`, `project_create.rs`):
   sniff, decode or migrate, the guard, the legacy upgrade (`legacy_upgrade.rs`:
   the original settled, kept, then replaced), the local-only save
-  (`open_file.rs`).
+  (`open_file.rs`). A version 2 file an earlier build wrote (no
+  `archived-stations` feature) is upgraded in memory as it opens
+  (`Decoded::upgrade`, kept-stations plan 8.2) and stays pending
+  (`FileState::upgrade_pending`) until a save writes it, which keeps the
+  original through `legacy_upgrade` as for a 0.6.0 file.
 - **SpeleoDB**: pull, install and revision swaps decode or migrate the
   download in memory before anything is locked or written
   (`prepare_download`); a push serializes `Mode::ForPush` under the push guard;
@@ -700,25 +711,33 @@ Subsystems ported onto the model and the v2 file:
 The deviations each package made from the plan are in the plan's "Deviations
 (stream C, the command families and subsystems)" section.
 
-## Naming and identity (`naming.rs`)
+## Naming and identity (`naming.rs`, `archive.rs`)
 
-- `name_on(station, line)` (and `slot_name(slot)`): the name a line shows a
-  station by, the name of the (latest) alias naming the line when it has
-  one, else the station's own (I-3). `line_alias`, `known_by_alias_on`.
-- `set_name_on(station, line, name)`: a rename through a slot, of that
-  line's alias when it has one (that line only), else of the station's own
-  name (every line in `lines_sharing_name_on`).
-- `lines_showing_name(station)`, `lines_sharing_name_on(station, line)`.
-- `name_conflicts(station)`, `conflicts_with_name(station, name)` (the
-  station's own name), `conflicts_with_name_on(station, line, name)` (a
-  rename through a slot), `names_around(station)`,
-  `names_around_on(station, line)`: the names the lines sharing the name
-  show their other stations by.
-- `uniquify_station_name(station)`, `uniquify_name_on(station, line)`: the
-  letter-suffix rule (`crate::station_naming::name_with_free_letter`), free
-  on every line that shows the name.
-- `uniquify_line_names(line)`: first holder of a name the line shows keeps
-  it, later ones get a suffix free on every line showing it.
+- `shown_name(node)` (and `slot_name(slot)`): the name a node is shown by
+  on every line through it, its shown identity's (its own, or a closure's
+  kept end's). `shown(node)`, `shown_station(node)`, `shown_index()` (one
+  resolution for many nodes), `lines_shown_on(identity)`, `nodes_showing`.
+- `set_shown_name(node, name)`: a rename of the identity the node shows
+  (every line it is shown on).
+- `name_conflicts(node)`, `conflicts_with_name(node, name)`,
+  `names_around(node)`: the names the lines the identity is shown on show
+  their other identities by.
+- `native_lines`, `is_native`, `record_naming(node, line)`, `home_line`,
+  `is_foreign_slot`: a slot is foreign when its line is not a native line of
+  the node holding the identity it shows (a record names the line, or a
+  closure archives the node).
+- Rule K (`rule_k` over per-line candidates, `rule_k_nodes` over node
+  candidates): the candidate on the longest line (`Line::measured_length`,
+  Reference shots excluded, exact f64), ties to the lowest Station ID; one
+  with no line loses.
+- Rule L (`name_collisions`, `letter_collisions(before)`,
+  `letter_collisions_with`): of the identities sharing a name on a line, all
+  but the strongest take a letter suffix free on every line they are shown
+  on; strongest is shown on the most lines, then already shown on that line
+  before the op, then the lowest Station ID. Every automatic path uses it;
+  `uniquify_station_name` is the letter-suffix rule
+  (`crate::station_naming::name_with_free_letter`). `uniquify_line_names`
+  (chain order) is left only to Combine until RS-M2.
 - `is_shot_uuid_taken`, `shot_by_uuid`, `duplicate_shot_uuids`, `mint_shot_uuid`.
 
 ## Tests
@@ -743,5 +762,5 @@ The deviations each package made from the plan are in the plan's "Deviations
 | `edit/edit_fuzz_tests.rs` | 32 seeds x 80 random operations: valid after every step, refusals change nothing, previews equal results, seeds replay bit for bit. |
 | `wire/ts_tests.rs`, `wire/wire_tests.rs` | The wire types generate today's TS files (less `line_offsets`); JSON keys as today's payloads; junction identity, derived merge pairs, closure references and chains, datum flags, `Tie` as aligned `Batch`, slot resolution, delete impact at a junction, line relationships, the envelope input; an ignored timing run on 78k slots. |
 | `ops_merge_tests.rs`, `ops_detach_tests.rs`, `ops_closures_tests.rs`, `ops_datums_tests.rs`, `ops_move_tests.rs`, `append_tests.rs` | Each M2 command, with ports of the legacy datum, entrance and placement tests. |
-| `alias_identity_tests.rs` | Per-line names (I-3: each line shows a junction by its own name) and the alias identity (I-1: a delete of a shot, a range or a line, or a detach, that leaves a station only on lines knowing it by an alias gives it that identity back, nothing moving, the datum following, Undo exact through the changeset). |
+| `archive_tests.rs` | The kept-stations model rules (plan 2026-11-23 section 12): merge keeping either side with a bit-identical raw layout (the M-P1-1 case included), detach restoring the archived identity, deletes restoring by rule K and keeping comments, tears, the closure normalisation, N8 with same-line closures, rule L, A1 to A5, C1 and C2 with crafted models reporting instead of hanging. |
 | `ops_scenario_tests.rs`, `ops_property_tests.rs` | The model review's scenarios; 48 seeds x 70 random commands (valid after every step, refusals change nothing, no-move commands move nothing, a merge moves exactly the moving piece, a seed replays bit for bit). |
