@@ -1183,3 +1183,97 @@ reason.
   produce them by node), and RS-T did not take it. Collapsing consecutive
   nodes that share a shown identity across a closure edge (section 6) needs
   the gas engine's and the ruler's outputs to change, which is a follow-up.
+
+## Deviations (package RS-FX3)
+
+Decisions the Plan-mode, wire and frontend fixes took where this page is
+silent or the code disagreed, each with its reason. They supersede RS-UI's
+"Plan mode's route, ruler, turn and drop lists are the engine's" and "One
+plain label for a loop end", and RS-INT's "Plan mode's route collapse stays
+open".
+
+- **Plan mode's collapse is presentation, after the engine.** The gas engine
+  walks, prices, measures and places drops on the node route as before; then
+  `GasReach::collapse_route` lists each run of consecutive route nodes joined
+  by closure ties whose nodes show one identity as one entry (section 6).
+  Every number stays the node route's, since a tie costs no gas, time or
+  distance; only the lists and the indices into them (drops, way points, the
+  profile) move. A project whose closures archive nothing takes a fast path
+  and is unchanged bit for bit (the determinism and golden tests hold).
+- **An entry names its run's first node; the last entry names the route
+  target**, so `final_turn` is still the last route station. The new
+  `GasReach::route_ends` keeps each entry's arriving and leaving node, and the
+  wire draws each leg from one entry's leaving node to the next one's
+  arriving node: a leg still runs between its own shot's slots (a loop end's
+  own point in the raw layout), and no tie leg joins a loop end and its kept
+  end.
+- **One profile point per entry, with the run's deepest depth.** Both nodes
+  are surveyed points the route passes, and `route_max_depth_m` already takes
+  the deeper; the merged points carry equal gas, time and distance. The
+  turnaround stays one point (`2n - 1` points), so the export's slate and
+  Subsurface log have no zero-length point at a loop end (X8).
+- **The turn frontier lists each shown station once**: the node holding the
+  identity when it is on the frontier, else the lowest Station ID. All nodes
+  that show one identity are joined by archive closures, so this is the
+  "across a closure edge" of section 6.
+- **A drop pinned on another node of its default station's run is the
+  default** (a no-op, like a release in place), as D18 makes a pin on another
+  slot of a junction. A pin anywhere else is priced as before.
+- **The ruler collapses its station list, not its wire slots.**
+  `AlongLine::path_stations` lists a loop end and its kept end once. The
+  wire's `path_stations` stay D19's two ends of each traversed shot, because
+  the map tints the path by slot: a loop end's own point is tinted with the
+  shot it ends, as a junction's two slots are. A path across a tie alone (no
+  shot) falls back to the collapsed list.
+- **"K (loop end)" is a Plan pin label of its own** (`planStation`,
+  `identity.loopEndPinLabel`): the origin, endpoint, way point, marked point
+  and turn readouts, the map legend's origin and the segment boundaries'
+  tooltips. Closure texts and every other plain label keep "K (loop end on
+  Side)". A foreign slot's pin keeps "Side / 12 (Main)".
+- **Detach's remaining-junction pick (ui-1).** The pick's preview is held
+  apart from the line's default preview; Detach waits while it is out; picking
+  rule K's record clears the pick (the command's default is the same record);
+  a pick whose preview fails goes back to the default with a note.
+- **One prompt per grid commit (ui-2).** The stations grid takes
+  `onBatchEdit`: a paste, fill or range clear is one commit, whose edits on
+  foreign slots and loop ends are listed in one prompt (each station, the
+  lines it changes on); the native edits of the commit wait for the answer.
+  Going on sends every edit in the commit's order, one command each (the
+  station commands have no batch form, so it is still not one undo step, and
+  a refusal part-way leaves the earlier edits applied, as for a native paste
+  before). A lone edit keeps the single-station prompt with its Detach and
+  Remove the closure. The grid gains `allowCellMove` (off for the stations
+  grid): a batch host otherwise offers moving cells by their edge, which the
+  stations grid never offered.
+- **Map comment edits (ui-3).** The Comment tool asks at the overlay's
+  commit (the comment is typed first, as in a data-table cell); Move Comment
+  asks at each click on such a slot, picking up (the comment leaves the
+  kept station on every line) and dropping (it lands on it). The prompt
+  dialog takes an `onProceed` for these map actions and closes before running
+  it, since the drop may open the swap dialog.
+- **The read-only gate after a preview (ui-5).** The one-click helpers check
+  `isEditingBlockedNow()` once the preview has answered (or failed), toast
+  the editing-disabled notice under `EDIT_DISABLED` and report `failed`. The
+  whose-station prompt's three edit buttons (go on, Remove the closure,
+  Detach) follow `useEditingBlocked`; Cancel stays enabled.
+- **Why rule K's end is refused (ui-6).** `LoopClosureNaming::rule_k_refused`
+  (`KeepRefusalReason`: C1 before C2 when both hold) words the note, which
+  names both ends and, for C1, the station the other end is shown as; it is
+  shown also when no end may be kept (no keep choice is offered then).
+  Without a reason (an older backend) the note is neutral. "Keep both names"
+  and a Remove that brings nothing back say "No name changes." with one
+  sentence per end another closure shows as another station.
+- **Remove Closure waits (ui-7)** until the chosen closure's preview has
+  answered or failed; a failed preview still removes without renames.
+- **The e2e mock (ui-8)** keeps rule K as its first end (a simplification it
+  already had) and checks C1 before C2. Closure collisions follow rule L's
+  shape as the other previews do: creating shows the kept end's shown
+  identity on the other end's lines (the other station takes the letter);
+  removing shows the returning station on its lines (it takes the letter,
+  being new there). Its refusals use the backend's `InvalidKeep` and
+  `NameTaken` wording.
+- **Notices close together join (ui-9)** instead of keying each action:
+  a key per command would still collide for two of the same command, and a
+  key per call would defeat the stack's burst dedup. A notice that lands
+  within the burst window of a fresh one is appended to it; the same words
+  twice are said once; later notices get their own toast as before.

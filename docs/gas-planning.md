@@ -221,6 +221,19 @@ the depth weighting. `route_max_depth_m` is max `z` over *all* route stations, t
 endpoints included - both ends of a tie are surveyed stations the diver passes
 through. `route_avg_depth_m` is distance-weighted over the swum legs.
 
+A loop closure that keeps one end shows both ends as one station (the kept
+end's identity, plan 2026-11-23 RS 6), yet they stay two graph nodes joined by a
+tie. So after the engine has walked, priced and measured the node route,
+`GasReach::collapse_route` (`survey/gas/collapse.rs`) lists each run of
+consecutive route nodes that show one station across such ties as ONE route
+entry: no tie leg, no zero-length profile point, the drop and way-point indices
+moved onto the collapsed route, the run's deepest depth on its profile point.
+Every number is still the node route's (a tie costs nothing). `route_ends` keeps
+each entry's arriving and leaving node, so the highlight is still drawn between
+each shot's own slots. The turn frontier lists each shown station once, and a
+drop pinned on the loop end of its default station is a no-op, as on another
+slot of a junction (D18). A closure that keeps both names collapses nothing.
+
 None of this is the length of the highlight on screen: the engine measures 3-D
 swum distance on measured coordinates, while `SurveyLayer.applyGasRoute` draws
 through the displayed geometry - in Plan, the closure-adjusted 2-D plan view.
