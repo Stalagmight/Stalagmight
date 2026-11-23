@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { autoAcquireSpeleoLock, useSpeleoReadOnlyNotice } from '../autoAcquireSpeleoLock';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import i18n from '../../i18n';
 
 const ipc = vi.hoisted(() => vi.fn());
 const replaceTree = vi.hoisted(() => vi.fn(async () => true));
@@ -21,7 +22,7 @@ beforeEach(() => {
 it('acquires automatically and silently enables editing', async () => {
   ipc.mockResolvedValue({ kind: 'editing' });
   await autoAcquireSpeleoLock('/remote.stalx', () => true);
-  expect(ipc).toHaveBeenCalledWith('speleodb_start_editing');
+  expect(ipc).toHaveBeenCalledWith('speleodb_start_editing', { afterOpen: true });
   expect(useSpeleoStore.getState().link?.editState).toBe('editing');
   expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
   expect(useSpeleoStore.getState().busy).toBe(false);
@@ -32,6 +33,24 @@ it('shows the actual competing editor and leaves the project read-only', async (
   await autoAcquireSpeleoLock('/remote.stalx', () => true);
   expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
   expect(useSpeleoReadOnlyNotice.getState().notice?.message).toContain('editor@example.com');
+});
+
+// sdbdemo2 issue 3 (screenshot 15): a second session of the account opened the
+// project and took over the lock the first session was editing under, in
+// silence. After an open the backend reports such a lock (this account's, never
+// claimed by this run) as held by this account; the project stays read-only and
+// the notice says what the held-lock prompt said, and that Resume editing edits
+// it here too. The notice never names our own email as "currently editing".
+it('a lock this account already holds opens read-only and says so in the prompt\'s words', async () => {
+  useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'Diver@Example.com', endpoint: 'https://synthetic.example' } });
+  ipc.mockResolvedValue({ kind: 'locked_by', email: 'diver@example.com' });
+  await autoAcquireSpeleoLock('/remote.stalx', () => true);
+  expect(ipc).toHaveBeenCalledWith('speleodb_start_editing', { afterOpen: true });
+  expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+  const notice = useSpeleoReadOnlyNotice.getState().notice;
+  expect(notice?.kind).toBe('opened');
+  expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.heldByYourAccount'));
+  expect(notice?.message).not.toContain('diver@example.com');
 });
 
 // Opened over our own un-uploaded work (a fast-forward local copy, or "Open my

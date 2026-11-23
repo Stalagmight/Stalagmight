@@ -897,3 +897,95 @@ fn taking_the_speleodb_version_read_only_leaves_the_lock_as_it_was() {
     assert!(!editing, "B stays read-only");
     assert!(claimed, "B still points at the lock");
 }
+
+/// B, the account's other session: its copy is open and this run holds no
+/// claim on the lock A edits under (a fresh sign-in on another computer).
+fn without_a_claim(state: &AppState) {
+    state.speleodb_shut_edit_gate();
+    let _ = state.speleodb_forget_lock_acquired_for(ID);
+}
+
+#[test]
+fn opening_does_not_take_over_a_lock_another_session_of_the_account_edits_under() {
+    // sdbdemo2 issue 3 (screenshots 11, 12, 15): session 2 signed in while
+    // session 1 edited; the held-lock prompt said the lock may be another
+    // computer's, and then opening the project took it over in silence and said
+    // "You are editing". The automatic Start Editing after an open now stops
+    // short of a lock the account holds and this run never claimed: it answers
+    // with the holder (this account) and sends nothing but the holder read, so
+    // the project opens read-only with a notice. Resume editing (the plain
+    // verb) still edits under it, on purpose.
+    // Injection: drop the `resume_held` guard from `speleodb_start_editing_flow`
+    // and the open acquires and edits.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    b.run(without_a_claim);
+    let sent_before = remote.lock().expect("remote").lines.len();
+
+    let opened = b.run(|state| {
+        state
+            .speleodb_start_editing_after_open()
+            .map_err(|e| e.message)
+    });
+
+    assert!(
+        matches!(
+            &opened,
+            Ok(crate::speleodb::StartEditingResult::LockedBy { email: Some(holder) }) if holder == ME
+        ),
+        "{opened:?}"
+    );
+    {
+        let remote = remote.lock().expect("remote");
+        let sent = remote.lines.get(sent_before..).unwrap_or_default();
+        assert!(
+            !sent
+                .iter()
+                .any(|l| l.contains("/acquire/") || l.contains("/release/")),
+            "only the holder was read: {sent:?}"
+        );
+        assert_eq!(remote.holder.as_deref(), Some(ME), "the lock is untouched");
+    }
+    let (b_editing, b_claimed) =
+        b.run(|state| (state.edit_enabled(), state.speleodb_holds_claim(ID)));
+    assert!(
+        !b_editing && !b_claimed,
+        "B opened read-only and took nothing"
+    );
+    assert!(a.run(|state| state.edit_enabled()), "A goes on editing");
+
+    let resumed = b.run(|state| state.speleodb_start_editing().map_err(|e| e.message));
+    assert!(
+        matches!(resumed, Ok(crate::speleodb::StartEditingResult::Editing)),
+        "{resumed:?}"
+    );
+    assert!(
+        b.run(|state| state.edit_enabled()),
+        "Resume editing edits here too"
+    );
+}
+
+#[test]
+fn opening_resumes_a_lock_this_run_claims() {
+    // The same automatic Start Editing over a lock THIS run claims (a close that
+    // kept the lock, a read-only session that still points at it) resumes it as
+    // before: nothing about another computer is in question.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, _remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    a.run(AppState::speleodb_shut_edit_gate);
+
+    let resumed = a.run(|state| {
+        state
+            .speleodb_start_editing_after_open()
+            .map_err(|e| e.message)
+    });
+
+    assert!(
+        matches!(resumed, Ok(crate::speleodb::StartEditingResult::Editing)),
+        "{resumed:?}"
+    );
+    assert!(a.run(|state| state.edit_enabled()));
+}

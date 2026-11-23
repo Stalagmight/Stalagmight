@@ -4,6 +4,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from './ipc';
 import { humanizeSpeleoError, lockMayBeHeld, speleoErrorAction } from './speleoError';
+import { emailsMatch } from './email';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
 import type { StartEditingResult } from '../types/ipc.generated';
 
@@ -56,7 +57,10 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
   if (!stillCurrent()) return;
   const token = useSpeleoStore.getState().beginBusy();
   try {
-    const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+    // `afterOpen`: a lock this account already holds and this run never claimed
+    // is reported, not taken over (sdbdemo2 issue 3): it may be the lock
+    // Stalagmight on another computer with this account is editing under.
+    const result = await invokeIpc<StartEditingResult>('speleodb_start_editing', { afterOpen: true });
     if (!stillCurrent()) return;
     if (result.kind === 'fast_forwarded') {
       const reconciled = await applySpeleoTreeReplacement({
@@ -75,7 +79,11 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
           heldLockPromptOpen: heldLocks.length > 0 && state.heldLockPromptOpen };
       });
     }
-    if (result.kind === 'locked_by') {
+    if (result.kind === 'locked_by' && emailsMatch(result.email, useSpeleoStore.getState().session?.userEmail ?? null)) {
+      // This account's own lock, which this computer did not take: the same
+      // words as the held-lock prompt, and Resume editing edits it here too.
+      showSpeleoReadOnlyNotice(i18n.t('speleodb.readOnlyNotice.heldByYourAccount'), 'opened');
+    } else if (result.kind === 'locked_by') {
       // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
       // local copy"): say that it is safe, not just that the project is read-only.
       const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;

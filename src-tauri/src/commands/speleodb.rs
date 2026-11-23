@@ -178,9 +178,22 @@ pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
 /// Acquire the write lock on the open remote project and reconcile it against the
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
 /// contention (locked-by), or an error otherwise.
+///
+/// `after_open` is the automatic Start Editing that follows opening a project:
+/// it reports a lock this account already holds, and this run never claimed, as
+/// `locked_by` with the account's own email instead of taking it over (it may be
+/// another computer's edit session; sdbdemo2 issue 3). Resume editing and the
+/// Start editing buttons leave it unset and edit under such a lock on purpose.
 #[tauri::command]
-pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
-    run_transfer(app, AppState::speleodb_start_editing).await
+pub async fn speleodb_start_editing(
+    app: AppHandle,
+    after_open: Option<bool>,
+) -> Result<StartEditingResult, SpeleoErrorDto> {
+    if after_open == Some(true) {
+        run_transfer(app, AppState::speleodb_start_editing_after_open).await
+    } else {
+        run_transfer(app, AppState::speleodb_start_editing).await
+    }
 }
 
 /// Push the open project's edits (if any) and release the lock, returning to
