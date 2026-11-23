@@ -93,8 +93,8 @@ describe('DetailLink at the Full level', () => {
     const sid = screen.getByTestId(`station-${MAIN}-0-link-station-id`);
     expect(sid.tagName).toBe('SUP');
     expect(sid).toHaveClass('sh-lpill-sid');
-    expect(sid).toHaveTextContent(/^40$/);
-    expect(pill.textContent).toBe('Main Line: St0 40');
+    expect(sid).toHaveTextContent(/^#40$/);
+    expect(pill.textContent).toBe('Main Line: St0 #40');
     const order = [...pill.children].map((c) => c.className);
     expect(order).toEqual(['sh-lpill-dot', 'sh-lpill-ctx', 'sh-lpill-main', 'sh-lpill-sid']);
   });
@@ -197,8 +197,8 @@ describe('EntityBlob', () => {
     expect(cssVar(pill, '--pill-bg')).toBe(pillColorsOf(SIDE_COLOR, 'dark').bg);
     expect(screen.getByTestId('blob-id')).toHaveTextContent(/^Side:$/);
     // A span pill has no aria-label, so the superscript carries its words.
-    expect(screen.getByTestId('blob-station-id')).toHaveTextContent(/^Station ID 51$/);
-    expect(pill.textContent).toBe('Side: B Station ID 51');
+    expect(screen.getByTestId('blob-station-id')).toHaveTextContent(/^Station ID #51$/);
+    expect(pill.textContent).toBe('Side: B Station ID #51');
   });
 
   it('a shot or a line: no Station ID even when one is passed; trailing content sits inside', () => {

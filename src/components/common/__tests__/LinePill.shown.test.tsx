@@ -78,7 +78,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     );
     expect(screen.getByTestId('foreign-home-dot')).toBeInTheDocument();
     expect(screen.queryByTestId('native-home-dot')).toBeNull();
-    expect(screen.getByTestId('foreign-station-id')).toHaveTextContent('11');
+    expect(screen.getByTestId('foreign-station-id')).toHaveTextContent('#11');
   });
 
   it('names the station bare in the pill: the dot and the loop mark say whose', () => {
@@ -89,13 +89,13 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
       </>,
     );
     // The dot reads "(Main)" to a screen reader (RS-FX6, P2-5).
-    expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*11$/);
-    expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*\(Main\)\s*loop end\s*Station ID\s*3$/);
+    expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*#11$/);
+    expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*\(Main\)\s*loop end\s*Station ID\s*#3$/);
   });
 
   it('ends a loop end with the shown Station ID and the loop mark', () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
-    expect(screen.getByTestId('loop-station-id')).toHaveTextContent('3');
+    expect(screen.getByTestId('loop-station-id')).toHaveTextContent(/#3$/);
     expect(screen.getByTestId('loop-station-id')).not.toHaveTextContent('22');
     expect(screen.getByTestId('loop-loop-end')).toHaveTextContent('loop end');
     expect(screen.getByTestId('loop-home-dot')).toBeInTheDocument();
@@ -133,7 +133,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
       />,
     );
     const id = `station-${SIDE}-2-link`;
-    expect(screen.getByTestId(`${id}-station-id`)).toHaveTextContent('3');
+    expect(screen.getByTestId(`${id}-station-id`)).toHaveTextContent(/#3$/);
     expect(screen.getByTestId(`${id}-loop-end`)).toBeInTheDocument();
     expect(screen.getByTestId(`${id}-home-dot`)).toBeInTheDocument();
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select station Main / 3 (loop end on Side), Station ID 3');

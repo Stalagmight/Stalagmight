@@ -1132,7 +1132,7 @@ the test ids) but are never shown:
   station or shot the line of its context): a dot in the line's colour, then
   (for a station or shot on another line) the line name, smaller and muted,
   with a colon, then the label at the surrounding text size, and for a station
-  its Station ID as a muted superscript (`Main Line: 17` with a raised `42`). The aria-label
+  its Station ID as a muted superscript with a `#` (`Main Line: 17` with a raised `#42`; the `#` is not read aloud). The aria-label
   and the selection announcement carry the ID too (`Select station Main Line
   / 17, Station ID 42`). The fill, border, hover, dot and dot ring come from
   `src/theme/pillColors.ts`, which holds main text at 7:1 and the muted parts

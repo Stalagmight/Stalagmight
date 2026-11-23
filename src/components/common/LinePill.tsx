@@ -193,7 +193,7 @@ export interface PillPartsProps {
   loopEnd?: boolean | undefined;
   /** Words read for a loop mark (the station's, or a shot end's) by a screen reader. */
   loopEndLabel?: string | undefined;
-  /** A station's Station ID, as a muted superscript at the end. */
+  /** A station's Station ID, as a muted superscript at the end (`#42`; the `#` is not read aloud). */
   stationId?: number | null | undefined;
   /** Words read before the Station ID by a screen reader (a span pill has no aria-label). */
   stationIdLabel?: string | undefined;
@@ -256,6 +256,7 @@ export function PillParts({
           {' '}
           <sup className="sh-lpill-sid" data-testid={part('station-id')}>
             {stationIdLabel && <span className="sr-only">{stationIdLabel} </span>}
+            <span aria-hidden="true">#</span>
             {stationId}
           </sup>
         </>

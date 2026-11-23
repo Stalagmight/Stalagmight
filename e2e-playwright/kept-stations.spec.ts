@@ -395,7 +395,7 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toBeVisible();
     // (The superscript carries sr-only words before the number.)
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-station-id`)).toHaveText(
-      `Station ID ${mainId * 100_000 + 3}`,
+      `Station ID #${mainId * 100_000 + 3}`,
     );
     // Side's own stations carry no dot.
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);

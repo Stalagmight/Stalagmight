@@ -132,8 +132,8 @@ describe('two "12"s on one line, one of them dotted (RS-FX5)', () => {
     expect(cell(12, 'name')).toHaveTextContent(/^12$/);
 
     // The gutter pills name both bare; the foreign slot's carries Main's dot.
-    expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*112$/);
-    expect(screen.getByTestId(pill(12))).toHaveTextContent(/^12\s*Station ID\s*312$/);
+    expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*#112$/);
+    expect(screen.getByTestId(pill(12))).toHaveTextContent(/^12\s*Station ID\s*#312$/);
     expect(screen.getByTestId(`${pill(0)}-home-dot`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${pill(12)}-home-dot`)).toBeNull();
 

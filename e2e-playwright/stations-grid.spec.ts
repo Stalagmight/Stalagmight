@@ -121,7 +121,7 @@ test.describe('Stations grid', () => {
     // line pill that ends with the Station ID the column below shows.
     await expect(page.getByTestId('grid-gutter-0').locator('.sh-lpill-main')).toHaveText('0');
     await expect(page.getByTestId('grid-gutter-0').locator('sup.sh-lpill-sid')).toHaveText(
-      `Station ID ${lineId * 100_000}`,
+      `Station ID #${lineId * 100_000}`,
     );
     await expect(page.getByTestId('grid-gutter-3').locator('.sh-lpill-main')).toHaveText('3');
 

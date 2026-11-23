@@ -1218,7 +1218,7 @@ test.describe('Detail Panel Links', () => {
       // At the Full level the pill ends with the Station ID (the mock's
       // lineId * 100000 + index), which the accessible name reads too.
       await expect(page.getByTestId(`station-${mainLineId}-0-link`).locator('.sh-lpill-main')).toHaveText('7');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(String(mainLineId * 100_000));
+      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(`#${mainLineId * 100_000}`);
       await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute(
         'aria-label',
         `Select station Main Tunnel / 7, Station ID ${mainLineId * 100_000}`,
