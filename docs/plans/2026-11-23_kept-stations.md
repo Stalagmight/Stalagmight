@@ -604,3 +604,77 @@ disagreed, each with its reason.
   route gives stays and a restore may pick another record when the routes'
   promotions differ. They are `#[ignore]`d with that reason until RS-T moves
   T5 to the new rules.
+
+## Deviations (package RS-X)
+
+Decisions the exports and imports took where this page is silent or the
+code disagreed, each with its reason.
+
+- **Compass, Walls and survex have no exporter.** This build imports those
+  formats but writes none, so section 9's shown-name rule for them has no
+  writer to apply to; the export module doc says so. Every exporter that
+  exists (Ariane, CSV, JSON, image, dive profile) follows section 9.
+- **Ariane ids are node ids, documented as a round-trip loss.**
+  `docs/ariane-export.md` declares that records and closure archives do not
+  survive an Ariane round trip, that a closure-archived end's own Station ID
+  is its Ariane node number, and that ids change once where a merge or an
+  upgrade kept the moving station.
+- **An import join compares the file's station with the target's own
+  identity**, not its shown one, and the record's name falls back to the
+  target's own name. The record stands for the station Detach Line from
+  Station gives back; without one, Detach gives the node's own name and no
+  comment (4.2 case 3), so only a difference from the node's own identity
+  needs a record. A closure-archived target is the case where the two
+  differ.
+- **The file's comment and external id at the junction** are the last
+  non-blank comment and the first non-blank external id the file gives that
+  station (mirrored), the rules the funnel already applies to every other
+  station.
+- **The record's Station ID is minted after the line's stations.** U1 minted
+  the alias id first. Minting it last means a record that does not fit
+  costs the record, never the line; the receipt warns what was not kept.
+- **Names settle around the file's own junction name in every case**, also
+  when no record can be minted (U1 did only when it kept an alias), so the
+  file's numbering does not depend on the Station ID budget. The new line's
+  stations that repeat the junction's shown name are lettered by the funnel
+  itself (rule L: the junction is shown on at least two lines, the new
+  station on one), and only those whose file name was lettered are reported,
+  as before; seeds are not.
+- **Receipt tiers.** A file station archived at a join and each closure
+  archive are notes (`ImportReceipt::info`): they are the designed outcome
+  of every join, and the slot's dot shows them, so they do not turn a clean
+  receipt into a dialog. A file station not kept, a station the project held
+  before the import that a closure now shows as another, and every rule-L
+  letter are warnings. A closure that archives nothing gets a note that it
+  shows both names. Notes are capped like warnings (`cap_warnings` caps
+  `info` too). Stations are named `Line / Station` by their identity's home
+  line.
+- **Imported closures** are decided in list order after the Jump/Reference
+  classification (rule K's measured length counts Jumps, not References),
+  with rule K over node candidates; "the allowed fallback" is the other end
+  when C1 and C2 allow it. The allowed test is written in the funnel
+  (`closure_keep_allowed`, the same rule RS-M2 adds as
+  `Project::closure_keep_allowed`; the integrator calls that one). The
+  normalisation then runs as a safety net, and rule L runs against a copy
+  of the project taken before the import, made only when the file has
+  closures (only a closure's archive can repeat a name across lines).
+- **Create line and merge** (the New Line dialog snapped onto a station)
+  gives no file identity, so it never archives; it keeps the target as
+  before.
+- **Orphan placement's keep rule is in the model, not yet wired.**
+  `Project::placement_merge_keep` (the closure-forced end, else the placed
+  station when only one is placed, the target when both are, rule K when
+  neither is) and `merge_by_placement` implement U-P2-9, with tests. Orphan
+  placement calls the same Merge Stations command as the dialog, which
+  cannot tell them apart until RS-W adds `keep`; RS-W should treat a merge
+  without the dialog's keep as `placement_merge_keep`. Until then the
+  command keeps the stationary station, which is the target in every orphan
+  placement onto an anchored survey (the orphan piece holds no datum), so
+  the only difference is the case where neither piece is placed (target,
+  not rule K).
+- **Add .stalx and Merge Projects sources** need nothing beyond RS-M1's
+  append (records shifted, closure archives kept, normalisation in the
+  epilogue); core tests now carry records and closure archives through the
+  files of both. A version 2 source written before RS is upgraded by RS-F's
+  load-time upgrade, since both read sources with the open path's reader;
+  saying so in the add receipt is RS-F's.
