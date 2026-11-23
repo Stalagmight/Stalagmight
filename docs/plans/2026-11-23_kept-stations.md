@@ -1136,3 +1136,50 @@ silent or the code disagreed, each with its reason.
   fired on every survey with a junction; it now counts nodes. An ignored
   core test (`rs_wire_dump`) writes real project-state payloads of the RS
   shapes so the harness oracle can be checked against them.
+
+## Deviations (package RS-INT)
+
+Decisions the integration took where the packages left a seam, each with its
+reason.
+
+- **Orphan placement is not rewired to `placement_merge_keep`.** RS-X put the
+  rule in the model (`Project::placement_merge_keep`, `merge_by_placement`)
+  and left wiring it to the Merge Stations command for after RS-W. Orphan
+  placement suggests only targets on an anchored piece for an unanchored one
+  (`import_suggest.rs`), so the command's default without a `keep` (the
+  station whose piece stays put) is already the target, and a closure-forced
+  keep is applied by the merge itself. The only case where the two rules
+  differ, neither piece placed, cannot reach orphan placement. The rule stays
+  in the model with its tests as the statement of 4.1's orphan rule; a new
+  path that can merge two unplaced pieces without a dialog should call it.
+- **Add .stalx and Merge Projects report a converted source by counts.** RS-F
+  upgrades an earlier source as it is read (8.2) and RS-X left the receipt
+  wording to RS-F; neither added it, and a 0.6.0 source was never reported
+  either. The add receipt now carries a note (`info`) and the merge result a
+  `SOURCE_CONVERTED` warning: which older file it was, that the file itself
+  is unchanged, and what its lines show differently, counted by kind (the
+  banner's own clauses). No station is named: the copy renumbers lines and
+  Station IDs, so the banner's "Side / 0" would not match what the user
+  sees. The Merge Projects dialog's toast joins every warning instead of
+  showing only the first.
+- **`uniquify_line_names` stays, unused by any operation.** Both RS-M2
+  (Combine) and RS-F (migration, upgrade) replaced its chain-order lettering
+  by rule L; its doc says so. Only its own unit test calls it.
+- **The funnel's local `closure_keep_allowed` is the model's.** RS-X wrote a
+  copy because RS-M2 was not on its base; the two were identical, so the
+  import funnel now calls `Project::closure_keep_allowed`.
+- **stalx-reader shows the archived end's kept name.** RS-F's reader tests
+  expected each node's own name per slot; RS-X's reader writes the shown name
+  per slot and the `shown_as` map (section 9). The tests follow RS-X and also
+  check `shown_as`.
+- **User guide and undo doc follow RS.** No package owned the user guide; it
+  still described U1 (merged stations keeping their own names on each line, a
+  together-detach keeping an alias). The merge, closure and concept pages and
+  `docs/undo-redo.md` now describe the kept station, archiving, the Keep and
+  "Both ends show" choices and hidden closure ends. The screenshots are not
+  retaken.
+- **Plan mode's route collapse stays open.** RS-UI found that no frontend view
+  lists route, ruler or turn stations by name (the engine and the ruler
+  produce them by node), and RS-T did not take it. Collapsing consecutive
+  nodes that share a shown identity across a closure edge (section 6) needs
+  the gas engine's and the ruler's outputs to change, which is a follow-up.

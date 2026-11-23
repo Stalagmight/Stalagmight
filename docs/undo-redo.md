@@ -233,7 +233,7 @@ still passes with room.
 
 Stations are entities with stable ids, so identity needs no epilogue: a
 changeset records a created or deleted station as its whole image (id, name,
-comment, aliases, external id) and a changed one by its changed fields, so an
+comment, archived records, external id) and a changed one by its changed fields, so an
 undone delete restores the same id and name and a redone insert re-creates
 the station with the id and name it had. The station counter goes to
 `max(live, recorded)`, so a later edit never takes an id a redo needs.
@@ -453,17 +453,18 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 
 Labels and previews never show the positional ids (`line:index`, shot ids):
 lines, stations and shots are named the way the user reads them -
-`Update shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`,
-`Delete line "Main Line"`. Each line shows a junction by the name that line
-knows it by, and a label names a station by the name its slot's line shows; a
-detach names the line that leaves and the station once, in the menu's words,
-as `Line / name` on a line that stays on it (`Detach line "Side" from Main /
-3`; demo finding V-6: Side's own name for it, `station 0`, could be another
-line's station 0). The line that leaves is the one that comes off the
-station: when the addressed line keeps it (it shows the station by its own
-name and every other line there knew it by an alias, `Project::detach_keeps`),
-the other lines come off and the label names them (`Detach lines "B" and "C"
-from Main / 4`), never the line that keeps the station (demo finding N-2).
+`Update shot Main Line: 4 → 5`, `Merge Side / 0 into Main / 12 (keeps 12)`,
+`Delete line "Main Line"`. A junction shows its kept station on every line
+(RS), and a label names a station by the name its slot shows; a detach names
+the line that leaves and the station once, in the menu's words, as `Line /
+name` on a line that stays on it (`Detach line "Side" from Main / 3`; demo
+finding V-6: Side's own name for it, `station 0`, could be another line's
+station 0). The line that leaves is the one that comes off the station: when
+the addressed line keeps it (it shows the station natively and a record
+archived in it names every other line there, `Project::detach_keeps`, RS
+4.2), the other lines come off and the label names them (`Detach lines "B"
+and "C" from Main / 4`), never the line that keeps the station (demo finding
+N-2).
 
 The names are worded **at record time**, with the names before the edit
 (`core/state/labels.rs`), and stored in the entry. A metadata edit that renames
