@@ -102,7 +102,7 @@ describe('the Station ID column (RS 6)', () => {
     const idColumn = columns.find((c) => c.key === '_stationId')!;
     const loopEnd = { id: 22, shown: { id: 3, foreign: true, loop_end: true } } as unknown as Station;
     const native = { id: 13 } as unknown as Station;
-    expect(idColumn.getValue(loopEnd)).toBe(3);
-    expect(idColumn.getValue(native)).toBe(13);
+    expect(idColumn.getValue(loopEnd, 0)).toBe(3);
+    expect(idColumn.getValue(native, 1)).toBe(13);
   });
 });

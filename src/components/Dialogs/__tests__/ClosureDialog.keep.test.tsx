@@ -64,6 +64,13 @@ function naming(extra: Partial<LoopClosureNaming> = {}): LoopClosureNaming {
   };
 }
 
+/** `n` without a default: rule K's end may not be kept. */
+function noDefault(n: LoopClosureNaming): LoopClosureNaming {
+  const copy = { ...n };
+  delete copy.default_keep;
+  return copy;
+}
+
 function open(answer: LoopClosureNaming, extra: Record<string, unknown> = {}) {
   invokeIpc.mockResolvedValue(answer);
   useUIStore.setState({
@@ -139,15 +146,16 @@ describe('Create Loop Closure: both ends show one station (RS 5.2)', () => {
 
   it("defaults to Keep both names when rule K's end may not be kept (U-P2-11)", async () => {
     open(
-      naming({
-        allowed: [17],
-        rule_k: 3,
-        default_keep: undefined,
-        options: [
-          { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN], collisions: [] },
-          { renamed_lines: [], collisions: [] },
-        ],
-      }),
+      noDefault(
+        naming({
+          allowed: [17],
+          rule_k: 3,
+          options: [
+            { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN], collisions: [] },
+            { renamed_lines: [], collisions: [] },
+          ],
+        }),
+      ),
     );
     await screen.findByTestId('closure-keep');
     expect(screen.getByTestId('closure-keep-both')).toBeChecked();
@@ -184,6 +192,6 @@ describe('Create Loop Closure: both ends show one station (RS 5.2)', () => {
 describe('defaultClosureChoice', () => {
   it("is rule K's allowed end, else keep both names", () => {
     expect(defaultClosureChoice(naming())).toBe(3);
-    expect(defaultClosureChoice(naming({ default_keep: undefined }))).toBe('both');
+    expect(defaultClosureChoice(noDefault(naming()))).toBe('both');
   });
 });

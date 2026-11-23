@@ -56,7 +56,7 @@ function stations(): Station[] {
       ...plain(MAIN, 1, 11, '3a'),
       merged_with: [ref(SIDE, 0)],
       archived: [{ id: 20, name: '0', lines: [SIDE] }],
-      closures_with: [{ closure_id: 5n, station_ref: ref(MAIN, 2), is_transitive: false }],
+      closures_with: [{ closure_id: 5n, station_ref: ref(MAIN, 2), via_station: null, is_transitive: false }],
     },
     plain(MAIN, 2, 12, '4'),
     {

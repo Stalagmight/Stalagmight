@@ -1434,7 +1434,11 @@ function ProjectDataTable({ lines }: DataTableProps) {
         title={labels.station(station.station_ref, true)}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <StationBlob station={station.station_ref} className="min-w-0 max-w-full" />
+        <StationBlob
+          station={station.station_ref}
+          className="min-w-0 max-w-full"
+          testId={`data-table-station-pill-${station.station_ref.line_id}-${station.station_ref.station_index}`}
+        />
       </span>
     ),
     [triggerCenterOnStation, labels]
