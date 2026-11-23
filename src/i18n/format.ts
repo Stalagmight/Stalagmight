@@ -71,6 +71,11 @@ export function formatNumber(
   return getCachedNumberFormat(resolvedLocale, options).format(value);
 }
 
+/**
+ * `value` with exactly `precision` decimals. A value that rounds to zero is
+ * written without a sign: "-0.00 m" (a Y of -0.0004 m in Station details)
+ * reads as a negative reading that is not there (RS-FX6, P3-19).
+ */
 export function formatFixed(
   value: number,
   locale?: string,
@@ -78,10 +83,11 @@ export function formatFixed(
 ): string {
   const resolvedLocale = getNumberLocale(locale);
   const clampedPrecision = Math.max(0, Math.min(6, Math.floor(precision)));
+  const roundsToZero = Math.abs(value) * 10 ** clampedPrecision < 0.5;
   return getCachedNumberFormat(resolvedLocale, {
     minimumFractionDigits: clampedPrecision,
     maximumFractionDigits: clampedPrecision,
-  }).format(value);
+  }).format(roundsToZero ? 0 : value);
 }
 
 export function formatPercent(
