@@ -2,12 +2,13 @@
 //!
 //! `image::render_svg` draws a [`Sketch`]: the drawn lines (each shot's kind,
 //! readings and comment), one wire `Station` per drawn slot (position,
-//! Station ID, name, comment, datum star), and the slot pairs that are one
+//! Station ID, name, comment, datum star), the slot pairs that are one
 //! physical point (the colocation the segments, labels and junction trims
-//! are built on). Distances it measures through a [`Measure`]. The
-//! station-graph exporter (`survey::image`) builds both.
+//! are built on) and the slots that take no label. Distances it measures
+//! through a [`Measure`]. The station-graph exporter (`survey::image`)
+//! builds both.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{LineId, ShotKind, Station, StationRef};
 
@@ -40,6 +41,10 @@ pub(super) struct Sketch {
     /// Slot pairs that are one physical point (a merge or a junction, then
     /// the two ends of an aligned loop closure).
     pub(super) colocated: Vec<(StationRef, StationRef)>,
+    /// Slots drawn without a name or Station ID label and never chosen to
+    /// label a point (a loop end a closure archives, RS 6): their point is
+    /// still drawn.
+    pub(super) unlabelled: HashSet<StationRef>,
 }
 
 /// The distances the renderer colours and labels by.

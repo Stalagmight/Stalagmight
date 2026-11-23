@@ -195,6 +195,48 @@ fn station_comments_fold_once_per_station() {
     assert!(!all.contains("entrance comment"));
 }
 
+/// A loop end a closure archives (RS 9) keeps its own Station ID as its
+/// Ariane node (two points cannot share one), the CLOSURE row joins the two
+/// nodes, and its hidden comment is not written: the kept end's comment is,
+/// once, at the kept end. Injection: fold every station's comment and "back
+/// comment" is written.
+#[test]
+fn a_closure_archived_end_keeps_its_node_and_writes_no_comment() {
+    let mut cave = cave();
+    let (kept, archived) = (cave.n[3], cave.b[0]);
+    cave.project.station_mut(kept).unwrap().comment = Some("north end".to_string());
+    cave.project.station_mut(archived).unwrap().comment = Some("back comment".to_string());
+    let closure = cave.project.closures.last_mut().unwrap();
+    assert_eq!((closure.a, closure.b), (kept, archived));
+    closure.archived = Some(crate::models::survey::ClosureEnd::B);
+    assert!(cave.project.validate().is_empty());
+    assert_eq!(cave.project.shown(archived), kept);
+    let rows = rows(&cave.project);
+    let at_archived = row(&rows, id(archived));
+    assert_eq!(at_archived.shot_type, "REAL");
+    assert!(
+        at_archived
+            .comment
+            .as_deref()
+            .is_none_or(|c| !c.contains("back comment")),
+        "{:?}",
+        at_archived.comment
+    );
+    let all: String = rows.iter().filter_map(|r| r.comment.clone()).collect();
+    assert!(!all.contains("back comment"), "{all}");
+    assert_eq!(all.matches("north end").count(), 1, "{all}");
+    assert!(row(&rows, id(kept))
+        .comment
+        .as_deref()
+        .is_some_and(|c| c.contains("north end")));
+    let closures: Vec<&super::ExportShot> = rows
+        .iter()
+        .filter(|r| r.shot_type == "CLOSURE" && r.from_id == id(kept))
+        .collect();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(closures[0].closure_to_id, id(archived));
+}
+
 /// Demo issue N-14: the comment of a station written as a START (an
 /// entrance's station) is left out of the file, as 0.6.0 left it out, but
 /// no longer silently: the export returns the `station-comments-not-written`

@@ -553,6 +553,7 @@ pub(super) fn render_svg(
         lines,
         stations,
         colocated,
+        unlabelled,
     } = sketch;
     // ---- Bounds and scale ---------------------------------------------------
     // Bounds come from *rendered* geometry only - endpoints of non-reference
@@ -1356,7 +1357,10 @@ pub(super) fn render_svg(
         // not the branch's `0`. Every station has a label for index labels,
         // only named ones for names, so a merge of an unnamed and a named
         // station still shows the name, and a point with no named station
-        // gets no label.
+        // gets no label. A slot the sketch marks `unlabelled` (a loop end a
+        // closure archives, RS 6) has no label in either mode, so it never
+        // represents a point: an aligned closure is labelled by its kept
+        // end, and an unaligned archived end's own point by nothing.
         if options.show_station_labels || show_station_names {
             // Names mode cleans each name once (it decides who represents a
             // point); index labels are formatted only for the chosen stations.
@@ -1381,7 +1385,10 @@ pub(super) fn render_svg(
                 &lines,
                 &stations,
                 |i| point_uf.find(i),
-                |i| !show_station_names || names[i].is_some(),
+                |i| {
+                    !unlabelled.contains(&stations[i].station_ref)
+                        && (!show_station_names || names[i].is_some())
+                },
             );
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
