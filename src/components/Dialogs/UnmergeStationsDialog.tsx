@@ -270,9 +270,14 @@ export default function UnmergeStationsDialog() {
             ...(restKeep !== undefined ? { restKeep } : {}),
           }
         : undefined;
-      const result = sameStationRef(target, stationRef)
-        ? await unmergeStations(stationRef, answered)
-        : await unmergeStationPair(stationRef, target, answered);
+      const own = sameStationRef(target, stationRef);
+      const result = answered
+        ? own
+          ? await unmergeStations(stationRef, answered)
+          : await unmergeStationPair(stationRef, target, answered)
+        : own
+          ? await unmergeStations(stationRef)
+          : await unmergeStationPair(stationRef, target);
       if (!result.success) {
         setError(result.error ?? t('dialogs.detachLine.failed'));
         return;
@@ -361,7 +366,7 @@ export default function UnmergeStationsDialog() {
 
             {naming && naming.lines.length > 0 && <DetachResults preview={naming} />}
 
-            {naming && naming.rest_choices.length > 1 && (
+            {naming && (naming.rest_choices ?? []).length > 1 && (
               <RestPicker
                 preview={naming}
                 restKeep={restKeep}
@@ -479,11 +484,11 @@ function ComesBack({ preview, line }: { preview: DetachLinePreview; line: number
           )}
         </div>
       )}
-      {preview.together.length > 0 && (
+      {(preview.together ?? []).length > 0 && (
         <p className="text-sm text-text-primary" data-testid="unmerge-stations-together">
           {t('dialogs.detachLine.offTogether', {
-            count: preview.together.length,
-            lines: listNames(preview.together.map(labels.lineName), t),
+            count: (preview.together ?? []).length,
+            lines: listNames((preview.together ?? []).map(labels.lineName), t),
             line: labels.lineName(line),
           })}
         </p>

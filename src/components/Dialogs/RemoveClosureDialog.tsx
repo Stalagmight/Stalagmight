@@ -108,7 +108,7 @@ export default function RemoveClosureDialog() {
 
   /** The station a closure hides, by closure id (the rows' "17 comes back"). */
   const hiddenOf = (closureId: bigint): string | null => {
-    const archive = project?.loop_closures.find((c) => c.id === closureId)?.archived;
+    const archive = project?.loop_closures?.find((c) => c.id === closureId)?.archived;
     return archive ? displayStationName(archive.station.name) : null;
   };
 

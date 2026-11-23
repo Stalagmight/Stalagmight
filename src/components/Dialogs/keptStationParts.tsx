@@ -42,12 +42,12 @@ export function useIdentityLabel(): (identity: StationIdentity) => string {
  * line it is shown on.
  */
 export function renamesFromAnswers(
-  collisions: readonly NameCollision[],
+  collisions: readonly NameCollision[] | undefined,
   answers: readonly CollisionAnswer[],
 ): StationRename[] {
   const renames: StationRename[] = [];
   const seen = new Set<number>();
-  collisions.forEach((collision, i) => {
+  (collisions ?? []).forEach((collision, i) => {
     const pick = answers[i] === 'alternative' ? collision.alternative : collision.letter;
     if (seen.has(pick.station.id)) return;
     seen.add(pick.station.id);
@@ -95,7 +95,8 @@ export function CollisionRows({
   testIdPrefix,
   disabled = false,
 }: {
-  collisions: readonly NameCollision[];
+  /** The preview's collisions (an older preview without them: none). */
+  collisions: readonly NameCollision[] | undefined;
   answers: readonly CollisionAnswer[];
   onAnswer: (index: number, answer: CollisionAnswer) => void;
   testIdPrefix: string;
@@ -104,7 +105,7 @@ export function CollisionRows({
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
-  if (collisions.length === 0) return null;
+  if (!collisions || collisions.length === 0) return null;
   return (
     <div className="space-y-2 text-sm" data-testid={`${testIdPrefix}-collisions`}>
       <p className="text-text-secondary">{t('dialogs.keptStations.collisionsLead', { count: collisions.length })}</p>

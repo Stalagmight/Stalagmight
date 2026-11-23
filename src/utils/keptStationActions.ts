@@ -25,17 +25,17 @@ export function detachNeedsDialog(preview: DetachLinePreview): boolean {
   return (
     preview.restored ||
     preview.kept ||
-    preview.together.length > 0 ||
-    preview.rest_choices.length > 1 ||
+    (preview.together ?? []).length > 0 ||
+    (preview.rest_choices ?? []).length > 1 ||
     preview.shown_before !== undefined ||
-    preview.collisions.length > 0
+    (preview.collisions ?? []).length > 0
   );
 }
 
 /** Whether a closure removal must be asked: its hidden end comes back, or a
  *  name would repeat. */
 export function removalNeedsDialog(naming: RemoveClosureNaming): boolean {
-  return naming.comes_back !== undefined || naming.collisions.length > 0;
+  return naming.comes_back !== undefined || (naming.collisions ?? []).length > 0;
 }
 
 /**
@@ -49,11 +49,15 @@ export async function detachLineAsking(
   partner: StationRef,
   mergedStations: readonly StationRef[],
 ): Promise<AskingOutcome> {
-  const preview = await invokeIpc<DetachLinePreview>(
-    'preview_detach_line',
-    { stationRef, lineId: partner.line_id },
-    { purpose: 'preview detach line' },
-  ).catch(() => null);
+  const preview = await Promise.resolve()
+    .then(() =>
+      invokeIpc<DetachLinePreview>(
+        'preview_detach_line',
+        { stationRef, lineId: partner.line_id },
+        { purpose: 'preview detach line' },
+      ),
+    )
+    .catch(() => null);
   if (preview && detachNeedsDialog(preview)) {
     useUIStore.getState().openDialog('unmerge-stations', {
       stationRef,
@@ -73,13 +77,17 @@ export async function detachLineAsking(
  * first end. A preview that fails removes at once.
  */
 export async function removeClosureAsking(closureId: bigint, anchor?: StationRef): Promise<AskingOutcome> {
-  const naming = await invokeIpc<RemoveClosureNaming>(
-    'preview_remove_loop_closure',
-    { closureId: Number(closureId) },
-    { purpose: 'preview remove loop closure' },
-  ).catch(() => null);
+  const naming = await Promise.resolve()
+    .then(() =>
+      invokeIpc<RemoveClosureNaming>(
+        'preview_remove_loop_closure',
+        { closureId: Number(closureId) },
+        { purpose: 'preview remove loop closure' },
+      ),
+    )
+    .catch(() => null);
   if (naming && removalNeedsDialog(naming)) {
-    const closure = useProjectStore.getState().project?.loop_closures.find((c) => c.id === closureId);
+    const closure = useProjectStore.getState().project?.loop_closures?.find((c) => c.id === closureId);
     const same = (a: StationRef, b: StationRef) => a.line_id === b.line_id && a.station_index === b.station_index;
     const anchorStation = anchor ?? closure?.station_a ?? naming.archived_slot;
     const other = closure && anchorStation
