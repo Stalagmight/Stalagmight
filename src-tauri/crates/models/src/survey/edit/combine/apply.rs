@@ -11,7 +11,8 @@ use crate::{
 use super::super::super::archive::has_text;
 use super::super::super::ops_detach::DetachMode;
 use super::super::super::{
-    ClosureId, ClosureStrategy, EditContext, LoopClosure, Placement, Project, RawPositions,
+    ClosureEnd, ClosureId, ClosureStrategy, EditContext, IdentityReport, LoopClosure, Placement,
+    Project, RawPositions,
 };
 use super::super::lines::absorb_legacy_credit;
 use super::super::EditError;
@@ -151,10 +152,19 @@ impl Project {
             }
         }
 
-        // Steps 2, 3, 6: the junctions torn into Batch closures.
+        // Steps 2, 3, 6: the junctions torn into Batch closures. A tear is a
+        // restoring detach of one line (RS 4.4, `DetachMode::Tear`); its
+        // closure archives, once the joins are known, the end that does not
+        // hold the identity the torn slot showed, so nothing visible changes
+        // and Remove Closure gives the line its own station back.
         let mut renamed: Vec<(StationId, StationId)> = Vec::new();
         let mut slot_map: BTreeMap<(LineId, StationId), StationId> = BTreeMap::new();
         let mut torn: Vec<TornTie> = Vec::new();
+        let mut tears: Vec<TearEnds> = Vec::with_capacity(decision.detaches.len());
+        // Torn junctions whose id went with the torn line (it was their only
+        // native line, RS 4.4), to the node their other lines are on: where
+        // the junction's position (and a gauge on it) stays.
+        let mut rest_of: BTreeMap<StationId, StationId> = BTreeMap::new();
         let (mut jk, mut jo) = (join.kept_station, join.other_station);
         let slot = |p: &Project, s: StationId, line: Option<LineId>| -> StationRef {
             let topology = p.topology();
@@ -163,28 +173,39 @@ impl Project {
                 .unwrap_or(StationRef::new(0, 0))
         };
         for d in &decision.detaches {
-            // RS-M2: a tear is a restoring detach whose closure archives the
-            // end that does not hold the identity the torn slot showed (RS
-            // 4.4); here the fresh station only takes the record naming the
-            // torn line (RS 4.3).
-            let fresh = self
-                .detach_ids(d.station, d.line, DetachMode::Tear)?
-                .new_station;
-            renamed.push((d.station, fresh));
-            slot_map.insert((d.line, d.station), fresh);
-            if d.line == k && d.station == jk {
-                jk = fresh;
+            let shown_before = self.shown(d.station);
+            let through = self.topology().lines_of(d.station);
+            let report = self.detach_ids(d.station, d.line, DetachMode::Tear)?;
+            let (line_node, rest_node) = (report.line_node(), report.rest_node());
+            renamed.push((d.station, report.new_station));
+            if report.kept {
+                rest_of.insert(d.station, rest_node);
             }
-            if d.line == o && d.station == jo {
-                jo = fresh;
+            for line in through {
+                let now = report.node_of(line);
+                if now != d.station {
+                    slot_map.insert((line, d.station), now);
+                }
+            }
+            if jk == d.station {
+                jk = report.node_of(k);
+            }
+            if jo == d.station {
+                jo = report.node_of(o);
             }
             let id = self.push_closure(
-                d.station,
+                rest_node,
                 d.toward,
-                fresh,
+                line_node,
                 Some(d.line),
                 ClosureStrategy::Batch,
             );
+            tears.push(TearEnds {
+                closure: id,
+                shown_before,
+                line_node,
+                rest_node,
+            });
             torn.push(TornTie {
                 kind: TornTieKind::Junction,
                 reason: d.reason,
@@ -237,8 +258,9 @@ impl Project {
         let held_parts: BTreeSet<StationId> = decision
             .detaches
             .iter()
-            .filter(|d| d.reason == TornTieReason::ZeroDatum)
-            .flat_map(|d| self.component_stations(d.station))
+            .zip(&tears)
+            .filter(|(d, _)| d.reason == TornTieReason::ZeroDatum)
+            .flat_map(|(_, t)| self.component_stations(t.rest_node))
             .collect();
         let mut reclose_check: BTreeSet<ClosureId> = BTreeSet::new();
         for closure in &mut self.closures {
@@ -301,13 +323,31 @@ impl Project {
             }
         }
 
-        // Step 4: the two join stations become one, the kept one.
+        // The tear closures' archives (RS 4.4), now that the joins are known.
+        for tear in &tears {
+            self.archive_tear(tear, (jo != jk).then_some(jo));
+        }
+
+        // Step 4: the two join stations become one node, `jk`'s (RS 4.4
+        // join): `jo` is archived in it with its native lines but the
+        // absorbed one, and the comment pick applies when it becomes history.
+        // A closure between the two that archives `jk` forces `jo`'s
+        // identity instead (RS 4.1 step 4), given to the node once the
+        // geometry is settled ([`Self::keep_other_join`]).
         let mut folded: Option<(StationId, StationId)> = None;
+        let mut join_forced: Option<(ClosureId, Option<String>, Option<String>)> = None;
         if jo != jk {
-            // RS-M2: Combine keeps `jk` and archives `jo` (RS 4.4 join); the
-            // comment pick applies only when `jo` becomes history.
+            let forced = self
+                .forced_merge_keep(jk, jo)
+                .filter(|&(_, kept)| kept == jo)
+                .map(|(closure, _)| closure);
+            let comment = |s: StationId| self.stations.get(&s).and_then(|s| s.comment.clone());
+            let comments = (comment(jk), comment(jo));
             self.merge_ids(jk, jo)?;
-            self.pick_join_comment(jk, jo, o, options.comment_pick);
+            match forced {
+                None => self.pick_join_comment(jk, jo, o, options.comment_pick),
+                Some(closure) => join_forced = Some((closure, comments.0, comments.1)),
+            }
             // Closures between the two join stations close nothing now (#738).
             self.closures.retain(|c| c.a != c.b);
             renamed.push((jo, jk));
@@ -356,13 +396,12 @@ impl Project {
         let kept_stations: BTreeSet<StationId> = line.stations().collect();
         self.repoint_vias(o, k, &kept_stations);
         self.repoint_record_lines(o, k, &arrived);
-        // RS-M2: collisions on the combined and third lines by rule L.
-        self.uniquify_line_names(k);
 
-        // Step 1's outcome: the fixed side stays, the moving side moves.
-        let intended = |s: StationId, p: &RawPositions| -> Option<[f64; 2]> {
+        // Step 1's outcome: the fixed side stays, the moving side moves. `s`
+        // is a pre-edit station, `at` where it is after the tears.
+        let intended = |s: StationId, at: StationId, p: &RawPositions| -> Option<[f64; 2]> {
             let [x, y] = p.xy(s)?;
-            Some(if moving_side.contains(&s) {
+            Some(if moving_side.contains(&at) {
                 [x + decision.shift[0], y + decision.shift[1]]
             } else {
                 [x, y]
@@ -377,52 +416,72 @@ impl Project {
         if !held {
             // The old placement stations that survive in the joined piece (the
             // other join station's is the joined station now, plan 5.1), the
-            // fixed side's first; laid out where the combine puts them.
+            // fixed side's first; laid out where the combine puts them. A
+            // placement on a junction a tear took its id from stays with the
+            // junction's other lines (`rest_of`): a placement is a position.
+            let stays_at = |s: StationId| {
+                let mut at = s;
+                for _ in 0..=rest_of.len() {
+                    match rest_of.get(&at) {
+                        Some(&next) => at = next,
+                        None => break,
+                    }
+                }
+                at
+            };
             let follow = |s: StationId| match folded {
                 Some((from, to)) if s == from => to,
                 _ => s,
             };
-            let candidates: Vec<(StationId, StationId)> = pre
+            let candidates: Vec<(StationId, StationId, StationId)> = pre
                 .placements
                 .iter()
-                .map(|p| (p.station, follow(p.station)))
-                .filter(|(_, now)| joined.contains(now))
+                .map(|p| (p.station, stays_at(p.station)))
+                .map(|(was, at)| (was, at, follow(at)))
+                .filter(|(_, _, now)| joined.contains(now))
                 .collect();
             let g = candidates
                 .iter()
                 .copied()
-                .find(|(was, _)| !moving_side.contains(was))
+                .find(|(_, at, _)| !moving_side.contains(at))
                 .or_else(|| candidates.first().copied())
                 .or_else(|| {
                     joined
                         .iter()
                         .copied()
                         .find(|s| p0.xy(*s).is_some())
-                        .map(|s| (s, s))
+                        .map(|s| (s, s, s))
                 });
-            if let Some((was, g)) = g {
-                if let Some([x, y]) = intended(was, &p0) {
+            if let Some((was, at, g)) = g {
+                if let Some([x, y]) = intended(was, at, &p0) {
                     self.placements.retain(|p| !joined.contains(&p.station));
                     self.placements.push(Placement { station: g, x, y });
                     ctx = ctx.with_placed(g);
                 }
             }
         }
+        // The epilogue (RS 3): stale attachments, the forced join identity,
+        // the A4 restore, anchors; then (below) the closure rules, the
+        // normalisation and rule L.
         self.drop_stale_attachments();
-        // RS-M2: Combine runs the whole epilogue (RS 3) and keeps every shown
-        // identity through its tears (RS 4.4); here only A4 is restored, so a
-        // tear of a junction's only native line leaves a valid model.
-        let restored: Vec<(StationId, StationId)> = self
-            .restore_archived_identities()
-            .iter()
-            .map(|r| (r.old, r.new))
-            .collect();
-        for &(old, new) in &restored {
+        let mut reidentified: Vec<(StationId, StationId)> = Vec::new();
+        if let Some((_, kept_comment, other_comment)) = &join_forced {
+            self.keep_other_join(
+                (jk, jo),
+                k,
+                options.comment_pick,
+                (kept_comment.clone(), other_comment.clone()),
+            );
+            reidentified.push((jk, jo));
+        }
+        let restored = self.restore_archived_identities();
+        reidentified.extend(restored.iter().map(|r| (r.old, r.new)));
+        for &(old, new) in &reidentified {
             if ctx.placed.contains(&old) {
                 ctx.placed.push(new);
             }
         }
-        ctx = ctx.with_reidentified(&restored);
+        ctx = ctx.with_reidentified(&reidentified);
         self.settle_anchors(&before, &ctx);
 
         // Snaps (and legacy ties) the move pulled apart become ordinary, as
@@ -467,9 +526,9 @@ impl Project {
 
         let replaced = self.dedupe_closures_on(k);
         let removed = self.remove_closures_newly_across_one_shot(&skipped_before);
-        // RS-M2: the epilogue's rule L (RS 4.4: collisions on third lines),
-        // with Combine's own notice; here the letters only.
-        self.letter_collisions(&pre);
+        let unarchived = self.normalise_closure_archives();
+        // Rule L (RS 4.4: collisions on the combined and third lines).
+        let lettered = self.letter_collisions(&pre);
         let violations = self.validate();
         if !violations.is_empty() {
             return Err(EditError::Invalid(violations));
@@ -487,8 +546,10 @@ impl Project {
                         now = to;
                     }
                 }
-                if let Some(&(_, new)) = restored.iter().find(|(old, _)| *old == now) {
-                    now = new;
+                for &(old, new) in &reidentified {
+                    if now == old {
+                        now = new;
+                    }
                 }
                 let (Some(a), Some(b)) = (p0.xy(s), after.xy(now)) else {
                     return None;
@@ -566,6 +627,13 @@ impl Project {
             closures_replaced: replaced,
             moved_with_joined_station,
             station_renames: renames,
+            join_keep_forced_by: join_forced.map(|(closure, _, _)| closure),
+            identities: IdentityReport {
+                restored,
+                unarchived,
+                lettered,
+            },
+            reidentified,
         })
     }
 
@@ -608,6 +676,7 @@ impl Project {
         }
         let mut replaced = Vec::new();
         let mut drop: BTreeSet<usize> = BTreeSet::new();
+        let mut archives: Vec<(usize, StationId)> = Vec::new();
         for (i, c) in self.closures.iter().enumerate() {
             if !on_line.contains(&c.a) && !on_line.contains(&c.b) {
                 continue;
@@ -620,6 +689,21 @@ impl Project {
                 let by = self.closures[stays];
                 if eligible(by.strategy) && !eligible(c.strategy) {
                     replaced.push(ReplacedClosure { dropped: *c, by });
+                }
+                // RS 4.4 dedupe: an archive moves to the closure that stays.
+                if let Some((archived, _)) = c.archive() {
+                    archives.push((stays, archived));
+                }
+            }
+        }
+        for (stays, archived) in archives {
+            if let Some(closure) = self.closures.get_mut(stays) {
+                if closure.archived.is_none() {
+                    closure.archived = Some(if closure.a == archived {
+                        ClosureEnd::A
+                    } else {
+                        ClosureEnd::B
+                    });
                 }
             }
         }
@@ -635,14 +719,82 @@ impl Project {
 
     /// RS 4.4 shared join (`j` on both lines): the combined line is native at
     /// `j` when either line was; a record naming either line drops it (and is
-    /// history when it names no other). Nothing visible changes: both lines
+    /// history when it names no other). When neither was native, the record
+    /// naming the kept line keeps it (the combined line still shows `j`'s
+    /// identity through it, and Detach still gives that station back), and
+    /// only the absorbed line is dropped. Nothing visible changes: both lines
     /// showed `j`'s identity.
     fn settle_shared_join_records(&mut self, j: StationId, kept: LineId, other: LineId) {
         if let Some(station) = self.stations.get_mut(&j) {
+            let native = station.record_for(kept).is_none() || station.record_for(other).is_none();
             for record in &mut station.archived {
-                record.lines.retain(|&l| l != kept && l != other);
+                record
+                    .lines
+                    .retain(|&l| l != other && (l != kept || !native));
             }
         }
+    }
+
+    /// A tear closure's archive (RS 4.4): the end that does not hold the
+    /// identity the torn slot showed before, so nothing visible changes;
+    /// none when neither end holds it, when the keep is not allowed (C1,
+    /// C2), or when the end it would archive is `folded` (the other line's
+    /// join station, which the join folds into the kept one: the combined
+    /// line shows the kept join station there).
+    fn archive_tear(&mut self, tear: &TearEnds, folded: Option<StationId>) {
+        let (archived, kept, end) = if self.shown(tear.rest_node) == tear.shown_before {
+            (tear.line_node, tear.rest_node, ClosureEnd::B)
+        } else if self.shown(tear.line_node) == tear.shown_before {
+            (tear.rest_node, tear.line_node, ClosureEnd::A)
+        } else {
+            return;
+        };
+        if folded == Some(archived)
+            || !self.closure_keep_allowed(tear.rest_node, tear.line_node, kept)
+        {
+            return;
+        }
+        if let Some(closure) = self.closures.iter_mut().find(|c| c.id == tear.closure) {
+            closure.archived = Some(end);
+        }
+    }
+
+    /// RS 4.1 step 4 at the join: a closure between the two join stations
+    /// archived `jk`, so the joined node takes `jo`'s identity (after the
+    /// fold, which kept `jk`'s id for the geometry): `jk`'s identity becomes
+    /// a record naming its native lines but the combined line `kept` (which
+    /// is `jo`'s now: its own line was absorbed into it), and the node's id
+    /// becomes `jo` everywhere. The comment pick applies when `jk` becomes
+    /// history, between `comments` (`jk`'s, then `jo`'s, before the join).
+    fn keep_other_join(
+        &mut self,
+        (jk, jo): (StationId, StationId),
+        kept: LineId,
+        pick: CombinePick,
+        comments: (Option<String>, Option<String>),
+    ) {
+        let native: Vec<LineId> = self
+            .native_lines(jk)
+            .into_iter()
+            .filter(|&l| l != kept)
+            .collect();
+        let Some(node) = self.stations.get_mut(&jk) else {
+            return;
+        };
+        let Some(index) = node.archived.iter().position(|r| r.id == jo) else {
+            return;
+        };
+        let record = node.archived.remove(index);
+        let old = node.as_record(native);
+        node.name = record.name;
+        node.comment = if old.lines.is_empty() {
+            joined_comment(comments.0, comments.1, pick)
+        } else {
+            record.comment
+        };
+        node.external = record.external;
+        node.archived.push(old);
+        self.rekey_node(jk, jo);
     }
 
     /// RS 4.4 join: Combine's comment pick between the kept join's comment
@@ -667,17 +819,8 @@ impl Project {
         if record.lines.iter().any(|&l| l != other) {
             return;
         }
-        let gone = record.comment.clone().filter(|c| has_text(Some(c)));
-        let keep = station.comment.clone().filter(|c| has_text(Some(c)));
-        station.comment = match (keep, gone) {
-            (Some(k), Some(g)) if k == g => Some(k),
-            (Some(k), Some(g)) => Some(match pick {
-                CombinePick::Kept => k,
-                CombinePick::Other => g,
-                CombinePick::Both => format!("{k}\n{g}"),
-            }),
-            (k, g) => k.or(g),
-        };
+        let gone = record.comment.clone();
+        station.comment = joined_comment(station.comment.clone(), gone, pick);
     }
 
     /// The prefix plan (`station_naming::plan_combine_prefixes`) on the names
@@ -728,7 +871,6 @@ impl Project {
         let kept_chain: Vec<StationId> = self.line_stations(kept).unwrap_or(&[]).to_vec();
         let other_chain: Vec<StationId> = self.line_stations(other).unwrap_or(&[]).to_vec();
         let mut done: BTreeSet<StationId> = BTreeSet::new();
-        let mut renamed: Vec<StationId> = Vec::new();
         for (chain, renames) in [(kept_chain, &plan.kept), (other_chain, &plan.other)] {
             for s in chain {
                 if s == jo && s != jk || !done.insert(s) {
@@ -739,24 +881,10 @@ impl Project {
                 };
                 if let Some(to) = renames.get(&name) {
                     // The shown identity's name, which its other lines show
-                    // too.
-                    renamed.push(s);
+                    // too; a repeat there is rule L's (RS 4.4), settled with
+                    // the combine's other collisions.
                     self.set_shown_name(s, to.clone());
                 }
-            }
-        }
-        // A junction whose own name was renamed must stay unique on its other
-        // lines too: it takes the letter suffix there rather than renaming a
-        // station the combine does not touch. (Only junctions with a third
-        // line showing its name can clash: the plan keeps the two lines' own
-        // names unique.)
-        for s in renamed {
-            if self
-                .lines_shown_on(self.shown(s))
-                .iter()
-                .any(|l| *l != kept && *l != other)
-            {
-                self.uniquify_station_name(s);
             }
         }
     }
@@ -833,5 +961,36 @@ impl Project {
             suffixed: (!suffixed.is_empty()).then_some(suffixed),
             join_name,
         })
+    }
+}
+
+/// One tear (RS 4.4): its closure, the identity the torn slot showed, the
+/// node the torn line is on and the node the other lines are on.
+#[derive(Debug, Clone, Copy)]
+struct TearEnds {
+    closure: ClosureId,
+    shown_before: StationId,
+    line_node: StationId,
+    rest_node: StationId,
+}
+
+/// Combine's comment pick between the kept join's comment and the other
+/// join's (today's `pick_text`): identical texts are kept once; with one
+/// side empty, whichever exists.
+fn joined_comment(
+    kept: Option<String>,
+    other: Option<String>,
+    pick: CombinePick,
+) -> Option<String> {
+    let kept = kept.filter(|c| has_text(Some(c)));
+    let other = other.filter(|c| has_text(Some(c)));
+    match (kept, other) {
+        (Some(k), Some(g)) if k == g => Some(k),
+        (Some(k), Some(g)) => Some(match pick {
+            CombinePick::Kept => k,
+            CombinePick::Other => g,
+            CombinePick::Both => format!("{k}\n{g}"),
+        }),
+        (k, g) => k.or(g),
     }
 }

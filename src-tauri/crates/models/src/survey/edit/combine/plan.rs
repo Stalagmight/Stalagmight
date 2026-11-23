@@ -49,9 +49,27 @@ struct Trial {
     /// copy the side was read from.
     side: BTreeSet<StationId>,
     side_datums: Vec<StationId>,
+    /// Each torn junction whose id went with the torn line (RS 4.4: the torn
+    /// line was its only native line), to the node its other lines are on:
+    /// where the junction's position stays.
+    rest_of: BTreeMap<StationId, StationId>,
 }
 
 impl Trial {
+    /// Where pre-edit station `s` stays in the scratch copy: itself, unless
+    /// a tear moved its id onto the torn line (then the node its other lines
+    /// took), followed through later tears.
+    fn stays_at(&self, s: StationId) -> StationId {
+        let mut at = s;
+        for _ in 0..=self.rest_of.len() {
+            match self.rest_of.get(&at) {
+                Some(&next) => at = next,
+                None => break,
+            }
+        }
+        at
+    }
+
     /// Does the moving side hold one of `placements` (pre-edit indices)?
     fn held(&self, placements: &[usize]) -> bool {
         placements.iter().any(|&d| {
@@ -86,7 +104,7 @@ pub(super) fn moving_side(
         let mut virtual_detach = p.clone();
         if let Ok(fresh) = virtual_detach
             .detach_ids(jm, m, DetachMode::Tear)
-            .map(|r| r.new_station)
+            .map(|r| r.line_node())
         {
             return (component(&virtual_detach, fresh), datums(&virtual_detach));
         }
@@ -292,7 +310,9 @@ impl Project {
         for m in [o, k] {
             let trial = self.trial(join, m);
             if !trial.held(&placements) {
-                let holds = anchor.is_some_and(|g| trial.side.contains(&g));
+                // The gauge is a position: a tear that moved its id with the
+                // torn line left the gauge with the other lines (RS 4.4).
+                let holds = anchor.is_some_and(|g| trial.side.contains(&trial.stays_at(g)));
                 free.push((m, trial, holds));
             }
         }
@@ -408,7 +428,8 @@ impl Project {
         let f = if m == o { k } else { o };
         let mut scratch = self.clone();
         let mut detaches = Vec::new();
-        let (mut jm, jf) = if m == o {
+        let mut rest_of = BTreeMap::new();
+        let (mut jm, mut jf) = if m == o {
             (join.other_station, join.kept_station)
         } else {
             (join.kept_station, join.other_station)
@@ -426,12 +447,17 @@ impl Project {
             if !on_f.contains(&s) || is_join {
                 continue;
             }
-            if let Ok(fresh) = scratch
-                .detach_ids(s, m, DetachMode::Tear)
-                .map(|r| r.new_station)
-            {
+            if let Ok(report) = scratch.detach_ids(s, m, DetachMode::Tear) {
+                // A tear of the junction's only native line keeps it on `m`
+                // and moves the other lines (RS 4.4): both joins follow.
                 if s == jm {
-                    jm = fresh;
+                    jm = report.node_of(m);
+                }
+                if s == jf {
+                    jf = report.node_of(f);
+                }
+                if report.kept {
+                    rest_of.insert(s, report.rest_node());
                 }
                 detaches.push(Detach {
                     line: m,
@@ -444,12 +470,12 @@ impl Project {
         // Step 2: still connected, so tear the junction nearest M on the path.
         if jm != jf && scratch.topology().connected(jm, jf) {
             if let Some((station, toward)) = scratch.first_junction_off(m, jm, jf) {
-                if let Ok(fresh) = scratch
-                    .detach_ids(station, m, DetachMode::Tear)
-                    .map(|r| r.new_station)
-                {
+                if let Ok(report) = scratch.detach_ids(station, m, DetachMode::Tear) {
                     if station == jm {
-                        jm = fresh;
+                        jm = report.node_of(m);
+                    }
+                    if report.kept {
+                        rest_of.insert(station, report.rest_node());
                     }
                     detaches.push(Detach {
                         line: m,
@@ -467,6 +493,7 @@ impl Project {
             scratch,
             side,
             side_datums,
+            rest_of,
         }
     }
 

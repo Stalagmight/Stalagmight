@@ -36,8 +36,9 @@
 //!
 //! The mutation ([`Project::detach_ids`]) is the one core every detach goes
 //! through: these commands and Combine Lines' torn junctions
-//! (`edit/combine/`, plan 5.4 steps 2, 3 and 6; RS-M2 makes those restoring
-//! detaches with the tear closure's archive).
+//! (`edit/combine/`, plan 5.4 steps 2, 3 and 6; RS 4.4: a tear is a
+//! restoring detach of one line, whose tear closure then archives the end
+//! that does not hold the identity the torn slot showed).
 
 use crate::{LineId, StationId, StationRef};
 
@@ -93,11 +94,40 @@ pub struct DetachReport {
     /// by records, got back an archived station (`new_station`): RS 4.2
     /// case 2.
     pub kept: bool,
-    /// A Combine tear of the junction's only native line made this record
-    /// history so the junction keeps a native line (A4): its lines show the
-    /// junction natively now (nothing visible changes). RS-M2 replaces this
-    /// with the case-2 distribution and the tear closure's archive (RS 4.4).
-    pub record_made_history: Option<StationId>,
+}
+
+impl DetachReport {
+    /// The node the detached line is on now, where the junction was: the
+    /// junction itself when it kept it (`kept`), else `new_station`.
+    pub fn line_node(&self) -> StationId {
+        if self.kept {
+            self.station
+        } else {
+            self.new_station
+        }
+    }
+
+    /// The node every other line of the junction is on now: `new_station`
+    /// when the line kept the junction (`kept`), else the junction.
+    pub fn rest_node(&self) -> StationId {
+        if self.kept {
+            self.new_station
+        } else {
+            self.station
+        }
+    }
+
+    /// The node `line` is on now, for a line that passed the junction:
+    /// [`Self::line_node`] for the detached line, [`Self::rest_node`] for
+    /// the others (the lines of its record that came off with it included,
+    /// which [`Self::lines_off`] names).
+    pub fn node_of(&self, line: LineId) -> StationId {
+        if line == self.line || (!self.kept && self.lines_off.contains(&line)) {
+            self.line_node()
+        } else {
+            self.rest_node()
+        }
+    }
 }
 
 /// What detaching a line would give it, for the Detach dialog: the station
@@ -155,11 +185,12 @@ pub(super) enum DetachMode {
     /// when every other line is named by a record (`rest_keep` picks the
     /// record those lines take).
     Restore { rest_keep: Option<StationId> },
-    /// Combine Lines' tear of one line (RS 4.3 "a slot moves to a new
-    /// node"): the fresh station takes the record naming the line, if any;
-    /// never the case-2 distribution (RS-M2): when the torn line is the
-    /// junction's only native line, the record rule K picks among those
-    /// naming the other lines becomes history instead.
+    /// Combine Lines' tear of one line (RS 4.4, a restoring detach): the
+    /// fresh station takes the record naming the line, if any (only that
+    /// line comes off: the record's other lines stay, native, on the
+    /// junction); when the torn line is the junction's only native line, the
+    /// case-2 distribution applies (the line keeps the junction, the other
+    /// lines take the record rule K picks among those naming them).
     Tear,
 }
 
@@ -405,24 +436,12 @@ impl Project {
                 let others: Vec<LineId> = lines.iter().copied().filter(|&l| l != line).collect();
                 self.detach_others(station, line, &others, rest_keep)
             }
-            (None, mode) => {
+            (None, DetachMode::Tear) if self.detach_keeps(station, line) => {
+                let others: Vec<LineId> = lines.iter().copied().filter(|&l| l != line).collect();
+                self.detach_others(station, line, &others, None)
+            }
+            (None, _) => {
                 let name = junction.name.clone();
-                let record_made_history = if mode == DetachMode::Tear
-                    && self.detach_keeps(station, line)
-                {
-                    let candidates = self.rest_candidates(station, line);
-                    let chosen = self.rule_k(candidates.iter().map(|r| (r.id, r.lines.clone())));
-                    if let (Some(id), Some(junction)) = (chosen, self.stations.get_mut(&station)) {
-                        for record in &mut junction.archived {
-                            if record.id == id {
-                                record.lines.clear();
-                            }
-                        }
-                    }
-                    chosen
-                } else {
-                    None
-                };
                 let new_station = self.mint_station_id()?;
                 self.stations
                     .insert(new_station, Station::new(new_station, name));
@@ -439,7 +458,6 @@ impl Project {
                     moved_hand_move,
                     restored: false,
                     kept: false,
-                    record_made_history,
                 })
             }
         }
@@ -474,7 +492,6 @@ impl Project {
             moved_hand_move,
             restored: true,
             kept: false,
-            record_made_history: None,
         }
     }
 
@@ -537,7 +554,6 @@ impl Project {
             moved_hand_move,
             restored: true,
             kept: true,
-            record_made_history: None,
         })
     }
 
