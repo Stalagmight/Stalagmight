@@ -212,6 +212,18 @@ regions). Read the comment blocks in those two files plus
   the `command-failed` catch-all shows `result.error`. A toast, not a dialog: the
   delete did what was asked, nothing needs deciding, and one Undo restores the
   closure with the shots.
+- **Names an action changed on its own are one notice per action** (kept and
+  archived stations, plan 2026-11-23 RS 7). A merge without a dialog, a delete
+  that brings an archived station back, a closure removal or a promotion may
+  give a station a letter so no line shows a name twice (rule L), restore an
+  archived station (hiding a comment Undo brings back), or make a loop
+  closure's hidden end show its own name again. The backend reports these on
+  `CommandResult.identities`; `notifyIdentityChanges`
+  (`utils/identityNotice.ts`, called by `executeCommand` on every success)
+  names each in ONE warning toast (key `station-identities`). The four dialogs
+  that ask (Merge Stations, Create Loop Closure, Detach Line from Station,
+  Remove Closure) send the user's own answers, which are not reported; imports
+  report theirs only in the receipt.
 - Genuine IPC rejections (transport errors) re-sync state and re-throw; the caller
   that initiated the action owns surfacing them under the rules above.
 
