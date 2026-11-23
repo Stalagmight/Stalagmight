@@ -117,15 +117,11 @@ impl Project {
         };
         let (index, change) = outcome.value;
         let role = self.datum_roles().get(index).copied().flatten();
-        Ok(OpOutcome {
-            value: DatumSet {
-                index,
-                change,
-                role,
-            },
-            anchors: outcome.anchors,
-            sweep: outcome.sweep,
-        })
+        Ok(outcome.map(|_| DatumSet {
+            index,
+            change,
+            role,
+        }))
     }
 
     /// [`Self::set_datum`] on a slot: its station, attached via its line.
@@ -235,11 +231,7 @@ impl Project {
         let value = op(self);
         let violations = self.validate();
         if violations.is_empty() {
-            Ok(OpOutcome {
-                value,
-                anchors: super::AnchorReport::default(),
-                sweep: super::SweepReport::default(),
-            })
+            Ok(OpOutcome::unchanged(value))
         } else {
             *self = backup;
             Err(OpError::Invalid(violations))

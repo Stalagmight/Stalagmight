@@ -392,7 +392,7 @@ impl Project {
         second.assign_session_shot_ids();
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &tail_stations);
-        self.repoint_alias_lines(line, new_id, &tail_stations);
+        self.repoint_record_lines(line, new_id, &tail_stations);
 
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
@@ -444,11 +444,11 @@ impl Project {
         }
     }
 
-    /// The alias line hints of `arrived` (stations that left `from` for
-    /// `to`) that named `from` now name `to`: the new line knows them by the
-    /// same aliases (UX-4; invariant 8 exempts them there as it did on
-    /// `from`). A station that was already on `to` is not in `arrived`.
-    pub(super) fn repoint_alias_lines(
+    /// The archived records of `arrived` (stations that left `from` for
+    /// `to`) that named `from` now name `to` (RS 4.4, like `via` hints): the
+    /// new line's own station there is the same archived one. A station that
+    /// was already on `to` is not in `arrived`.
+    pub(super) fn repoint_record_lines(
         &mut self,
         from: LineId,
         to: LineId,
@@ -456,9 +456,11 @@ impl Project {
     ) {
         for station in arrived {
             if let Some(s) = self.stations.get_mut(station) {
-                for alias in &mut s.aliases {
-                    if alias.line == Some(from) {
-                        alias.line = Some(to);
+                for record in &mut s.archived {
+                    for line in &mut record.lines {
+                        if *line == from {
+                            *line = to;
+                        }
                     }
                 }
             }

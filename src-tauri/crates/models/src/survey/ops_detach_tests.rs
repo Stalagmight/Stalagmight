@@ -298,7 +298,7 @@ fn detaching_a_line_mints_when_another_line_shows_the_junctions_own_name() {
     assert!(!out.value.kept && !out.value.restored_alias);
     assert_eq!(out.value.new_station, counter);
     assert_eq!((at(&p, a, 2), at(&p, c, 0)), (b0, b0));
-    assert_eq!(p.name_on(b0, a), Some("2"));
+    assert_eq!(p.shown_name(b0), Some("2"));
     assert_eq!(p.stations[&counter].name, "0");
 }
 
@@ -383,7 +383,7 @@ fn the_detach_preview_says_what_every_line_of_a_hub_ends_up_with() {
             slot.is_some(),
             "{o:?}: the line is on the station the preview names"
         );
-        assert_eq!(p.name_on(o.station, o.line), Some(o.name.as_str()));
+        assert_eq!(p.shown_name(o.station), Some(o.name.as_str()));
         assert_eq!(
             p.line_alias(o.station, o.line)
                 .map(|a| a.id)

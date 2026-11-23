@@ -8,6 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::{
@@ -28,7 +30,8 @@ pub const MAX_MEASUREMENT_M: f64 = 1_000_000.0;
 pub const MAX_COORDINATE_M: f64 = 100_000_000.0;
 
 /// Which end of a closure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ClosureEnd {
     A,
     B,
@@ -155,16 +158,17 @@ pub enum Violation {
         kind: CounterKind,
         id: u64,
     },
-    /// An alias id is a live station's id or another alias.
-    AliasCollision {
+    /// A1: an archived record's id is a live station's id or another
+    /// record's.
+    ArchivedIdCollision {
         station: StationId,
-        alias: StationId,
+        archived: StationId,
     },
-    /// An alias id at or above [`MAX_STATION_ID`] (outside the Station ID
-    /// space).
-    AliasOutOfRange {
+    /// A1: an archived record's id at or above [`MAX_STATION_ID`] (outside
+    /// the Station ID space).
+    ArchivedIdOutOfRange {
         station: StationId,
-        alias: StationId,
+        archived: StationId,
     },
     /// A line holds more than [`MAX_SHOTS_PER_LINE`] shots (session shot ids
     /// would run into the next line's).
@@ -229,12 +233,24 @@ pub enum Violation {
         station: StationId,
         line: LineId,
     },
-    /// An alias's line hint names a line that does not pass through its
-    /// station.
-    StaleAliasLine {
+    /// A2: an archived record names a line that does not pass through the
+    /// station holding it.
+    StaleArchivedLine {
         station: StationId,
-        alias: StationId,
+        archived: StationId,
         line: LineId,
+    },
+    /// A3: two records of one station name the same line.
+    LineNamedTwice {
+        station: StationId,
+        line: LineId,
+        first: StationId,
+        second: StationId,
+    },
+    /// A4: a station on a line has no native line (records name every line
+    /// through it).
+    NoNativeLine {
+        station: StationId,
     },
     /// A hand move keyed on a station that is not on its line.
     HandMoveOffLine {
@@ -289,9 +305,23 @@ pub enum Violation {
         a: StationId,
         b: StationId,
     },
+    /// C1: a station is the archived end of two closures (`first` is the
+    /// earlier in list order).
+    StationArchivedTwice {
+        station: StationId,
+        first: ClosureId,
+        second: ClosureId,
+    },
+    /// C2: following archived end -> kept end from this closure's archived
+    /// end comes back to it.
+    ClosureArchiveCycle {
+        closure: ClosureId,
+        station: StationId,
+    },
     // 8. names
-    /// A line shows two stations by one name (each station by the name the
-    /// line knows it by, `Project::name_on`).
+    /// N8: a line shows two identities by one name (each slot by its node's
+    /// shown identity, `Project::shown`; `first` and `second` are the
+    /// identities' Station IDs).
     DuplicateStationName {
         line: LineId,
         name: String,
@@ -349,13 +379,15 @@ impl fmt::Display for Violation {
                 };
                 write!(f, "{kind} id {id} is not below {bound}")
             }
-            Self::AliasCollision { station, alias } => write!(
+            Self::ArchivedIdCollision { station, archived } => write!(
                 f,
-                "station {station} keeps alias {alias}, which is another station's id or alias"
+                "station {station} keeps archived station {archived}, whose id is another \
+                 station's or archived station's"
             ),
-            Self::AliasOutOfRange { station, alias } => write!(
+            Self::ArchivedIdOutOfRange { station, archived } => write!(
                 f,
-                "station {station} keeps alias {alias}, which is not below {MAX_STATION_ID}"
+                "station {station} keeps archived station {archived}, which is not below \
+                 {MAX_STATION_ID}"
             ),
             Self::TooManyShots { line, count } => write!(
                 f,
@@ -427,14 +459,29 @@ impl fmt::Display for Violation {
                 "closure {closure} end {end} is attached via line {line}, which does not pass \
                  through station {station}"
             ),
-            Self::StaleAliasLine {
+            Self::StaleArchivedLine {
                 station,
-                alias,
+                archived,
                 line,
             } => write!(
                 f,
-                "alias {alias} of station {station} names line {line}, which does not pass \
-                 through it"
+                "archived station {archived} of station {station} names line {line}, which does \
+                 not pass through it"
+            ),
+            Self::LineNamedTwice {
+                station,
+                line,
+                first,
+                second,
+            } => write!(
+                f,
+                "archived stations {first} and {second} of station {station} both name line \
+                 {line}"
+            ),
+            Self::NoNativeLine { station } => write!(
+                f,
+                "station {station} is shown on no line of its own: archived stations name every \
+                 line through it"
             ),
             Self::HandMoveOffLine { line, station } => write!(
                 f,
@@ -491,6 +538,18 @@ impl fmt::Display for Violation {
                 "closure {closure} joins stations {a} and {b}, which are in different pieces \
                  that do not both hold a datum"
             ),
+            Self::StationArchivedTwice {
+                station,
+                first,
+                second,
+            } => write!(
+                f,
+                "station {station} is the archived end of closures {first} and {second}"
+            ),
+            Self::ClosureArchiveCycle { closure, station } => write!(
+                f,
+                "closure {closure} archives station {station}, whose kept ends lead back to it"
+            ),
             Self::DuplicateStationName {
                 line,
                 name,
@@ -543,7 +602,7 @@ impl Project {
         self.check_forest(topology, &mut out);
         self.check_anchors(topology, &mut out);
         self.check_closures(topology, &mut out);
-        self.check_names(topology, &mut out);
+        self.check_names(&mut out);
         self.check_counters(&mut out);
         self.check_numbers(&mut out);
         out
@@ -555,7 +614,7 @@ impl Project {
     }
 
     fn check_ids(&self, out: &mut Vec<Violation>) {
-        let mut aliases: BTreeSet<StationId> = BTreeSet::new();
+        let mut archived: BTreeSet<StationId> = BTreeSet::new();
         for (&key, station) in &self.stations {
             if key != station.id {
                 out.push(Violation::StationKeyMismatch {
@@ -569,17 +628,17 @@ impl Project {
                     id: u64::from(key),
                 });
             }
-            for alias in &station.aliases {
-                if alias.id >= MAX_STATION_ID {
-                    out.push(Violation::AliasOutOfRange {
+            for record in &station.archived {
+                if record.id >= MAX_STATION_ID {
+                    out.push(Violation::ArchivedIdOutOfRange {
                         station: key,
-                        alias: alias.id,
+                        archived: record.id,
                     });
                 }
-                if self.stations.contains_key(&alias.id) || !aliases.insert(alias.id) {
-                    out.push(Violation::AliasCollision {
+                if self.stations.contains_key(&record.id) || !archived.insert(record.id) {
+                    out.push(Violation::ArchivedIdCollision {
                         station: key,
-                        alias: alias.id,
+                        archived: record.id,
                     });
                 }
             }
@@ -741,17 +800,35 @@ impl Project {
             }
         }
         for (&station, s) in &self.stations {
-            if !topology.contains(station) {
+            if s.archived.is_empty() || !topology.contains(station) {
                 continue;
             }
-            for alias in &s.aliases {
-                if let Some(line) = alias.line.filter(|&line| !via_holds(station, line)) {
-                    out.push(Violation::StaleAliasLine {
-                        station,
-                        alias: alias.id,
-                        line,
-                    });
+            let mut named: BTreeMap<LineId, StationId> = BTreeMap::new();
+            for record in &s.archived {
+                for &line in &record.lines {
+                    if !via_holds(station, line) {
+                        out.push(Violation::StaleArchivedLine {
+                            station,
+                            archived: record.id,
+                            line,
+                        });
+                    }
+                    match named.get(&line) {
+                        Some(&first) => out.push(Violation::LineNamedTwice {
+                            station,
+                            line,
+                            first,
+                            second: record.id,
+                        }),
+                        None => {
+                            named.insert(line, record.id);
+                        }
+                    }
                 }
+            }
+            let lines = topology.lines_of(station);
+            if !lines.is_empty() && lines.iter().all(|l| named.contains_key(l)) {
+                out.push(Violation::NoNativeLine { station });
             }
         }
     }
@@ -896,47 +973,57 @@ impl Project {
                 });
             }
         }
-    }
-
-    fn check_names(&self, topology: &Topology, out: &mut Vec<Violation>) {
-        let mut sorted: Vec<(&str, StationId)> = Vec::new();
-        for (position, line) in self.lines.iter().enumerate() {
-            let Some(chain) = topology.chain_at(position) else {
+        // C1: one archiving closure per station; C2: no cycle of archives
+        // (each check bounded, so a crafted file reports instead of
+        // hanging).
+        let mut kept_of: BTreeMap<StationId, StationId> = BTreeMap::new();
+        let mut archived_by: BTreeMap<StationId, ClosureId> = BTreeMap::new();
+        for c in &self.closures {
+            let Some((archived, kept)) = c.archive() else {
                 continue;
             };
-            // Each station by the name this line shows it by
-            // (`Project::name_on`): an alias's name on a line that knows the
-            // station by it, else the station's own name.
-            let named = |s: &StationId| self.name_on(*s, line.id).map(|name| (name, *s));
-            // Fast path: no name on two stations of the chain.
-            sorted.clear();
-            sorted.extend(chain.iter().filter_map(named));
-            sorted.sort_unstable();
-            if sorted
-                .windows(2)
-                .all(|w| w[0].0 != w[1].0 || w[0].1 == w[1].1)
-            {
-                continue;
-            }
-            let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
-            for &station in chain {
-                let Some((name, _)) = named(&station) else {
-                    continue;
-                };
-                match seen.get(name) {
-                    Some(&first) if first != station => {
-                        out.push(Violation::DuplicateStationName {
-                            line: line.id,
-                            name: name.to_string(),
-                            first,
-                            second: station,
-                        });
-                    }
-                    Some(_) => {}
-                    None => {
-                        seen.insert(name, station);
-                    }
+            match archived_by.get(&archived) {
+                Some(&first) => out.push(Violation::StationArchivedTwice {
+                    station: archived,
+                    first,
+                    second: c.id,
+                }),
+                None => {
+                    archived_by.insert(archived, c.id);
+                    kept_of.insert(archived, kept);
                 }
+            }
+        }
+        for c in &self.closures {
+            let Some((archived, kept)) = c.archive() else {
+                continue;
+            };
+            if archived_by.get(&archived) == Some(&c.id)
+                && super::archive::reaches(&kept_of, kept, archived)
+            {
+                out.push(Violation::ClosureArchiveCycle {
+                    closure: c.id,
+                    station: archived,
+                });
+            }
+        }
+    }
+
+    fn check_names(&self, out: &mut Vec<Violation>) {
+        // N8: each slot by its node's shown identity (the shown index never
+        // loops, so a broken C2 cannot hang this).
+        for collision in self.name_collisions() {
+            let mut holders = collision.identities.iter().copied();
+            let Some(first) = holders.next() else {
+                continue;
+            };
+            for second in holders {
+                out.push(Violation::DuplicateStationName {
+                    line: collision.line,
+                    name: collision.name.clone(),
+                    first,
+                    second,
+                });
             }
         }
         let mut sections: HashMap<&str, SectionId> = HashMap::with_capacity(self.sections.len());
@@ -983,7 +1070,7 @@ impl Project {
         let station_max = self
             .stations
             .values()
-            .flat_map(|s| std::iter::once(s.id).chain(s.aliases.iter().map(|a| a.id)))
+            .flat_map(|s| std::iter::once(s.id).chain(s.archived.iter().map(|r| r.id)))
             .chain(self.stations.keys().copied())
             .max();
         if let Some(max) = station_max {

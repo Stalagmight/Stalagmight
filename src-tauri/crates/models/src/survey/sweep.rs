@@ -25,7 +25,6 @@
 
 use crate::StationId;
 
-use super::ops_merge::CommentRule;
 use super::{ClosureEnd, ClosureId, EditContext, LoopClosure, Project};
 
 /// What the sweep did, as warning data for the command's result.
@@ -58,7 +57,7 @@ pub struct Promotion {
     pub position: usize,
     /// The station that stayed (the stationary piece's end).
     pub survivor: StationId,
-    /// The moving piece's end, now an alias of the survivor.
+    /// The moving piece's end, now archived in the survivor (a record).
     pub retired: StationId,
 }
 
@@ -125,10 +124,9 @@ impl Project {
                 _ => (closure.b, closure.a),
             };
             let before = self.anchor_snapshot();
-            if self
-                .merge_ids(survivor, retired, CommentRule::Join)
-                .is_err()
-            {
+            // RS-M2: the promotion keeps the closure's kept end (geometry
+            // first, then re-identify, RS 5.4); today's survivor keeps here.
+            if self.merge_ids(survivor, retired).is_err() {
                 continue;
             }
             let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);

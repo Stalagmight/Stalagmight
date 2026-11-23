@@ -8,7 +8,8 @@ use crate::{
     normalize_azimuth, CombineLinesOptions, CombinePick, LineEnd, LineId, StationId, StationRef,
 };
 
-use super::super::super::ops_merge::CommentRule;
+use super::super::super::archive::has_text;
+use super::super::super::ops_detach::DetachMode;
 use super::super::super::{
     ClosureId, ClosureStrategy, EditContext, LoopClosure, Placement, Project, RawPositions,
 };
@@ -162,7 +163,11 @@ impl Project {
                 .unwrap_or(StationRef::new(0, 0))
         };
         for d in &decision.detaches {
-            let fresh = self.detach_ids(d.station, d.line, false)?.new_station;
+            // RS-M2: a tear is a restoring detach whose closure archives the
+            // end that does not hold the identity the torn slot showed (RS
+            // 4.4); here the fresh station only takes the record naming the
+            // torn line (RS 4.3).
+            let fresh = self.detach_ids(d.station, d.line, DetachMode::Tear)?.new_station;
             renamed.push((d.station, fresh));
             slot_map.insert((d.line, d.station), fresh);
             if d.line == k && d.station == jk {
@@ -297,7 +302,10 @@ impl Project {
         // Step 4: the two join stations become one, the kept one.
         let mut folded: Option<(StationId, StationId)> = None;
         if jo != jk {
-            self.merge_ids(jk, jo, CommentRule::Pick(options.comment_pick))?;
+            // RS-M2: Combine keeps `jk` and archives `jo` (RS 4.4 join); the
+            // comment pick applies only when `jo` becomes history.
+            self.merge_ids(jk, jo)?;
+            self.pick_join_comment(jk, jo, o, options.comment_pick);
             // Closures between the two join stations close nothing now (#738).
             self.closures.retain(|c| c.a != c.b);
             renamed.push((jo, jk));
@@ -309,16 +317,16 @@ impl Project {
             return Err(EditError::line_gone());
         };
         let other = self.lines_mut().remove(position);
-        // The other line's stations come onto the kept line: their alias
-        // hints follow (UX-4), so the combined line shows each by the name
-        // the other line did. A join merged here is the kept line's own
-        // station: its new alias (the retired join) knew the other line only
-        // and is cleared. A join both lines already shared shows the kept
-        // line's name ([`Self::settle_shared_join_aliases`]).
+        // The other line's stations come onto the kept line: the records
+        // naming the other line there name the kept one (RS 4.4). A join
+        // merged here is the kept line's own station: its new record (the
+        // retired join) loses the absorbed line. A join both lines already
+        // shared is native on the combined line
+        // ([`Self::settle_shared_join_records`]).
         let arrived: BTreeSet<StationId> =
             other.stations().filter(|&s| s != jk && s != jo).collect();
         if jo == jk {
-            self.settle_shared_join_aliases(jk, k, o);
+            self.settle_shared_join_records(jk, k, o);
         }
         let Some(line) = self.line_mut(k) else {
             return Err(EditError::line_gone());
@@ -345,7 +353,8 @@ impl Project {
         absorb_legacy_credit(line);
         let kept_stations: BTreeSet<StationId> = line.stations().collect();
         self.repoint_vias(o, k, &kept_stations);
-        self.repoint_alias_lines(o, k, &arrived);
+        self.repoint_record_lines(o, k, &arrived);
+        // RS-M2: collisions on the combined and third lines by rule L.
         self.uniquify_line_names(k);
 
         // Step 1's outcome: the fixed side stays, the moving side moves.
@@ -602,27 +611,51 @@ impl Project {
         replaced
     }
 
-    /// At a join both lines already pass (`j`), the combined line shows the
-    /// kept line's name. An alias by which the other line knew `j` either
-    /// repeats the kept line's alias there (same name: a Split Line Here's
-    /// copy, removed, the earlier of the two kept for the combined line) or
-    /// records another name, kept as history (no line).
-    fn settle_shared_join_aliases(&mut self, j: StationId, kept: LineId, other: LineId) {
-        let Some(station) = self.stations.get_mut(&j) else {
-            return;
-        };
-        let Some(o) = station.aliases.iter().rposition(|a| a.line == Some(other)) else {
-            return;
-        };
-        let k = station.aliases.iter().rposition(|a| a.line == Some(kept));
-        match k {
-            Some(k) if station.aliases[k].name == station.aliases[o].name => {
-                let (first, second) = (k.min(o), k.max(o));
-                station.aliases[first].line = Some(kept);
-                station.aliases.remove(second);
+    /// RS 4.4 shared join (`j` on both lines): the combined line is native at
+    /// `j` when either line was; a record naming either line drops it (and is
+    /// history when it names no other). Nothing visible changes: both lines
+    /// showed `j`'s identity.
+    fn settle_shared_join_records(&mut self, j: StationId, kept: LineId, other: LineId) {
+        if let Some(station) = self.stations.get_mut(&j) {
+            for record in &mut station.archived {
+                record.lines.retain(|&l| l != kept && l != other);
             }
-            _ => station.aliases[o].line = None,
         }
+    }
+
+    /// RS 4.4 join: Combine's comment pick between the kept join's comment
+    /// and the retired join's applies only when the retired join `jo`
+    /// becomes history (the absorbed line `other` was its only native line);
+    /// otherwise its comment stays in its record, shown again by a Detach.
+    /// Identical texts are kept once; with one side empty, whichever exists
+    /// (today's `pick_text`).
+    fn pick_join_comment(
+        &mut self,
+        jk: StationId,
+        jo: StationId,
+        other: LineId,
+        pick: CombinePick,
+    ) {
+        let Some(station) = self.stations.get_mut(&jk) else {
+            return;
+        };
+        let Some(record) = station.archived.iter().find(|r| r.id == jo) else {
+            return;
+        };
+        if record.lines.iter().any(|&l| l != other) {
+            return;
+        }
+        let gone = record.comment.clone().filter(|c| has_text(Some(c)));
+        let keep = station.comment.clone().filter(|c| has_text(Some(c)));
+        station.comment = match (keep, gone) {
+            (Some(k), Some(g)) if k == g => Some(k),
+            (Some(k), Some(g)) => Some(match pick {
+                CombinePick::Kept => k,
+                CombinePick::Other => g,
+                CombinePick::Both => format!("{k}\n{g}"),
+            }),
+            (k, g) => k.or(g),
+        };
     }
 
     /// The prefix plan (`station_naming::plan_combine_prefixes`) on the names
@@ -641,13 +674,13 @@ impl Project {
     ) -> crate::station_naming::CombinePrefixes {
         let kept_chain = self.line_stations(kept).unwrap_or(&[]);
         let shared_join = kept_chain.contains(&jo);
-        // Each line's names as it shows them (`Project::name_on`): the
+        // Each line's names as it shows them (`Project::shown_name`): the
         // combined line shows every station as its line did.
-        let names = |line: LineId, chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
+        let names = |_line: LineId, chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
             chain
                 .iter()
                 .filter(|s| Some(**s) != skip)
-                .filter_map(|s| self.name_on(*s, line).map(str::to_string))
+                .filter_map(|s| self.shown_name(*s).map(str::to_string))
                 .collect()
         };
         let kept_names = names(kept, kept_chain, None);
@@ -656,7 +689,7 @@ impl Project {
             self.line_stations(other).unwrap_or(&[]),
             shared_join.then_some(jo),
         );
-        let join_name = self.name_on(jo, other).map(str::to_string);
+        let join_name = self.shown_name(jo).map(str::to_string);
         plan_combine_prefixes(
             &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
             &other_names.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -674,24 +707,19 @@ impl Project {
         let other_chain: Vec<StationId> = self.line_stations(other).unwrap_or(&[]).to_vec();
         let mut done: BTreeSet<StationId> = BTreeSet::new();
         let mut renamed: Vec<StationId> = Vec::new();
-        for (line, chain, renames) in [
-            (kept, kept_chain, &plan.kept),
-            (other, other_chain, &plan.other),
-        ] {
+        for (chain, renames) in [(kept_chain, &plan.kept), (other_chain, &plan.other)] {
             for s in chain {
                 if s == jo && s != jk || !done.insert(s) {
                     continue;
                 }
-                let Some(name) = self.name_on(s, line).map(str::to_string) else {
+                let Some(name) = self.shown_name(s).map(str::to_string) else {
                     continue;
                 };
                 if let Some(to) = renames.get(&name) {
-                    // The name this line shows: an alias naming it, or the
-                    // station's own name (which its other lines show too).
-                    if !self.known_by_alias_on(s, line) {
-                        renamed.push(s);
-                    }
-                    self.set_name_on(s, line, to.clone());
+                    // The shown identity's name, which its other lines show
+                    // too.
+                    renamed.push(s);
+                    self.set_shown_name(s, to.clone());
                 }
             }
         }
@@ -702,7 +730,7 @@ impl Project {
         // names unique.)
         for s in renamed {
             if self
-                .lines_showing_name(s)
+                .lines_shown_on(self.shown(s))
                 .iter()
                 .any(|l| *l != kept && *l != other)
             {
@@ -730,10 +758,10 @@ impl Project {
             self.line_stations(line)
                 .unwrap_or(&[])
                 .iter()
-                .filter_map(|s| self.name_on(*s, line).map(str::to_string))
+                .filter_map(|s| self.shown_name(*s).map(str::to_string))
                 .collect()
         };
-        let retired = self.name_on(jo, other).map(str::to_string);
+        let retired = self.shown_name(jo).map(str::to_string);
         let no_suffixes = BTreeSet::new();
         let suffixed_set: BTreeSet<String> = plan.other_suffixed.iter().cloned().collect();
         let summarize = |line: LineId,
@@ -774,7 +802,7 @@ impl Project {
         if kept_renames.is_none() && other_renames.is_none() && suffixed.is_empty() {
             return None;
         }
-        let join = self.name_on(jk, kept)?.to_string();
+        let join = self.shown_name(jk)?.to_string();
         let join_name = plan.kept.get(&join).cloned().unwrap_or(join);
         Some(crate::CombineStationRenames {
             reason,

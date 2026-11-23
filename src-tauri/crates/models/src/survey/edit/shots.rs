@@ -357,13 +357,13 @@ impl Project {
         let name_of = |p: &Project, i: usize| -> String {
             chain
                 .get(i)
-                .and_then(|&s| p.name_on(s, line))
+                .and_then(|&s| p.shown_name(s))
                 .map_or_else(|| i.to_string(), str::to_string)
         };
         let taken: BTreeSet<String> = chain
             .iter()
             .filter(|s| **s != station)
-            .filter_map(|&s| self.name_on(s, line).map(str::to_string))
+            .filter_map(|&s| self.shown_name(s).map(str::to_string))
             .collect();
         let names = || taken.iter().map(String::as_str);
         let last = chain.len() - 1;
@@ -464,7 +464,7 @@ impl Project {
         let name = |i: usize| {
             self.line(line)
                 .and_then(|l| l.station(i))
-                .and_then(|s| self.name_on(s, line))
+                .and_then(|s| self.shown_name(s))
                 .map_or_else(|| i.to_string(), str::to_string)
         };
         format!(

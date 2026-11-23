@@ -5,11 +5,14 @@
 //! Per slot `(L, i)` with station `S`:
 //! - coordinates: `S`'s position (raw or Computed View), depth plus `L`'s
 //!   hand-move z at `S`;
-//! - `name`: the name `L` shows `S` by ([`Project::name_on`]: the alias `L`
-//!   knows a junction by, else `S`'s own name), so a junction's slots may
-//!   differ;
-//! - `id`, `comment`, `aliases`: `S`'s, shared by every slot of a junction
-//!   (`aliases` absent when `S` has none; each with the line it names);
+//! - `name`, `comment`: `S`'s shown identity's ([`Project::shown_name`]: its
+//!   own, or the kept end's when a loop closure archives `S`), shared by
+//!   every slot of a junction;
+//! - `id`: `S` (the node: every grouping, command and selection keys on it);
+//! - `aliases`: `S`'s archived records, one entry per line a record names
+//!   (or one with no line for a history record); absent when `S` has none.
+//!   RS-W replaces this with the shown-identity fields of RS 6 (`shown_id`,
+//!   `foreign`, `home_line`, `loop_end`) and a records DTO;
 //! - `merged_with`: `S`'s other slots (slot order), so a junction's slots
 //!   list each other, transitively, as today's merge groups did;
 //! - `is_zero_datum` / `gps_coordinates`: the datum the slot's datum dialog
@@ -26,7 +29,7 @@ use std::collections::BTreeMap;
 
 use crate::{ClosureRef, Coordinates, StationId, StationRef};
 
-use super::super::{AdjustedPositions, Project, RawPositions, StationAlias, StationPositions};
+use super::super::{AdjustedPositions, ArchivedStation, Project, RawPositions, StationPositions};
 
 /// Everything a wire station holds but its coordinates (one state).
 struct SlotRelations {
@@ -197,6 +200,7 @@ impl SlotRelations {
             .zip(closures)
             .map(|(((slot, station), datum), closures)| {
                 let identity = project.stations.get(&station);
+                let shown = project.shown_station(station);
                 let gps = datum.and_then(|d| project.datums.get(d)).map(|d| d.gps);
                 crate::Station {
                     station_ref: slot,
@@ -210,27 +214,33 @@ impl SlotRelations {
                         .filter(|&other| other != slot)
                         .collect(),
                     closures_with: (!closures.is_empty()).then_some(closures),
-                    comment: identity.and_then(|s| s.comment.clone()),
+                    comment: shown.and_then(|s| s.comment.clone()),
                     id: station,
                     name: project
-                        .name_on(station, slot.line_id)
+                        .shown_name(station)
                         .map(str::to_string)
                         .unwrap_or_default(),
                     aliases: identity
-                        .filter(|s| !s.aliases.is_empty())
-                        .map(|s| s.aliases.iter().map(alias_wire).collect()),
+                        .filter(|s| !s.archived.is_empty())
+                        .map(|s| s.archived.iter().flat_map(alias_wire).collect()),
                 }
             })
             .collect()
     }
 }
 
-/// The wire form of one alias.
-fn alias_wire(alias: &StationAlias) -> crate::StationAliasWire {
-    crate::StationAliasWire {
-        id: alias.id,
-        name: alias.name.clone(),
-        line: alias.line,
+/// The wire form of one archived record: one alias entry per line it names,
+/// or one with no line for a history record (RS-W: the records DTO).
+fn alias_wire(record: &ArchivedStation) -> Vec<crate::StationAliasWire> {
+    let entry = |line| crate::StationAliasWire {
+        id: record.id,
+        name: Some(record.name.clone()),
+        line,
+    };
+    if record.lines.is_empty() {
+        vec![entry(None)]
+    } else {
+        record.lines.iter().map(|&l| entry(Some(l))).collect()
     }
 }
 

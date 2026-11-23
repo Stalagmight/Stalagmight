@@ -150,7 +150,11 @@ impl Project {
                 .closure_metrics_via((station_a, Some(a.line_id)), (station_b, Some(b.line_id)));
         }
         if result.can_merge {
-            result.merge_preview = self.merge_preview(station_a, station_b).map(|m| {
+            // RS-W: the dialog's keep and the preview's identities,
+            // collisions and hidden station ride the wire; the default keep
+            // until then.
+            let keep = self.merge_default_keep(station_a, station_b);
+            result.merge_preview = self.merge_preview(station_a, station_b, keep).map(|m| {
                 let [a_m, b_m] = m.depths_m;
                 let depths = ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then(|| {
                     crate::MergeDepths {

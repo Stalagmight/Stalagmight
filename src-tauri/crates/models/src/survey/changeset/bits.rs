@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::super::{
-    ClosureStrategy, Line, LoopClosure, Placement, ProjectSettings, Shot, Station, StationAlias,
+    ArchivedStation, ClosureStrategy, Line, LoopClosure, Placement, ProjectSettings, Shot, Station,
     ZeroDatum,
 };
 
@@ -59,7 +59,7 @@ same_by_eq!(
     NaiveDate,
     DateTime<Utc>,
     Station,
-    StationAlias,
+    ArchivedStation,
     LoopClosure,
     ClosureStrategy,
     Section,

@@ -35,7 +35,7 @@ fn shown(p: &Project, line: crate::LineId) -> Vec<String> {
     p.line_stations(line)
         .unwrap()
         .iter()
-        .map(|&s| p.name_on(s, line).unwrap().to_string())
+        .map(|&s| p.shown_name(s).unwrap().to_string())
         .collect()
 }
 

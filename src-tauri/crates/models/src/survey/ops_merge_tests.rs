@@ -200,8 +200,8 @@ fn the_survivor_keeps_its_name_comment_and_ids_and_joins_the_comments() {
     assert_eq!(p.stations[&b0].name, "0");
     assert_eq!(p.stations[&a0].name, "0");
     assert!(p.known_by_alias_on(b0, a));
-    assert_eq!(p.name_on(b0, a), Some("2"));
-    assert_eq!(p.name_on(b0, b), Some("0"));
+    assert_eq!(p.shown_name(b0), Some("2"));
+    assert_eq!(p.shown_name(b0), Some("0"));
     assert_eq!(
         p.stations[&b0].comment.as_deref(),
         Some("survivor note\n\nretired note")
@@ -358,9 +358,9 @@ fn a_merge_keeps_every_lines_own_name_for_a_junction_it_retires() {
     assert_eq!(p.stations[&b0].name, "0");
     assert_eq!(p.stations[&a0].name, "0");
     assert_eq!(p.stations[&a2_end].name, "0");
-    assert_eq!(p.name_on(b0, a), Some("1"));
-    assert_eq!(p.name_on(b0, a2), Some("1"));
-    assert_eq!(p.name_on(b0, b), Some("0"));
+    assert_eq!(p.shown_name(b0), Some("1"));
+    assert_eq!(p.shown_name(b0), Some("1"));
+    assert_eq!(p.shown_name(b0), Some("0"));
     let aliases = &p.stations[&b0].aliases;
     assert_eq!(aliases.len(), 2);
     assert_eq!((aliases[0].id, aliases[0].line), (a1, Some(a)));

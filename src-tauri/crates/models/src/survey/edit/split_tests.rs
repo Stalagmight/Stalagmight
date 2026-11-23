@@ -232,9 +232,9 @@ fn a_split_moves_the_alias_hints_with_their_stations() {
     assert_eq!(aliases.len(), 2);
     assert_eq!((aliases[0].id, aliases[0].line), (50, Some(l)));
     assert_eq!((aliases[1].id, aliases[1].line), (52, Some(second)));
-    assert_eq!(p.name_on(k, l), Some("old k"));
-    assert_eq!(p.name_on(k, second), Some("old k"));
-    assert_eq!(p.name_on(m3, second), Some("old 3"));
+    assert_eq!(p.shown_name(k), Some("old k"));
+    assert_eq!(p.shown_name(k), Some("old k"));
+    assert_eq!(p.shown_name(m3), Some("old 3"));
     assert_eq!(p.station(k).unwrap().name, name4, "nothing renamed");
     assert_eq!(p.station(m4).unwrap().name, name4, "nothing renamed");
 }

@@ -134,9 +134,10 @@ pub struct EditContext {
     /// Datums (post-edit indices) whose correction the command set itself
     /// (Add .stalx): kept as is, in post-edit coordinates.
     pub corrected: Vec<usize>,
-    /// Stations that went back to an alias identity in the epilogue
-    /// (`Project::restore_alias_identities`), `(old, new)`: the same station
-    /// under another id, so its datums, its pre-edit position and its
+    /// Stations that took another identity in the edit, `(old, new)`: a
+    /// merge that keeps the moving station (RS 4.1 step 3), and the epilogue's
+    /// restores (`Project::restore_archived_identities`, RS 4.3). The same
+    /// node under another id, so its datums, its pre-edit position and its
     /// placement are recognised across the edit.
     pub reidentified: Vec<(StationId, StationId)>,
 }
@@ -179,7 +180,7 @@ impl EditContext {
         self
     }
 
-    /// Record stations that went back to an alias identity, `(old, new)`.
+    /// Record stations that took another identity, `(old, new)`.
     #[must_use]
     pub fn with_reidentified(mut self, pairs: &[(StationId, StationId)]) -> Self {
         self.reidentified.extend_from_slice(pairs);
@@ -440,7 +441,16 @@ impl Project {
 
         // Pre-edit placements surviving in each component: (index in the old
         // list, placement), the merge's stationary one first, else list order.
-        // A re-identified station's placement survives under its new id.
+        // A re-identified station's placement survives under its new id. A
+        // placement is on the stationary side when its PRE-edit station was
+        // (RS M-P1-1: a merge that keeps the moving station re-keys the
+        // stationary piece's placement to an id that was on the moving side
+        // before the edit).
+        let on_stationary_side = |index: usize| {
+            stationary_component.is_some()
+                && before.topology.component_of(before.placements[index].station)
+                    == stationary_component
+        };
         let mut surviving: Vec<Option<(usize, Placement)>> = vec![None; components.len()];
         for (index, old) in before.placements.iter().enumerate() {
             let old = &match ctx.post_edit_id(old.station) {
@@ -450,14 +460,10 @@ impl Project {
             let Some(c) = topology.component_of(old.station) else {
                 continue;
             };
-            let stationary = stationary_component.is_some()
-                && before.topology.component_of(old.station) == stationary_component;
             match surviving[c] {
                 None => surviving[c] = Some((index, *old)),
-                Some((_, current)) => {
-                    let current_stationary = stationary_component.is_some()
-                        && before.topology.component_of(current.station) == stationary_component;
-                    if stationary && !current_stationary {
+                Some((current, _)) => {
+                    if on_stationary_side(index) && !on_stationary_side(current) {
                         surviving[c] = Some((index, *old));
                     }
                 }

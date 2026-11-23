@@ -11,7 +11,7 @@
 
 use chrono::NaiveDate;
 
-use crate::{ProjectStats, ShotKind};
+use crate::ProjectStats;
 
 use super::{Project, RawPositions};
 
@@ -69,12 +69,8 @@ impl Project {
         let mut first: Option<NaiveDate> = None;
         let mut last: Option<NaiveDate> = None;
         for line in self.lines() {
-            let mut line_length = 0.0;
+            let line_length = line.measured_length();
             for shot in &line.shots {
-                match shot.kind {
-                    ShotKind::Normal | ShotKind::Jump => line_length += shot.length,
-                    ShotKind::Reference => {}
-                }
                 if let Some(date) = shot.credit.as_ref().and_then(|c| c.date) {
                     first = Some(first.map_or(date, |d| d.min(date)));
                     last = Some(last.map_or(date, |d| d.max(date)));

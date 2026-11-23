@@ -85,15 +85,11 @@ pub(super) fn add_datum(p: &mut Project, station: StationId, at: crate::GpsCoord
 /// Merge station `moving` into `stationary` with a forced direction (Merge
 /// Stations' mutation core, `merge_ids`, without its direction rule or the
 /// sweep): `moving`'s piece moves so `moving` lands on `stationary`, which
-/// survives (its id and name; the other becomes an alias). Closures between
-/// the two are removed (#738). Panics if refused or invalid.
+/// survives (its id and name; the other is archived in it). Closures
+/// between the two are removed (#738). Panics if refused or invalid.
 pub(super) fn merge(p: &mut Project, moving: StationId, stationary: StationId) {
     let before = p.anchor_snapshot();
-    if let Err(error) = p.merge_ids(
-        stationary,
-        moving,
-        super::super::ops_merge::CommentRule::Join,
-    ) {
+    if let Err(error) = p.merge_ids(stationary, moving) {
         panic!("merge refused: {error}");
     }
     p.closures.retain(|c| c.a != c.b);

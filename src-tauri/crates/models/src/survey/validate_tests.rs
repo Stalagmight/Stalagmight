@@ -951,8 +951,8 @@ fn an_alias_line_must_pass_its_station_and_names_it_on_that_line() {
     assert_eq!(p.validate(), Vec::new());
     assert!(p.known_by_alias_on(s1, l1));
     assert!(!p.known_by_alias_on(s1, l0));
-    assert_eq!(p.name_on(s1, l1), Some("0"));
-    assert_eq!(p.name_on(s1, l0), Some(name.as_str()));
+    assert_eq!(p.shown_name(s1), Some("0"));
+    assert_eq!(p.shown_name(s1), Some(name.as_str()));
     // L1 holds "0" for s1: its end may not take it, by hand or in a rename.
     assert!(p.conflicts_with_name(l1_end, &name).is_empty());
     assert_eq!(
@@ -980,12 +980,12 @@ fn an_alias_line_must_pass_its_station_and_names_it_on_that_line() {
     let mut renamed = p.clone();
     renamed.set_name_on(s1, l1, "J".to_string());
     assert_eq!(
-        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
+        (renamed.shown_name(s1), renamed.shown_name(s1)),
         (Some("J"), Some(name.as_str()))
     );
     renamed.set_name_on(s1, l0, "K".to_string());
     assert_eq!(
-        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
+        (renamed.shown_name(s1), renamed.shown_name(s1)),
         (Some("J"), Some("K"))
     );
     assert_eq!(renamed.validate(), Vec::new());

@@ -17,6 +17,8 @@ use crate::{
     ShotId, ShotKind, StationId, SurveyCredit, SurveyDirection, FEATURE_ID_STRIDE,
 };
 
+use super::ClosureEnd;
+
 /// A loop closure's id: project-unique, never reused.
 pub type ClosureId = u64;
 
@@ -38,22 +40,27 @@ pub const MAX_SHOT_UUID_CHARS: usize = 128;
 /// next line's ids (the legacy model's cap too). Checked by `validate`.
 pub const MAX_SHOTS_PER_LINE: usize = (FEATURE_ID_STRIDE - 1) as usize;
 
-/// One physical survey station.
+/// One physical survey station: a node of the survey graph, with the
+/// identity it shows (its own, unless a loop closure archives it, plan
+/// 2026-11-23 RS 5.1) and the identities merges put away in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Station {
     /// The Station ID the user sees. A junction has one id.
     pub id: StationId,
-    /// Unique among the stations of every line the station is on (plan 5.3).
+    /// The name every line through the station shows it by; unique among the
+    /// names shown on each of those lines (invariant N8).
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    /// Ids (and names) merged into this station, oldest first.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<StationAlias>,
     /// The identity an importer gave the station (a Compass or Walls name, an
     /// Ariane ID). An attribute only: nothing resolves through it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<String>,
+    /// The stations merged into this one and not kept (RS 3), oldest first:
+    /// each keeps its own identity and the lines whose own station it was,
+    /// is shown nowhere, and comes back with Detach Line from Station.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived: Vec<ArchivedStation>,
 }
 
 impl Station {
@@ -63,28 +70,67 @@ impl Station {
             id,
             name: name.into(),
             comment: None,
-            aliases: Vec::new(),
             external: None,
+            archived: Vec::new(),
+        }
+    }
+
+    /// The record of this station that names `line`, if any (invariant A3:
+    /// at most one does).
+    pub fn record_for(&self, line: LineId) -> Option<&ArchivedStation> {
+        self.archived.iter().find(|r| r.lines.contains(&line))
+    }
+
+    /// This station's own identity as a record naming `lines` (what a merge
+    /// or a restore archives).
+    pub fn as_record(&self, lines: Vec<LineId>) -> ArchivedStation {
+        ArchivedStation {
+            id: self.id,
+            name: self.name.clone(),
+            comment: self.comment.clone(),
+            external: self.external.clone(),
+            lines,
         }
     }
 }
 
-/// An id (and the name it had) that was merged into a station.
+/// A station a merge put away inside another one (RS 3): its identity and
+/// the lines whose own station it was. Shown nowhere, its name counts toward
+/// no uniqueness, and Detach Line from Station on one of its lines brings it
+/// back. A record with no lines is history (invariant A5): it reserves its
+/// id and nothing restores it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StationAlias {
+#[serde(deny_unknown_fields)]
+pub struct ArchivedStation {
     pub id: StationId,
+    pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// The line that knew the station by this alias: the line the retired
-    /// station was on when it was merged (a 0.6.0 merge member's line, the
-    /// moving line of a merge). Like a datum's `via` it must pass through the
-    /// station (invariant 2; a stale one is cleared). Detaching that line
-    /// gives it this id and name back (review finding UX-4), and that line
-    /// shows the station by this alias's name (`Project::name_on`), which
-    /// invariant 8 holds unique on the line like every name it shows (I-3;
-    /// review findings D-migration-upgrade-8 and UX-3).
+    pub comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub line: Option<LineId>,
+    pub external: Option<String>,
+    /// The lines whose own station this was; each passes the station that
+    /// holds the record (invariant A2), and names at most one record there
+    /// (A3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<LineId>,
+}
+
+impl ArchivedStation {
+    /// Whether this record is history only (A5: it names no line).
+    pub fn is_history(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// The live station this record restores to (no records of its own).
+    pub fn to_station(&self) -> Station {
+        Station {
+            id: self.id,
+            name: self.name.clone(),
+            comment: self.comment.clone(),
+            external: self.external.clone(),
+            archived: Vec::new(),
+        }
+    }
 }
 
 /// One survey run: a simple chain of stations, `start` then each shot's `to`.
@@ -140,6 +186,21 @@ impl Line {
         } else {
             None
         }
+    }
+
+    /// The line's measured length, metres: its `Normal` and `Jump` shots'
+    /// lengths summed in shot order (`Reference` shots excluded), exactly as
+    /// line details and the survey statistics compute it. Rule K (RS 2)
+    /// compares these as exact f64 values.
+    pub fn measured_length(&self) -> f64 {
+        let mut length = 0.0;
+        for shot in &self.shots {
+            match shot.kind {
+                ShotKind::Normal | ShotKind::Jump => length += shot.length,
+                ShotKind::Reference => {}
+            }
+        }
+        length
     }
 
     /// Number of stations on the chain (`shots + 1`).
@@ -456,6 +517,33 @@ pub struct LoopClosure {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub b_via: Option<LineId>,
     pub strategy: ClosureStrategy,
+    /// The end this closure archives (RS 5): that end shows the other end's
+    /// identity (`Project::shown`) while it stays a node of its own. `None`
+    /// archives nothing (both ends show their own names).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<ClosureEnd>,
+}
+
+impl LoopClosure {
+    /// The archived end's station and the kept end's, when this closure
+    /// archives one and its ends are two stations.
+    pub fn archive(&self) -> Option<(StationId, StationId)> {
+        if self.a == self.b {
+            return None;
+        }
+        match self.archived? {
+            ClosureEnd::A => Some((self.a, self.b)),
+            ClosureEnd::B => Some((self.b, self.a)),
+        }
+    }
+
+    /// The station at `end`.
+    pub fn end(&self, end: ClosureEnd) -> StationId {
+        match end {
+            ClosureEnd::A => self.a,
+            ClosureEnd::B => self.b,
+        }
+    }
 }
 
 /// How a loop closure is treated (plan 3.6).
