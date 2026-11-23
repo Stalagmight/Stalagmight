@@ -1101,7 +1101,7 @@ export default function UndoHistoryDropdown({
                       <div
                         className={HISTORY_ROW_CLASS}
                         title={item.description}
-                        data-testid={`${testId}-item-${item.index}-description`}
+                        data-testid={`${testId}-description-${item.index}`}
                       >
                         {item.description}
                       </div>

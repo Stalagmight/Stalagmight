@@ -34,7 +34,7 @@ it('shows a long description whole, wrapped', async () => {
   await act(async () => {
     fireEvent.click(screen.getByTestId('chevron'));
   });
-  const description = await screen.findByTestId('undo-item-0-description');
+  const description = await screen.findByTestId('undo-description-0');
   expect(description).toHaveTextContent(MERGE);
   expect(description.textContent).not.toContain('…');
   expect(description.className).toBe(HISTORY_ROW_CLASS);
