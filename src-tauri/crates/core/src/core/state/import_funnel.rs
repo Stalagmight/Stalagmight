@@ -945,6 +945,7 @@ fn archive_file_station(
         name: name.clone(),
         comment: file.comment,
         external: file.external,
+        into: None,
         lines: vec![line],
     });
     Some(FileStation::Archived {

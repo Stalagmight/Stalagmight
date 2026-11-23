@@ -140,6 +140,7 @@ pub(super) fn example() -> (Project, Extras) {
             name: "B0".to_string(),
             comment: Some("Side's tie-off".to_string()),
             external: None,
+            into: None,
             lines: vec![side],
         });
     }

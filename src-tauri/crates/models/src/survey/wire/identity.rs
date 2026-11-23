@@ -166,7 +166,6 @@ impl Project {
             },
             unarchived: m.unarchived,
             comments_hidden: m.comments_hidden.iter().map(hidden_wire).collect(),
-            not_given_back: m.not_given_back.clone(),
         }
     }
 

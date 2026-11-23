@@ -367,37 +367,6 @@ fn the_detach_preview_says_a_line_stops_showing_a_loop_closures_station() {
     assert_eq!(naming.shown_before, Some(x0));
 }
 
-/// Model review finding 4: merging junction X (its own line LX native, LX2
-/// named by X's record R) into Y keeping Y moves R onto Y's node; Detach of
-/// LX later gives X back on LX alone, and LX2 keeps showing Y. The merge
-/// preview now names LX2 (`not_given_back`), so the dialog does not promise
-/// more than Detach gives. Injection: leave `MergeMove::not_given_back`
-/// empty.
-#[test]
-fn the_merge_preview_names_the_lines_detach_does_not_give_back() {
-    let mut p = project();
-    let lx = free_line(&mut p, [0.0, 0.0], run(90.0, 1, 10.0));
-    let lx2 = free_line(&mut p, [0.0, 50.0], run(90.0, 1, 10.0));
-    let ly = free_line(&mut p, [0.0, 100.0], run(90.0, 1, 10.0));
-    name_line(&mut p, lx, "X");
-    name_line(&mut p, lx2, "R");
-    name_line(&mut p, ly, "Y");
-    let (x1, r0, y1) = (at(&p, lx, 1), at(&p, lx2, 0), at(&p, ly, 1));
-    ok(p.merge_stations_auto(r0, x1, x1));
-    assert_valid(&p);
-    let preview = p.merge_preview(x1, y1, y1).unwrap();
-    assert_eq!(preview.hidden.0, x1);
-    assert_eq!(preview.not_given_back, vec![lx2]);
-    let wire = p.merge_keep_wire(&preview);
-    assert_eq!(wire.not_given_back, vec![lx2]);
-    // As the preview says: Detach of LX gives X back on LX only.
-    let out = ok(p.merge_stations(x1, y1, y1, &[]));
-    let node = out.value.kept;
-    ok(p.detach_line(node, lx, &[], None));
-    assert_eq!(p.topology().lines_of(x1), vec![lx]);
-    assert_eq!(p.shown(at(&p, lx2, 0)), y1);
-}
-
 /// `Project::hidden_comments` (RS 12): a comment shown before is hidden when
 /// an identity no slot shows keeps it (here a loop end a closure archives);
 /// not when another identity shows it now, alone or as one part of a

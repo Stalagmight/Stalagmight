@@ -315,6 +315,7 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
                 name,
                 comment,
                 external: None,
+                into: None,
                 lines,
             });
         }

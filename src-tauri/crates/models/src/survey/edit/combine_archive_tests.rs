@@ -187,6 +187,7 @@ fn a_join_archives_the_other_join_station_with_its_other_lines() {
             name: "O0".to_string(),
             comment: Some("other".to_string()),
             external: None,
+            into: None,
             lines: vec![x],
         }]
     );

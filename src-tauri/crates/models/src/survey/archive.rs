@@ -264,8 +264,10 @@ pub struct SlotOwner {
     /// The closure archiving the node, when the slot is a loop end: "shown
     /// as Main / 20 through a loop closure; Remove the closure".
     pub loop_closure: Option<ClosureId>,
-    /// The line's own station there, archived by a merge (the record naming
-    /// the slot's line at the node): "Detach Side to get back its own
+    /// The station a Detach of the slot's line gives back, archived by a
+    /// merge: the record naming the line at the node, or the record it was
+    /// archived under, directly under the node's identity (RS-FX4: the
+    /// line's station before that merge). "Detach Side to get back its own
     /// station 0".
     pub own_station: Option<StationId>,
 }
@@ -391,7 +393,10 @@ impl Project {
             home_line: self.home_line(shown),
             foreign: !self.is_native(shown, slot.line_id),
             loop_closure: self.archiving_closure(node).map(|c| c.id),
-            own_station: self.record_naming(node, slot.line_id).map(|r| r.id),
+            own_station: self.stations.get(&node).and_then(|s| {
+                let record = s.record_for(slot.line_id)?;
+                Some(s.record_top(record.id).map_or(record.id, |top| top.id))
+            }),
         })
     }
 
@@ -692,11 +697,13 @@ impl Project {
     }
 
     /// RS 4.3 (invariant A4 on every node): a node that has a slot but no
-    /// native line takes as its identity the record naming its lines (rule K
-    /// over the records' own lines when several do). The old identity is not
-    /// dropped: when the record has no comment the old comment moves with
-    /// the node (and the old external id when the record has none), and the
-    /// old identity becomes a history record holding whatever did not move.
+    /// native line takes as its identity a record directly under its
+    /// identity whose subtree names its lines (rule K over the lines each
+    /// subtree names when several do, RS-FX4); the records under it come
+    /// under the node's identity. The old identity is not dropped: when the
+    /// record has no comment the old comment moves with the node (and the
+    /// old external id when the record has none), and the old identity
+    /// becomes a history record holding whatever did not move.
     /// The node's slots, hand moves, datums, closure ends and placement
     /// follow the new id. Run after stale record lines are cleared (so a
     /// line that left is no reason). Returns what it restored, in old-id
@@ -721,39 +728,29 @@ impl Project {
             let Some(station) = self.stations.get(&node) else {
                 continue;
             };
-            let candidates: Vec<(StationId, Vec<LineId>)> = station
-                .archived
-                .iter()
-                .filter(|r| !r.lines.is_empty())
-                .map(|r| (r.id, r.lines.clone()))
-                .collect();
+            let candidates = station.top_records_with_lines();
             let Some(chosen) = self.rule_k(candidates) else {
                 continue;
             };
             let Some(station) = self.stations.get_mut(&node) else {
                 continue;
             };
-            let Some(index) = station.archived.iter().position(|r| r.id == chosen) else {
+            let (old_comment, old_external) = (station.comment.clone(), station.external.clone());
+            let Some(record) = station.swap_identity(chosen, Vec::new()) else {
                 continue;
             };
-            let record = station.archived.remove(index);
-            let mut old = station.as_record(Vec::new());
             let comment_moved =
-                !has_text(record.comment.as_ref()) && has_text(old.comment.as_ref());
-            let comment = if comment_moved {
-                old.comment.take()
-            } else {
-                record.comment.clone()
+                !has_text(record.comment.as_ref()) && has_text(old_comment.as_ref());
+            let Some(old) = station.archived.last_mut() else {
+                continue;
             };
-            let external = match record.external.clone() {
-                Some(external) => Some(external),
-                None => old.external.take(),
-            };
+            if comment_moved {
+                station.comment = old.comment.take();
+            }
+            if record.external.is_none() && old_external.is_some() {
+                station.external = old.external.take();
+            }
             let comment_hidden = old.comment.clone().filter(|c| !c.is_empty());
-            station.name.clone_from(&record.name);
-            station.comment = comment;
-            station.external = external;
-            station.archived.push(old);
             self.rekey_node(node, record.id);
             out.push(RestoredIdentity {
                 old: node,

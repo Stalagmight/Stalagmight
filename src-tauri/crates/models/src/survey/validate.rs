@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::{LineId, SectionId, StationId, MAX_LINE_ID, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::{
-    ClosureId, Project, Topology, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE, MAX_SHOT_UUID_CHARS,
+    ClosureId, OwnerFault, Project, Topology, MAX_CLOSURE_ID, MAX_SHOTS_PER_LINE,
+    MAX_SHOT_UUID_CHARS,
 };
 
 /// The largest magnitude of a measured distance: a shot's length, its two
@@ -252,6 +253,26 @@ pub enum Violation {
     NoNativeLine {
         station: StationId,
     },
+    /// A6: an archived record's owner (`into`) names no other record of the
+    /// station holding it.
+    DanglingArchivedOwner {
+        station: StationId,
+        archived: StationId,
+        into: StationId,
+    },
+    /// A6 (with A5): an archived record is archived under a history record,
+    /// which owns nothing.
+    ArchivedUnderHistory {
+        station: StationId,
+        archived: StationId,
+        into: StationId,
+    },
+    /// A6: following archived records' owners from this one comes back to
+    /// it.
+    ArchivedOwnerCycle {
+        station: StationId,
+        archived: StationId,
+    },
     /// A hand move keyed on a station that is not on its line.
     HandMoveOffLine {
         line: LineId,
@@ -482,6 +503,26 @@ impl fmt::Display for Violation {
                 f,
                 "station {station} is shown on no line of its own: archived stations name every \
                  line through it"
+            ),
+            Self::DanglingArchivedOwner {
+                station,
+                archived,
+                into,
+            } => write!(
+                f,
+                "archived station {archived} of station {station} is archived under {into},                  which is no other archived station of it"
+            ),
+            Self::ArchivedUnderHistory {
+                station,
+                archived,
+                into,
+            } => write!(
+                f,
+                "archived station {archived} of station {station} is archived under {into},                  which names no line"
+            ),
+            Self::ArchivedOwnerCycle { station, archived } => write!(
+                f,
+                "archived station {archived} of station {station} is archived under itself                  through other archived stations"
             ),
             Self::HandMoveOffLine { line, station } => write!(
                 f,
@@ -800,6 +841,26 @@ impl Project {
             }
         }
         for (&station, s) in &self.stations {
+            for (i, fault) in super::records::owner_faults(&s.archived) {
+                let record = &s.archived[i];
+                let into = record.into.unwrap_or(record.id);
+                out.push(match fault {
+                    OwnerFault::Dangling => Violation::DanglingArchivedOwner {
+                        station,
+                        archived: record.id,
+                        into,
+                    },
+                    OwnerFault::History => Violation::ArchivedUnderHistory {
+                        station,
+                        archived: record.id,
+                        into,
+                    },
+                    OwnerFault::Cycle => Violation::ArchivedOwnerCycle {
+                        station,
+                        archived: record.id,
+                    },
+                });
+            }
             if s.archived.is_empty() || !topology.contains(station) {
                 continue;
             }

@@ -58,7 +58,10 @@ pub struct Station {
     pub external: Option<String>,
     /// The stations merged into this one and not kept (RS 3), oldest first:
     /// each keeps its own identity and the lines whose own station it was,
-    /// is shown nowhere, and comes back with Detach Line from Station.
+    /// is shown nowhere, and comes back with Detach Line from Station. Each
+    /// names the identity it was archived under ([`ArchivedStation::into`]),
+    /// so the list is a forest under this station's own identity
+    /// (`records.rs`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived: Vec<ArchivedStation>,
 }
@@ -82,23 +85,27 @@ impl Station {
     }
 
     /// This station's own identity as a record naming `lines` (what a merge
-    /// or a restore archives).
+    /// or a restore archives), archived under the identity of the station
+    /// that will hold it (`into` unset).
     pub fn as_record(&self, lines: Vec<LineId>) -> ArchivedStation {
         ArchivedStation {
             id: self.id,
             name: self.name.clone(),
             comment: self.comment.clone(),
             external: self.external.clone(),
+            into: None,
             lines,
         }
     }
 }
 
-/// A station a merge put away inside another one (RS 3): its identity and
-/// the lines whose own station it was. Shown nowhere, its name counts toward
-/// no uniqueness, and Detach Line from Station on one of its lines brings it
-/// back. A record with no lines is history (invariant A5): it reserves its
-/// id and nothing restores it.
+/// A station a merge put away inside another one (RS 3): its identity, the
+/// identity it was archived under, and the lines whose own station it was.
+/// Shown nowhere, its name counts toward no uniqueness, and Detach Line from
+/// Station on one of its lines (or of the records archived under it) brings
+/// it back with the records archived under it. A record with no lines is
+/// history (invariant A5): it reserves its id, owns no record, and nothing
+/// restores it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchivedStation {
@@ -108,6 +115,14 @@ pub struct ArchivedStation {
     pub comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<String>,
+    /// The identity this record was archived under (RS-FX4): unset for the
+    /// identity of the station holding it, else the Station ID of another
+    /// record of that station, which held this one as its own record when a
+    /// later merge archived it (invariant A6: never itself, never a history
+    /// record, never a cycle). A record and the records under it are one
+    /// former junction, which Detach Line from Station gives back whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub into: Option<StationId>,
     /// The lines whose own station this was; each passes the station that
     /// holds the record (invariant A2), and names at most one record there
     /// (A3).
@@ -121,7 +136,8 @@ impl ArchivedStation {
         self.lines.is_empty()
     }
 
-    /// The live station this record restores to (no records of its own).
+    /// The live station this record restores to (no records of its own:
+    /// the caller moves the records under it, `records.rs`).
     pub fn to_station(&self) -> Station {
         Station {
             id: self.id,

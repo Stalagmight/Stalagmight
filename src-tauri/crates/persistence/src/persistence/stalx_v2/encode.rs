@@ -507,7 +507,8 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
         }
         if !station.archived.is_empty() {
             // RS 8.1 (feature `archived-stations`): each record an object
-            // `{id, name, comment?, external?, lines?}`.
+            // `{id, name, comment?, external?, into?, lines?}`; `into` is
+            // the record it was archived under (RS-FX4).
             let b = o.key("archived");
             b.push(b'[');
             for (i, record) in station.archived.iter().enumerate() {
@@ -522,6 +523,9 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
                 }
                 if let Some(external) = &record.external {
                     string(r.key("external"), external);
+                }
+                if let Some(into) = record.into {
+                    small(r.key("into"), u64::from(into));
                 }
                 if !record.lines.is_empty() {
                     let l = r.key("lines");

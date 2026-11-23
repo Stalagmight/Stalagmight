@@ -229,6 +229,34 @@ describe('junction station details', () => {
     expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent('21 (Station ID 21), kept for its Station ID');
   });
 
+  /** RS-FX4: a record archived inside another (its `into`) is listed under
+   *  it, as Detach brings the two back together; a record whose owner is
+   *  missing or whose owners cycle is listed at the top, so each is listed
+   *  once. Injection: rendering every record at the top level fails it. */
+  it('lists a record archived inside another under it', () => {
+    const list = stations().map((s) =>
+      s.archived
+        ? {
+            ...s,
+            archived: [
+              { id: 21, name: 'R0', into: 20, lines: [SIDE] },
+              { id: 23, name: 'Q0', into: 99, lines: [] },
+              { id: 20, name: 'X1', lines: [MAIN] },
+            ],
+          }
+        : s,
+    );
+    useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
+    render(<DetailPanel />);
+    const inside = screen.getByTestId('station-detail-record-20-inside');
+    expect(inside).toContainElement(screen.getByTestId('station-detail-record-21'));
+    expect(inside).toHaveAccessibleName('Archived inside X1');
+    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent("R0 (Station ID 21), Side's own station");
+    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent("X1 (Station ID 20), Main's own station");
+    expect(inside).not.toContainElement(screen.getByTestId('station-detail-record-23'));
+    expect(screen.getAllByTestId(/^station-detail-record-\d+$/)).toHaveLength(3);
+  });
+
   it('a station with nothing archived shows no "Archived here"', () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(MAIN, 2) });
     render(<DetailPanel />);

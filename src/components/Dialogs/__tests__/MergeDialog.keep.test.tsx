@@ -58,8 +58,8 @@ function preview(extra: Partial<MergePreview> = {}): MergePreview {
     ],
     default_keep: 12,
     keeps: [
-      { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: { id: 12, name: '12', home_line: MAIN }, comments_hidden: [], not_given_back: [] },
-      { keep: 12, renamed_lines: [SIDE], collisions: [collision], hidden: side0, comments_hidden: [], not_given_back: [] },
+      { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: { id: 12, name: '12', home_line: MAIN }, comments_hidden: [] },
+      { keep: 12, renamed_lines: [SIDE], collisions: [collision], hidden: side0, comments_hidden: [] },
     ],
     ...extra,
   };
@@ -159,7 +159,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     open(
       preview({
         keep_forced_by: 7n,
-        keeps: [{ keep: 12, renamed_lines: [SIDE], collisions: [], hidden: side0, comments_hidden: [], not_given_back: [] }],
+        keeps: [{ keep: 12, renamed_lines: [SIDE], collisions: [], hidden: side0, comments_hidden: [] }],
       }),
     );
     expect(screen.getByTestId('merge-keep-forced')).toHaveTextContent(
@@ -206,7 +206,7 @@ describe('defaultKeepOf', () => {
   it('takes the default when offered, else the one offered, else none', () => {
     expect(defaultKeepOf(preview())).toBe(12);
     expect(
-      defaultKeepOf(preview({ default_keep: 99, keeps: [{ keep: 40, renamed_lines: [], collisions: [], hidden: main12, comments_hidden: [], not_given_back: [] }] })),
+      defaultKeepOf(preview({ default_keep: 99, keeps: [{ keep: 40, renamed_lines: [], collisions: [], hidden: main12, comments_hidden: [] }] })),
     ).toBe(40);
     expect(defaultKeepOf(preview({ keeps: [] }))).toBeNull();
     expect(defaultKeepOf(undefined)).toBeNull();
@@ -216,19 +216,18 @@ describe('defaultKeepOf', () => {
 /**
  * Package RS-FX1: the chosen keep also says when the station not kept was a
  * loop closure's hidden end (the closure then hides nothing, so the kept
- * station is shown there, RS 1.3), which lines Detach Line from Station will
- * not give back (the archived station's own earlier merges, model review
- * finding 4), and every other comment the merge hides (a promotion it makes,
- * RS 12). Injections: rendering `detachBringsBack` whatever
- * `not_given_back` says fails the first case; dropping `HiddenComments`
- * fails it too.
+ * station is shown there, RS 1.3) and every other comment the merge hides (a
+ * promotion it makes, RS 12). Detach Line from Station gives the archived
+ * station back on every line it covered, its own earlier merges included
+ * (RS-FX4), so the dialog promises that without exceptions. Injection:
+ * dropping `HiddenComments` fails the first case.
  */
 describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
-  it('says the loop end, the lines Detach does not give back and every other hidden comment', () => {
+  it('says the loop end and every other hidden comment', () => {
     open(
       preview({
         keeps: [
-          { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: main12, comments_hidden: [], not_given_back: [] },
+          { keep: 40, renamed_lines: [MAIN], collisions: [], hidden: main12, comments_hidden: [] },
           {
             keep: 12,
             renamed_lines: [SIDE],
@@ -236,7 +235,6 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
             hidden: side0,
             unarchived: 3n,
             comments_hidden: [{ id: 28, name: '3', home_line: MAIN, comment: 'Low air' }],
-            not_given_back: [MAIN],
           },
         ],
       }),
@@ -244,9 +242,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     expect(screen.getByTestId('merge-loop-end-shown')).toHaveTextContent(
       'It was the hidden end of a loop closure: the closure stays, and Main / 12 is shown at that end too.',
     );
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(
-      'Detach Line from Station brings it back on its own lines; Main keeps showing Main / 12.',
-    );
+    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings it back\.$/);
     expect(screen.getByTestId('merge-comments-hidden-28')).toHaveTextContent(
       'Main / 3\'s comment ("Low air") is hidden. Undo brings it back.',
     );

@@ -183,6 +183,7 @@ fn a_merged_stations_records_ride_every_slot() {
         id: a2,
         name: a2_name,
         comment: None,
+        into: None,
         lines: vec![a],
     }]);
     assert_eq!(station_at(&stations, slot(a, 2)).archived, expected);

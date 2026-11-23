@@ -1240,11 +1240,13 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
                 name: "tampered".to_string(),
                 comment: Some("changed behind its back".to_string()),
                 external: None,
+                into: None,
                 lines: Vec::new(),
             });
             if let Some(record) = st.archived.first_mut() {
                 record.name.push('!');
                 record.lines.push(u32::MAX);
+                record.into = Some(record.into.map_or(u32::MAX - 1, |o| o ^ 1));
             }
             return Some("a station it records");
         }

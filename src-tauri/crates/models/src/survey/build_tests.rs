@@ -128,6 +128,7 @@ fn inserting_a_station_raises_the_counter_past_it_and_its_records() {
         name: "old".to_string(),
         comment: None,
         external: None,
+        into: None,
         lines: Vec::new(),
     });
     p.insert_station(station).unwrap();

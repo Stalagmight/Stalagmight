@@ -428,6 +428,7 @@ fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
             name: alias.name.unwrap_or_else(|| station.name.clone()),
             comment: None,
             external: None,
+            into: None,
             lines,
         });
     }
@@ -436,8 +437,8 @@ fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
 }
 
 /// A station's `archived` array (RS 8.1): records `{id, name, comment?,
-/// external?, lines?}`. Each record and each of its lines counts against the
-/// archived-station cap.
+/// external?, into?, lines?}`. Each record and each of its lines counts
+/// against the archived-station cap.
 struct ArchivedSeed<'c, 'l> {
     ctx: &'c mut Ctx<'l>,
     out: &'c mut Vec<ArchivedStation>,
@@ -455,7 +456,7 @@ impl<'de> Visitor<'de> for ArchivedSeed<'_, '_> {
     type Value = ();
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an array of archived stations {id, name, comment?, external?, lines?}")
+        f.write_str("an array of archived stations {id, name, comment?, external?, into?, lines?}")
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
@@ -488,18 +489,20 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
     type Value = ArchivedStation;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an archived station {id, name, comment?, external?, lines?}")
+        f.write_str("an archived station {id, name, comment?, external?, into?, lines?}")
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ArchivedStation, A::Error> {
         // Range-checked by `validate` (A1); each line must pass through the
-        // station (A2) and name no other record of it (A3).
-        const KEYS: [&str; 5] = ["id", "name", "comment", "external", "lines"];
+        // station (A2) and name no other record of it (A3); `into` must name
+        // another record of the station that is not history, and owners
+        // must not cycle (A6).
+        const KEYS: [&str; 6] = ["id", "name", "comment", "external", "lines", "into"];
         let ctx = self.ctx;
         let mut mask = 0;
         let mut others = OtherKeys::new();
-        let (mut id, mut name, mut comment, mut external, mut lines) =
-            (None, None, None, None, Vec::new());
+        let (mut id, mut name, mut comment, mut external, mut into, mut lines) =
+            (None, None, None, None, None, Vec::new());
         while let Some(key) = map.next_key::<Key<'de>>()? {
             let key = key.0;
             let Some(index) = known(&KEYS, &key) else {
@@ -512,6 +515,7 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
                 1 => name = Some(value::<String, _>(&mut map, ctx, "archived name")?),
                 2 => comment = Some(value::<String, _>(&mut map, ctx, "archived comment")?),
                 3 => external = Some(value::<String, _>(&mut map, ctx, "archived external")?),
+                5 => into = Some(value::<StationId, _>(&mut map, ctx, "archived into")?),
                 _ => {
                     ctx.field = "archived lines";
                     map.next_value_seed(RecordLinesSeed {
@@ -529,6 +533,7 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
             name,
             comment,
             external,
+            into,
             lines,
         })
     }

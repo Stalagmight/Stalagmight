@@ -71,6 +71,14 @@ pub enum Repair {
         station: StationId,
         archived: StationId,
     },
+    /// A6: an archived station whose owner (`into`) named no other archived
+    /// station of its station, a history one, or one archived under it
+    /// again: it is archived under the station's own identity now, so a
+    /// Detach of its lines gives it back on its own (RS-FX4).
+    ArchivedOwnerCleared {
+        station: StationId,
+        archived: StationId,
+    },
     /// A4: a station with no native line took back the archived identity
     /// naming its lines (RS 4.3); its own became history.
     RestoredArchived {
@@ -180,6 +188,12 @@ impl fmt::Display for Repair {
                 f,
                 "archived station {archived} of station {station} names no line any more (its \
                  name and comment can no longer be brought back)"
+            ),
+            Self::ArchivedOwnerCleared { station, archived } => write!(
+                f,
+                "archived station {archived} of station {station} is now archived under station \
+                 {station} itself (the station it was archived under was missing, kept only for \
+                 its Station ID, or archived under it in turn)"
             ),
             Self::RestoredArchived { from, to } => write!(
                 f,
@@ -326,6 +340,9 @@ fn stage(v: &Violation) -> u8 {
         | Violation::StaleArchivedLine { .. }
         | Violation::LineNamedTwice { .. }
         | Violation::NoNativeLine { .. }
+        | Violation::DanglingArchivedOwner { .. }
+        | Violation::ArchivedUnderHistory { .. }
+        | Violation::ArchivedOwnerCycle { .. }
         | Violation::HandMoveOffLine { .. }
         | Violation::DanglingSection { .. } => 1,
         Violation::RepeatedStationInChain { .. }
@@ -446,6 +463,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     // Within a pass, act on each line at most once for chain repairs (later
     // violations about it are re-checked next pass).
     let mut touched_lines = BTreeSet::new();
+    let mut owners: BTreeMap<StationId, HashSet<StationId>> = BTreeMap::new();
     for v in violations.iter().filter(|v| stage(v) == first) {
         match v {
             Violation::StationKeyMismatch { key, id } => {
@@ -500,8 +518,8 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             Violation::ArchivedIdCollision { station, archived }
             | Violation::ArchivedIdOutOfRange { station, archived } => {
                 if let Some(s) = p.stations.get_mut(station) {
-                    if let Some(i) = s.archived.iter().position(|r| r.id == *archived) {
-                        s.archived.remove(i);
+                    // The records under it move up to its owner (A6).
+                    if s.take_record(*archived).is_some() {
                         repairs.push(Repair::DroppedArchived {
                             station: *station,
                             archived: *archived,
@@ -621,6 +639,17 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                         }
                     }
                 }
+            }
+            // A6: the record goes directly under the station's identity
+            // (applied after the loop, one walk per station).
+            Violation::DanglingArchivedOwner {
+                station, archived, ..
+            }
+            | Violation::ArchivedUnderHistory {
+                station, archived, ..
+            }
+            | Violation::ArchivedOwnerCycle { station, archived } => {
+                owners.entry(*station).or_default().insert(*archived);
             }
             // A4: the station takes back the identity of the record naming
             // its lines (RS 4.3, rule K when several do), once per pass for
@@ -746,6 +775,18 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     apply_line_edits(p, edits);
     if !remap.is_empty() {
         remap_stations(p, &remap);
+    }
+    for (station, ids) in owners {
+        if let Some(s) = p.stations.get_mut(&station) {
+            for record in &mut s.archived {
+                if ids.contains(&record.id) && record.into.take().is_some() {
+                    repairs.push(Repair::ArchivedOwnerCleared {
+                        station,
+                        archived: record.id,
+                    });
+                }
+            }
+        }
     }
     if stale {
         let dropped = p.drop_stale_attachments();

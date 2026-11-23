@@ -145,24 +145,45 @@ impl<'p> NameBook<'p> {
     }
 
     /// The slots of the lines a detach at `slot` takes off the station
-    /// there: the slot itself, or, when its line keeps the station
-    /// (`Project::detach_keeps`), one slot of each other line, in slot order
-    /// ([`detach`]). The slot alone when it does not exist.
+    /// there, one per line in slot order ([`detach`]): when its line keeps
+    /// the station (`Project::detach_keeps`), every other line; when an
+    /// archived station names its line, every line of the former junction
+    /// that comes back with it (the archived station's subtree, RS 4.2,
+    /// RS-FX4); else the slot itself. The slot alone when it does not exist.
     fn detached_slots(&self, slot: StationRef) -> Vec<StationRef> {
         let topology = self.project.topology();
         let Some(station) = topology.station_at(slot) else {
             return vec![slot];
         };
-        if !self.project.detach_keeps(station, slot.line_id) {
-            return vec![slot];
-        }
+        let off_lines: Vec<LineId> = if self.project.detach_keeps(station, slot.line_id) {
+            topology
+                .lines_of(station)
+                .into_iter()
+                .filter(|&line| line != slot.line_id)
+                .collect()
+        } else {
+            let together = self.project.stations.get(&station).and_then(|s| {
+                let record = s.record_for(slot.line_id)?;
+                let top = s.record_top(record.id).map_or(record.id, |t| t.id);
+                Some(s.subtree_lines(top))
+            });
+            match together {
+                Some(lines) if lines.len() > 1 => lines,
+                _ => return vec![slot],
+            }
+        };
         let mut off: Vec<StationRef> = Vec::new();
         for &other in topology.slots_of(station) {
-            if other.line_id != slot.line_id && off.iter().all(|o| o.line_id != other.line_id) {
+            if off_lines.contains(&other.line_id) && off.iter().all(|o| o.line_id != other.line_id)
+            {
                 off.push(other);
             }
         }
-        off
+        if off.is_empty() {
+            vec![slot]
+        } else {
+            off
+        }
     }
 
     /// A slot of a line that stays on the station at `slot` when the lines
@@ -305,7 +326,8 @@ fn merge_label(
 /// knows it by an alias, I-1): then the other lines come off, each getting
 /// back the station it had, and the label names them (`Detach lines "B" and
 /// "C" from Main / 4`), never the line that keeps the station (demo finding
-/// N-2). The station reads on `clicked` (the pair form's first slot, where
+/// N-2). When the slot's line was archived with others as one junction, the
+/// label names every line that comes off with it (RS-FX4). The station reads on `clicked` (the pair form's first slot, where
 /// the user opened the dialog) when its line stays.
 fn detach(names: &NameBook<'_>, slot: StationRef, clicked: Option<StationRef>) -> String {
     let off = names.detached_slots(slot);

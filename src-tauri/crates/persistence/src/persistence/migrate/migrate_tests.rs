@@ -160,6 +160,7 @@ fn a_merge_keeps_the_member_on_the_longest_line() {
     assert_eq!(s.archived[0].name, "0");
     assert_eq!(s.archived[0].comment.as_deref(), Some("low air"));
     assert_eq!(s.archived[0].lines, vec![side]);
+    assert_eq!(s.archived[0].into, None, "under the kept member (RS-FX4)");
     let r = &out.report;
     assert_eq!(
         (r.merges_collapsed, r.members_archived, r.kept_by_length),

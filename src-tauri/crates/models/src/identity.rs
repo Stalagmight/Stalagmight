@@ -31,10 +31,12 @@ pub struct StationIdentity {
     pub home_line: Option<LineId>,
 }
 
-/// A station a merge archived inside a node (RS 3): its identity and the
-/// lines whose own station it was. A record with no lines is history (A5):
-/// nothing restores it. The station details list them; Detach Line from
-/// Station on one of `lines` brings the record back.
+/// A station a merge archived inside a node (RS 3): its identity, the
+/// identity it was archived under, and the lines whose own station it was.
+/// A record with no lines is history (A5): nothing restores it. The station
+/// details list them, each under the one it was archived under; Detach Line
+/// from Station on one of `lines` brings back the record directly under the
+/// node's identity that holds it, with every record under that one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(rename = "ArchivedStation")]
 pub struct ArchivedStationWire {
@@ -43,6 +45,13 @@ pub struct ArchivedStationWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub comment: Option<String>,
+    /// The Station ID of the record of the same node it was archived under
+    /// (a junction of its own that a later merge archived whole, RS-FX4);
+    /// absent when it was archived under the node's own identity. The list
+    /// gives a record before the one it is under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub into: Option<StationId>,
     /// The lines whose own station it was, in the model's line order; empty
     /// for a history record.
     pub lines: Vec<LineId>,
@@ -172,11 +181,6 @@ pub struct MergeKeepPreview {
     /// comment. Undo brings them back.
     #[serde(default)]
     pub comments_hidden: Vec<StationIdentity>,
-    /// The lines the archived station's own earlier merges named: Detach
-    /// Line from Station gives the archived station back on its own lines,
-    /// but these keep showing the kept station. In line order.
-    #[serde(default)]
-    pub not_given_back: Vec<LineId>,
 }
 
 /// A slot away from a detached junction that shows another station after
@@ -291,8 +295,10 @@ pub struct StationOwner {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub loop_closure: Option<u64>,
-    /// The line's own station there, archived by a merge ("Detach Side to
-    /// get back its own station 0").
+    /// The station a Detach of the line gives back there, archived by a
+    /// merge ("Detach Side to get back its own station 0"): the line's own
+    /// station, or the junction it was part of when a later merge archived
+    /// that junction whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub own_station: Option<StationIdentity>,

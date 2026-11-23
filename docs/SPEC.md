@@ -1118,7 +1118,9 @@ with it or repeat a name, the button opens Detach Line from Station on that
 line instead. "Archived here" lists the stations merges archived in it, each
 with its name, Station ID and the line whose own station it was (`0 (Station
 ID 9), Side's own station`) or, for one no line names any more, "kept for its
-Station ID", and its comment; hidden when none. A loop closure end that
+Station ID", and its comment; a station archived inside another (a junction a
+later merge archived whole) is listed under it, as Detach brings the two back
+together; hidden when none. A loop closure end that
 shows its closure's kept end opens with "Loop closure end, shown as Main /
 3" and its own station, hidden until the closure is removed; its position,
 depth and datum are its own. A rename or comment edit through a foreign slot
@@ -1968,7 +1970,10 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 menu, or a line's button in Station details): the chosen line gets a new
 station where the junction was (the name it showed the junction by; no
 comment, no aliases), so nothing moves; a line that was merged there gets its
-own Station ID and name back. When every other line knew the junction by
+own Station ID and name back, and when that station was a junction of its own
+when a later merge archived it, every line of that junction comes off with it
+and gets it back, the stations archived in it still inside it (RS-FX4). When
+every other line knew the junction by
 another name (each was merged there), the chosen line keeps the junction (its
 Station ID, name and comment) and the other lines get their own station back
 instead; the dialog says which. The datums and closure ends that came from that

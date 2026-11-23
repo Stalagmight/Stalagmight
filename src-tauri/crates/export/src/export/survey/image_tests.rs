@@ -89,6 +89,7 @@ fn a_junction_is_labelled_by_its_kept_name() {
         name: "M1".to_string(),
         comment: None,
         external: None,
+        into: None,
         lines: vec![main],
     });
     assert_eq!(p.shown_name(j), Some("S0"));

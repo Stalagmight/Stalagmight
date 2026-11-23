@@ -542,6 +542,48 @@ describe('checkProjectInvariants', () => {
       ).toBe(true);
     });
 
+    it("fires when a record's owner breaks A6 (RS-FX4)", () => {
+      // Only lines 1 and 2 pass the junction, so a record 20 naming line 2
+      // can only be archived under a history record here (A5: it owns
+      // nothing), a missing one, or itself through another.
+      const withRecords = (records: unknown[]) => (state: Record<string, unknown>) => {
+        merged(state);
+        slots(state)[1]!.archived = records;
+        slots(state)[2]!.archived = records;
+      };
+      const inside = [
+        { id: 20, name: '0', into: 21, lines: [2] },
+        { id: 21, name: 'x', lines: [] },
+      ];
+      expect(
+        violationsAfter(withRecords(inside)).some((v) =>
+          v.includes('record 20 of Station ID 11 is archived under history record 21 (A6)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(withRecords([{ id: 20, name: '0', into: 99, lines: [2] }])).some((v) =>
+          v.includes('record 20 of Station ID 11 is archived under 99, no other record of it (A6)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 20, name: '0', into: 21, lines: [2] },
+            { id: 21, name: 'x', into: 20, lines: [] },
+          ]),
+        ).some((v) => v.includes('record 20 of Station ID 11 is archived under itself through other records (A6)')),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 21, name: 'x', lines: [] },
+            { id: 22, name: 'y', into: 21, lines: [] },
+            { id: 20, name: '0', lines: [2] },
+          ]),
+        ).filter((v) => v.includes('(A6)')),
+      ).toEqual(['record 22 of Station ID 11 is archived under history record 21 (A6)']);
+    });
+
     /** Closure 1 archives its end b (2/2, Station ID 13), kept 1/0 (10): 2/2
      *  shows 10's name with the dot in line 1's colour and the loop mark. */
     const archived = (state: Record<string, unknown>) => {

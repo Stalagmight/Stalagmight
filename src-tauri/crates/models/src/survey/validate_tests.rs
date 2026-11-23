@@ -15,6 +15,7 @@ fn record(id: crate::StationId, name: &str, lines: Vec<crate::LineId>) -> Archiv
         name: name.to_string(),
         comment: None,
         external: None,
+        into: None,
         lines,
     }
 }

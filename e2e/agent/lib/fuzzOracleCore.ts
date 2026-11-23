@@ -545,7 +545,8 @@ export function checkProjectInvariants(state: unknown): string[] {
     idAt[here] = idKey;
   }
   // Each node: its slots agree, list each other, and its records hold A1 to
-  // A4 (RS 3). `nativeOf` is its native lines in the model's line order.
+  // A4 (RS 3) and A6 (RS-FX4). `nativeOf` is its native lines in the model's
+  // line order.
   const nativeOf: Record<string, string[]> = {};
   const recordHolder: Record<string, string> = {};
   const idKeys = Object.keys(byStationId);
@@ -582,6 +583,36 @@ export function checkProjectInvariants(state: unknown): string[] {
           violations.push(`Station ID ${idKey} has two records naming line ${lineKey} (A3)`);
         }
         named[lineKey] = true;
+      }
+    }
+    // A6 (RS-FX4): a record's `into` names another record of the node that
+    // names a line, and following `into` never comes back to a record.
+    const recordById: Record<string, Record<string, unknown>> = {};
+    for (let r = 0; r < records.length; r++) {
+      const record = records[r] as Record<string, unknown>;
+      recordById[String(Number(record.id))] = record;
+    }
+    for (let r = 0; r < records.length; r++) {
+      const record = records[r] as Record<string, unknown>;
+      if (record.into === undefined || record.into === null) continue;
+      const recordKey = String(Number(record.id));
+      const ownerKey = String(Number(record.into));
+      const owner = recordById[ownerKey];
+      if (owner === undefined || ownerKey === recordKey) {
+        violations.push(`record ${recordKey} of Station ID ${idKey} is archived under ${ownerKey}, no other record of it (A6)`);
+        continue;
+      }
+      if (!Array.isArray(owner.lines) || owner.lines.length === 0) {
+        violations.push(`record ${recordKey} of Station ID ${idKey} is archived under history record ${ownerKey} (A6)`);
+      }
+      let at: Record<string, unknown> | undefined = owner;
+      for (let hops = 0; at !== undefined && hops <= records.length; hops++) {
+        if (at.into === undefined || at.into === null) break;
+        if (String(Number(at.into)) === recordKey) {
+          violations.push(`record ${recordKey} of Station ID ${idKey} is archived under itself through other records (A6)`);
+          break;
+        }
+        at = recordById[String(Number(at.into))];
       }
     }
     const native = Object.keys(linesOfNode[idKey] as Record<string, true>)

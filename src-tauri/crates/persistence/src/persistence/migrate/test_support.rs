@@ -727,11 +727,19 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     if shot_uuids_changed != r.shot_uuids_minted {
         return Err("shot uuids changed without being reported".to_string());
     }
-    // Every legacy Station ID survives, as a station or an archived record.
+    // Every legacy Station ID survives, as a station or an archived record;
+    // a 0.6.0 merge group's members are archived under its kept member, none
+    // inside another (RS 8.3, RS-FX4).
     let mut ids: BTreeSet<u32> = BTreeSet::new();
     for station in p.stations.values() {
         ids.insert(station.id);
         ids.extend(station.archived.iter().map(|r| r.id));
+        if let Some(nested) = station.archived.iter().find(|r| r.into.is_some()) {
+            return Err(format!(
+                "record {} of station {} is archived under {:?}, not under the kept member",
+                nested.id, station.id, nested.into
+            ));
+        }
     }
     let lost = lp
         .station_ids

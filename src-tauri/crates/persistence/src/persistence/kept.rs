@@ -207,6 +207,12 @@ pub(crate) fn keep_longest(
     project: &mut Project,
     comments: Comments,
 ) -> Vec<(StationId, StationId)> {
+    // Neither earlier form knew owners (U1 alias rows, 0.6.0 merge
+    // members): every record is archived under its node's own identity
+    // (RS-FX4), whatever an earlier file's record objects say.
+    for station in project.stations.values_mut() {
+        station.flatten_records();
+    }
     let junctions: Vec<StationId> = project
         .stations
         .iter()

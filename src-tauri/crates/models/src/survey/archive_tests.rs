@@ -53,6 +53,7 @@ pub(super) fn record(id: StationId, name: &str, lines: Vec<LineId>) -> ArchivedS
         name: name.to_string(),
         comment: None,
         external: None,
+        into: None,
         lines,
     }
 }

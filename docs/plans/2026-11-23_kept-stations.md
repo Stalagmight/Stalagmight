@@ -1492,3 +1492,114 @@ reason.
   (`GasReach::collapse_route`, `AlongLine::path_stations`), and RS-T's
   follow-up (the Merge and Detach previews did not name what a promotion
   inside the op hides) by RS-FX1's `comments_hidden` and `shown_elsewhere`.
+
+## Deviations (package RS-FX4)
+
+Decisions the record-ownership fix (model review finding 4) took where this
+page is silent or the code disagreed, each with its reason. They supersede
+RS-M1's "Detach keeps history records on the junction", RS-T's "Merge then
+detach restores everything only when the archived station held no records"
+and RS-FX1's "Records still carry no owner link".
+
+- **An owner link, not nesting.** A record gains `into: Option<StationId>`:
+  unset when the node's own identity holds it, else the Station ID of another
+  record of the same node, the station that held it when a later merge
+  archived that station whole. The list order stays the order (oldest first;
+  a record comes before the one it is under). Section 3 reads
+  `ArchivedStation { id, name, comment, external, into, lines }`. Nesting
+  would have changed every flat-list site (A2's stale-line clear, A3,
+  `record_for`, Split's and the range moves' repointing, Add's remap, id
+  reservation, the decoder's caps and counts) into a tree walk, and made the
+  file's record, the changeset row and the wire recursive (a decoder depth
+  cap of their own). The link costs one optional key in the file's record
+  object, one optional field in the changeset row (serde, so `StationExtras`
+  stays `deny_unknown_fields`) and on the wire, and the flat sites stay as
+  they were. Its price, an owner that dangles or cycles in a crafted file,
+  is invariant A6 below, checked in one linear walk.
+- **A6, and A5 extended.** A record's `into` names another record of the
+  same node that is not history, and following `into` never comes back to a
+  record (`Violation::DanglingArchivedOwner`, `ArchivedUnderHistory`,
+  `ArchivedOwnerCycle`; file rule 13). A history record owns nothing: a record
+  that loses its last line hands the records under it to its own owner, which
+  every epilogue does after the stale-line clear (`drop_stale_attachments`,
+  `Station::settle_record_owners`, run on every station since an edit may
+  have emptied a record itself, as Combine's shared join does). Ids stay
+  unique across the whole node (A1) and A3 stays per node, as the list is
+  still the node's one list. Salvage puts a record with a bad owner under its
+  station's identity (`Repair::ArchivedOwnerCleared`), one walk per station,
+  so a crafted 200,000-record owner cycle is refused and salvaged in about a
+  second.
+- **Merge.** The fold (`Station::archive_whole`) moves the retired node's
+  records under the retired identity (those directly under it get
+  `into = retired`), then pushes the retired identity with no `into`. Keeping
+  the moving station (4.1 step 3, `Station::swap_identity`) puts the
+  stationary node's own records under the stationary record and brings the
+  moving identity's records back under the node. A retired identity that
+  would be history (no native line) owns nothing, so its records stay under
+  the node's identity.
+- **Detach case 1 gives back the whole former junction.** The record naming
+  the line leads to the record directly under the junction's identity that
+  holds it (`Station::record_top`; itself when it has no owner); that record
+  comes back as the line's node, every line its subtree names comes off with
+  it (the together-detach of 4.2, listed in `DetachNaming::together` and the
+  dialog's "come off with" sentence), and the records under it stay inside it,
+  those directly under it with `into` unset (`Station::take_subtree`). So in
+  model review finding 4's sequence, Detach of LX or of LX2 gives X back on
+  both, with R inside it. Taking one line alone has a path that exists: a
+  second Detach on the restored node (LX2 from X gives R back); no new UI.
+  The merge preview's `not_given_back` (and the dialog sentence it fed, with
+  its two strings) is gone, as Detach now gives everything back.
+- **Detach case 2 and the A4 restore pick among the records directly under
+  the identity.** `rest_keep` and rule K choose among those, each measured
+  over the lines its subtree names (the lines its identity is shown on once
+  restored, as a node candidate is; equal to its own lines for a record with
+  nothing under it, so a flat survey picks as before); a `rest_keep` naming a
+  record inside another refuses (`InvalidKeep`). The chosen record's own
+  records come under the new identity; in case 2 every other record goes
+  with the remaining lines, keeping its owner, but the history records
+  directly under the junction's identity, which stay with it; in the restore
+  the old identity becomes a history record that owns nothing.
+- **The history row names every line that comes off.** A Detach whose
+  archived station comes back on other lines too reads `Detach lines "Side"
+  and "Far" from Main / 4`, as case 2's row already named the lines that
+  come off (N-2); before, it named the addressed line alone, also for a
+  several-line record.
+- **History records stay with the identity they were archived under**: one
+  under a record comes back inside it, one directly under the junction's
+  identity stays with the junction.
+- **A tear takes the one record off.** Combine's tear separates one line, so
+  the torn line's fresh node takes the record naming it alone
+  (`Station::take_record`); the records under it move up to its owner at the
+  junction. Combine's forced join keep re-identifies with `swap_identity`;
+  the plain join goes through the merge's fold.
+- **Split, ranges and append.** Split and the range moves only rewrite
+  record lines, so owners are untouched; Add .stalx shifts `into` with the
+  record ids.
+- **The upgrades flatten.** Neither U1 alias rows nor 0.6.0 merge members
+  knew owners: `keep_longest` (8.2 step 2 and 8.3) first puts every record
+  under its node's identity, so an `into` an earlier file holds (no build
+  wrote one) is dropped, and A6 is among the violations the 8.2 upgrade
+  settles. The migration oracle checks that no migrated record has an owner.
+- **No history or file version bump.** The record shape changed (an optional
+  `into`) inside version 2 of both, which no release has (the latest tag,
+  v0.5.5, writes neither): a record without `into` reads as before, and an
+  earlier #827 development build opens a file with `into` read-only (an
+  unknown record key is tier 1) and refuses a history entry with it (its
+  record rows are `deny_unknown_fields`), which only those unreleased builds
+  meet.
+- **Display.** `ArchivedStationWire::into` (TS `ArchivedStation.into`);
+  "Archived here" lists a record inside another under it (a record whose
+  owner is missing or cycles at the top, so each is listed once). The
+  whose-station prompt's own station (`SlotOwner::own_station`,
+  `StationOwner.own_station`) is the station a Detach of the line gives back,
+  the top record, so "Detach Side to get back its own station 0" names what
+  Detach does. The e2e mock keeps an owner per archived slot: a merge
+  archives the junction not kept whole, a Detach of any of its lines gives
+  it back together, case 2 picks among the members directly under the kept
+  station. The agent harness's wire oracle checks A6.
+- **The RS-T property is strict again.** `rs-merge-detach` compares every
+  station (records and owners included) and every slot after merge then
+  Detach, with no flat-record exception; it passes on the 24 gate seeds and
+  the nine pinned farm seeds. Its remaining exclusions (a merge or detach
+  that also ran a promotion, a restore, a letter or the user's renames) are
+  unchanged.

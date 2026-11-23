@@ -1436,15 +1436,12 @@ fn chains(p: &Project) -> Vec<(LineId, Vec<StationId>)> {
 }
 
 /// `rs-merge-detach` (RS 12): detaching the archived station's line right
-/// after a merge restores every shown identity and record, when the merge
-/// made nothing else happen (no sweep, restore, letter or renames). `Ok(true)`
-/// when it was checked.
-///
-/// Exception (deviation RS-T): records carry no ownership link (RS-M1), so a
-/// retired junction's own records stay on the kept node after the detach.
-/// When the archived station held records, only its own identity and its
-/// own lines are checked: it is a node again with its name, comment and
-/// external, on exactly the lines its record named.
+/// after a merge restores every shown identity and record, byte for byte,
+/// when the merge made nothing else happen (no sweep, restore, letter or
+/// renames): the slots, and every station with its records and their
+/// owners. A junction the merge archived comes back whole, with the records
+/// it held still inside it (RS-FX4; the flat-record exception RS-T made
+/// before records had owners is gone). `Ok(true)` when it was checked.
 fn merge_then_detach(
     before: &Project,
     merged: &Project,
@@ -1466,6 +1463,15 @@ fn merge_then_detach(
             format!("the merge kept {node} but holds no record {x}"),
         ));
     };
+    if record.into.is_some() {
+        return Err(fail(
+            "rs-merge-detach",
+            format!(
+                "the merge archived {x} under {:?}, not under {node}",
+                record.into
+            ),
+        ));
+    }
     let Some(&line) = record.lines.first() else {
         return Err(fail(
             "rs-merge-detach",
@@ -1482,52 +1488,27 @@ fn merge_then_detach(
     if !detached.sweep.is_empty() || !detached.identities.is_empty() {
         return Ok(false);
     }
-    let Some(old) = before.stations.get(&x) else {
+    if !before.stations.contains_key(&x) {
         return Ok(false);
-    };
-    if old.archived.is_empty() {
-        if chains(&copy) != chains(before) {
-            return Err(fail(
-                "rs-merge-detach",
-                format!("after the merge and the detach of {x}'s line {line} the slots differ"),
-            ));
-        }
-        if copy.stations != before.stations {
-            let differs = before
-                .stations
-                .iter()
-                .find(|(id, s)| copy.stations.get(id) != Some(s))
-                .map(|(id, s)| (id, s, copy.stations.get(id)));
-            return Err(fail(
-                "rs-merge-detach",
-                format!(
-                    "after the merge and the detach of {x}'s line {line} the stations differ: \
-                     {differs:?}"
-                ),
-            ));
-        }
-        return Ok(true);
     }
-    let Some(back) = copy.stations.get(&x) else {
+    if chains(&copy) != chains(before) {
         return Err(fail(
             "rs-merge-detach",
-            format!("the detach of line {line} did not bring {x} back"),
-        ));
-    };
-    if (&back.name, &back.comment, &back.external) != (&old.name, &old.comment, &old.external) {
-        return Err(fail(
-            "rs-merge-detach",
-            format!("{x} came back as {back:?}, it was {old:?}"),
+            format!("after the merge and the detach of {x}'s line {line} the slots differ"),
         ));
     }
-    let mut on: Vec<LineId> = copy.topology().lines_of(x);
-    let mut named = record.lines;
-    on.sort_unstable();
-    named.sort_unstable();
-    if on != named {
+    if copy.stations != before.stations {
+        let differs = before
+            .stations
+            .iter()
+            .find(|(id, s)| copy.stations.get(id) != Some(s))
+            .map(|(id, s)| (id, s, copy.stations.get(id)));
         return Err(fail(
             "rs-merge-detach",
-            format!("{x} came back on {on:?}, its record named {named:?}"),
+            format!(
+                "after the merge and the detach of {x}'s line {line} the stations differ: \
+                 {differs:?}"
+            ),
         ));
     }
     Ok(true)

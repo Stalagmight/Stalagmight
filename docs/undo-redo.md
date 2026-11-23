@@ -233,7 +233,8 @@ still passes with room.
 
 Stations are entities with stable ids, so identity needs no epilogue: a
 changeset records a created or deleted station as its whole image (id, name,
-comment, archived records, external id) and a changed one by its changed fields, so an
+comment, archived records with the record each was archived under, external
+id) and a changed one by its changed fields, so an
 undone delete restores the same id and name and a redone insert re-creates
 the station with the id and name it had. The station counter goes to
 `max(live, recorded)`, so a later edit never takes an id a redo needs.
@@ -464,7 +465,9 @@ the addressed line keeps it (it shows the station natively and a record
 archived in it names every other line there, `Project::detach_keeps`, RS
 4.2), the other lines come off and the label names them (`Detach lines "B"
 and "C" from Main / 4`), never the line that keeps the station (demo finding
-N-2).
+N-2); likewise, when the addressed line's archived station comes back on
+other lines too (a junction a merge archived whole, RS-FX4), the label names
+every line that comes off.
 
 The names are worded **at record time**, with the names before the edit
 (`core/state/labels.rs`), and stored in the entry. A metadata edit that renames

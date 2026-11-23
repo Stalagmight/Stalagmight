@@ -79,6 +79,13 @@ mod format_v2_gating_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod format_v2_hostile_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_owner_tests;
 
 #[cfg(test)]
 #[expect(
