@@ -3,6 +3,7 @@ export * from './ipc/CommandResult';
 export * from './ipc/LockReleaseOutcome';
 export * from './ipc/ConversionFile';
 export * from './ipc/ConversionNoticeView';
+export * from './ipc/ConversionSource';
 export * from './ipc/ReversedLine';
 export * from './ipc/ImportReceipt';
 export * from './ipc/CommentHolder';

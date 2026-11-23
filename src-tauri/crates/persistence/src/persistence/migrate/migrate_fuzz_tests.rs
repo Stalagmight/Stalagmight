@@ -159,7 +159,7 @@ impl Tally {
     }
 
     fn report(&mut self, r: &MigrationReport) {
-        let fields: [(&str, usize); 17] = [
+        let fields: [(&str, usize); 20] = [
             ("report.merges_collapsed", r.merges_collapsed),
             ("report.merges_demoted_cycle", r.merges_demoted_cycle),
             (
@@ -171,8 +171,11 @@ impl Tally {
                 "report.merges_dropped_redundant",
                 r.merges_dropped_redundant,
             ),
-            ("report.aliases_created", r.aliases_created),
-            ("report.comments_joined", r.comments_joined),
+            ("report.members_archived", r.members_archived),
+            ("report.kept_by_length", r.kept_by_length),
+            ("report.closures_archived", r.closures_archived),
+            ("report.closures_keep_both", r.closures_keep_both),
+            ("report.comments_hidden", r.comments_hidden),
             ("report.stations_renamed", r.stations_renamed),
             ("report.names_changed", r.names_changed),
             ("report.aligned_closures_to_tie", r.aligned_closures_to_tie),
@@ -1521,12 +1524,13 @@ fn migration_fuzz_window() {
         "0.5.5 shape",
         "speleodb link",
         "report.merges_demoted_cycle",
-        // Every merged member's line keeps showing the member's name, by an
-        // alias naming it (I-3), so `names_changed` is 0 on every seed
-        // (`test_support::check` fails a seed that changes a name) and the
-        // window gates the aliases that do it instead.
-        "report.aliases_created",
-        "report.comments_joined",
+        // The kept-stations rules (RS 8.3, checked on every seed by
+        // `test_support::check`): archived members, junctions kept by
+        // length, archived closure ends, hidden comments.
+        "report.members_archived",
+        "report.kept_by_length",
+        "report.closures_archived",
+        "report.comments_hidden",
         "report.hand_moves_carried",
         "report.history_rows_dropped",
         "walk steps",

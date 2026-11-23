@@ -858,8 +858,8 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// A the cascade's seed) converts with C's two stations moved onto B: the
 /// open offers the conversion notice once. The same survey clean moves
 /// nothing, but C shows its start by the kept junction's name and its own 1
-/// takes the letter (RS 8.3), so the notice lists those names. RS-F: the
-/// 8.3 notice (rule K, hidden comments, grouped by line).
+/// takes the letter (RS 8.3), so the notice lists those names, the kept one
+/// by its own line.
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     crate::app_dirs::init_for_test();
@@ -892,11 +892,12 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     assert_eq!(
         notice.changes,
         [
-            "Line 3 / 0 is now shown as 1",
+            "Line 3 / 0 is now shown as Line 2 / 1",
             "Line 3 / 1 is now shown as 1a"
         ],
         "{notice:?}"
     );
+    assert!(notice.brings_back);
     let project = state.get_project_state().unwrap();
     let c = project.lines()[2].id;
     let start = project.line(c).unwrap().start;
@@ -965,11 +966,13 @@ fn the_file_is_legacy_until_a_save_writes_the_open_project() {
     }
 }
 
-/// Review finding UX-1: a conversion that moved nothing still says what each
-/// line now shows differently: the two members' comments are one station's
-/// comment now. C's start keeps its own name (I-3), so no name is listed.
+/// Review finding UX-1, RS 8.3 and U-P1-2: a conversion that moved nothing
+/// still says what each line now shows differently: C's start shows the
+/// junction kept on the longer line B (its own comment, never a joined
+/// one), so C's own name and comment there are hidden, and the notice says
+/// so; C's own 1 takes the letter.
 #[test]
-fn a_conversion_that_joined_comments_says_so() {
+fn a_conversion_that_hides_a_comment_says_so() {
     use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
     crate::app_dirs::init_for_test();
     let dir = TempDir::new().unwrap();
@@ -1001,13 +1004,12 @@ fn a_conversion_that_joined_comments_says_so() {
     let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
-    // RS-F: comments are not joined under 8.3 (each member keeps its own).
     assert_eq!(
         notice.changes,
         [
-            "Line 2 / 0 is now shown as 1",
+            "Line 2 / 0 is now shown as Line 1 / 1",
             "Line 2 / 1 is now shown as 1a",
-            "a merged station's two comments were joined"
+            "the comment of Line 2 / 0 is hidden"
         ],
         "{notice:?}"
     );

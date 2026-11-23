@@ -215,7 +215,7 @@ impl FileState {
         let mut state = Self {
             fingerprint,
             origin: FileOrigin::Legacy,
-            conversion: ConversionNotice::of_migration(report, &migrated.names_changed),
+            conversion: ConversionNotice::of_migration(report, &migrated.changes),
             legacy_parity: Some(migrated.legacy_parity),
             ..Self::default()
         };

@@ -42,26 +42,36 @@ pub struct MigrationReport {
     pub merges_collapsed_torn: usize,
     pub merges_collapsed_torn_max_m: f64,
 
-    // Station identity.
-    /// Merge members kept as aliases of their station (each naming the
-    /// member's line, which keeps showing the member's name).
-    pub aliases_created: usize,
+    // Station identity (plan 2026-11-23 RS 8.3).
+    /// Merge members archived in their station (records, each naming the
+    /// member's line, with its own name and comment).
+    pub members_archived: usize,
     /// Member ids dropped because they were out of range or already used.
     pub station_ids_dropped: usize,
     /// Stations that had no usable id and were given a fresh one.
     pub station_ids_minted: usize,
-    /// Aliases whose member had no usable id and were given a fresh one.
-    pub alias_ids_minted: usize,
-    /// Stations renamed (letter suffix) because a line showed one name
-    /// twice: only a 0.6.0 file that already did (every line keeps the names
-    /// 0.6.0 showed on it, a junction's included).
+    /// Records whose member had no usable id and were given a fresh one.
+    pub record_ids_minted: usize,
+    /// Junctions that show a member other than the one the map labelled,
+    /// because it is on the longest line (rule K).
+    pub kept_by_length: usize,
+    /// Loop closures (migrated `Tie`s included) that show one end as the
+    /// other (rule K), and those left showing both ends by their own names
+    /// (C1 or C2 refused rule K's choice).
+    pub closures_archived: usize,
+    pub closures_keep_both: usize,
+    /// Stations given a letter suffix (rule L) because a line would show
+    /// two of them by one name.
     pub stations_renamed: usize,
-    /// Slots now shown by another name than 0.6.0 showed there (a lettered
-    /// repeat); the names themselves are in `MigratedExtras::names_changed`,
-    /// never here.
+    /// Slots now shown by another name than 0.6.0 showed there (another
+    /// station's, or a letter), and of those the slots showing another
+    /// station; the names themselves are in `MigratedExtras::changes`, never
+    /// here.
     pub names_changed: usize,
-    /// Stations whose members' distinct comments were joined.
-    pub comments_joined: usize,
+    pub shown_as_other: usize,
+    /// Slots whose own non-empty comment is now hidden (the slot shows
+    /// another station).
+    pub comments_hidden: usize,
     /// Name, id, comment or hand-move keys that resolve to no station.
     pub station_keys_dangling: usize,
     /// Keys dropped because another key of the same map named the same slot.
@@ -406,13 +416,17 @@ impl MigrationReport {
         put("merges_dropped_redundant", self.merges_dropped_redundant);
         put("merges_dropped_dangling", self.merges_dropped_dangling);
         put("merges_collapsed_torn", self.merges_collapsed_torn);
-        put("aliases_created", self.aliases_created);
+        put("members_archived", self.members_archived);
         put("station_ids_dropped", self.station_ids_dropped);
         put("station_ids_minted", self.station_ids_minted);
-        put("alias_ids_minted", self.alias_ids_minted);
+        put("record_ids_minted", self.record_ids_minted);
+        put("kept_by_length", self.kept_by_length);
+        put("closures_archived", self.closures_archived);
+        put("closures_keep_both", self.closures_keep_both);
         put("stations_renamed", self.stations_renamed);
         put("names_changed", self.names_changed);
-        put("comments_joined", self.comments_joined);
+        put("shown_as_other", self.shown_as_other);
+        put("comments_hidden", self.comments_hidden);
         put("station_keys_dangling", self.station_keys_dangling);
         put("station_keys_duplicate", self.station_keys_duplicate);
         put("shot_uuids_minted", self.shot_uuids_minted);

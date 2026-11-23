@@ -88,11 +88,10 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
 
     // The gate's seeds must reach every conversion rule they are meant to.
     let c = &coverage;
-    // Names are not gated here: every slot keeping the name 0.6.0 showed
-    // (I-3) is a property of every seed (`check`), so `names_changed` is 0
-    // by design; what makes a junction's lines show different names is the
-    // aliases, gated below.
-    let checks: [(&str, usize); 20] = [
+    // The kept-stations rules (RS 8.3) are properties of every seed
+    // (`check`); the gate makes sure the seeds reach them: archived members,
+    // junctions kept by length, archived closure ends, hidden comments.
+    let checks: [(&str, usize); 22] = [
         ("merges collapsed", c.total(|r| r.merges_collapsed)),
         ("cycle merges demoted", c.total(|r| r.merges_demoted_cycle)),
         (
@@ -104,8 +103,10 @@ fn migrated_legacy_projects_keep_every_station_in_place() {
             "repeated merges dropped",
             c.total(|r| r.merges_dropped_redundant),
         ),
-        ("aliases", c.total(|r| r.aliases_created)),
-        ("comments joined", c.total(|r| r.comments_joined)),
+        ("archived members", c.total(|r| r.members_archived)),
+        ("junctions kept by length", c.total(|r| r.kept_by_length)),
+        ("archived closure ends", c.total(|r| r.closures_archived)),
+        ("hidden comments", c.total(|r| r.comments_hidden)),
         (
             "aligned closures to Tie",
             c.total(|r| r.aligned_closures_to_tie),

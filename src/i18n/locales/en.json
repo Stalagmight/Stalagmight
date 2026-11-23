@@ -2866,6 +2866,8 @@
     },
     "conversion": {
       "lead": "Converted from the old file format.",
+      "upgradedLead": "Upgraded from an earlier version 2 file.",
+      "bringsBack": "Detach Line from Station or Remove Closure brings each one back.",
       "notYetSaved": "It is saved in the new format the next time you save; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
       "saved": "Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
       "savedAsNewFile": "Saved in the new format as a new file; the original file is unchanged.",

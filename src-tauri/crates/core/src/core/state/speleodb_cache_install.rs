@@ -238,11 +238,9 @@ impl AppState {
                 );
                 // The cache copy is version 2 at once and nothing local keeps
                 // the original: the notice points at the server's revision.
-                conversion = ConversionNotice::of_migration(
-                    &migrated.report,
-                    &migrated.extras.names_changed,
-                )
-                .map(ConversionNotice::downloaded);
+                conversion =
+                    ConversionNotice::of_migration(&migrated.report, &migrated.extras.changes)
+                        .map(ConversionNotice::downloaded);
                 let mut project = migrated.project;
                 if !migrated.extras.validation_stored {
                     project.settings.validation = config.validation;

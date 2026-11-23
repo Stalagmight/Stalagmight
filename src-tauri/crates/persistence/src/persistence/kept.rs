@@ -76,6 +76,9 @@ pub struct IdentityChanges {
     pub comments_hidden: Vec<CommentHidden>,
     /// Every closure left with no archive.
     pub closures_keep_both: Vec<ClosureKeepsBoth>,
+    /// The lines `names` and `comments_hidden` name, each once, in line
+    /// order: the notice groups its lists by them.
+    pub lines: Vec<String>,
 }
 
 impl IdentityChanges {
@@ -267,7 +270,7 @@ pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
     let (closures_archived, refused) = archive_closures(project);
     let pairs = before.pairs.clone();
     let lettered = project.letter_collisions_with(move || pairs);
-    let (names, comments_hidden) = slot_changes(project, before);
+    let (names, comments_hidden, lines) = slot_changes(project, before);
     let closures_keep_both = closures_keep_both(project, &refused);
     Settled {
         closures_archived,
@@ -276,6 +279,7 @@ pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
             names,
             comments_hidden,
             closures_keep_both,
+            lines,
         },
     }
 }
@@ -331,7 +335,10 @@ fn has_text(comment: Option<&String>) -> bool {
 /// what `before` says it showed, in line order, then chain order. A name
 /// change keeps the same identity (a letter) or shows another one; a comment
 /// is hidden when the slot showed text that it no longer shows.
-fn slot_changes(project: &Project, before: &Before) -> (Vec<NameChange>, Vec<CommentHidden>) {
+fn slot_changes(
+    project: &Project,
+    before: &Before,
+) -> (Vec<NameChange>, Vec<CommentHidden>, Vec<String>) {
     let topology = project.topology();
     let index = project.shown_index();
     let mut labels: BTreeMap<LineId, String> = BTreeMap::new();
@@ -343,6 +350,7 @@ fn slot_changes(project: &Project, before: &Before) -> (Vec<NameChange>, Vec<Com
     };
     let mut names = Vec::new();
     let mut comments = Vec::new();
+    let mut order: Vec<String> = Vec::new();
     for (position, line) in project.lines().iter().enumerate() {
         let chain = topology.chain_at(position).unwrap_or(&[]);
         for (i, &node) in chain.iter().enumerate() {
@@ -375,9 +383,15 @@ fn slot_changes(project: &Project, before: &Before) -> (Vec<NameChange>, Vec<Com
                     station: was.name.clone(),
                 });
             }
+            if name_changed || comment_hidden {
+                let here = label(line.id);
+                if !order.contains(&here) {
+                    order.push(here);
+                }
+            }
         }
     }
-    (names, comments)
+    (names, comments, order)
 }
 
 /// The closures `ids` as the notice names them, ends by their shown names.

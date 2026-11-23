@@ -45,8 +45,10 @@ describe('checkFileStatus', () => {
 
   it('keeps the conversion notice a second (StrictMode) check cannot take again', async () => {
     let notice: ConversionNoticeView | null = {
+      source: 'old_format',
       changes: ['3 stations moved by up to 0.42 m'],
       details: [],
+      brings_back: false,
       file: 'not_yet_saved',
     };
     ipc.mockImplementation(async (command: string) => {
@@ -126,8 +128,10 @@ describe('a warning ignore rides the save', () => {
  */
 describe('the converting save', () => {
   const notice: ConversionNoticeView = {
+    source: 'old_format',
     changes: ['1 station moved by 0.40 m'],
     details: [],
+    brings_back: false,
     file: 'not_yet_saved',
   };
   const saving = (legacy_converted?: 'saved' | 'saved_as_new_file') =>

@@ -352,10 +352,10 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
             let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
             assert!(opened.success, "{:?}", opened.error);
             let notice = state.take_conversion_notice();
-            // RS 8.3: C shows its start by the kept junction's name and its
-            // own 1 takes the letter. RS-F: the 8.3 notice.
+            // RS 8.3: C shows its start by the kept junction's name (B's
+            // station, so named by B) and its own 1 takes the letter.
             let names = [
-                "Line 3 / 0 is now shown as 1",
+                "Line 3 / 0 is now shown as Line 2 / 1",
                 "Line 3 / 1 is now shown as 1a",
             ];
             let notice = notice.expect("a notice");
