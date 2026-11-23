@@ -810,8 +810,9 @@ fn a1_and_a5_hold_for_records() {
 }
 
 /// A hub: line 0 runs one shot from station `hub`, and `sides` more lines
-/// start there, one shot each; a record of the hub names every side line
-/// (`a{k}`) and `history` more name none (history).
+/// start there, one shot each; the hub holds `history` records naming no
+/// line (history, oldest first), then a record naming each side line
+/// (`a{k}`), so a scan for a line's record passes every history record.
 fn crafted_hub(sides: usize, history: usize) -> (Project, StationId, Vec<LineId>) {
     let mut p = project();
     let main = free_line(&mut p, [0.0, 0.0], run(90.0, 1, 1.0));
@@ -820,32 +821,26 @@ fn crafted_hub(sides: usize, history: usize) -> (Project, StationId, Vec<LineId>
         .map(|_| branch(&mut p, hub, run(0.0, 1, 1.0)))
         .collect();
     let mut next = p.counters.next_station_id;
-    let mut records: Vec<ArchivedStation> = lines
-        .iter()
-        .enumerate()
-        .map(|(k, &line)| {
-            next += 1;
-            ArchivedStation {
-                id: next - 1,
-                name: format!("a{k}"),
-                comment: None,
-                external: None,
-                into: None,
-                lines: vec![line],
-            }
-        })
-        .collect();
-    records.extend((0..history).map(|_| {
+    let mut record = |name: String, lines: Vec<LineId>| {
         next += 1;
         ArchivedStation {
             id: next - 1,
-            name: "h".to_string(),
+            name,
             comment: None,
             external: None,
             into: None,
-            lines: Vec::new(),
+            lines,
         }
-    }));
+    };
+    let mut records: Vec<ArchivedStation> = (0..history)
+        .map(|_| record("h".to_string(), Vec::new()))
+        .collect();
+    records.extend(
+        lines
+            .iter()
+            .enumerate()
+            .map(|(k, &line)| record(format!("a{k}"), vec![line])),
+    );
     p.counters.next_station_id = next;
     p.station_mut(hub).unwrap().archived = records;
     (p, hub, lines)
@@ -873,7 +868,9 @@ fn record_lookups_at_a_hub_cost_its_lines_plus_its_records() {
         "line 0 is native"
     );
     // Every line named (A4 broken): the restore gives the hub a record back.
-    p.station_mut(hub).unwrap().archived[0].lines.push(main);
+    p.station_mut(hub).unwrap().archived[1_000_000]
+        .lines
+        .push(main);
     let restored = p.restore_archived_identities();
     assert_eq!(restored.len(), 1);
     let elapsed = started.elapsed();
