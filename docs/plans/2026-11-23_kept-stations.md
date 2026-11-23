@@ -2040,3 +2040,52 @@ each with its reason.
   crafted hub, where each slot's `merged_with` (every other slot of the
   junction, a shape older than this plan) is quadratic too; both belong to
   one wire change, not to this package.
+
+## Deviations (package RS-FX10)
+
+Decisions the last review items took where this page is silent, each with
+its reason.
+
+- **Linear-time tests compare two sizes.** A wall-clock bound flakes on
+  CI's debug builds and shared runners, so every test that pins a pass as
+  linear times one shape at n and 4n in the same run
+  (`models::linear_time::assert_linear`, test support): the runs alternate,
+  the fastest of three per size counts, and 4x the input may take at most
+  8x the time (a linear pass takes about 4x, the quadratic forms these
+  tests were written against about 16x). A ratio over the bound gets a
+  second round before it fails, since a busy runner can slow the larger
+  size more (it reaches past the caches the smaller fits in); a 5-minute
+  backstop covers a hang. Sizes are a few times below the old ones (1-5 s
+  each here); the full caps are not run any more. Under a host load of
+  about 24 on 16 cores one round of the model's hub test measured 10x, the
+  reason for the second round.
+- **A deadline test counts asks, not the exact one.** The upgrade's first
+  step asks once per line; a deadline passing on the tenth ask must stop it
+  with the deadline's error before that step asked for every line, so a
+  check added between steps does not break the test.
+- **The op's own letters go through verbatim.** A rename that is exactly a
+  letter the command's own collisions offer for that station (rule L's or
+  the other answer, `offered_letters`) is taken untrimmed: it is the
+  backend's answer, free on the station's lines, and its base may be an
+  imported name with padding (`" 5"` letters to `" 5a"`, which trimmed
+  could repeat a `5a` of the line). Any other name follows Set Station
+  Name's rules as in RS-FX9. The dialogs still run Edit Station's check on
+  what they send, so a letter of a name holding a control or invisible
+  formatting character still asks the user to rename that station first,
+  though the backend would take it.
+- **No Create Loop Closure takes a rename.** A loop end counts for no
+  uniqueness (RS-FX5), creation runs no sweep, and C1 and C2 leave the
+  normalisation nothing to drop, so a creation makes no collision and
+  RS-FX9 refuses any rename it carries; the 24 gate seeds of the RS
+  property fuzzer create 224 closures, none with a collision. The
+  editing-blocked test therefore checks the creation, like every other
+  command there, refused for its rename alone with editing allowed, and
+  going through as its dialog sends it (no renames).
+- **The Detach picker comes first.** The remaining junction's picker sits
+  under the sentence it answers ("Main keeps this station, and Side and
+  North come off together"), above "They get back", the archived-inside
+  notes and the After Detach list, which follow the pick.
+- **The prompt's every-line sentence only when the button lacks it.** "A
+  new name changes it on every line it is on." is left out whenever the
+  go-on button names the lines (every case but a rename with no new name
+  to say).
