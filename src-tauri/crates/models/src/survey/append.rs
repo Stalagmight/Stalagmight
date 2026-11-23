@@ -177,6 +177,7 @@ impl Project {
             copy.id = shift(station.id);
             for record in &mut copy.archived {
                 record.id = shift(record.id);
+                record.into = record.into.map(shift);
                 record.lines = record
                     .lines
                     .iter()

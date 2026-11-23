@@ -804,6 +804,7 @@ mod tests {
             id: merged.archived,
             name: retired_name,
             comment: None,
+            into: None,
             lines: vec![retired_line],
         }];
         // Slots in line order: Main 0, 1 (junction), 2; Side 0 (junction), 1.

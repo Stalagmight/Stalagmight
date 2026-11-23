@@ -185,6 +185,7 @@ fn archived_ids_and_counters_stay_in_range() {
         name: "old".to_string(),
         comment: None,
         external: None,
+        into: None,
         lines: Vec::new(),
     });
     p.counters.next_station_id = 4_000_000_001;

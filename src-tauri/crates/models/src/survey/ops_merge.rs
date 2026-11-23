@@ -185,12 +185,6 @@ pub struct MergeMove {
     /// sweep makes, or a closure archive it moves, may hide one. `hidden`'s
     /// own comment is not repeated here.
     pub comments_hidden: Vec<super::HiddenComment>,
-    /// The lines the archived station's own records name (a junction of its
-    /// own merged earlier): Detach Line from Station on the archived
-    /// station's lines gives it back on those lines only, and these keep
-    /// showing the kept station, their records staying with it. In line
-    /// order (model review finding 4).
-    pub not_given_back: Vec<LineId>,
 }
 
 /// The Merge tool's check of a picked pair (today's
@@ -350,7 +344,10 @@ impl Project {
     /// After [`Self::merge_ids`] folded `moving` into `stationary`: give the
     /// merged node the moving identity (RS 4.1 step 3). The stationary
     /// identity becomes a record naming `stationary_native` (its pre-merge
-    /// native lines), and the node's id becomes `moving` everywhere.
+    /// native lines) with its own records under it, the moving identity's
+    /// records come under the node's identity again
+    /// (`Station::swap_identity`), and the node's id becomes `moving`
+    /// everywhere.
     pub(super) fn reidentify_merged(
         &mut self,
         stationary: StationId,
@@ -360,15 +357,9 @@ impl Project {
         let Some(node) = self.stations.get_mut(&stationary) else {
             return;
         };
-        let Some(index) = node.archived.iter().position(|r| r.id == moving) else {
+        if node.swap_identity(moving, stationary_native).is_none() {
             return;
-        };
-        let record = node.archived.remove(index);
-        let old = node.as_record(stationary_native);
-        node.name = record.name;
-        node.comment = record.comment;
-        node.external = record.external;
-        node.archived.push(old);
+        }
         self.rekey_node(stationary, moving);
     }
 
@@ -505,14 +496,6 @@ impl Project {
             })
             .fold((sx - mx).hypot(sy - my), f64::max);
         let hidden_station = self.stations.get(&report.archived)?;
-        let mut not_given_back: Vec<(usize, LineId)> = hidden_station
-            .archived
-            .iter()
-            .flat_map(|r| r.lines.iter().copied())
-            .filter_map(|l| Some((self.line_position(l)?, l)))
-            .collect();
-        not_given_back.sort_unstable();
-        not_given_back.dedup();
         let collisions = outcome
             .identities
             .lettered
@@ -544,7 +527,6 @@ impl Project {
             ),
             unarchived: report.unarchived,
             comments_hidden: outcome.identities.hidden.clone(),
-            not_given_back: not_given_back.into_iter().map(|(_, l)| l).collect(),
         })
     }
 
@@ -642,8 +624,9 @@ impl Project {
     /// starts, shot ends, hand-move keys, datums, closure ends), drop a
     /// placement on `retired`, and archive the retired station whole in the
     /// survivor (RS 4.1 step 2): one record with its id, name, comment,
-    /// external id and native lines, after its own records (which move
-    /// along). Nothing is minted and no comment is joined. A closure between
+    /// external id and native lines, after its own records, which move along
+    /// under it (RS-FX4, `Station::archive_whole`). Nothing is minted and
+    /// no comment is joined. A closure between
     /// the two stations is left with both ends on the survivor for the caller
     /// to remove (the sweep does, #738). No anchors, no sweep, no validation
     /// (callers run the pipeline). Refused, with nothing changed, when a line
@@ -711,10 +694,8 @@ impl Project {
         self.placements.retain(|p| p.station != retired);
 
         self.stations.remove(&retired);
-        let record = gone.as_record(native);
         if let Some(keep) = self.stations.get_mut(&survivor) {
-            keep.archived.extend(gone.archived);
-            keep.archived.push(record);
+            keep.archive_whole(gone, native);
         }
         Ok(moving_lines)
     }

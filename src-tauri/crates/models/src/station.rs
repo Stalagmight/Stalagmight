@@ -736,12 +736,14 @@ mod tests {
                 id: 7,
                 name: "0".into(),
                 comment: Some("rope".into()),
+                into: None,
                 lines: vec![2],
             },
             crate::ArchivedStationWire {
                 id: 8,
                 name: "5".into(),
                 comment: None,
+                into: Some(7),
                 lines: Vec::new(),
             },
         ]);
@@ -757,7 +759,7 @@ mod tests {
             junction["archived"],
             serde_json::json!([
                 { "id": 7, "name": "0", "comment": "rope", "lines": [2] },
-                { "id": 8, "name": "5", "lines": [] }
+                { "id": 8, "name": "5", "into": 7, "lines": [] }
             ])
         );
         assert_eq!(

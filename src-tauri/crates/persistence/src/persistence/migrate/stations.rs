@@ -186,6 +186,7 @@ pub(super) fn plan(
                 comment: own_comment(member),
                 external: None,
                 // The member's own line (UX-4, D-migration-upgrade-8).
+                into: None,
                 lines: vec![slots.slot(member).line_id],
             });
         }

@@ -9,8 +9,9 @@
 //!   own, or the kept end's when a loop closure archives `S`), shared by
 //!   every slot of a junction;
 //! - `id`: `S` (the node: every grouping, command and selection keys on it);
-//! - `archived`: `S`'s records (RS 3), each with its id, name, comment and
-//!   lines (none for a history record); absent when `S` has none;
+//! - `archived`: `S`'s records (RS 3), each with its id, name, comment, the
+//!   record it was archived under (`into`, RS-FX4) and lines (none for a
+//!   history record); absent when `S` has none;
 //! - `shown` (RS 6): on a foreign slot (a record names `L`, or `L` is not a
 //!   native line of the node holding the shown identity) or a loop end (a
 //!   closure archives `S`): the Station ID shown, the shown identity's home
@@ -246,6 +247,7 @@ pub(super) fn record_wire(
         id: record.id,
         name: record.name.clone(),
         comment: record.comment.clone(),
+        into: record.into,
         lines,
     }
 }

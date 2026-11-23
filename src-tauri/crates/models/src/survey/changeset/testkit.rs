@@ -1240,6 +1240,7 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
                 name: "tampered".to_string(),
                 comment: Some("changed behind its back".to_string()),
                 external: None,
+                into: None,
                 lines: Vec::new(),
             });
             if let Some(record) = st.archived.first_mut() {

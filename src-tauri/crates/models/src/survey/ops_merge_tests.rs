@@ -62,6 +62,7 @@ fn merging_two_free_pieces_moves_a_onto_b_and_keeps_bs_placement() {
             comment: None,
             external: None,
             // A's own station there (RS 4.1 step 2).
+            into: None,
             lines: vec![a],
         }]
     );

@@ -428,6 +428,7 @@ fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
             name: alias.name.unwrap_or_else(|| station.name.clone()),
             comment: None,
             external: None,
+            into: None,
             lines,
         });
     }
@@ -529,6 +530,7 @@ impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
             name,
             comment,
             external,
+            into: None,
             lines,
         })
     }

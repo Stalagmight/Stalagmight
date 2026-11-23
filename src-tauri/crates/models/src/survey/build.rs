@@ -441,7 +441,8 @@ impl Project {
     /// Clear what an edit left pointing at a line that no longer passes the
     /// station: datum and closure-end `via` hints (they become unset), hand
     /// moves (dropped) and archived records' lines (A2; a record left with
-    /// no line is history, A5). Invariant 2 refuses them, so a command that
+    /// no line is history, A5, and the records under it move up to its
+    /// owner, A6). Invariant 2 refuses them, so a command that
     /// removes a station from a line (delete shot or range, delete line,
     /// split, combine) runs this in its epilogue, before [`Self::validate`].
     pub fn drop_stale_attachments(&mut self) -> StaleAttachments {
@@ -481,6 +482,10 @@ impl Project {
                     stays
                 });
             }
+            // A record left with no line (here, or by the edit itself) is
+            // history and owns nothing (A5, A6): the records under it move
+            // up (RS-FX4).
+            s.settle_record_owners();
         }
         if !dropped.hand_moves.is_empty() {
             let stale = dropped.hand_moves.clone();

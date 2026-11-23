@@ -215,6 +215,7 @@ fn a_split_shares_the_cut_stations_record_and_moves_the_others() {
         name: name.to_string(),
         comment: None,
         external: None,
+        into: None,
         lines,
     };
     p.station_mut(k)

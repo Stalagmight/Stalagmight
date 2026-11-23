@@ -4,23 +4,28 @@
 //! Detaching line L from junction N, in the three cases of RS 4.2:
 //!
 //! 1. **A record R of N names L** (L's own station was archived by a merge):
-//!    L gets a new node with R's identity (id, name, comment, external id),
-//!    and R leaves N. When R names other lines too (a split junction merged
-//!    away), all of R's lines come off together onto that node, since they
-//!    were one station (M-P2-3).
+//!    the record T that R was archived under, directly under N's identity
+//!    (R itself, or the station whose junction R was part of when a later
+//!    merge archived it, RS-FX4), comes back: L gets a new node with T's
+//!    identity (id, name, comment, external id), and every line T or a
+//!    record under it names comes off with L onto that node, since they
+//!    were one station (M-P2-3); the records under T stay inside it as they
+//!    were. A second Detach at the restored node takes R's lines off it.
 //! 2. **L is native and every other line is named by a record**
 //!    ([`Project::detach_keeps`]): L keeps N's identity; the other lines get
-//!    a new node whose identity is the record naming them, or, when several
-//!    records remain, the one `rest_keep` picks (default: rule K over their
-//!    own lines); the others stay archived in the new node.
+//!    a new node whose identity is the record directly under N's identity
+//!    naming them, or, when several remain, the one `rest_keep` picks
+//!    (default: rule K over the lines each one's subtree names); the others
+//!    stay archived in the new node.
 //! 3. **L and another line are native** (Split Line Here, Create Line, an
 //!    import join): L gets a fresh station with N's own name and no comment.
 //!
 //! What belonged to the lines that come off follows them: the datums and
 //! closure ends whose `via` is one of them (with `kept`, those whose `via` is
 //! not L), and their hand moves at N. A closure's `archived` marker follows
-//! its end. History records (A5) stay with N, which keeps the identity they
-//! were archived under. Every identity shown anew is checked by N8: the
+//! its end. History records (A5) stay with the identity they were archived
+//! under: inside T in case 1, with N when directly under N's identity.
+//! Every identity shown anew is checked by N8: the
 //! user's renames answer a collision, an unanswered one refuses
 //! ([`super::OpError::NameTaken`]); the forms without a dialog letter it by
 //! rule L. A letter an earlier op gave because of the junction stays. The
@@ -135,7 +140,9 @@ impl DetachReport {
 /// and what every line through the junction ends up with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetachNaming {
-    /// The station the lines that come off get: its name, id and comment.
+    /// The station the lines that come off get: its name, id and comment
+    /// (in case 1 the record the detached line's record was archived under,
+    /// directly under the junction's identity: RS-FX4).
     pub name: String,
     pub id: StationId,
     pub comment: Option<String>,
@@ -144,11 +151,15 @@ pub struct DetachNaming {
     /// The line keeps the junction; `name` and `id` are what the other lines
     /// get back.
     pub kept: bool,
-    /// The lines that come off with the detached one because one archived
-    /// station names them all (RS 4.2 case 1; the dialog says so).
+    /// The lines that come off with the detached one because they were one
+    /// station before the merge that archived it: the archived station's
+    /// own lines and those of the records archived under it (RS 4.2 case 1,
+    /// RS-FX4; the dialog says so).
     pub together: Vec<LineId>,
-    /// With `kept` and several records naming the other lines: the records
-    /// `rest_keep` may pick (their Station IDs), and the default (rule K).
+    /// With `kept` and several records directly under the junction's
+    /// identity naming the other lines: the records `rest_keep` may pick
+    /// (their Station IDs), and the default (rule K over each one's
+    /// subtree's lines).
     pub rest_choices: Vec<StationId>,
     pub rest_default: Option<StationId>,
     /// The identity the detached line showed at the junction before, when a
@@ -310,8 +321,8 @@ impl Project {
         }
         let (rest_choices, rest_default) = if self.detach_keeps(station, line) {
             let choices = self.rest_candidates(station, line);
-            let default = self.rule_k(choices.iter().map(|r| (r.id, r.lines.clone())));
-            (choices.iter().map(|r| r.id).collect(), default)
+            let default = self.rule_k(choices.iter().cloned());
+            (choices.iter().map(|(id, _)| *id).collect(), default)
         } else {
             (Vec::new(), None)
         };
@@ -447,14 +458,17 @@ impl Project {
                 .all(|&l| junction.record_for(l).is_some())
     }
 
-    /// The records of `station` naming a line other than `line` (case 2's
-    /// candidates for the remaining lines), in list order.
-    fn rest_candidates(&self, station: StationId, line: LineId) -> Vec<ArchivedStation> {
+    /// Case 2's candidates for the remaining lines: the records directly
+    /// under `station`'s identity whose subtree names a line other than
+    /// `line`, each with those lines (rule K's measure: the lines its
+    /// identity would show on), in list order.
+    fn rest_candidates(&self, station: StationId, line: LineId) -> Vec<(StationId, Vec<LineId>)> {
         self.stations.get(&station).map_or_else(Vec::new, |s| {
             s.archived
                 .iter()
-                .filter(|r| r.lines.iter().any(|&l| l != line))
-                .cloned()
+                .filter(|r| r.into.is_none())
+                .map(|r| (r.id, s.subtree_lines(r.id)))
+                .filter(|(_, lines)| lines.iter().any(|&l| l != line))
                 .collect()
         })
     }
@@ -495,20 +509,41 @@ impl Project {
             .stations
             .get(&station)
             .ok_or(OpError::UnknownStation(station))?;
-        let record = junction.record_for(line).cloned();
+        let record = junction.record_for(line).map(|r| r.id);
         match (record, mode) {
             (Some(record), DetachMode::Restore { .. }) => {
+                // The former junction the record was part of comes back
+                // whole (RS-FX4): its top record, under the junction's
+                // identity, with every line its subtree names.
+                let top = junction.record_top(record).map_or(record, |top| top.id);
+                let named = junction.subtree_lines(top);
                 let off: Vec<LineId> = lines
                     .iter()
                     .copied()
-                    .filter(|l| record.lines.contains(l))
+                    .filter(|l| named.contains(l))
                     .collect();
-                Ok(self.restore_record(station, line, &record, off))
+                let junction = self
+                    .stations
+                    .get_mut(&station)
+                    .ok_or(OpError::UnknownStation(station))?;
+                let (head, under) = junction
+                    .take_subtree(top)
+                    .ok_or(OpError::UnknownStation(top))?;
+                Ok(self.restore_record(station, line, head, under, off))
             }
             (Some(record), DetachMode::Tear) => {
                 // Only the torn line comes off; the record's other lines (a
-                // split junction merged away) show the junction natively now.
-                Ok(self.restore_record(station, line, &record, vec![line]))
+                // split junction merged away) show the junction natively now,
+                // and the records under it stay, under the identity it was
+                // archived under.
+                let junction = self
+                    .stations
+                    .get_mut(&station)
+                    .ok_or(OpError::UnknownStation(station))?;
+                let head = junction
+                    .take_record(record)
+                    .ok_or(OpError::UnknownStation(record))?;
+                Ok(self.restore_record(station, line, head, Vec::new(), vec![line]))
             }
             (None, DetachMode::Restore { rest_keep }) if self.detach_keeps(station, line) => {
                 let others: Vec<LineId> = lines.iter().copied().filter(|&l| l != line).collect();
@@ -541,20 +576,22 @@ impl Project {
         }
     }
 
-    /// RS 4.2 case 1: `record` of `station` leaves it and becomes the station
-    /// of `off` (its lines that come off), with what they owned.
+    /// RS 4.2 case 1: `record`, already taken out of `station`, becomes the
+    /// station of `off` (the lines that come off), holding `under` (the
+    /// records archived under it, `into` re-rooted), with what the lines
+    /// owned.
     fn restore_record(
         &mut self,
         station: StationId,
         line: LineId,
-        record: &ArchivedStation,
+        record: ArchivedStation,
+        under: Vec<ArchivedStation>,
         off: Vec<LineId>,
     ) -> DetachReport {
-        if let Some(junction) = self.stations.get_mut(&station) {
-            junction.archived.retain(|r| r.id != record.id);
-        }
         let new_station = record.id;
-        self.stations.insert(new_station, record.to_station());
+        let mut restored = record.to_station();
+        restored.archived = under;
+        self.stations.insert(new_station, restored);
         let moved_hand_move = self.move_slots(station, new_station, &off);
         let (moved_datums, moved_closure_ends) =
             self.move_attachments(station, new_station, |via| {
@@ -575,10 +612,13 @@ impl Project {
 
     /// RS 4.2 case 2: `line` keeps `station` (its id, name, comment and
     /// external id), and the other lines (`others`, all named by records)
-    /// come off onto a new node whose identity is the record `rest_keep`
-    /// names, else rule K's over the records' own lines; the other records
-    /// naming those lines go with them, history records stay. What was not
-    /// the line's own follows the other lines: datums and closure ends whose
+    /// come off onto a new node whose identity is the record directly under
+    /// the junction's identity that `rest_keep` names, else rule K's over
+    /// each such record's subtree's lines. Every other record goes with them
+    /// (the records under the chosen one come under the new node's identity;
+    /// the others keep their owners), but the history records directly
+    /// under the junction's identity, which stay with it. What was not the
+    /// line's own follows the other lines: datums and closure ends whose
     /// `via` is not the line, and their hand moves.
     fn detach_others(
         &mut self,
@@ -589,33 +629,29 @@ impl Project {
     ) -> Result<DetachReport, OpError> {
         let candidates = self.rest_candidates(station, line);
         let chosen = match rest_keep {
-            Some(id) if candidates.iter().any(|r| r.id == id) => id,
+            Some(id) if candidates.iter().any(|(r, _)| *r == id) => id,
             Some(id) => return Err(OpError::InvalidKeep(id)),
             None => self
-                .rule_k(candidates.iter().map(|r| (r.id, r.lines.clone())))
+                .rule_k(candidates.iter().cloned())
                 .ok_or(OpError::NotDirectlyMerged)?,
         };
         let junction = self
             .stations
             .get_mut(&station)
             .ok_or(OpError::UnknownStation(station))?;
-        let names_other = |r: &ArchivedStation| r.lines.iter().any(|l| others.contains(l));
-        let (moving, staying): (Vec<ArchivedStation>, Vec<ArchivedStation>) =
+        let stays = |r: &ArchivedStation| r.into.is_none() && r.is_history();
+        let (staying, moving): (Vec<ArchivedStation>, Vec<ArchivedStation>) =
             std::mem::take(&mut junction.archived)
                 .into_iter()
-                .partition(|r| names_other(r));
+                .partition(stays);
         junction.archived = staying;
-        let mut identity = None;
-        let mut rest = Vec::with_capacity(moving.len());
-        for record in moving {
-            if record.id == chosen {
-                identity = Some(record.to_station());
-            } else {
-                rest.push(record);
-            }
-        }
-        let mut identity = identity.ok_or(OpError::InvalidKeep(chosen))?;
-        identity.archived = rest;
+        let mut rest = Station::new(chosen, String::new());
+        rest.archived = moving;
+        let record = rest
+            .take_record(chosen)
+            .ok_or(OpError::InvalidKeep(chosen))?;
+        let mut identity = record.to_station();
+        identity.archived = rest.archived;
         let new_station = identity.id;
         self.stations.insert(new_station, identity);
 

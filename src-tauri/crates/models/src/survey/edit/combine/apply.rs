@@ -785,8 +785,9 @@ impl Project {
     /// archived `jk`, so the joined node takes `jo`'s identity (after the
     /// fold, which kept `jk`'s id for the geometry): `jk`'s identity becomes
     /// a record naming its native lines but the combined line `kept` (which
-    /// is `jo`'s now: its own line was absorbed into it), and the node's id
-    /// becomes `jo` everywhere. The comment pick applies when `jk` becomes
+    /// is `jo`'s now: its own line was absorbed into it), with its records
+    /// under it (`Station::swap_identity`), and the node's id becomes `jo`
+    /// everywhere. The comment pick applies when `jk` becomes
     /// history, between `comments` (`jk`'s, then `jo`'s, before the join).
     fn keep_other_join(
         &mut self,
@@ -803,19 +804,13 @@ impl Project {
         let Some(node) = self.stations.get_mut(&jk) else {
             return;
         };
-        let Some(index) = node.archived.iter().position(|r| r.id == jo) else {
+        let history = native.is_empty();
+        if node.swap_identity(jo, native).is_none() {
             return;
-        };
-        let record = node.archived.remove(index);
-        let old = node.as_record(native);
-        node.name = record.name;
-        node.comment = if old.lines.is_empty() {
-            joined_comment(comments.0, comments.1, pick)
-        } else {
-            record.comment
-        };
-        node.external = record.external;
-        node.archived.push(old);
+        }
+        if history {
+            node.comment = joined_comment(comments.0, comments.1, pick);
+        }
         self.rekey_node(jk, jo);
     }
 

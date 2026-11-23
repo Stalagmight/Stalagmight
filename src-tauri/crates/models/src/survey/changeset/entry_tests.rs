@@ -381,6 +381,7 @@ fn an_archived_record_row_carries_every_field() {
             name: "0".to_string(),
             comment: None,
             external: None,
+            into: None,
             lines: Vec::new(),
         },
         ArchivedStation {
@@ -388,6 +389,7 @@ fn an_archived_record_row_carries_every_field() {
             name: "1".to_string(),
             comment: Some("tie-off".to_string()),
             external: Some("A9".to_string()),
+            into: None,
             lines: vec![2, 4],
         },
     ];

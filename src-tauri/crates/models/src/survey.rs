@@ -54,6 +54,7 @@ mod archive;
 mod build;
 mod naming;
 mod positions;
+mod records;
 mod topology;
 mod types;
 mod validate;
@@ -281,6 +282,12 @@ mod ops_scenario_tests;
 mod ops_test_helpers;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod records_tests;
+#[cfg(test)]
+#[expect(
     clippy::panic,
     clippy::print_stdout,
     clippy::unwrap_used,
@@ -300,6 +307,7 @@ pub use naming::{LetteredStation, NameCollision, NameConflict};
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,
 };
+pub use records::OwnerFault;
 pub use rigid::RigidGroups;
 pub use roles::{FarFix, GpsGapWarning};
 pub use stats::SurveyStats;
