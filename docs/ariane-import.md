@@ -110,10 +110,11 @@ RS 9; `import_funnel.rs`), decided in file order once the lines are
 classified: the end whose station is shown on the longest line is kept
 (rule K) when the closure may keep it, else the other end when that one
 may be kept, else the closure archives nothing (both ends keep their
-names). The archived end is shown under the kept end's name; a station
-that then repeats that name on its line takes a letter (rule L). The
-import summary notes each archive and warns for each letter and for each
-station the project already held that a closure now shows as another.
+names). The archived end is shown under the kept end's name, with the
+loop mark, which takes up no name on its line (RS-FX5): a station of that
+name on the line keeps it, and nothing is lettered. The import summary
+notes each archive and warns for each station the project already held
+that a closure now shows as another.
 
 ## Import Workflow
 

@@ -31,9 +31,14 @@ dialog keeps the one it shows and says why. A station another loop closure
 hides (its choice says "shown as ... through a loop closure") keeps showing
 that closure's station when you keep it; when you keep the other station
 instead, the closure stays but stops hiding its end, so the station you kept
-is shown there too, and the dialog says so. If the kept name is already used
-by another station on a line it will be shown on, a row asks how to settle
-it: rename the other station (for example `12` to `12a`) or rename the kept
+is shown there too, and the dialog says so. The lines that show the kept
+station anew show it with a coloured dot (its own line's colour), and a
+dotted station does not take up its name there: if Side already has a
+station `12` of its own, it keeps it, and Side shows both `12`s, one with
+the dot. Texts without the dot name the dotted one `12 (Main)`. Only when
+the merge would make a line show one name for two stations of its own (a
+loop closure it changes, for example) does a row ask how to settle it:
+rename the other station (for example `12` to `12a`) or rename the kept
 one. When the archived station was itself a junction of earlier merges, it
 is archived whole, with the stations archived in it still inside it:
 **Detach Line from Station** on any of its lines gives that junction back on

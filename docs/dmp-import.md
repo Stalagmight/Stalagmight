@@ -436,11 +436,16 @@ indexes, so the import records each station's MNemo number as its **name**
   file's station is **archived** in the junction (a record under a fresh
   Station ID naming the new line, with the file's number and comment), so
   Detach Line from Station gives the line its own station back. Comments
-  are never joined. The new line's own stations keep their numbers, except
-  one whose number is the junction's name, which takes a letter (`12a`):
-  the junction is shown on two lines, the new station on one (rule L). The
-  import summary notes each archived station and names each letter, with
-  the line, the junction and the new name.
+  are never joined. The new line's own stations keep their numbers. Where
+  the file's station is archived, the new line shows the junction with the
+  kept station's coloured dot, which takes up no name on the line (RS-FX5),
+  so the line's own `12` stays `12` beside the dotted `12`. Only where
+  nothing is archived (the file gives the station no number or comment of
+  its own), the junction shows natively on the new line, and a new station
+  whose number is the junction's name takes a letter (`12a`): the junction
+  is shown on two lines, the new station on one (rule L). The import
+  summary notes each archived station and names each letter, with the line,
+  the junction and the new name.
 - **After import.** A name belongs to its station, so it follows the station
   through later inserts, deletes, splits and reverses; a merge asks which
   station is kept and archives the other. On the map, the Display menu's

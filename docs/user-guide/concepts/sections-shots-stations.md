@@ -104,7 +104,10 @@ afterwards:
   file (an [MNemo import](../workflows/importing-from-mnemo.md) uses the MNemo
   station numbers) and names any others by the rules above. A name the line
   already has gets a letter: a second `5` becomes `5a`, a second `Sump`
-  becomes `Sump-a`.
+  becomes `Sump-a`. A station a line shows with another line's coloured dot
+  (a merged station kept on its own line) or with the loop mark (a loop
+  closure end) does not take up its name on that line: the line may have a
+  station of its own with that name too.
 
 ### Labels at merged stations
 
