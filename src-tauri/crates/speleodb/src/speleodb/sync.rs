@@ -141,14 +141,21 @@ impl UnansweredUpload {
     /// the upload's BASE (an upload is one revision on the tip it was sent to;
     /// uploads are never retried by the client), be authored by our account,
     /// and carry the upload's description as the server stores it
-    /// ([`normalize_like_server`]). A history without descriptions (an older
-    /// server) is matched on the first two alone.
+    /// ([`normalize_like_server`]).
+    ///
+    /// A revision with no description is ours only where the server keeps no
+    /// descriptions at all (`described_history` false: an older server, whose
+    /// history is matched on the BASE and the account alone). Our upload always
+    /// carries one (the upload verbs put in a default for a blank one), so where
+    /// the history shows descriptions, an undescribed revision on our BASE is
+    /// another session's or another tool's (pre-PR review of the X3 round,
+    /// should-fix 4: it used to count as ours and could clear the dirty mark).
     ///
     /// The description is what tells our own landed upload from another
     /// session's revision in the one place they can both be: on our BASE,
     /// authored by our account. It cannot tell two sessions that wrote the same
-    /// words, which is the residue.
-    pub fn made(&self, commit: &RevisionCommit, my_email: &str) -> bool {
+    /// words, nor anything on a server that keeps no descriptions: the residue.
+    pub fn made(&self, commit: &RevisionCommit, my_email: &str, described_history: bool) -> bool {
         let on_base = match (&self.base, commit.parent_ids.as_slice()) {
             (None, []) => true,
             (Some(base), [parent]) => parent.eq_ignore_ascii_case(base),
@@ -156,11 +163,20 @@ impl UnansweredUpload {
         };
         let ours =
             !my_email.trim().is_empty() && commit.author_email.eq_ignore_ascii_case(my_email);
-        let described = commit.message.as_deref().is_none_or(|stored| {
-            normalize_like_server(stored) == normalize_like_server(&self.message)
-        });
+        let described = match commit.message.as_deref() {
+            Some(stored) => normalize_like_server(stored) == normalize_like_server(&self.message),
+            None => !described_history,
+        };
         on_base && ours && described
     }
+}
+
+/// Whether the server keeps revision descriptions on this history: any revision
+/// in it carries one. [`UnansweredUpload::made`] matches an undescribed revision
+/// only where it does not.
+#[must_use]
+pub fn history_records_descriptions(commits: &[RevisionCommit]) -> bool {
+    commits.iter().any(|commit| commit.message.is_some())
 }
 
 /// Guardrail-7 ancestry recovery (#193).
@@ -264,13 +280,14 @@ pub(crate) fn classify_ancestry(
     // - a stranger's, or another session of our own account, which holds the same
     // per-account lock and signs with our email.
     let mut unanswered: Vec<&UnansweredUpload> = own.unanswered.iter().collect();
+    let described_history = history_records_descriptions(commits);
     for c in &new_commits {
         if own.landed.iter().any(|id| id.eq_ignore_ascii_case(&c.id)) {
             continue;
         }
         match unanswered
             .iter()
-            .position(|upload| upload.made(c, my_email))
+            .position(|upload| upload.made(c, my_email, described_history))
         {
             Some(at) => {
                 unanswered.remove(at);
@@ -465,13 +482,14 @@ pub fn not_our_own(
     replaced: Vec<RevisionCommit>,
     unanswered: &[UnansweredUpload],
     my_email: &str,
+    described_history: bool,
 ) -> Vec<RevisionCommit> {
     replaced
         .into_iter()
         .filter(|commit| {
             !unanswered
                 .iter()
-                .any(|upload| upload.made(commit, my_email))
+                .any(|upload| upload.made(commit, my_email, described_history))
         })
         .collect()
 }
@@ -917,9 +935,10 @@ pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, display_history, edits_captured_by_push, fence,
-        not_our_own, plan_push, reconcile_verdict, replaced_by_upload, rewind_target,
-        status_verdict, tip_of, unwind_target, AncestryOutcome, FenceOutcome, OwnUploads, PushPlan,
-        ReconcileVerdict, RemoteState, RevisionCommit, UnansweredUpload,
+        history_records_descriptions, not_our_own, plan_push, reconcile_verdict,
+        replaced_by_upload, rewind_target, status_verdict, tip_of, unwind_target, AncestryOutcome,
+        FenceOutcome, OwnUploads, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
+        UnansweredUpload,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -1370,6 +1389,58 @@ mod tests {
         // A history without descriptions (an older server) matches on the BASE
         // and the account alone.
         let bare = [commit("c", &["b"], ME)];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &bare, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Landed { clear_dirty: true }
+        );
+    }
+
+    #[test]
+    fn an_undescribed_revision_is_ours_only_where_the_server_keeps_no_descriptions() {
+        // Pre-PR review of the X3 round, should-fix 4. Our upload always carries a
+        // description (the upload verbs put in a default for a blank one), and a
+        // server that stores descriptions shows it. So on such a server a revision
+        // with no description on our BASE, by our account, is not what our
+        // unanswered upload made: another session's or another tool's revision.
+        // Taking it for ours used to adopt it as our landed push and clear the
+        // dirty mark over work that never reached SpeleoDB.
+        // Injection: let an undescribed revision match whatever the history keeps
+        // (the rule before) and the first case is Landed.
+        let own = unanswered(Some("b"), "Surveyed the sump");
+        let mixed = [
+            commit("c", &["b"], ME),
+            described("b", &["a"], ME, "First survey"),
+            described("a", &[], ME, "Created"),
+        ];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &mixed, ME, &own, Some(T1), Some(T2)),
+            AncestryOutcome::Diverged,
+            "an undescribed revision where the server keeps descriptions is not ours"
+        );
+        // And a late landing of it is reported as replaced, not hidden as ours.
+        let after = [
+            commit("u", &["c"], ME),
+            commit("c", &["b"], ME),
+            described("b", &["a"], ME, "First survey"),
+            described("a", &[], ME, "Created"),
+        ];
+        let replaced = replaced_by_upload(Some("b"), "u", &after);
+        assert_eq!(ids(&replaced), ["c"]);
+        assert_eq!(
+            ids(&not_our_own(
+                replaced,
+                &own.unanswered,
+                ME,
+                history_records_descriptions(&after)
+            )),
+            ["c"]
+        );
+
+        // The residue, pinned: a server that keeps no descriptions at all (an
+        // older one) cannot tell our upload from another session's on our BASE,
+        // so the BASE and the account decide, as documented.
+        let bare = [commit("c", &["b"], ME), commit("b", &[], ME)];
+        assert!(!history_records_descriptions(&bare));
         assert_eq!(
             classify_ancestry(Some("b"), Some("c"), &bare, ME, &own, Some(T1), Some(T2)),
             AncestryOutcome::Landed { clear_dirty: true }
@@ -1919,14 +1990,28 @@ mod tests {
         ];
         let replaced = replaced_by_upload(Some("b0"), "u2", &history);
         assert_eq!(ids(&replaced), ["u1"]);
-        assert!(not_our_own(replaced, &own.unanswered, ME).is_empty());
+        assert!(not_our_own(
+            replaced,
+            &own.unanswered,
+            ME,
+            history_records_descriptions(&history)
+        )
+        .is_empty());
         let theirs = [
             commit("u2", &["m1"], ME),
             described("m1", &["b0"], ME, "From A"),
             commit("b0", &[], ME),
         ];
         let replaced = replaced_by_upload(Some("b0"), "u2", &theirs);
-        assert_eq!(ids(&not_our_own(replaced, &own.unanswered, ME)), ["m1"]);
+        assert_eq!(
+            ids(&not_our_own(
+                replaced,
+                &own.unanswered,
+                ME,
+                history_records_descriptions(&theirs)
+            )),
+            ["m1"]
+        );
     }
 
     #[test]
