@@ -377,10 +377,17 @@ export function buildLabelDescriptors(
       const top = lineMaxIndex.get(sid);
       if (top === undefined || idx > top) lineMaxIndex.set(sid, idx);
     }
-    // IDs mode draws the Station ID, never the station's position in its line.
+    // IDs mode draws the Station ID the slot shows (RS 6: a foreign slot
+    // shows its kept station's), never the station's position in its line. A
+    // loop end (a station a loop closure shows as its other end) is never
+    // labelled, by name, Station ID or comment: its kept end's label says it
+    // (RS 6, M-P2-10), and its point is still drawn and selectable.
+    const shownSlots = data.stationShown;
+    const loopEnd = (g: number): boolean => shownSlots?.get(g)?.loop_end === true;
     const labelText = (g: number): string | null => {
+      if (loopEnd(g)) return null;
       if (namesMode) return formatStationNameLabel(data.stationNames.get(g));
-      const stationId = data.stationIds[g];
+      const stationId = shownSlots?.get(g)?.id ?? data.stationIds[g];
       return stationId === undefined ? null : formatStationLabel(stationId);
     };
     // A junction is one station: ONE label per Station ID, drawn for its
@@ -431,7 +438,8 @@ export function buildLabelDescriptors(
         stationIndex,
         ...(group !== undefined ? { stationGroup: group } : {}),
       });
-      const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
+      const stationComment =
+        wantStationComment && stationInView && !loopEnd(g) ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {
         descriptors.push({
           kind: LABEL_KIND.STATION_COMMENT,

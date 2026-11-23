@@ -15,7 +15,7 @@ import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, C
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
+import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure, StationRef } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { warningMessageBody } from '../../utils/stationIdentity';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
@@ -32,9 +32,11 @@ import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
-import { StationAliases } from './StationAliases';
-import { StationOtherLines, recordsShownByOtherLines } from './StationOtherLines';
+import { StationRecords } from './StationRecords';
+import { StationOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
+import { useIdentityLabel } from '../Dialogs/keptStationParts';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -697,7 +699,6 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const lineName = labels.lineName(lineId);
-  const stationId = labels.stationId(station.station_ref);
 
   const centerButton = (
     <button
@@ -717,10 +718,7 @@ function StationDetail({ station }: { station: Station }) {
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
       <Panel bare title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
-          <StationNameRows station={station} labels={labels} />
-          {stationId !== null && (
-            <DetailRow label={t('identity.stationId')} value={String(stationId)} testId="station-detail-id" />
-          )}
+          <StationNameRows station={station} labels={labels} closures={project?.loop_closures} />
           {/* The station's line, named once (demo finding V-8): this row is
               its link, so neither the Name row nor Connected repeats it. */}
           <DetailRow
@@ -767,16 +765,11 @@ function StationDetail({ station }: { station: Station }) {
 
           <StationOtherLines station={station} />
 
-          <StationAliases
-            records={station.archived}
-            lineName={labels.lineName}
-            shown={recordsShownByOtherLines(station)}
-            ownLine={lineId}
-            ownName={labels.stationName(station.station_ref)}
-          />
+          <StationRecords records={station.archived} lineName={labels.lineName} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection
+              anchor={station.station_ref}
               closures={station.closures_with}
               loopClosures={project?.loop_closures ?? []}
               stations={stations}
@@ -1390,7 +1383,13 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.line_count)} />
               <StatCard label={t('detailPanel.projectStats.shots')} value={formatNumber(stats.shot_count)} />
-              <StatCard label={t('detailPanel.projectStats.stations')} value={formatNumber(stats.station_count)} />
+              {/* A loop closure's hidden end is still a station point (RS 6). */}
+              <StatCard
+                label={t('detailPanel.projectStats.stations')}
+                value={formatNumber(stats.station_count)}
+                hint={t('detailPanel.projectStats.stationsHint')}
+                testId="project-stats-stations"
+              />
               {stats.loop_count > 0 && (
                 <StatCard label={t('detailPanel.projectStats.loops')} value={formatNumber(stats.loop_count)} />
               )}
@@ -1455,6 +1454,8 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
 }
 
 interface ClosuresSectionProps {
+  /** The station the details show: Remove Closure names each closure by its other end. */
+  anchor: StationRef;
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
@@ -1465,6 +1466,7 @@ interface ClosuresSectionProps {
 }
 
 function ClosuresSection({
+  anchor,
   closures,
   loopClosures,
   stations,
@@ -1475,7 +1477,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
+  const identityLabel = useIdentityLabel();
   const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
@@ -1532,7 +1534,9 @@ function ClosuresSection({
     trackContextMenuAction('remove-closure', 'detail-panel');
     setRemovingClosureId(closureId);
     try {
-      await removeLoopClosure(closureId);
+      // Asks first when its hidden end comes back or a name would repeat
+      // (RS 7); otherwise removes it at once.
+      await removeClosureAsking(closureId, anchor);
     } finally {
       setRemovingClosureId(null);
     }
@@ -1655,6 +1659,14 @@ function ClosuresSection({
                 ) : (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
                     {t('detailPanel.closures.unavailable')}
+                  </div>
+                )}
+                {closure?.archived && (
+                  <div className="text-xs text-text-secondary" data-testid={`closure-archive-${closureIdLabel}`}>
+                    {t('detailPanel.closures.archives', {
+                      hidden: identityLabel(closure.archived.station),
+                      shown: identityLabel(closure.archived.shown_as),
+                    })}
                   </div>
                 )}
               </div>

@@ -108,12 +108,13 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       },
     },
     {
-      // The project-unique Station ID (read-only).
+      // The Station ID the slot shows (read-only, RS 6): a foreign slot or a
+      // loop end shows its kept station's.
       key: '_stationId',
       header: t('dataTable.stationColumns.stationId'),
       width: 84,
       align: 'right',
-      getValue: (r) => r.id,
+      getValue: (r) => r.shown?.id ?? r.id,
     },
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),

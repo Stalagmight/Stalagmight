@@ -24,6 +24,7 @@ import type { Line, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
 import type { ProjectWarning } from '../../types/commands';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 
 /** Color for the on-map resolution preview ghost (issue #57). */
 const PREVIEW_COLOR = '#38bdf8';
@@ -289,11 +290,10 @@ export function WarningResolution({
   const { t } = useTranslation();
   const identity = useIdentityLabels();
   const precision = useDecimalPrecision();
-  const { updateShot, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
+  const { updateShot, deleteShot, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
       updateShot: s.updateShot,
       deleteShot: s.deleteShot,
-      removeLoopClosure: s.removeLoopClosure,
       resolveWarning: s.resolveWarning,
       isShotFrozen: s.isShotFrozen,
     })),
@@ -748,9 +748,11 @@ export function WarningResolution({
     if (opt.id === 'remove-closure') {
       if (warning.closureId === undefined) return 'failed';
       // Undoable like any closure removal; failure surfacing is owned by
-      // executeCommand's catch-all toast.
-      const result = await removeLoopClosure(BigInt(warning.closureId));
-      return result.success ? 'resolved' : 'failed';
+      // executeCommand's catch-all toast. When its hidden end comes back or a
+      // name would repeat, Remove Closure asks first (RS 7): the flow leaves
+      // for the dialog, as for a jump to the station.
+      const outcome = await removeClosureAsking(BigInt(warning.closureId), closureStation ?? undefined);
+      return outcome === 'done' ? 'resolved' : outcome === 'asked' ? 'navigated' : 'failed';
     }
 
     if (opt.id === 'delete-shot') {

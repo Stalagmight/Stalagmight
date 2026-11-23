@@ -1758,7 +1758,8 @@
       "gap": "GPS is {{distance}} m {{direction}} of the surveyed position.",
       "gapExceeds": "That is more than the {{threshold}} m expected over {{distance}} m of survey from the zero datum that places this survey. Check the GPS reading and the survey; you can still save.",
       "gapExceedsNoDistance": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey; you can still save.",
-      "editingDisabled": "Editing is disabled in the current view"
+      "editingDisabled": "Editing is disabled in the current view",
+      "loopEndDatum": "This station is a loop end ({{station}}): the datum goes on its own point."
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Line",
@@ -1915,6 +1916,30 @@
       "commentComesBack": "Its comment comes back too: \"{{comment}}\"",
       "nothingBack": "Both ends already show their own names, so no name changes.",
       "comesBackPlain": "{{station}} comes back."
+    },
+    "shownIdentity": {
+      "titleName": "Rename Station",
+      "titleComment": "Station Comment",
+      "belongs": "{{name}} belongs to {{line}}.",
+      "loopEnd": "Shown as {{station}} through a loop closure.",
+      "changes": {
+        "name": "A new name changes it on every line it is on: {{lines}}.",
+        "comment": "A new comment changes it on every line it is on: {{lines}}.",
+        "both": "A new name and comment change it on every line it is on: {{lines}}."
+      },
+      "proceed": {
+        "name": "Rename it on every line",
+        "comment": "Change its comment on every line",
+        "both": "Change it on every line"
+      },
+      "proceedLoop": {
+        "name": "Rename {{station}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Change {{station}}"
+      },
+      "removeClosure": "Remove the closure",
+      "detach": "Detach {{line}} to get back its own station {{name}}",
+      "cancel": "Cancel"
     }
   },
   "undo": {
@@ -2213,20 +2238,20 @@
       "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
       "alsoOn": "Also on",
-      "alsoOnHint": "The other lines through this station. They share it, its Station ID and its comment, and each shows it by its own name. A Station ID beside a line is the one that line had here before a merge; Detach gives it back.",
-      "otherLineName": "{{name}} (Station ID {{id}})",
-      "otherLineId": "Station ID {{id}}",
-      "alsoKnownAs": "Also known as",
-      "alsoKnownAsHint": "Stations merged into this one. They keep their old name and Station ID here, so you can find them from your notes.",
-      "alias": "{{name}} (Station ID {{id}})",
-      "aliasOnLine": "{{name}} on {{line}} (Station ID {{id}})",
-      "aliasIdOnLine": "Station ID {{id}} on {{line}}",
-      "aliasNoName": "Station ID {{id}}",
+      "alsoOnHint": "The other lines through this station. Every line shows it by the same name and Station ID. Detach takes a line off and gives it back its own station.",
       "detachLine": "Detach {{line}} from this station",
       "connected": "Connected",
       "previousShot": "Previous shot",
       "nextShot": "Next shot",
-      "otherLineShots": "On {{line}}"
+      "otherLineShots": "On {{line}}",
+      "archived": "Archived here",
+      "archivedHint": "Stations a merge archived in this one. Each keeps its own name, comment and Station ID, and is shown nowhere until Detach Line from Station on its line brings it back.",
+      "recordOfLines": "{{name}} (Station ID {{id}}), {{lines}}'s own station",
+      "recordHistory": "{{name}} (Station ID {{id}}), kept for its Station ID",
+      "recordComment": "Comment: {{comment}}",
+      "loopEnd": "Loop closure end, shown as {{station}}",
+      "loopEndOwn": "Its own station {{name}} (Station ID {{id}}) is hidden. Removing the closure brings it back.",
+      "belongsTo": "{{name}} belongs to {{line}}."
     },
     "shot": {
       "title": "Shot",
@@ -2280,7 +2305,8 @@
       "latestSurvey": "Latest survey",
       "connections": "Connections",
       "junctions": "Junctions",
-      "zeroDatums": "Zero datums"
+      "zeroDatums": "Zero datums",
+      "stationsHint": "Every surveyed point counts once. The two ends of a loop closure count as two, even when they show one name."
     },
     "projectSettings": {
       "open": "Local settings"
@@ -2292,7 +2318,8 @@
       "viaPrefix": " (via ",
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
-      "unavailable": "Closure metrics unavailable"
+      "unavailable": "Closure metrics unavailable",
+      "archives": "{{hidden}} is shown as {{shown}} (loop end). Removing the closure brings it back."
     },
     "multiShot": {
       "title_one": "{{count}} shot selected",
@@ -4361,5 +4388,15 @@
     "loopEnd": "loop end",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
     "foreignLabel": "{{station}} ({{home}})"
+  },
+  "notices": {
+    "identities": {
+      "letter": "{{station}} to {{to}}",
+      "lettered": "Renamed {{renamed}} so no line shows a name twice.",
+      "restored": "{{station}} (Station ID {{id}}) is shown again.",
+      "commentHidden": "The comment of Station ID {{id}} is hidden: Undo brings it back.",
+      "unarchived_one": "A loop closure's hidden end shows its own name again.",
+      "unarchived_other": "{{count}} loop closures' hidden ends show their own names again."
+    }
   }
 }

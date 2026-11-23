@@ -21,6 +21,7 @@ export { default as EditStationDialog } from './EditStationDialog';
 export { default as UnmergeStationsDialog } from './UnmergeStationsDialog';
 export { default as SaveConflictDialog } from './SaveConflictDialog';
 export { default as RemoveClosureDialog } from './RemoveClosureDialog';
+export { default as ShownIdentityEditDialog } from './ShownIdentityEditDialog';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
 export { default as ImportBlockedDialog } from './ImportBlockedDialog';

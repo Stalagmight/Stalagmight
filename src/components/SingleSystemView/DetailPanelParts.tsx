@@ -21,9 +21,9 @@ export function CenterLocateIcon() {
   );
 }
 
-export function StatCard({ label, value }: { label: string; value: string }) {
+export function StatCard({ label, value, hint, testId }: { label: string; value: string; hint?: string; testId?: string }) {
   return (
-    <div className="text-sm">
+    <div className="text-sm" title={hint} data-testid={testId}>
       <div className="text-text-secondary text-xs">{label}</div>
       <div className="font-medium">{value}</div>
     </div>

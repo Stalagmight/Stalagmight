@@ -1,0 +1,53 @@
+/**
+ * The notice of what an action did to station names on its own (plan
+ * 2026-11-23, RS 7 "Notices"): a merge without a dialog, a delete that brings
+ * an archived station back (RS 4.3), a closure removal (RS 5.3) or a promotion
+ * may letter a station so no line shows a name twice (rule L), restore an
+ * archived station, or make a loop closure's hidden end show its own name
+ * again. The backend reports these on `CommandResult.identities`; nothing the
+ * user saw changes name silently (docs/notifications.md), so one toast per
+ * action names each. A dialog's own answers are the user's and are not
+ * reported; imports report theirs in the receipt only.
+ */
+import i18n from '../i18n';
+import { useUIStore } from '../store/uiStore';
+import type { CommandResult } from '../types/commands';
+import type { IdentityNotice } from '../types/ipc/IdentityNotice';
+import { formatStationLabel } from './formatters';
+import { TOAST_KEYS } from './toastKeys';
+
+/** The notice's words, or null when the action did nothing to names on its own. */
+export function identityNoticeMessage(notice: IdentityNotice | undefined, lineName: (lineId: number) => string): string | null {
+  if (!notice) return null;
+  const parts: string[] = [];
+  if (notice.lettered.length > 0) {
+    const renamed = notice.lettered
+      .map((l) => i18n.t('notices.identities.letter', { station: formatStationLabel(l.from, lineName(l.line_id)), to: l.to }))
+      .join(', ');
+    parts.push(i18n.t('notices.identities.lettered', { renamed }));
+  }
+  for (const r of notice.restored) {
+    const station = formatStationLabel(r.station.name, r.station.home_line === undefined ? null : lineName(r.station.home_line));
+    parts.push(i18n.t('notices.identities.restored', { station, id: r.station.id }));
+    if (r.comment_hidden !== undefined) {
+      parts.push(i18n.t('notices.identities.commentHidden', { id: r.old_id }));
+    }
+  }
+  if (notice.unarchived.length > 0) {
+    parts.push(i18n.t('notices.identities.unarchived', { count: notice.unarchived.length }));
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/**
+ * Toast what a successful action did to names on its own, then hand the
+ * result on unchanged (so a store action can wrap its command in one
+ * expression). A `warning`: the action did what was asked, with names the
+ * user did not choose; one Undo brings them back with the rest of it.
+ */
+export function notifyIdentityChanges(result: CommandResult, lineName: (lineId: number) => string): CommandResult {
+  if (!result.success) return result;
+  const message = identityNoticeMessage(result.identities, lineName);
+  if (message !== null) useUIStore.getState().showToast(message, TOAST_KEYS.STATION_IDENTITIES, 'warning');
+  return result;
+}
