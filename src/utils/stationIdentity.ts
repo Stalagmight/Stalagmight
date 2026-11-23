@@ -154,59 +154,67 @@ function shownIdAt(data: IdentityData, g: number): number | undefined {
   return data.stationShown?.get(g)?.id ?? data.stationIds[g];
 }
 
-/** The Station ID the station at `ref` shows, from the `Station[]` list. */
+/** The Station ID the station shows, from the `Station[]` list. */
 function shownIdOfStation(station: Station): number {
   return station.shown?.id ?? station.id;
 }
 
+/** A native slot: it shows its node's own identity on one of the node's
+ *  native lines (no `shown`), so it counts for name uniqueness (N8, RS-FX5). */
+function isNativeAt(data: IdentityData, g: number): boolean {
+  return data.stationShown?.get(g) === undefined;
+}
+
 /**
- * The first line on which ANOTHER station is already shown as `name`, among
- * the lines a rename of the station at `ref` renames it on, or null when the
- * name is free. A rename through any slot renames the identity the slot
- * shows (RS 5.4: a junction shows its kept station on every line, a loop
- * end its closure's kept end), so every line that identity is shown on is
- * checked, and every slot showing it is its own (a same-line closure shows
- * one identity twice). On one line this is the old per-line check.
- * A foreign slot or a loop end asks whose station it is first
+ * The first line on which a NATIVE slot of another station already shows
+ * `name`, among the lines a rename of the station at `ref` is checked on, or
+ * null when the name is free. A rename through any slot renames the identity
+ * the slot shows (RS 5.4: a junction shows its kept station on every line, a
+ * loop end its closure's kept end). N8 holds among native slots only
+ * (RS-FX5): a foreign slot (the dot) and a loop end (the loop mark) count for
+ * no uniqueness. So the rename is checked on the lines that identity is
+ * native on (where a slot shows it with no dot or loop mark), against the
+ * native slots of other identities there, as the backend's
+ * `conflicts_with_name` does; a line that shows it only through a foreign
+ * slot or a loop end is not checked. On one line this is the old per-line
+ * check. A foreign slot or a loop end asks whose station it is first
  * (`preview_station_identity`, `ShownIdentityPrompt`).
  */
 export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
   const data = src.surveyData;
-  const showing: StationRef[] = [];
-  const shows: (lineId: number, index: number) => boolean = (() => {
-    if (data && data.stationCount > 0) {
-      const g = stationGlobalIndexOf(data, ref);
-      const target = g === null ? undefined : shownIdAt(data, g);
-      if (target !== undefined) {
-        for (let s = 0; s < data.stationCount; s++) {
-          if (shownIdAt(data, s) === target) {
-            showing.push({ line_id: data.stationLineIds[s]!, station_index: data.stationIndices[s]! });
-          }
-        }
-        return (lineId: number, index: number) => {
-          const at = stationGlobalIndexOf(data, { line_id: lineId, station_index: index });
-          return at !== null && shownIdAt(data, at) === target;
-        };
+  if (data && data.stationCount > 0) {
+    const g = stationGlobalIndexOf(data, ref);
+    const target = g === null ? undefined : shownIdAt(data, g);
+    if (target !== undefined) {
+      const lines: number[] = [];
+      for (const s of idIndexOf(data).get(target) ?? []) {
+        const line = data.stationLineIds[s]!;
+        if (isNativeAt(data, s) && !lines.includes(line)) lines.push(line);
       }
+      const byLine = refIndexOf(data).byLine;
+      for (const line of lines) {
+        const slots = byLine.get(line) ?? [];
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (s === undefined || !isNativeAt(data, s) || data.stationIds[s] === target) continue;
+          if ((data.stationNames.get(s) || String(i)) === name) return line;
+        }
+      }
+      return null;
     }
-    const station = findStationIn(src.stations, ref);
-    if (!station) {
-      showing.push(ref);
-      return (lineId: number, index: number) => lineId === ref.line_id && index === ref.station_index;
-    }
-    const target = shownIdOfStation(station);
-    const own = (src.stations ?? []).filter((s) => shownIdOfStation(s) === target);
-    showing.push(...own.map((s) => s.station_ref));
-    const keys = new Set(own.map((s) => `${s.station_ref.line_id}:${s.station_ref.station_index}`));
-    return (lineId: number, index: number) => keys.has(`${lineId}:${index}`);
-  })();
-  const seen = new Set<number>();
-  for (const slot of showing) {
-    if (seen.has(slot.line_id)) continue;
-    seen.add(slot.line_id);
-    const names = lineStationNamesOf(src, slot.line_id);
-    for (let i = 0; i < names.length; i++) {
-      if (names[i] === name && !shows(slot.line_id, i)) return slot.line_id;
+  }
+  const stations = src.stations ?? [];
+  const station = findStationIn(stations, ref);
+  // An unknown station: its own line, against the other native slots there.
+  const target = station ? shownIdOfStation(station) : null;
+  const lines = station
+    ? [...new Set(stations.filter((s) => s.id === target && !s.shown).map((s) => s.station_ref.line_id))]
+    : [ref.line_id];
+  for (const line of lines) {
+    for (const s of stations) {
+      if (s.station_ref.line_id !== line || s.shown) continue;
+      if (station ? s.id === target : s.station_ref.station_index === ref.station_index) continue;
+      if ((s.name || String(s.station_ref.station_index)) === name) return line;
     }
   }
   return null;

@@ -76,11 +76,71 @@ describe('shown identity labels (RS 6)', () => {
     expect(labels.station(side2, true)).toBe('Main / 3 (loop end on Side)');
   });
 
-  it('checks a rename through a loop end on every line its shown station is on', () => {
-    // Renaming through Side 2 renames Main / 3, which Side 2 and Main 0 show:
-    // 13 is taken on Main by another station, 1 on Side.
+  it('checks a rename through a loop end on the lines its shown station is native on (RS-FX5)', () => {
+    // Renaming through Side 2 renames Main / 3, which Main 0 shows natively
+    // and Side 2 as a loop end: 13 is taken on Main by another station; Side
+    // is not checked, so its own 1 is free.
     expect(labels.stationNameTakenOn(side2, '13')).toBe(MAIN);
-    expect(labels.stationNameTakenOn(side2, '1')).toBe(SIDE);
+    expect(labels.stationNameTakenOn(side2, '1')).toBeNull();
     expect(labels.stationNameTakenOn(side2, '30')).toBeNull();
+  });
+
+  it('checks a rename through a foreign slot on the kept station\'s native lines only (RS-FX5)', () => {
+    // Main / 12 is shown on Side through the foreign slot Side 0: renaming it
+    // (through either slot) to Side's own 1 is free, to Main's 13 is not.
+    expect(labels.stationNameTakenOn(side0, '1')).toBeNull();
+    expect(labels.stationNameTakenOn(main1, '1')).toBeNull();
+    expect(labels.stationNameTakenOn(side0, '13')).toBe(MAIN);
+    expect(labels.stationNameTakenOn(main1, '3')).toBe(MAIN);
+  });
+
+  it('lets a native station take a name only dotted slots show on its line (RS-FX5)', () => {
+    // Side 1 is Side's own station: the foreign 12 and the loop end's 3 on
+    // Side count for no uniqueness.
+    const side1 = { line_id: SIDE, station_index: 1 };
+    expect(labels.stationNameTakenOn(side1, '12')).toBeNull();
+    expect(labels.stationNameTakenOn(side1, '3')).toBeNull();
+  });
+});
+
+/**
+ * The user's example (RS-FX5): Main / 12 is kept at Branch's start, so
+ * Branch's slot 0 shows "12" with Main's dot, and Branch's own station 2 keeps
+ * its surveyed name "12". Neither counts against the other.
+ */
+describe('dotted slots do not collide (RS-FX5)', () => {
+  const BRANCH = 3;
+  const d = {
+    stationCount: 5,
+    stationLineIds: new Uint32Array([MAIN, MAIN, BRANCH, BRANCH, BRANCH]),
+    stationIndices: new Uint32Array([0, 1, 0, 1, 2]),
+    stationNames: new Map([
+      [0, '11'],
+      [1, '12'],
+      [2, '12'],
+      [3, '1'],
+      [4, '12'],
+    ]),
+    stationIds: new Uint32Array([10, 12, 12, 31, 32]),
+    stationShown: new Map<number, ShownSlot>([[2, { id: 12, home_line: MAIN, foreign: true, loop_end: false }]]),
+    lines: [
+      { id: MAIN, name: 'Main', shotOffset: 0, shotCount: 1 },
+      { id: BRANCH, name: 'Branch', shotOffset: 1, shotCount: 2 },
+    ],
+    shotIds: new Int32Array([1, 2, 3]),
+  } as unknown as IdentityData;
+  const labels = identityLabels({ surveyData: d });
+  const branch0 = { line_id: BRANCH, station_index: 0 };
+  const branch2 = { line_id: BRANCH, station_index: 2 };
+
+  it("keeps Branch's own 12 renamable to anything Branch's native slots do not show", () => {
+    expect(labels.stationNameTakenOn(branch2, '12')).toBeNull();
+    expect(labels.stationNameTakenOn(branch2, '1')).toBe(BRANCH);
+    expect(labels.stationNameTakenOn(branch2, '11')).toBeNull();
+  });
+
+  it("checks Main / 12's rename on Main only", () => {
+    expect(labels.stationNameTakenOn(branch0, '1')).toBeNull();
+    expect(labels.stationNameTakenOn(branch0, '11')).toBe(MAIN);
   });
 });

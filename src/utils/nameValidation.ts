@@ -48,8 +48,9 @@ export function lineNameProblem(
 
 /**
  * Whether `name` can rename a station, given the line it would collide on
- * (`takenOnLine`, from `stationNameTakenOn`: a junction's name must be free on
- * every line through it, plan 5.3). Trimmed, exact.
+ * (`takenOnLine`, from `stationNameTakenOn`: the name must be free among the
+ * native slots of every line the renamed station is native on, plan 5.3,
+ * RS-FX5; foreign slots and loop ends count for none). Trimmed, exact.
  */
 export function stationRenameProblem(name: string, takenOnLine: number | null): NameProblem | null {
   const trimmed = name.trim();

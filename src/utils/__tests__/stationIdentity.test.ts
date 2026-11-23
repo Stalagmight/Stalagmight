@@ -159,9 +159,9 @@ describe('a junction', () => {
 /**
  * A loop end (RS 5): Side's last station (Station ID 13, "A1") is archived by
  * a closure keeping Main Line's "5" (Station ID 44), so Side shows "5" there.
- * A rename through either slot renames Main Line's "5" on every line it is
- * shown on, so both lines are checked, and the two slots showing it are its
- * own.
+ * A rename through either slot renames Main Line's "5", checked on the lines
+ * it is native on (Main Line): the loop end counts for no name uniqueness on
+ * Side (RS-FX5).
  */
 function loopEnd(): IdentityData {
   const d = data();
@@ -173,12 +173,16 @@ function loopEnd(): IdentityData {
 describe('a loop end shows its closure\'s kept station', () => {
   const labels = identityLabels({ surveyData: loopEnd() });
 
-  it('checks a rename on every line the shown station is on', () => {
-    // Through the loop end: Main Line's "4" and Side's "A0" are both taken.
+  it('checks a rename on the lines the shown station is native on', () => {
+    // Through the loop end: Main Line's "4" is taken; Side, which shows the
+    // station only through the loop end, is not checked.
     expect(labels.stationNameTakenOn({ line_id: 2, station_index: 1 }, '4')).toBe(7);
-    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 1 }, 'A0')).toBe(2);
-    // Through the kept station: the same lines.
-    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, 'A0')).toBe(2);
+    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 1 }, 'A0')).toBeNull();
+    // Through the kept station: the same line.
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, 'A0')).toBeNull();
+    expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, '4a')).toBe(7);
+    // Side's own A0 may take the loop end's name.
+    expect(labels.stationNameTakenOn({ line_id: 2, station_index: 0 }, '5')).toBeNull();
     // Its own name, shown on both slots, is not a collision.
     expect(labels.stationNameTakenOn({ line_id: 2, station_index: 1 }, '5')).toBeNull();
     expect(labels.stationNameTakenOn({ line_id: 7, station_index: 2 }, 'fresh')).toBeNull();
