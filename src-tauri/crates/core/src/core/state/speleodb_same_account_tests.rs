@@ -915,7 +915,7 @@ fn opening_does_not_take_over_a_lock_another_session_of_the_account_edits_under(
     // with the holder (this account) and sends nothing but the holder read, so
     // the project opens read-only with a notice. Resume editing (the plain
     // verb) still edits under it, on purpose.
-    // Injection: drop the `resume_held` guard from `speleodb_start_editing_flow`
+    // Injection: drop the `resume_held` early return from `speleodb_start_editing_flow`
     // and the open acquires and edits.
     let temp = tempfile::tempdir().expect("temp");
     let (endpoint, remote) = server();

@@ -1031,27 +1031,25 @@ impl AppState {
         // whole span, and the release's reclaim check then stands down for the live
         // session).
         let me = self.speleodb_my_email();
-        let probe =
-            self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id);
-        // The automatic Start Editing after an open stops short of a lock the
-        // account holds and this run never claimed (sdbdemo2 issue 3; see
-        // `speleodb_start_editing_after_open`). Nothing was acquired yet.
-        if let Ok(Some(holder)) = &probe {
-            if !resume_held
-                && lock_held_by_me(Some(holder.as_str()), me.as_deref())
-                && !self.speleodb_holds_claim(&link.project_id)
-            {
-                return Ok(StartEditingResult::LockedBy {
-                    email: Some(holder.clone()),
-                });
-            }
-        }
-        let (acquired_here, keep_lock_on_unwind) = match probe {
+        let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link.project_id,
+        ) {
             // Unheld -> this call took it: record the acquisition, hand it back if we
             // walk away.
             Ok(None) => (true, false),
-            // Already ours -> inherited: no authorship, and never hand it back.
+            // Already ours -> inherited: no authorship, and never hand it back. The
+            // automatic Start Editing after an open stops short of such a lock when
+            // this run never claimed it (sdbdemo2 issue 3; see
+            // `speleodb_start_editing_after_open`): nothing was acquired yet.
             Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                if !resume_held && !self.speleodb_holds_claim(&link.project_id) {
+                    return Ok(StartEditingResult::LockedBy {
+                        email: Some(holder),
+                    });
+                }
                 (false, true)
             }
             // Someone else's, and the acquire below still succeeded -> they released in

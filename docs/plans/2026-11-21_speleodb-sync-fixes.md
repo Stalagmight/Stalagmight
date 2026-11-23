@@ -915,7 +915,8 @@ each reproduced first by a test that fails on e9df1b642 (named with each item).
   - Tests: `opening_does_not_take_over_a_lock_another_session_of_the_account_edits_under`
     and `opening_resumes_a_lock_this_run_claims` (two sessions on the R3 loopback
     server; the new verb does not exist on e9df1b642; injection: drop the
-    `resume_held` guard and the first fails), the autoAcquire vitest case,
+    `resume_held` early return in the "already ours" probe arm and the first
+    fails), the autoAcquire vitest case,
     `SpeleoProjectInfo` (four origin cases fail on e9df1b642), the header case, and
     `speleodb-held-lock-same-account.spec.ts` asserting the card behind the prompt
     (e9df1b642: "You are editing").
