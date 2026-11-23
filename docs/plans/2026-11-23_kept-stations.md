@@ -835,6 +835,16 @@ disagreed, each with its reason.
   Closure. A datum set through a loop end is said before saving (Edit
   Station's datum section names the loop end), since the command result
   does not carry `DatumSet::shown_as` on the wire.
+- **The data table's prompt is a dialog of its own, with telemetry.** The
+  `shown-identity-edit` dialog gets the per-dialog telemetry set every
+  dialog carries (`action.dialog.*`, `dialog-cancel.*`, `dwell.dialog.*`,
+  `active-dwell.dialog.*`; the registry goes from 756 to 760 events), the
+  one Rust change of this package.
+- **The keep radios name each station by its own identity.** A
+  closure-archived candidate's slot shows its kept end's name, so the radio
+  draws a pill of the candidate's own name and Station ID and says "shown
+  as K through a loop closure" beside it (7: "its pill: line, own name,
+  Station ID").
 - **The data table's dot and loop mark ride the row's gutter pill.** The
   Name column stays plain editable text; the gutter pill carries the dot
   and the loop mark, the Station ID column reads the shown Station ID, and
