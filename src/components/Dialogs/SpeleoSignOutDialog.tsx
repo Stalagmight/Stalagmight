@@ -56,12 +56,14 @@ type Answer = 'go' | 'keep' | 'upload' | 'discard' | 'retry';
 export default function SpeleoSignOutDialog() {
   const request = useSpeleoSignOut((s) => s.request);
   if (!request) return null;
-  return <SignOutPrompt key={request.id} kind={request.kind} initial={request.survey} settle={request.settle} />;
+  return <SignOutPrompt key={request.id} kind={request.kind} initial={request.survey}
+    initialError={request.error ?? null} settle={request.settle} />;
 }
 
-function SignOutPrompt({ kind, initial, settle }: {
+function SignOutPrompt({ kind, initial, initialError, settle }: {
   kind: SignOutKind;
   initial: SignOutSurvey | null;
+  initialError: string | null;
   settle: (proceed: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -78,7 +80,7 @@ function SignOutPrompt({ kind, initial, settle }: {
   const [doing, setDoing] = useState<Answer | null>(null);
   const [releasing, setReleasing] = useState(false);
   const [message, setMessage] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [failed, setFailed] = useState<SignOutProject[]>([]);
   // (d) rows released anyway, and the one being released now.
   const [releasedAnyway, setReleasedAnyway] = useState<ReadonlySet<string>>(new Set());

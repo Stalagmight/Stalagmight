@@ -180,10 +180,15 @@ describe('guardSpeleoSignOut', () => {
   });
 
   it('raises the dialog in its "could not check" state when the server cannot be asked', async () => {
-    invokeIpcMock.mockRejectedValue(new Error('Synthetic: unreachable'));
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Refused',
+    });
     const answer = guardSpeleoSignOut('signOut');
     await vi.waitFor(() => expect(useSpeleoSignOut.getState().request).not.toBeNull());
     expect(useSpeleoSignOut.getState().request?.survey).toBeNull();
+    // sdbdemo2 P3 (screenshot 26): with its cause in plain words, from the start.
+    expect(useSpeleoSignOut.getState().request?.error).toMatch(/^Could not connect to SpeleoDB at https:\/\/sdb\.example/);
     useSpeleoSignOut.getState().request?.settle(true);
     expect(await answer).toBe(true);
   });

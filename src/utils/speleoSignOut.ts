@@ -48,6 +48,7 @@ import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 import { emailsMatch } from './email';
 import { invokeIpc } from './ipc';
+import { describeSpeleoError } from './speleoError';
 import { needsSpeleoExitPrompt } from './speleoExit';
 import { fetchSpeleoLocalStates, lockNotTakenHere } from './speleoLocalState';
 
@@ -176,6 +177,9 @@ interface SignOutRequest {
   kind: SignOutKind;
   /** `null` while the first survey runs; the dialog re-surveys on "Try again". */
   survey: SignOutSurvey | null;
+  /** Why the first survey failed, worded by cause (sdbdemo2 P3, screenshot 26:
+      the cause used to appear only after Try again). */
+  error?: string | null;
   /** Finish: `true` = go ahead and sign out, `false` = the sign-out is cancelled. */
   settle: (proceed: boolean) => void;
 }
@@ -184,7 +188,7 @@ export const useSpeleoSignOut = create<{ request: SignOutRequest | null }>(() =>
 
 let nextId = 0;
 
-function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Promise<boolean> {
+function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null, error: string | null = null): Promise<boolean> {
   useSpeleoSignOut.getState().request?.settle(false);
   return new Promise<boolean>((resolve) => {
     const id = ++nextId;
@@ -195,7 +199,7 @@ function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Pro
       if (useSpeleoSignOut.getState().request?.id === id) useSpeleoSignOut.setState({ request: null });
       resolve(proceed);
     };
-    useSpeleoSignOut.setState({ request: { id, kind, survey, settle } });
+    useSpeleoSignOut.setState({ request: { id, kind, survey, error, settle } });
   });
 }
 
@@ -207,12 +211,14 @@ function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Pro
 export async function guardSpeleoSignOut(kind: SignOutKind): Promise<boolean> {
   if (useSpeleoStore.getState().session?.loggedIn !== true) return true;
   let survey: SignOutSurvey | null;
+  let error: string | null = null;
   try {
     survey = await surveySignOut();
-  } catch {
-    // Could not look: say so rather than guess. The dialog offers Try again.
+  } catch (e) {
+    // Could not look: say so, and why, rather than guess. The dialog offers Try again.
     survey = null;
+    error = describeSpeleoError(e);
   }
   if (survey && !signOutHasWork(survey)) return true;
-  return openSignOutDialog(kind, survey);
+  return openSignOutDialog(kind, survey, error);
 }

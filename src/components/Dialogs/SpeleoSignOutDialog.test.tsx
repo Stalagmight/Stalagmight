@@ -33,9 +33,9 @@ let closeProject: ReturnType<typeof vi.fn>;
 let released: string[];
 
 /** Open the dialog the way `guardSpeleoSignOut` does; resolves with its answer. */
-function show(survey: SignOutSurvey | null, kind: 'signOut' | 'switch' = 'signOut'): Promise<boolean> {
+function show(survey: SignOutSurvey | null, kind: 'signOut' | 'switch' = 'signOut', error: string | null = null): Promise<boolean> {
   const answer = new Promise<boolean>((resolve) => {
-    useSpeleoSignOut.setState({ request: { id: Math.random(), kind, survey, settle: (go) => {
+    useSpeleoSignOut.setState({ request: { id: Math.random(), kind, survey, error, settle: (go) => {
       useSpeleoSignOut.setState({ request: null });
       resolve(go);
     } } });
@@ -438,6 +438,15 @@ describe('SpeleoSignOutDialog', () => {
     await userEvent.click(screen.getByTestId('speleodb-signout-retry'));
     expect(await answer).toBe(true);
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects', undefined, expect.anything());
+  });
+
+  // sdbdemo2 P3 (screenshot 26): the first failed check said only "SpeleoDB could
+  // not be reached"; the cause appeared after Try again. It is there at once now.
+  it('the first failed check says its cause at once', () => {
+    void show(null, 'signOut', 'Could not connect to SpeleoDB at https://sdb.example.');
+    expect(screen.getByTestId('speleodb-signout-check-failed')).toBeVisible();
+    expect(screen.getByTestId('speleodb-signout-error'))
+      .toHaveTextContent('Could not connect to SpeleoDB at https://sdb.example.');
   });
 
   // Demo item 4: a re-check that got no reply says why in the words every
