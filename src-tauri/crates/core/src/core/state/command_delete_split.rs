@@ -16,6 +16,12 @@ use super::command_shot::{any_shot_frozen, closure_warnings, ClosureNames};
 use super::commands::Record;
 use super::labels::{delete_shots_label, ShotsDeleted};
 use super::AppState;
+
+/// A recipe's closure warnings and identity notice (RS 7 "Notices").
+type Notes = (
+    Vec<crate::core::ValidationWarning>,
+    crate::models::IdentityNotice,
+);
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::PreviewRow;
 use crate::models::survey::{Project as Survey, RangeDeleteMode};
@@ -124,8 +130,8 @@ fn shot_uuids(project: &Survey, line: LineId, first: usize, last: usize) -> Vec<
 /// renamed `name_a`, a new line `name_b` takes the shots after them, in
 /// `color_b` when given (the colour a new line gets, as Split Line Here
 /// gives it; demo finding I-9), else in the line's colour (0.6.0's split,
-/// which copied the line's metadata). Returns the new line's id and the
-/// closure warnings.
+/// which copied the line's metadata). Returns the new line's id, the
+/// closure warnings and the identity notice (RS 7).
 fn split_out(
     project: &mut Survey,
     record: &mut Record,
@@ -133,7 +139,7 @@ fn split_out(
     (start, end): (usize, usize),
     (name_a, name_b, color_b): (&str, &str, Option<&str>),
     context: &str,
-) -> Result<(LineId, Vec<crate::core::ValidationWarning>), String> {
+) -> Result<(LineId, Notes), String> {
     let (first, last) = {
         let shots = &project
             .line(line)
@@ -191,7 +197,10 @@ fn split_out(
     ];
     Ok((
         new_line,
-        closure_warnings(&names, project, &edited.report, context),
+        (
+            closure_warnings(&names, project, &edited.report, context),
+            project.identity_notice(&edited.report.identities),
+        ),
     ))
 }
 
@@ -293,7 +302,7 @@ impl AppState {
             },
         );
         match result {
-            Ok((new_line_id, warnings)) => {
+            Ok((new_line_id, (warnings, identities))) => {
                 tracing::info!(
                     line_id,
                     shot_id,
@@ -304,6 +313,7 @@ impl AppState {
                 CommandResult::success()
                     .with_line_id(new_line_id)
                     .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }
@@ -396,7 +406,7 @@ impl AppState {
             },
         );
         match result {
-            Ok((new_line_id, warnings)) => {
+            Ok((new_line_id, (warnings, identities))) => {
                 tracing::info!(
                     line_id,
                     new_line_id,
@@ -406,6 +416,7 @@ impl AppState {
                 CommandResult::success()
                     .with_line_id(new_line_id)
                     .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }
@@ -475,16 +486,19 @@ impl AppState {
                         )
                     })
                     .collect();
-                Ok(closure_warnings(
-                    &names,
-                    project,
-                    &edited.report,
-                    "delete shot range and shift",
+                Ok((
+                    closure_warnings(
+                        &names,
+                        project,
+                        &edited.report,
+                        "delete shot range and shift",
+                    ),
+                    project.identity_notice(&edited.report.identities),
                 ))
             },
         );
         match result {
-            Ok(warnings) => {
+            Ok((warnings, identities)) => {
                 tracing::info!(
                     line_id,
                     purpose = "gap-close a deleted shot range",
@@ -493,6 +507,7 @@ impl AppState {
                 CommandResult::success()
                     .with_line_id(line_id)
                     .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }
@@ -560,23 +575,23 @@ impl AppState {
                         new: String::new(),
                     },
                 ];
-                Ok(closure_warnings(
-                    &names,
-                    project,
-                    &edited.report,
-                    "delete last shot and line",
+                Ok((
+                    closure_warnings(&names, project, &edited.report, "delete last shot and line"),
+                    project.identity_notice(&edited.report.identities),
                 ))
             },
         );
         match result {
-            Ok(warnings) => {
+            Ok((warnings, identities)) => {
                 tracing::info!(
                     line_id,
                     shot_id,
                     purpose = "remove single-shot line",
                     "Deleted last shot and removed line"
                 );
-                CommandResult::success().with_warnings(warnings)
+                CommandResult::success()
+                    .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }

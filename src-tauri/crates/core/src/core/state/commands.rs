@@ -58,6 +58,10 @@ pub(crate) struct Applied {
     pub(crate) reversed: Vec<ReversedLine>,
     /// The Section a `CreateCaveSection` created (#327).
     pub(crate) cave_section_id: Option<u32>,
+    /// What the command did to identities on its own (RS 7 "Notices"):
+    /// rule-L letters, restored archived identities, dropped closure
+    /// archives.
+    pub(crate) identities: crate::models::IdentityNotice,
 }
 
 impl Applied {
@@ -74,6 +78,7 @@ impl Applied {
             self.shot_id = other.shot_id;
         }
         self.reversed.extend(other.reversed);
+        self.identities.extend(other.identities);
     }
 
     fn into_result(self) -> CommandResult {
@@ -82,6 +87,9 @@ impl Applied {
         result.line_ids = self.line_ids;
         result.shot_id = self.shot_id;
         result.cave_section_id = self.cave_section_id;
+        if !self.identities.is_empty() {
+            result.identities = Some(self.identities);
+        }
         let reversed = net_reversed(self.reversed);
         if !reversed.is_empty() {
             result = result.with_reversed_lines(reversed);

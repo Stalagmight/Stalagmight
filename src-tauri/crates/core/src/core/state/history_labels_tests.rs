@@ -508,10 +508,12 @@ fn a_merge_names_both_stations_as_they_were() {
         Command::MergeStations {
             station_a: StationRef::new(SIDE, 0),
             station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
         },
     );
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Merge stations Side / 0 and Main / 4");
+    assert_eq!(item.description, "Merge Side / 0 into Main / 4 (keeps 4)");
     assert_eq!(
         rows(&item),
         vec![
@@ -527,6 +529,8 @@ fn unmerges_name_the_stations_they_detach() {
     let cmd = Command::UnmergeStationPair {
         station_a: StationRef::new(MAIN, 2),
         station_b: StationRef::new(BRANCH, 0),
+        renames: None,
+        rest_keep: None,
     };
     record(&o.state, &cmd, |p| {
         p.unmerge_station_pair(
@@ -554,6 +558,8 @@ fn unmerges_name_the_stations_they_detach() {
     assert!(o.state.undo().success);
     let cmd = Command::UnmergeStations {
         station_ref: StationRef::new(BRANCH, 0),
+        renames: None,
+        rest_keep: None,
     };
     record(&o.state, &cmd, |p| {
         p.unmerge_station(
@@ -587,6 +593,8 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
         Command::MergeStations {
             station_a: StationRef::new(SIDE, 0),
             station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
         },
     );
     let p = survey_of(&o.state);
@@ -605,6 +613,8 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
         &o.state,
         Command::UnmergeStations {
             station_ref: StationRef::new(MAIN, 4),
+            renames: None,
+            rest_keep: None,
         },
     );
     let item = assert_survives(&o);
@@ -615,6 +625,8 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
         &o.state,
         Command::UnmergeStations {
             station_ref: StationRef::new(SIDE, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert_eq!(
@@ -628,6 +640,8 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
         Command::UnmergeStationPair {
             station_a: StationRef::new(SIDE, 0),
             station_b: StationRef::new(MAIN, 4),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert_eq!(
@@ -654,6 +668,8 @@ fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
             Command::MergeStations {
                 station_a: StationRef::new(line, 0),
                 station_b: StationRef::new(MAIN, 4),
+                keep: None,
+                renames: None,
             },
         );
     }
@@ -661,6 +677,8 @@ fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
         &o.state,
         Command::UnmergeStations {
             station_ref: StationRef::new(MAIN, 4),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert_eq!(
@@ -676,6 +694,8 @@ fn closures_name_their_ends_when_created_and_removed() {
         station_a: StationRef::new(BRANCH, 2),
         station_b: StationRef::new(MAIN, 4),
         closure_strategy: ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     };
     let branch_end = labels::NameBook::of(&survey_of(&o.state))
         .station(StationRef::new(BRANCH, 2))
@@ -705,7 +725,10 @@ fn closures_name_their_ends_when_created_and_removed() {
     );
 
     let closure_id = survey_of(&o.state).closures[0].id;
-    let cmd = Command::RemoveLoopClosure { closure_id };
+    let cmd = Command::RemoveLoopClosure {
+        closure_id,
+        renames: None,
+    };
     record(&o.state, &cmd, |p| {
         p.remove_closure(closure_id, &[])
             .map(|_| ())
@@ -1036,6 +1059,8 @@ fn a_batch_names_a_line_it_deletes_by_the_name_it_had() {
                 Command::MergeStations {
                     station_a: StationRef::new(SIDE, 0),
                     station_b: StationRef::new(MAIN, 4),
+                    keep: None,
+                    renames: None,
                 },
                 Command::DeleteLine { line_id: BRANCH },
             ],
@@ -1043,12 +1068,12 @@ fn a_batch_names_a_line_it_deletes_by_the_name_it_had() {
         },
     );
     let item = assert_survives(&o);
-    assert_eq!(item.description, "Merge stations Side / 0 and Main / 4");
+    assert_eq!(item.description, "Merge Side / 0 into Main / 4 (keeps 4)");
     assert_eq!(
         rows(&item),
         vec![
             r(
-                "Merge stations Side / 0 and Main / 4",
+                "Merge Side / 0 into Main / 4 (keeps 4)",
                 "",
                 "Side / 0 \u{2194} Main / 4"
             ),
@@ -1244,6 +1269,8 @@ fn labels_never_change_after_a_reverse_an_insert_or_a_rename() {
         Command::MergeStations {
             station_a: StationRef::new(SIDE, 0),
             station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
         },
     );
     let before: Vec<serde_json::Value> = o.state.get_undo_stack().iter().map(shown).collect();
@@ -1390,6 +1417,8 @@ fn an_entry_reads_the_same_from_its_persisted_text() {
         Command::MergeStations {
             station_a: StationRef::new(SIDE, 0),
             station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
         },
     );
     let stack = o.state.undo_stack.lock().unwrap();
@@ -1398,7 +1427,7 @@ fn an_entry_reads_the_same_from_its_persisted_text() {
     let back = decode_entry(&text, &EntryLimits::default()).unwrap();
     let item = |e| crate::core::undo::history_item::history_item(0, e);
     assert_eq!(shown(&item(held.entry())), shown(&item(&back)));
-    assert_eq!(back.label, "Merge stations Side / 0 and Main / 4");
+    assert_eq!(back.label, "Merge Side / 0 into Main / 4 (keeps 4)");
     assert!(back.refs.lines.contains(&SIDE) && back.refs.lines.contains(&MAIN));
     assert_eq!(back.refs.stations.len(), 2);
 }
@@ -1546,6 +1575,8 @@ fn batch_rows_carry_each_sub_commands_detail() {
                 station_a: StationRef::new(BRANCH, 2),
                 station_b: StationRef::new(MAIN, 9),
                 closure_strategy: ClosureStrategy::Move,
+                keep: None,
+                renames: None,
             },
             Command::SetShotKind {
                 line_id: MAIN,

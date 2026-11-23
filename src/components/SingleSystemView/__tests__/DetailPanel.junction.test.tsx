@@ -57,7 +57,8 @@ function stations(): Station[] {
   const junction = (at: ReturnType<typeof ref>, other: ReturnType<typeof ref>): Station => ({
     ...plain(at.line_id, at.station_index, 11, '3a'),
     merged_with: [other],
-    aliases: [{ id: 20, name: '0' }, { id: 21, name: null }],
+    // Records (RS 3): history ones here, naming no line.
+    archived: [{ id: 20, name: '0', lines: [] }, { id: 21, name: '', lines: [] }],
   });
   return [
     plain(MAIN, 0, 10, '2'),
@@ -88,9 +89,9 @@ beforeEach(() => {
  */
 function perLineStations(): Station[] {
   const list = stations();
-  const aliases = [{ id: 20, name: '0', line: SIDE }];
-  list[1] = { ...list[1]!, aliases };
-  list[3] = { ...list[3]!, name: '0', aliases };
+  const archived = [{ id: 20, name: '0', lines: [SIDE] }];
+  list[1] = { ...list[1]!, archived };
+  list[3] = { ...list[3]!, name: '0', archived };
   return list;
 }
 
@@ -170,7 +171,7 @@ describe('a junction made by Split Line Here (I-9)', () => {
     // alias, nothing merged.
     const list = stations().map((s) => {
       const plain = { ...s };
-      delete plain.aliases;
+      delete plain.archived;
       return plain;
     });
     useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
@@ -223,10 +224,11 @@ describe('junction station details', () => {
     expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
   });
 
-  it('a binary-loaded station carries its aliases through the SoA', () => {
+  it('a binary-loaded station carries its records through the SoA', () => {
     const data = useProjectStore.getState().surveyData!;
-    expect(data.stationAliases.get(1)).toEqual([{ id: 20, name: '0' }, { id: 21, name: null }]);
-    expect(data.stationAliases.get(3)).toEqual([{ id: 20, name: '0' }, { id: 21, name: null }]);
-    expect(data.stationAliases.has(0)).toBe(false);
+    const records = [{ id: 20, name: '0', lines: [] }, { id: 21, name: '', lines: [] }];
+    expect(data.stationArchived.get(1)).toEqual(records);
+    expect(data.stationArchived.get(3)).toEqual(records);
+    expect(data.stationArchived.has(0)).toBe(false);
   });
 });

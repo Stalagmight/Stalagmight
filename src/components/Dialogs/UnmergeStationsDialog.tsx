@@ -355,9 +355,10 @@ export default function UnmergeStationsDialog() {
 }
 
 /** What every line ends up with after the chosen detach (V-1): its name and
- *  Station ID there, whether it comes off (with which lines) or stays, and,
- *  for a line that comes off together with others and had its own Station ID,
- *  that it keeps that ID only as an alias. */
+ *  Station ID there, and whether it comes off (with which lines) or stays.
+ *  Under RS a line shows its node's one identity, so no line keeps an alias
+ *  of its own; RS-UI adds what comes back, the lines that come off together
+ *  and the collision rows (RS 7). */
 function DetachResults({ preview }: { preview: DetachLinePreview }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
@@ -371,19 +372,14 @@ function DetachResults({ preview }: { preview: DetachLinePreview }) {
             name: r.name,
             id: r.station_id,
             joined: listNames(r.joined_with.map(labels.lineName), t),
-            alias: r.alias_id,
           };
           const key = !r.comes_off
-            ? r.alias_id !== undefined
-              ? 'dialogs.detachLine.resultStaysAlias'
-              : 'dialogs.detachLine.resultStays'
-            : r.alias_id !== undefined
-              ? 'dialogs.detachLine.resultOffShared'
-              : r.joined_with.length > 0
-                ? 'dialogs.detachLine.resultOffWith'
-                : preview.restored
-                  ? 'dialogs.detachLine.resultOff'
-                  : 'dialogs.detachLine.resultOffNew';
+            ? 'dialogs.detachLine.resultStays'
+            : r.joined_with.length > 0
+              ? 'dialogs.detachLine.resultOffWith'
+              : preview.restored
+                ? 'dialogs.detachLine.resultOff'
+                : 'dialogs.detachLine.resultOffNew';
           return (
             <li key={r.line_id} data-testid={`unmerge-stations-result-${r.line_id}`}>
               {t(key, params)}

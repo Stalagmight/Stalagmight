@@ -669,6 +669,8 @@ fn an_unconnected_line_is_listed_in_the_warnings() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(unmerged, 0),
         station_b: StationRef::new(placed, 2),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     assert!(not_connected(&state).is_empty());

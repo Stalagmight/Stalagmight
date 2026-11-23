@@ -67,9 +67,15 @@ use stalagmight_lib::models::{
     PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning,
     RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind,
     ShotUpdates, SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide,
-    Station, StationAliasWire, StationMergeWire, StationPair, StationRef, SurveyCredit,
-    SurveyDirection, TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
+    Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
+    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
     ZeroDatumPreview, ZeroDatumWire,
+};
+use stalagmight_lib::models::{
+    ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
+    KeepCandidate, LetteredStationWire, LoopClosureNaming, MergeKeepPreview, NameCollisionWire,
+    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot, StationIdentity,
+    StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -166,6 +172,8 @@ fn main() {
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
     // Remove generated files whose source types were retired with native transfer.
     for name in [
+        // U1's per-line junction aliases, replaced by records (RS 3).
+        "StationAlias",
         "SpeleoProjectMetadataPatch",
         "SpeleoProjectMetadata",
         "SpeleoUnwindTarget",
@@ -304,7 +312,24 @@ fn main() {
     export::<VirtualShotMode>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
-    export::<StationAliasWire>(&out_dir);
+    // Kept and archived stations (plan 2026-11-23, RS 6 and 7).
+    export::<ArchivedStationWire>(&out_dir);
+    export::<ShownSlot>(&out_dir);
+    export::<StationIdentity>(&out_dir);
+    export::<ClosureEndWire>(&out_dir);
+    export::<ClosureArchive>(&out_dir);
+    export::<StationRename>(&out_dir);
+    export::<RenameSuggestion>(&out_dir);
+    export::<NameCollisionWire>(&out_dir);
+    export::<KeepCandidate>(&out_dir);
+    export::<MergeKeepPreview>(&out_dir);
+    export::<ClosureKeepPreview>(&out_dir);
+    export::<LoopClosureNaming>(&out_dir);
+    export::<RemoveClosureNaming>(&out_dir);
+    export::<StationOwner>(&out_dir);
+    export::<LetteredStationWire>(&out_dir);
+    export::<RestoredIdentityWire>(&out_dir);
+    export::<IdentityNotice>(&out_dir);
     export::<StationRef>(&out_dir);
     export::<StationMergeWire>(&out_dir);
     export::<ZeroDatumWire>(&out_dir);
@@ -635,7 +660,23 @@ fn main() {
         "KeptMovesReason",
         "LineEnd",
         "Station",
-        "StationAlias",
+        "ArchivedStation",
+        "ShownSlot",
+        "StationIdentity",
+        "ClosureEnd",
+        "ClosureArchive",
+        "StationRename",
+        "RenameSuggestion",
+        "NameCollision",
+        "KeepCandidate",
+        "MergeKeepPreview",
+        "ClosureKeepPreview",
+        "LoopClosureNaming",
+        "RemoveClosureNaming",
+        "StationOwner",
+        "LetteredStation",
+        "RestoredIdentity",
+        "IdentityNotice",
         "StationRef",
         "StationMerge",
         "ZeroDatum",

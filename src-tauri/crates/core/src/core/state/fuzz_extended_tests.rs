@@ -473,7 +473,11 @@ pub(super) fn apply_extended(
             let Some(station_ref) = refs.station(*station, targets) else {
                 return refs.skip(&label);
             };
-            state.execute(Command::UnmergeStations { station_ref })
+            state.execute(Command::UnmergeStations {
+                station_ref,
+                renames: None,
+                rest_keep: None,
+            })
         }
         ExtOp::MoveComment {
             source,
@@ -1255,6 +1259,8 @@ fn a_merge_of_two_placed_pieces_survives_a_reopen() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(ids[0], 2),
                 station_b: StationRef::new(ids[1], 0),
+                keep: None,
+                renames: None,
             })
             .success
     );
@@ -1290,6 +1296,8 @@ fn an_add_after_a_merge_of_two_placed_pieces_undoes_exactly() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(ids[0], 2),
                 station_b: StationRef::new(ids[1], 0),
+                keep: None,
+                renames: None,
             })
             .success
     );

@@ -18,6 +18,7 @@ pub mod dive_plan;
 pub mod gas;
 pub mod geo;
 pub mod id_stride;
+pub mod identity;
 pub mod import_receipt;
 pub mod line;
 pub mod line_combine;
@@ -52,6 +53,7 @@ pub use gas::{
 };
 pub use geo::*;
 pub use id_stride::*;
+pub use identity::*;
 pub use import_receipt::*;
 pub use line::*;
 pub use line_combine::*;

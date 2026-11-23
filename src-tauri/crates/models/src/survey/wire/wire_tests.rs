@@ -154,9 +154,10 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
 }
 
 /// A merged station's archived records (each with the lines whose own
-/// station it was) ride every slot of it, for the station details (RS-W
-/// replaces them with a records DTO); a station without any sends none
-/// (H-frontend-wire-5). Every slot shows the kept station's name (RS 4.1):
+/// station it was) ride every slot of it, for the station details; a
+/// station without any sends none (H-frontend-wire-5). The slot whose line
+/// a record names is foreign (RS 6): it shows the kept Station ID with the
+/// kept station's home-line dot; the kept line's slot carries no `shown`. Every slot shows the kept station's name (RS 4.1):
 /// the moving line's slot reads `0` too, and the moving line's own `0`
 /// takes the letter (rule L). The Station ID is the junction's one id on
 /// both. Injection: send the slot's own record name and the moving line's
@@ -178,16 +179,29 @@ fn a_merged_stations_records_ride_every_slot() {
     assert_eq!(station_at(&stations, slot(a, 0)).name, "0a");
     assert_eq!(station_at(&stations, slot(a, 2)).id, b0);
     assert_eq!(station_at(&stations, slot(b, 0)).id, b0);
-    let expected = Some(vec![crate::StationAliasWire {
+    let expected = Some(vec![crate::ArchivedStationWire {
         id: a2,
-        name: Some(a2_name),
-        line: Some(a),
+        name: a2_name,
+        comment: None,
+        lines: vec![a],
     }]);
-    assert_eq!(station_at(&stations, slot(a, 2)).aliases, expected);
-    assert_eq!(station_at(&stations, slot(b, 0)).aliases, expected);
-    assert_eq!(station_at(&stations, slot(a, 1)).aliases, None);
+    assert_eq!(station_at(&stations, slot(a, 2)).archived, expected);
+    assert_eq!(station_at(&stations, slot(b, 0)).archived, expected);
+    assert_eq!(station_at(&stations, slot(a, 1)).archived, None);
+    assert_eq!(
+        station_at(&stations, slot(a, 2)).shown,
+        Some(crate::ShownSlot {
+            id: b0,
+            home_line: Some(b),
+            foreign: true,
+            loop_end: false,
+            loop_closure: None,
+        })
+    );
+    assert_eq!(station_at(&stations, slot(b, 0)).shown, None);
+    assert_eq!(station_at(&stations, slot(a, 1)).shown, None);
     let json = serde_json::to_value(station_at(&stations, slot(b, 0))).unwrap();
-    assert_eq!(json["aliases"][0]["id"], serde_json::json!(a2));
+    assert_eq!(json["archived"][0]["id"], serde_json::json!(a2));
 }
 
 #[test]

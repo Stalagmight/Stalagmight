@@ -452,12 +452,21 @@ fn operate(
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
             ),
             _ => ("merge stations", none()),
         },
         15 => match slot(p, rng) {
-            Some(station_ref) => exec("unmerge stations", Command::UnmergeStations { station_ref }),
+            Some(station_ref) => exec(
+                "unmerge stations",
+                Command::UnmergeStations {
+                    station_ref,
+                    renames: None,
+                    rest_keep: None,
+                },
+            ),
             None => ("unmerge stations", none()),
         },
         16 => match (slot(p, rng), slot(p, rng)) {
@@ -471,6 +480,8 @@ fn operate(
                     } else {
                         ClosureStrategy::Batch
                     },
+                    keep: None,
+                    renames: None,
                 },
             ),
             _ => ("create closure", none()),
@@ -478,7 +489,10 @@ fn operate(
         17 => match p.closures.get(rng.below(p.closures.len().max(1))) {
             Some(c) => exec(
                 "remove closure",
-                Command::RemoveLoopClosure { closure_id: c.id },
+                Command::RemoveLoopClosure {
+                    closure_id: c.id,
+                    renames: None,
+                },
             ),
             None => ("remove closure", none()),
         },

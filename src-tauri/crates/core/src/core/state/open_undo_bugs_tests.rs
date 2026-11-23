@@ -680,6 +680,8 @@ fn two_merged_lines(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "MergeStations failed: {:?}", merged.error);
     (a, b)
@@ -700,6 +702,8 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
+        keep: None,
+        renames: None,
     });
     assert!(first.success, "first closure failed: {:?}", first.error);
     // A second loop: a side passage C off A:1, closed to B:1.
@@ -707,12 +711,16 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
     let side = state.execute(Command::MergeStations {
         station_a: StationRef::new(c, 0),
         station_b: StationRef::new(a, 1),
+        keep: None,
+        renames: None,
     });
     assert!(side.success, "MergeStations failed: {:?}", side.error);
     let second = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(c, 1),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
+        keep: None,
+        renames: None,
     });
     assert!(second.success, "second closure failed: {:?}", second.error);
     let before_ids = closure_ids(&state);
@@ -720,6 +728,7 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
     let before = snapshot(&state);
     let removed = state.execute(Command::RemoveLoopClosure {
         closure_id: before_ids[0],
+        renames: None,
     });
     assert!(
         removed.success,
@@ -777,6 +786,8 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
+        keep: None,
+        renames: None,
     });
     assert!(
         closed.success,
@@ -837,6 +848,8 @@ fn the_delete_guards_still_refuse_a_user_delete() {
             station_a: StationRef::new(a, 0),
             station_b: StationRef::new(b, 1),
             closure_strategy: strategy,
+            keep: None,
+            renames: None,
         });
         assert!(closed.success, "setup ({strategy:?}): {:?}", closed.error);
         assert_eq!(
@@ -886,6 +899,8 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
             let merged = state.execute(Command::MergeStations {
                 station_a: StationRef::new(left.0, left.1),
                 station_b: StationRef::new(right.0, right.1),
+                keep: None,
+                renames: None,
             });
             assert!(merged.success, "MergeStations failed: {:?}", merged.error);
         }
@@ -893,6 +908,8 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
             station_a: StationRef::new(a, 0),
             station_b: StationRef::new(b, 1),
             closure_strategy: ClosureStrategy::default(),
+            keep: None,
+            renames: None,
         });
         assert!(
             closure.success,
@@ -977,6 +994,8 @@ fn two_unanchored_merged_lines(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "MergeStations failed: {:?}", merged.error);
     assert!(gap(xy(state, a, 1), xy(state, b, 0)) < 1e-9);
@@ -1069,6 +1088,8 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "MergeStations failed: {:?}", merged.error);
     // A least-squares closure, so the Computed View really solves.
@@ -1076,6 +1097,8 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 2),
         closure_strategy: ClosureStrategy::LeastSquaresWeighted,
+        keep: None,
+        renames: None,
     });
     assert!(
         closure.success,
@@ -1125,6 +1148,8 @@ fn merged_chain_for_range_delete(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 4),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "MergeStations failed: {:?}", merged.error);
     (a, b)
@@ -1489,6 +1514,8 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_placement() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(anchored, 2),
         station_b: StationRef::new(partner, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success);
     let moved = state.execute(Command::MoveLine {
@@ -1625,6 +1652,8 @@ fn snapped_loop(state: &AppState, anchored: bool) -> (LineId, LineId) {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::Move,
+        keep: None,
+        renames: None,
     });
     assert!(
         closed.success,
@@ -1642,6 +1671,8 @@ fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::Move,
+        keep: None,
+        renames: None,
     });
     assert!(
         closed.success,
@@ -1684,6 +1715,8 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
                 station_a: StationRef::new(a, 0),
                 station_b: StationRef::new(b, 1),
                 closure_strategy: ClosureStrategy::Move,
+                keep: None,
+                renames: None,
             },
         ],
         label: None,
@@ -1797,6 +1830,8 @@ fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(c, 0),
         closure_strategy: ClosureStrategy::Move,
+        keep: None,
+        renames: None,
     });
     assert!(
         closed.success,
@@ -2021,6 +2056,8 @@ fn detached_anchored_closure() -> (AppState, LineId, LineId) {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
+        keep: None,
+        renames: None,
     });
     assert!(
         closure.success,

@@ -416,6 +416,11 @@ const IDENTITY_BEARING_COMMANDS = [
   'set_station_comment',
   'set_station_name',
   'move_station',
+  // Kept and archived stations (RS 7): the dialogs' naming previews.
+  'preview_detach_line',
+  'preview_loop_closure',
+  'preview_remove_loop_closure',
+  'preview_station_identity',
 ] as const;
 
 const COMMANDS_DIR = path.join(REPO_ROOT, 'src-tauri/src/commands');
@@ -506,21 +511,22 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
       for (const field of required) {
         expect(new RegExp(`\\b${field}\\s*[:,]`).test(literal), `a mock station lacks ${field}`).toBe(true);
       }
-      // A junction's slots share one Station ID and merge list (plan 9.2),
-      // and each shows the name its own line knows it by (plan 5.3 per line):
-      // the mock derives all three from its junctions.
+      // A junction's slots share one node id and merge list (plan 9.2), and
+      // each shows the kept station's name (RS 4.1): the mock derives all
+      // three from its junctions.
       expect(literal).toMatch(/\bid:\s*identity\.id\b/);
       expect(literal).toMatch(/\bmerged_with:\s*identity\.merged_with\b/);
       expect(literal).toMatch(/\bname:\s*identity\.name\b/);
     }
   });
 
-  // An optional field is still part of the wire: a junction's aliases (the
-  // ids and names a merge retired) are optional because most stations have
-  // none, and a mock that never sends them hides "Also known as" from every
-  // spec. So each optional field of the generated type must be sent by every
-  // mock station list too, and the shared identity ones from the junction.
-  it('the mock station list sends every optional Station field, aliases from the junction', () => {
+  // An optional field is still part of the wire: a node's records (the
+  // stations a merge archived, RS 3) and a foreign slot's or loop end's shown
+  // slot (RS 6) are optional because most stations have none, and a mock
+  // that never sends them hides the records and the dots from every spec. So
+  // each optional field of the generated type must be sent by every mock
+  // station list too, and the identity ones from the junction.
+  it('the mock station list sends every optional Station field, records and shown slots from the junction', () => {
     const stationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/Station.ts'), 'utf8');
     const body = /export interface Station \{([^}]*)\}/.exec(stationTs)?.[1] ?? '';
     const optional = body
@@ -528,25 +534,27 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
       .map((f) => f.trim())
       .filter((f) => /^\w+\?:/.test(f))
       .map((f) => f.slice(0, f.indexOf('?')).trim());
-    expect(optional).toEqual(expect.arrayContaining(['closures_with', 'comment', 'aliases']));
+    expect(optional).toEqual(expect.arrayContaining(['closures_with', 'comment', 'archived', 'shown']));
     const pushes = stripComments(mockTsSource).split('mockStations.push({').slice(1);
     for (const push of pushes) {
       const literal = push.slice(0, findMatchingBracket(`{${push}`, 0, '{', '}'));
       for (const field of optional) {
         expect(new RegExp(`\\b${field}\\b`).test(literal), `a mock station never sends ${field}`).toBe(true);
       }
-      expect(literal).toMatch(/\baliases:\s*identity\.aliases\b/);
+      expect(literal).toMatch(/\barchived:\s*identity\.archived\b/);
+      expect(literal).toMatch(/\bshown:\s*identity\.shown\b/);
     }
     // The binary load envelope carries them too, as the backend's does.
-    expect(stripComments(mockTsSource)).toMatch(/\bstation_aliases:\s*\w+/);
-    // Each alias names the line that shows the junction by it, as the
-    // generated StationAlias declares; and a slot's name is its own line's,
-    // not the representative's (plan 5.3 per line).
-    const aliasTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/StationAlias.ts'), 'utf8');
-    expect(aliasTs).toMatch(/\bline\?:\s*number\b/);
-    const identity = stripComments(mockTsSource);
-    expect(identity).toMatch(/\bline:\s*m\.line_id\b/);
-    expect(identity).toMatch(/\bname:\s*mockStationName\(ref\.line_id,\s*ref\.station_index\)/);
+    const mock = stripComments(mockTsSource);
+    expect(mock).toMatch(/\bstation_archived:\s*\w+/);
+    expect(mock).toMatch(/\bstation_shown:\s*\w+/);
+    // Each record names the lines whose own station it was, as the
+    // generated ArchivedStation declares; every slot of a junction shows the
+    // kept station's name (RS 4.1), not its own line's.
+    const recordTs = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc/ArchivedStation.ts'), 'utf8');
+    expect(recordTs).toMatch(/\blines:\s*Array<number>/);
+    expect(mock).toMatch(/\blines:\s*\[m\.line_id\]/);
+    expect(mock).toMatch(/\bname:\s*mockStationName\(kept\.line_id,\s*kept\.station_index\)/);
   });
 
   it('the shape check finds the arguments of a known command', () => {
@@ -554,6 +562,8 @@ describe('identity-bearing command shapes (plan 9.3)', () => {
       'state',
       'station_a',
       'station_b',
+      'renames',
+      'rest_keep',
     ]);
     expect(mockCaseBody("switch (cmd) {\n          case 'a':\n          case 'b': {\n            x(args?.y);\n          }\n          case 'c':\n", 'a')).toContain('args?.y');
   });

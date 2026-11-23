@@ -382,6 +382,39 @@ impl Project {
         out
     }
 
+    /// The dialogs' other answer to each of `letters` (RS 4.1 step 6): the
+    /// identity that kept the name is lettered instead, with a letter free on
+    /// every line it is shown on once the lettered identity has its name
+    /// back. Called on the state rule L left (`letters` applied); each entry
+    /// names the identity to rename (`station`), the one keeping the name
+    /// (`other`), and the line, in the order of `letters`.
+    pub fn alternative_letters(&self, letters: &[LetteredStation]) -> Vec<LetteredStation> {
+        if letters.is_empty() {
+            return Vec::new();
+        }
+        let mut unlettered = self.clone();
+        for letter in letters.iter().rev() {
+            if let Some(s) = unlettered.stations.get_mut(&letter.station) {
+                s.name.clone_from(&letter.from);
+            }
+        }
+        letters
+            .iter()
+            .map(|letter| {
+                let mut taken = unlettered.names_around(letter.other);
+                taken.insert(letter.from.clone());
+                let to = name_with_free_letter(&letter.from, &|n| taken.contains(n));
+                LetteredStation {
+                    station: letter.other,
+                    line: letter.line,
+                    other: letter.station,
+                    from: letter.from.clone(),
+                    to,
+                }
+            })
+            .collect()
+    }
+
     /// Whether some shot already has `uuid`.
     pub fn is_shot_uuid_taken(&self, uuid: &str) -> bool {
         self.shot_uuids().contains(uuid)

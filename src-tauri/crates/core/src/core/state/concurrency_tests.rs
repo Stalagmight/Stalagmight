@@ -325,6 +325,8 @@ fn worker(
                         state.execute(Command::MergeStations {
                             station_a: StationRef::new(a.0, a.1),
                             station_b: StationRef::new(b.0, b.1),
+                            keep: None,
+                            renames: None,
                         });
                     }
                 }

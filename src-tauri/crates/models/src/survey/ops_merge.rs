@@ -162,6 +162,10 @@ pub struct MergeMove {
     pub renamed_lines: Vec<LineId>,
     /// The names the merge would show twice, with rule L's answers.
     pub collisions: Vec<MergeCollision>,
+    /// The dialog's other answer to each collision, in the same order: the
+    /// identity rule L kept the name for is lettered instead
+    /// ([`Project::alternative_letters`]).
+    pub alternatives: Vec<LetteredStation>,
     /// The identity that becomes hidden: its Station ID, name and comment.
     pub hidden: (StationId, String, Option<String>),
 }
@@ -214,10 +218,10 @@ impl Project {
         self.merge_with(a, b, keep, Answers::RuleL)
     }
 
-    /// The merge the Merge Stations command runs until it carries the
-    /// dialog's keep and renames (RS-W): the stationary station (the one
-    /// the dialog says the other piece moves to join, the station a merge
-    /// kept before RS) is kept, and every collision is lettered by rule L.
+    /// The merge without a dialog's answers (Merge Stations with no `keep`
+    /// or `renames`): the stationary station (the one the other piece moves
+    /// to join, the station a merge kept before RS) is kept, and every
+    /// collision is lettered by rule L.
     pub fn merge_keeping_stationary(
         &mut self,
         a: StationId,
@@ -471,6 +475,7 @@ impl Project {
             keep_forced_by: report.keep_forced_by,
             renamed_lines: self.renamed_lines(&copy, &[a, b], node),
             collisions,
+            alternatives: copy.alternative_letters(&outcome.identities.lettered),
             hidden: (
                 hidden_station.id,
                 hidden_station.name.clone(),

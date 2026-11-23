@@ -292,6 +292,7 @@ pub(super) fn apply(
             );
             Ok(Applied {
                 warnings: swept_closure_warnings(&labels, &deleted.report.sweep.removed),
+                identities: project.identity_notice(&deleted.report.identities),
                 ..Applied::default()
             })
         }

@@ -428,6 +428,8 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 result: state.execute(Command::MergeStations {
                     station_a: StationRef::new(line_id, index),
                     station_b: StationRef::new(other, index),
+                    keep: None,
+                    renames: None,
                 }),
             }
         }
@@ -438,6 +440,8 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 result: state.execute(Command::UnmergeStationPair {
                     station_a: StationRef::new(line_id, index),
                     station_b: StationRef::new(other, 0),
+                    renames: None,
+                    rest_keep: None,
                 }),
             }
         }
@@ -445,6 +449,8 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             label: format!("UnmergeStations({line_id}/{index})"),
             result: state.execute(Command::UnmergeStations {
                 station_ref: StationRef::new(line_id, index),
+                renames: None,
+                rest_keep: None,
             }),
         },
         18 => {
@@ -459,6 +465,8 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                         ClosureStrategy::LeastSquaresWeighted,
                         ClosureStrategy::ProportionalByLength,
                     ]),
+                    keep: None,
+                    renames: None,
                 }),
             }
         }
@@ -466,7 +474,10 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             let id = *rng.pick(&[0, u64::MAX, 1 << 53, targets.closures.len() as u64 + 99]);
             Move {
                 label: format!("RemoveLoopClosure({id})"),
-                result: state.execute(Command::RemoveLoopClosure { closure_id: id }),
+                result: state.execute(Command::RemoveLoopClosure {
+                    closure_id: id,
+                    renames: None,
+                }),
             }
         }
         20 => {

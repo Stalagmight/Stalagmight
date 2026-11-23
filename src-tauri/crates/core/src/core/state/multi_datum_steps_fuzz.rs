@@ -688,15 +688,21 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
         Op::Merge { a, b } => state.execute(Command::MergeStations {
             station_a: *a,
             station_b: *b,
+            keep: None,
+            renames: None,
         }),
         Op::Unmerge { a, b } => state.execute(Command::UnmergeStationPair {
             station_a: *a,
             station_b: *b,
+            renames: None,
+            rest_keep: None,
         }),
         Op::Closure { a, b } => state.execute(Command::CreateLoopClosure {
             station_a: *a,
             station_b: *b,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         }),
         Op::Split { line, at, .. } => state.execute_split_line(
             *line,

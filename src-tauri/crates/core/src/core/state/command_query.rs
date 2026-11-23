@@ -9,8 +9,9 @@ use std::collections::BTreeSet;
 use super::AppState;
 use crate::models::survey::Project;
 use crate::models::{
-    ConnectivityResult, GpsCoordinates, LineId, SegmentGeometry, SegmentLineGeometry, StationRef,
-    ZeroDatumPreview, LINE_GONE,
+    ClosureStrategy, ConnectivityResult, DetachLinePreview, GpsCoordinates, LineId,
+    LoopClosureNaming, RemoveClosureNaming, SegmentGeometry, SegmentLineGeometry, StationId,
+    StationOwner, StationRef, ZeroDatumPreview, LINE_GONE,
 };
 
 impl AppState {
@@ -43,6 +44,74 @@ impl AppState {
         station_b: StationRef,
     ) -> Result<ConnectivityResult, String> {
         self.with_project(|project| project.check_merge_connectivity_wire(station_a, station_b))
+    }
+
+    /// What detaching `line_id` from the station at `station_ref` would do
+    /// (read-only, RS 4.2 and 7): what each line ends up with, what comes
+    /// back (name, comment, Station ID), the lines that come off together,
+    /// the remaining-junction choices (`rest_keep` picks one; absent: rule
+    /// K's), the identity a loop closure showed before, and each name
+    /// collision with its two answers. Refused as the detach is.
+    pub fn preview_detach_line(
+        &self,
+        station_ref: StationRef,
+        line_id: LineId,
+        rest_keep: Option<StationId>,
+    ) -> Result<DetachLinePreview, String> {
+        self.with_project(|project| {
+            if project.station_at(station_ref).is_none() {
+                return Err("Station not found".to_string());
+            }
+            project
+                .detach_preview_wire(station_ref, line_id, rest_keep)
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    /// The Create Loop Closure dialog's naming part (read-only, RS 5.2 and
+    /// 7): both ends, which may be kept, the default ("Keep both names" when
+    /// rule K's end may not be kept), and what each choice does to names.
+    /// Refused as the creation is.
+    pub fn preview_loop_closure(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        closure_strategy: ClosureStrategy,
+    ) -> Result<LoopClosureNaming, String> {
+        self.with_project(|project| {
+            project
+                .loop_closure_naming_wire(station_a, station_b, closure_strategy.into())
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    /// What Remove Closure does to names (read-only, RS 5.3 and 7): the
+    /// station that comes back, the lines that show it again, and each name
+    /// that would then repeat, with its two answers.
+    pub fn preview_remove_loop_closure(
+        &self,
+        closure_id: u64,
+    ) -> Result<RemoveClosureNaming, String> {
+        self.with_project(|project| {
+            project
+                .remove_closure_naming_wire(closure_id)
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    /// Whose station the slot shows (read-only, RS 5.4): what Set Station
+    /// Name and Set Station Comment through it change (the shown identity,
+    /// on every line it is shown on), whether the slot is foreign or a loop
+    /// end, and the line's own archived station there.
+    pub fn preview_station_identity(
+        &self,
+        station_ref: StationRef,
+    ) -> Result<StationOwner, String> {
+        self.with_project(|project| {
+            project
+                .station_owner_wire(station_ref)
+                .ok_or_else(|| "Station not found".to_string())
+        })
     }
 
     /// Get all line IDs connected through merges and aligned closures (rigid

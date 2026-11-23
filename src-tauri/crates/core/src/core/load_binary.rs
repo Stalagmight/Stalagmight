@@ -32,9 +32,9 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LineId, LoopClosureWire, Person,
-    ProjectStats, ProjectWarning, Section, SectionId, ShotId, StationAliasWire, StationMergeWire,
-    StationRef, SurveyCredit, SurveyDirection, ZeroDatumWire,
+    ArchivedStationWire, AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LineId,
+    LoopClosureWire, Person, ProjectStats, ProjectWarning, Section, SectionId, ShotId, ShownSlot,
+    StationMergeWire, StationRef, SurveyCredit, SurveyDirection, ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -112,7 +112,11 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// `stations_ids` and comments are shared by a junction's slots (names are
 /// each slot's line's own). The same unreleased version gained the sparse
 /// `station_aliases` list (a junction's retired ids and names, each with the
-/// line that knew it by it).
+/// line that knew it by it), which kept and archived stations (plan
+/// 2026-11-23, RS 6) replaced, still in that unreleased version, with the
+/// sparse `station_archived` (a node's records) and `station_shown` (how a
+/// foreign slot or a loop end shows its node) lists; `station_names` and
+/// comments are the shown identity's, one per junction.
 pub const BINARY_FORMAT_VERSION: u32 = 9;
 
 #[derive(Serialize)]
@@ -169,9 +173,14 @@ pub struct LoadProjectFullBinaryResult {
     /// Per-station u32 (LE): the project-unique Station ID, in station order
     /// (`station_count * 4` bytes).
     pub stations_ids: ByteBuf,
-    /// Sparse: stations with aliases (ids and names merged into them),
-    /// [`crate::models::Station::aliases`]; every slot of such a junction.
-    pub station_aliases: Vec<(u32, Vec<StationAliasWire>)>,
+    /// Sparse: stations whose node keeps records (stations merges archived
+    /// in it, RS 3), [`crate::models::Station::archived`]; every slot of
+    /// such a junction.
+    pub station_archived: Vec<(u32, Vec<ArchivedStationWire>)>,
+    /// Sparse: foreign slots and loop ends (RS 6),
+    /// [`crate::models::Station::shown`]: the Station ID shown, the home-line
+    /// dot and the loop mark.
+    pub station_shown: Vec<(u32, ShownSlot)>,
 
     pub stats: ProjectStats,
     pub warnings: Vec<ProjectWarning>,
@@ -416,7 +425,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut station_comments: Vec<(u32, String)> = Vec::new();
     let mut station_names: Vec<(u32, String)> = Vec::with_capacity(station_count);
     let mut stations_ids: Vec<u8> = Vec::with_capacity(station_count * 4);
-    let mut station_aliases: Vec<(u32, Vec<StationAliasWire>)> = Vec::new();
+    let mut station_archived: Vec<(u32, Vec<ArchivedStationWire>)> = Vec::new();
+    let mut station_shown: Vec<(u32, ShownSlot)> = Vec::new();
 
     for (idx, station) in stations.into_iter().enumerate() {
         let idx_u32 = idx as u32;
@@ -449,8 +459,11 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         if !station.name.is_empty() {
             station_names.push((idx_u32, station.name));
         }
-        if let Some(aliases) = station.aliases.filter(|a| !a.is_empty()) {
-            station_aliases.push((idx_u32, aliases));
+        if let Some(records) = station.archived.filter(|a| !a.is_empty()) {
+            station_archived.push((idx_u32, records));
+        }
+        if let Some(shown) = station.shown {
+            station_shown.push((idx_u32, shown));
         }
     }
 
@@ -499,7 +512,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_comments,
         station_names,
         stations_ids: ByteBuf::from(stations_ids),
-        station_aliases,
+        station_archived,
+        station_shown,
         stats,
         warnings,
         display_settings,
@@ -555,7 +569,8 @@ mod tests {
         station_merged_with: Vec<(u32, Vec<StationRef>)>,
         station_names: Vec<(u32, String)>,
         stations_ids: ByteBuf,
-        station_aliases: Vec<(u32, Vec<StationAliasWire>)>,
+        station_archived: Vec<(u32, Vec<ArchivedStationWire>)>,
+        station_shown: Vec<(u32, ShownSlot)>,
     }
     #[derive(Deserialize)]
     struct DecodedHeader {
@@ -755,10 +770,12 @@ mod tests {
     }
 
     /// A merged station's archived records ride the envelope on every slot of
-    /// it (as alias entries until RS-W), so a binary load shows "Also known
-    /// as" like a JSON refresh does; every slot shows the kept name (RS 4.1).
+    /// it, so a binary load shows them like a JSON refresh does; every slot
+    /// shows the kept name (RS 4.1), and the slot of the line whose own
+    /// station was archived is foreign (RS 6): it shows the kept Station ID
+    /// with the kept station's home-line dot.
     #[test]
-    fn a_junctions_aliases_ride_every_slot() {
+    fn a_junctions_records_ride_every_slot() {
         let mut project = Project::new("aliases", None);
         let main = add_free_line(
             &mut project,
@@ -777,20 +794,36 @@ mod tests {
             .unwrap()
             .value;
         let retired_on_main = merged.archived == junction;
-        let retired_name = Some(if retired_on_main { "1" } else { "0" }.to_string());
+        let retired_name = if retired_on_main { "1" } else { "0" }.to_string();
         let retired_line = if retired_on_main { main } else { side };
+        let kept_line = if retired_on_main { side } else { main };
 
         let decoded = decode(&project);
 
-        let expected = vec![StationAliasWire {
+        let expected = vec![ArchivedStationWire {
             id: merged.archived,
             name: retired_name,
-            line: Some(retired_line),
+            comment: None,
+            lines: vec![retired_line],
         }];
         // Slots in line order: Main 0, 1 (junction), 2; Side 0 (junction), 1.
         assert_eq!(
-            decoded.station_aliases,
+            decoded.station_archived,
             vec![(1, expected.clone()), (3, expected)]
+        );
+        let foreign_slot = if retired_on_main { 1 } else { 3 };
+        assert_eq!(
+            decoded.station_shown,
+            vec![(
+                foreign_slot,
+                ShownSlot {
+                    id: merged.kept,
+                    home_line: Some(kept_line),
+                    foreign: true,
+                    loop_end: false,
+                    loop_closure: None,
+                }
+            )]
         );
         // Every slot shows the kept station's name.
         let kept_name = if retired_on_main { "0" } else { "1" };

@@ -17,12 +17,13 @@ import type { Station, StationRef } from '../types/project';
 import type { SurveyData } from '../types/survey-data';
 import { displayStationName, formatShotLabel, formatStationLabel } from './formatters';
 
-/** The SurveyData columns identity needs (aliases only for a rename check). */
+/** The SurveyData columns identity needs (the shown slots only for a rename
+ *  check through a loop end). */
 export type IdentityData = Pick<
   SurveyData,
   'stationCount' | 'stationLineIds' | 'stationIndices' | 'stationNames' | 'stationIds' | 'lines' | 'shotIds'
 > &
-  Partial<Pick<SurveyData, 'stationAliases'>>;
+  Partial<Pick<SurveyData, 'stationShown'>>;
 
 /** A line as identity needs it: the store's `project.lines` or `SurveyData.lines`. */
 export interface IdentityLine {
@@ -124,11 +125,11 @@ function idIndexOf(data: IdentityData): Map<number, number[]> {
 }
 
 /**
- * Every slot of the station `ref` is on: the slots that share its Station ID.
+ * Every slot of the station `ref` is on: the slots that share its node id.
  * On the station graph a junction is ONE station that two or more lines pass
- * (plan 9.2), so its slots share one id and comment, while each line shows it
- * by the name that line knows it by (plan 5.3 per line); a station on one line
- * has the one slot. `ref` alone when the station is unknown.
+ * (plan 9.2), so its slots share one id, and every line shows its kept
+ * station (RS 4.1); a station on one line has the one slot. `ref` alone when
+ * the station is unknown.
  */
 export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef[] {
   const data = src.surveyData;
@@ -146,42 +147,65 @@ export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef
   return (src.stations ?? []).filter((s) => s.id === station.id).map((s) => s.station_ref);
 }
 
-/** The lines the aliases of the station at `ref` name: each shows the station by its alias's name. */
-function aliasLinesOf(src: IdentitySource, ref: StationRef): Set<number> {
-  const data = src.surveyData;
-  let aliases: ReadonlyArray<{ line?: number | null }> | undefined;
-  if (data && data.stationCount > 0) {
-    const g = stationGlobalIndexOf(data, ref);
-    aliases = g === null ? undefined : data.stationAliases?.get(g);
-  } else {
-    aliases = findStationIn(src.stations, ref)?.aliases;
-  }
-  const lines = new Set<number>();
-  for (const alias of aliases ?? []) if (alias.line !== undefined && alias.line !== null) lines.add(alias.line);
-  return lines;
+/** The Station ID the slot at global index `g` shows (RS 6): its shown
+ *  identity's, the node's own unless a loop closure archives the node. */
+function shownIdAt(data: IdentityData, g: number): number | undefined {
+  return data.stationShown?.get(g)?.id ?? data.stationIds[g];
+}
+
+/** The Station ID the station at `ref` shows, from the `Station[]` list. */
+function shownIdOfStation(station: Station): number {
+  return station.shown?.id ?? station.id;
 }
 
 /**
  * The first line on which ANOTHER station is already shown as `name`, among
  * the lines a rename of the station at `ref` renames it on, or null when the
- * name is free. Each line shows a junction by the name that line knows it by
- * (plan 5.3 per line): renaming it through a line that knows it by an alias
- * renames that line's name only, so only that line is checked; otherwise it
- * renames the station's own name, which every line without an alias of its
- * own shows, so all of those are checked. On one line this is the old
- * per-line check.
+ * name is free. A rename through any slot renames the identity the slot
+ * shows (RS 5.4: a junction shows its kept station on every line, a loop
+ * end its closure's kept end), so every line that identity is shown on is
+ * checked, and every slot showing it is its own (a same-line closure shows
+ * one identity twice). On one line this is the old per-line check.
+ * RS-UI: a foreign slot or a loop end asks whose station it is first
+ * (`preview_station_identity`).
  */
 export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
-  const own = stationSlotsOf(src, ref);
-  const ownKeys = new Set(own.map((s) => `${s.line_id}:${s.station_index}`));
-  const aliasLines = aliasLinesOf(src, ref);
-  const sharing = aliasLines.has(ref.line_id)
-    ? own.filter((s) => s.line_id === ref.line_id)
-    : own.filter((s) => !aliasLines.has(s.line_id));
-  for (const slot of sharing) {
+  const data = src.surveyData;
+  const showing: StationRef[] = [];
+  const shows: (lineId: number, index: number) => boolean = (() => {
+    if (data && data.stationCount > 0) {
+      const g = stationGlobalIndexOf(data, ref);
+      const target = g === null ? undefined : shownIdAt(data, g);
+      if (target !== undefined) {
+        for (let s = 0; s < data.stationCount; s++) {
+          if (shownIdAt(data, s) === target) {
+            showing.push({ line_id: data.stationLineIds[s]!, station_index: data.stationIndices[s]! });
+          }
+        }
+        return (lineId: number, index: number) => {
+          const at = stationGlobalIndexOf(data, { line_id: lineId, station_index: index });
+          return at !== null && shownIdAt(data, at) === target;
+        };
+      }
+    }
+    const station = findStationIn(src.stations, ref);
+    if (!station) {
+      showing.push(ref);
+      return (lineId: number, index: number) => lineId === ref.line_id && index === ref.station_index;
+    }
+    const target = shownIdOfStation(station);
+    const own = (src.stations ?? []).filter((s) => shownIdOfStation(s) === target);
+    showing.push(...own.map((s) => s.station_ref));
+    const keys = new Set(own.map((s) => `${s.station_ref.line_id}:${s.station_ref.station_index}`));
+    return (lineId: number, index: number) => keys.has(`${lineId}:${index}`);
+  })();
+  const seen = new Set<number>();
+  for (const slot of showing) {
+    if (seen.has(slot.line_id)) continue;
+    seen.add(slot.line_id);
     const names = lineStationNamesOf(src, slot.line_id);
     for (let i = 0; i < names.length; i++) {
-      if (names[i] === name && !ownKeys.has(`${slot.line_id}:${i}`)) return slot.line_id;
+      if (names[i] === name && !shows(slot.line_id, i)) return slot.line_id;
     }
   }
   return null;

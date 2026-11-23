@@ -33,7 +33,7 @@ import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
 import { StationAliases } from './StationAliases';
-import { StationOtherLines, aliasesShownByOtherLines } from './StationOtherLines';
+import { StationOtherLines, recordsShownByOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
@@ -768,9 +768,9 @@ function StationDetail({ station }: { station: Station }) {
           <StationOtherLines station={station} />
 
           <StationAliases
-            aliases={station.aliases}
+            records={station.archived}
             lineName={labels.lineName}
-            shown={aliasesShownByOtherLines(station)}
+            shown={recordsShownByOtherLines(station)}
             ownLine={lineId}
             ownName={labels.stationName(station.station_ref)}
           />

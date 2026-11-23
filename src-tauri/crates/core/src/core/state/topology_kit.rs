@@ -260,6 +260,8 @@ pub(super) fn merge(state: &AppState, a: StationRef, b: StationRef) -> CommandRe
         Command::MergeStations {
             station_a: a,
             station_b: b,
+            keep: None,
+            renames: None,
         },
     )
 }

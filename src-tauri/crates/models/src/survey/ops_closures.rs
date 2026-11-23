@@ -78,6 +78,9 @@ pub struct ClosureNaming {
     /// The names the op would show twice on a line, with rule L's answers
     /// (the other answer the dialog offers is renaming the kept station).
     pub collisions: Vec<LetteredStation>,
+    /// The dialog's other answer to each collision, in the same order
+    /// ([`Project::alternative_letters`]).
+    pub alternatives: Vec<LetteredStation>,
 }
 
 impl Project {
@@ -236,6 +239,7 @@ impl Project {
             archived: archive.map(|(archived, _)| archived),
             identity,
             renamed_lines: self.lines_shown_differently(&copy),
+            alternatives: copy.alternative_letters(&outcome.identities.lettered),
             collisions: outcome.identities.lettered,
         })
     }
@@ -297,6 +301,7 @@ impl Project {
             archived: archive.map(|(archived, _)| archived),
             identity: archive.and_then(|(archived, _)| copy.identity_text(archived)),
             renamed_lines: self.lines_shown_differently(&copy),
+            alternatives: copy.alternative_letters(&outcome.identities.lettered),
             collisions: outcome.identities.lettered,
         })
     }

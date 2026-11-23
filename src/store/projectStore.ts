@@ -55,7 +55,20 @@ import type { NewerSchema } from '../types/ipc/NewerSchema';
 import { newerSchemaMessage } from '../utils/newerSchema';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
+import type { StationRename } from '../types/ipc/StationRename';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion } from '../types/commands';
+
+/** A merge's or a closure's answers in its dialog (RS 4.1, 5.2). */
+export interface KeptStationAnswers {
+  keep?: number;
+  renames?: StationRename[];
+}
+
+/** A detach's answers in its dialog (RS 4.2). */
+export interface DetachAnswers {
+  renames?: StationRename[];
+  restKeep?: number;
+}
 
 /** Additive import-receipt provenance (#391) - see `import_lines` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
@@ -413,12 +426,18 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   deleteShotRangeShift: (lineId: LineId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
   setShotKind: (lineId: LineId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
 
-  mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
-  unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
-  unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
+  /** Kept and archived stations (RS 4.1, 4.2, 5.2, 5.3): `keep` is the
+   *  Station ID kept (a merge: absent keeps the stationary station; a
+   *  closure: absent keeps both names), `renames` the dialog's answers to
+   *  the name collisions (absent: no dialog, rule L letters them and the
+   *  result's `identities` says so), `restKeep` the record the remaining
+   *  junction shows after a detach. RS-UI's dialogs pass them. */
+  mergeStations: (stationA: StationRef, stationB: StationRef, answers?: KeptStationAnswers) => Promise<CommandResult>;
+  unmergeStations: (stationRef: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;
+  unmergeStationPair: (stationA: StationRef, stationB: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
-  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
-  removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
+  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy, answers?: KeptStationAnswers) => Promise<CommandResult>;
+  removeLoopClosure: (closureId: bigint, answers?: { renames?: StationRename[] }) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
@@ -1725,26 +1744,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Station operations
-  mergeStations: async (stationA: StationRef, stationB: StationRef) => {
+  mergeStations: async (stationA: StationRef, stationB: StationRef, answers?: KeptStationAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'merge_stations',
-      { stationA, stationB },
+      { stationA, stationB, ...answers },
       { purpose: 'connect survey lines', fields: { stationA, stationB } }
     ));
   },
 
-  unmergeStations: async (stationRef: StationRef) => {
+  unmergeStations: async (stationRef: StationRef, answers?: DetachAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'unmerge_stations',
-      { stationRef },
+      { stationRef, ...answers },
       { purpose: 'disconnect merged stations', fields: { stationRef } }
     ));
   },
 
-  unmergeStationPair: async (stationA: StationRef, stationB: StationRef) => {
+  unmergeStationPair: async (stationA: StationRef, stationB: StationRef, answers?: DetachAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'unmerge_station_pair',
-      { stationA, stationB },
+      { stationA, stationB, ...answers },
       { purpose: 'disconnect selected merged station pair', fields: { stationA, stationB } }
     ));
   },
@@ -1757,18 +1776,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
+  createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy, answers?: KeptStationAnswers) => {
     return executeCommand(
       'create_loop_closure',
-      { stationA, stationB, closureStrategy },
+      { stationA, stationB, closureStrategy, ...answers },
       { purpose: 'add loop closure for accuracy', fields: { stationA, stationB, closureStrategy } }
     );
   },
 
-  removeLoopClosure: async (closureId: bigint) => {
+  removeLoopClosure: async (closureId: bigint, answers?: { renames?: StationRename[] }) => {
     return executeCommand(
       'remove_loop_closure',
-      { closureId: Number(closureId) },
+      { closureId: Number(closureId), ...answers },
       { purpose: 'remove loop closure', fields: { closureId: closureId.toString() } }
     );
   },

@@ -1624,6 +1624,8 @@ fn test_project_lifecycle_persists_undo_and_state() {
             state(&app),
             StationRef::new(line_a, 0),
             StationRef::new(line_b, 0),
+            None,
+            None,
         );
         assert_success(&merge_result);
 
@@ -1690,6 +1692,8 @@ fn test_get_project_state_emits_positional_wire_refs() {
             state(&app),
             StationRef::new(line_a, 1),
             StationRef::new(line_b, 1),
+            None,
+            None,
         ));
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
@@ -3859,6 +3863,8 @@ fn test_move_segment_moves_connected_lines() {
         state(&app),
         StationRef::new(line_a, 1),
         StationRef::new(line_b, 0),
+        None,
+        None,
     ));
 
     // Every slot of both lines (one piece through the junction) moves by
@@ -4271,7 +4277,13 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
 #[test]
 fn test_merge_stations_fails_without_project() {
     let app = app_with_state();
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(1, 0));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 0),
+        StationRef::new(1, 0),
+        None,
+        None,
+    );
     assert_failure_contains(&result, "No project open");
 }
 
@@ -4280,7 +4292,13 @@ fn test_merge_stations_fails_same_line() {
     let app = app_with_state();
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(0, 1));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 0),
+        StationRef::new(0, 1),
+        None,
+        None,
+    );
     assert_failure_contains(&result, "same line");
 }
 
@@ -4290,7 +4308,13 @@ fn test_merge_stations_success_between_lines() {
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+        None,
+        None,
+    );
     assert_success(&result);
     // A merge is one shared station: both slots carry its id.
     let project = state(&app).get_project_state().unwrap();
@@ -4307,7 +4331,7 @@ fn test_unmerge_stations_noop_success() {
     let app = app_with_state();
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 0));
+    let result = station::unmerge_stations(state(&app), StationRef::new(0, 0), None, None);
     assert_success(&result);
 }
 
@@ -4321,8 +4345,10 @@ fn test_unmerge_stations_removes_merge() {
         state(&app),
         StationRef::new(0, 1),
         StationRef::new(1, 0),
+        None,
+        None,
     ));
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
+    let result = station::unmerge_stations(state(&app), StationRef::new(0, 1), None, None);
     assert_success(&result);
     // The slot's line is detached: the two slots no longer share a station.
     let project = state(&app).get_project_state().unwrap();
@@ -4351,10 +4377,10 @@ fn test_preview_detach_line_names_what_the_detach_gives() {
         (id, p.stations[&id].name.clone())
     };
     let (a1_own, b0_own) = (own(&before, a1), own(&before, b0));
-    assert_success(&station::merge_stations(state(&app), a1, b0));
+    assert_success(&station::merge_stations(state(&app), a1, b0, None, None));
     let previews = [
-        station::preview_detach_line(state(&app), a1, 0).unwrap(),
-        station::preview_detach_line(state(&app), a1, 1).unwrap(),
+        station::preview_detach_line(state(&app), a1, 0, None).unwrap(),
+        station::preview_detach_line(state(&app), a1, 1, None).unwrap(),
     ];
     let restored: Vec<_> = previews.iter().filter(|p| p.restored && !p.kept).collect();
     assert_eq!(
@@ -4376,14 +4402,20 @@ fn test_preview_detach_line_names_what_the_detach_gives() {
     );
     assert_eq!((keeping[0].station_id, &keeping[0].name), (was.0, &was.1));
     let other = if line == 0 { b0 } else { a1 };
-    assert_success(&station::unmerge_station_pair(state(&app), other, slot));
+    assert_success(&station::unmerge_station_pair(
+        state(&app),
+        other,
+        slot,
+        None,
+        None,
+    ));
     let after = state(&app).get_project_state().unwrap();
     assert_eq!(
         own(&after, slot),
         was.clone(),
         "the line has its own station back"
     );
-    assert!(station::preview_detach_line(state(&app), slot, line).is_err());
+    assert!(station::preview_detach_line(state(&app), slot, line, None).is_err());
 }
 
 #[test]
@@ -5920,9 +5952,10 @@ fn test_closure_across_one_shot_warning_is_never_suppressible() {
     assert_eq!(wire["closureId"], serde_json::json!(id));
 
     // Removing the closure is the fix.
-    let removed = state(&app)
-        .inner()
-        .execute(Command::RemoveLoopClosure { closure_id: id });
+    let removed = state(&app).inner().execute(Command::RemoveLoopClosure {
+        closure_id: id,
+        renames: None,
+    });
     assert!(removed.success, "{:?}", removed.error);
     assert!(validation::get_project_warnings(state(&app))
         .iter()
@@ -6299,6 +6332,8 @@ fn test_get_segment_geometry_connected_lines() {
         state(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
+        None,
+        None,
     ));
 
     // Query segment from line A
@@ -6359,6 +6394,8 @@ fn test_get_segment_geometry_queried_from_either_end() {
         state(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
+        None,
+        None,
     ));
 
     // Query from line B - should still include both lines

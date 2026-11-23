@@ -243,16 +243,17 @@ impl AppState {
                         .unwrap_or_default(),
                 );
                 record.preview = combine_rows(before, project, kept, other);
-                Ok(warnings)
+                Ok((warnings, project.identity_notice(&edited.report.identities)))
             },
         );
         match result {
-            Ok(warnings) => {
+            Ok((warnings, identities)) => {
                 tracing::info!(kept, other, "Combine lines completed");
                 CommandResult::success()
                     .with_line_id(kept)
                     .with_line_ids(vec![kept])
                     .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }

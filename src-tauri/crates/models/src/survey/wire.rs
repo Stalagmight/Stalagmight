@@ -36,11 +36,18 @@
 
 mod combine;
 mod envelope;
+mod identity;
 mod previews;
 mod project;
 mod refs;
 mod stations;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod identity_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -57,5 +64,6 @@ mod ts_tests;
 mod wire_tests;
 
 pub use envelope::LoadEnvelopeInput;
+pub use identity::lettered_wire;
 pub use project::{LineWire, ProjectStateWire, ProjectWire};
 pub use refs::{wire_strategy, SlotTarget};

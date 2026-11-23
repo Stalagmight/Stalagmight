@@ -9,30 +9,25 @@ import { displayStationName } from '../../utils/formatters';
 import { findStation } from '../../utils/findStation';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import type { Station, StationRef } from '../../types/project';
-import type { StationAlias } from '../../types/ipc/StationAlias';
+import type { ArchivedStation } from '../../types/ipc/ArchivedStation';
 import { DetailLink } from '../common/DetailLink';
 import { LinkOffIcon } from '../common/icons';
 
 /**
- * The alias a line knows a station by: the latest one naming that line, as
- * the backend's `name_on` reads it (the name the line shows, and the Station
- * ID Detach gives that line back).
+ * The record of a node that names a line (RS 3: at most one does): that
+ * line's own station, which a merge archived and Detach gives back.
+ * RS-UI: the "Also on" rows and the records' list are redesigned (RS 6).
  */
-export function lineAlias(aliases: ReadonlyArray<StationAlias> | undefined, lineId: number): StationAlias | undefined {
-  if (!aliases) return undefined;
-  for (let i = aliases.length - 1; i >= 0; i -= 1) {
-    const alias = aliases[i];
-    if (alias?.line === lineId) return alias;
-  }
-  return undefined;
+export function lineRecord(records: ReadonlyArray<ArchivedStation> | undefined, lineId: number): ArchivedStation | undefined {
+  return records?.find((record) => record.lines.includes(lineId));
 }
 
-/** The ids of the aliases the "Also on" rows show: each other line's own. */
-export function aliasesShownByOtherLines(station: Station): Set<number> {
+/** The ids of the records the "Also on" rows show: each other line's own. */
+export function recordsShownByOtherLines(station: Station): Set<number> {
   const shown = new Set<number>();
   for (const ref of station.merged_with) {
-    const alias = lineAlias(station.aliases, ref.line_id);
-    if (alias) shown.add(alias.id);
+    const record = lineRecord(station.archived, ref.line_id);
+    if (record) shown.add(record.id);
   }
   return shown;
 }
@@ -100,8 +95,8 @@ export function StationOtherLines({ station }: { station: Station }) {
           // station's own name again read as "merged with itself").
           const name = labels.stationName(ref);
           const otherName = name === ownName ? null : displayStationName(name);
-          const alias = lineAlias(station.aliases, ref.line_id);
-          const otherId = alias && alias.id !== stationId ? alias.id : null;
+          const record = lineRecord(station.archived, ref.line_id);
+          const otherId = record && record.id !== stationId ? record.id : null;
           const said =
             otherName !== null && otherId !== null
               ? t('detailPanel.station.otherLineName', { name: otherName, id: otherId })

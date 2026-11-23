@@ -917,6 +917,8 @@ fn every_command_fails_without_an_open_project() {
         Command::MergeStations {
             station_a: StationRef::new(0, 0),
             station_b: StationRef::new(1, 0),
+            keep: None,
+            renames: None,
         },
         Command::SetZeroDatum {
             station_ref: StationRef::new(0, 0),

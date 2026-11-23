@@ -351,6 +351,7 @@ pub(super) fn apply(
             record.refs.stations.push(edited.value.station);
             Ok(super::commands::Applied {
                 warnings: closure_warnings(&names, project, &edited.report, "delete shot"),
+                identities: project.identity_notice(&edited.report.identities),
                 ..super::commands::Applied::default()
             })
         }

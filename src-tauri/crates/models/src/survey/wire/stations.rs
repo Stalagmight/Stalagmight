@@ -9,10 +9,13 @@
 //!   own, or the kept end's when a loop closure archives `S`), shared by
 //!   every slot of a junction;
 //! - `id`: `S` (the node: every grouping, command and selection keys on it);
-//! - `aliases`: `S`'s archived records, one entry per line a record names
-//!   (or one with no line for a history record); absent when `S` has none.
-//!   RS-W replaces this with the shown-identity fields of RS 6 (`shown_id`,
-//!   `foreign`, `home_line`, `loop_end`) and a records DTO;
+//! - `archived`: `S`'s records (RS 3), each with its id, name, comment and
+//!   lines (none for a history record); absent when `S` has none;
+//! - `shown` (RS 6): on a foreign slot (a record names `L`, or `L` is not a
+//!   native line of the node holding the shown identity) or a loop end (a
+//!   closure archives `S`): the Station ID shown, the shown identity's home
+//!   line (the dot's colour), both flags and the archiving closure; absent
+//!   on every other slot, which shows `id` natively;
 //! - `merged_with`: `S`'s other slots (slot order), so a junction's slots
 //!   list each other, transitively, as today's merge groups did;
 //! - `is_zero_datum` / `gps_coordinates`: the datum the slot's datum dialog
@@ -29,7 +32,9 @@ use std::collections::BTreeMap;
 
 use crate::{ClosureRef, Coordinates, StationId, StationRef};
 
-use super::super::{AdjustedPositions, ArchivedStation, Project, RawPositions, StationPositions};
+use super::super::{
+    AdjustedPositions, ArchivedStation, Project, RawPositions, ShownIndex, StationPositions,
+};
 
 /// Everything a wire station holds but its coordinates (one state).
 struct SlotRelations {
@@ -190,6 +195,7 @@ impl SlotRelations {
         let topology = project.topology();
         // One resolution of the closure archives for every slot.
         let index = project.shown_index();
+        let mut home_lines: BTreeMap<StationId, Option<crate::LineId>> = BTreeMap::new();
         let Self {
             slots,
             datum,
@@ -219,28 +225,72 @@ impl SlotRelations {
                     comment: shown.and_then(|s| s.comment.clone()),
                     id: station,
                     name: shown.map(|s| s.name.clone()).unwrap_or_default(),
-                    aliases: identity
+                    archived: identity
                         .filter(|s| !s.archived.is_empty())
-                        .map(|s| s.archived.iter().flat_map(alias_wire).collect()),
+                        .map(|s| s.archived.iter().map(|r| record_wire(project, r)).collect()),
+                    shown: shown_slot(project, &index, &mut home_lines, slot, station),
                 }
             })
             .collect()
     }
 }
 
-/// The wire form of one archived record: one alias entry per line it names,
-/// or one with no line for a history record (RS-W: the records DTO).
-fn alias_wire(record: &ArchivedStation) -> Vec<crate::StationAliasWire> {
-    let entry = |line| crate::StationAliasWire {
+/// The wire form of one record (RS 3): its lines in the model's line order.
+pub(super) fn record_wire(
+    project: &Project,
+    record: &ArchivedStation,
+) -> crate::ArchivedStationWire {
+    let mut lines = record.lines.clone();
+    lines.sort_by_key(|&line| project.line_position(line).unwrap_or(usize::MAX));
+    crate::ArchivedStationWire {
         id: record.id,
-        name: Some(record.name.clone()),
-        line,
-    };
-    if record.lines.is_empty() {
-        vec![entry(None)]
-    } else {
-        record.lines.iter().map(|&l| entry(Some(l))).collect()
+        name: record.name.clone(),
+        comment: record.comment.clone(),
+        lines,
     }
+}
+
+/// [`crate::Station::shown`] of `slot` on `station` (RS 6): `None` when
+/// the slot shows its node's own identity on a native line. `home_lines`
+/// memoises each shown identity's home line.
+fn shown_slot(
+    project: &Project,
+    index: &ShownIndex,
+    home_lines: &mut BTreeMap<StationId, Option<crate::LineId>>,
+    slot: StationRef,
+    station: StationId,
+) -> Option<crate::ShownSlot> {
+    let shown = index.shown(station);
+    let loop_end = shown != station;
+    // Foreign (RS 2): the slot's line is not a native line of the node
+    // holding the shown identity. For a node showing its own identity that
+    // is a record naming the line; the full check runs only on loop ends.
+    let foreign = if loop_end {
+        !project.is_native(shown, slot.line_id)
+    } else {
+        project
+            .stations
+            .get(&station)
+            .is_some_and(|s| s.record_for(slot.line_id).is_some())
+    };
+    let loop_end = loop_end || index.is_archived(station);
+    if !foreign && !loop_end {
+        return None;
+    }
+    let home_line = *home_lines
+        .entry(shown)
+        .or_insert_with(|| project.home_line(shown));
+    Some(crate::ShownSlot {
+        id: shown,
+        home_line,
+        foreign,
+        loop_end,
+        loop_closure: if loop_end {
+            project.archiving_closure(station).map(|c| c.id)
+        } else {
+            None
+        },
+    })
 }
 
 /// A slot's coordinates: its station's XY, its station's depth plus the
