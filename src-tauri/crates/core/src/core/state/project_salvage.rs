@@ -125,6 +125,23 @@ fn repairs_text(report: &SalvageReport) -> String {
     text
 }
 
+/// The sentence a repair adds when the damaged file was one an earlier build
+/// of version 2 wrote: the repaired survey is also upgraded to kept stations
+/// (plan 2026-11-23 RS 8.2), which shows some stations differently.
+fn upgrade_text(report: &SalvageReport) -> Option<String> {
+    let upgrade = report.upgrade.as_ref().filter(|u| !u.is_empty())?;
+    let shown = upgrade.changes.names.len();
+    Some(if shown == 0 {
+        "It was also upgraded from an earlier version 2 file.".to_string()
+    } else {
+        format!(
+            "It was also upgraded from an earlier version 2 file: {shown} station name(s) are \
+             shown differently; Detach Line from Station or Remove Closure brings a station \
+             back."
+        )
+    })
+}
+
 /// Why salvage could not rebuild the project.
 fn unrepairable(report: &SalvageReport) -> String {
     if let Some(error) = &report.error {
@@ -209,15 +226,20 @@ fn repair_v2(path: &Path, bytes: &[u8], fingerprint: &Fingerprint) -> Result<Rep
         purpose = "repair a project the load refused",
         "Repaired the project in place; the damaged original is kept"
     );
+    let mut message = format!(
+        "Repair succeeded: {} fix(es): {}. The damaged original is kept as {}.",
+        report.repairs.len(),
+        repairs_text(&report),
+        name(&backup)
+    );
+    if let Some(upgraded) = upgrade_text(&report) {
+        message.push(' ');
+        message.push_str(&upgraded);
+    }
     Ok(RepairResult {
         success: true,
         backup_path: backup.display().to_string(),
-        message: format!(
-            "Repair succeeded: {} fix(es): {}. The damaged original is kept as {}.",
-            report.repairs.len(),
-            repairs_text(&report),
-            name(&backup)
-        ),
+        message,
     })
 }
 
@@ -419,5 +441,6 @@ fn salvage_v2(bytes: &[u8]) -> SalvagedData {
             .iter()
             .map(|repair| format!("Repaired: {repair}")),
     );
+    salvaged.errors.extend(upgrade_text(&report));
     salvaged
 }
