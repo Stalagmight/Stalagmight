@@ -2,7 +2,9 @@
  * Delete Shot + Split on a shot inside a loop makes the loop closure left as
  * the only connection a junction, and the stranded piece moves onto it by the
  * misclosure, as 0.6.0 did. Both dialogs on the way say so, from the
- * backend's dry run in `preview_delete_shot` (review finding UX-5).
+ * backend's dry run in `preview_delete_shot` (review finding UX-5). Each
+ * station of a closure is a prose pill (RS-PROSE); the notice reads, word for
+ * word, the sentence plain text wrote.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -18,10 +20,25 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import DeleteShotChoiceDialog from '../DeleteShotChoiceDialog';
 import SplitLineDialog from '../SplitLineDialog';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 3;
 const LOOP = 8;
 const ref = (line_id: number, station_index: number) => ({ line_id, station_index });
+const station = (line_id: number, station_index: number, name: string) => ({
+  station_ref: ref(line_id, station_index),
+  name,
+  coordinates: { x: 0, y: 0, z: 0 },
+  merged_with: [],
+});
+/** The notice as a screen reader reads it, after checking both stations are pills. */
+const read = (notice: HTMLElement) => {
+  expect([...notice.querySelectorAll('.sh-ppill')].map((el) => el.getAttribute('data-prose-kind'))).toEqual([
+    'station',
+    'station',
+  ]);
+  return accessibleText(notice);
+};
 const impact = (welds: boolean, moved = 2.19) => ({
   removed_station: ref(MAIN, 3),
   removed_merges: [],
@@ -44,7 +61,7 @@ beforeEach(() => {
       station_merges: [],
     },
     surveyData: null,
-    stations: [],
+    stations: [station(LOOP, 3, 'L3'), station(MAIN, 5, 'M5')],
     isShotFrozen: () => false,
   } as never);
   useUIStore.setState({ dialogData: { lineId: MAIN, shotId: 32, lineName: 'Main Line' } } as never);
@@ -55,14 +72,18 @@ describe('Delete Shot + Split weld notice', () => {
     invokeIpc.mockResolvedValue(impact(true));
     render(<DeleteShotChoiceDialog />);
     const notice = await screen.findByTestId('split-weld-notice');
-    expect(notice.textContent).toMatch(/^If you choose Split Line, the loop closure .+ - .+ becomes a junction; the stations past it move by up to 2\.\d+ m\.$/);
+    expect(read(notice)).toMatch(
+      /^If you choose Split Line, the loop closure Loop \/ L3 - Main Line \/ M5 becomes a junction; the stations past it move by up to 2\.\d+ m\.$/,
+    );
   });
 
   it('the Delete & Split dialog says the same from its own preview', async () => {
     invokeIpc.mockResolvedValue(impact(true));
     render(<SplitLineDialog />);
     const notice = await screen.findByTestId('split-weld-notice');
-    expect(notice.textContent).toMatch(/^The loop closure .+ - .+ becomes a junction; the stations past it move by up to 2\.\d+ m\.$/);
+    expect(read(notice)).toMatch(
+      /^The loop closure Loop \/ L3 - Main Line \/ M5 becomes a junction; the stations past it move by up to 2\.\d+ m\.$/,
+    );
     expect(invokeIpc).toHaveBeenCalledWith('preview_delete_shot', { lineId: MAIN, shotId: 32 }, expect.anything());
   });
 
@@ -70,7 +91,7 @@ describe('Delete Shot + Split weld notice', () => {
     invokeIpc.mockResolvedValue(impact(true, 0));
     render(<SplitLineDialog />);
     const notice = await screen.findByTestId('split-weld-notice');
-    expect(notice.textContent).toMatch(/becomes a junction\.$/);
+    expect(read(notice)).toBe('The loop closure Loop / L3 - Main Line / M5 becomes a junction.');
   });
 
   it('says nothing when the split welds nothing', async () => {

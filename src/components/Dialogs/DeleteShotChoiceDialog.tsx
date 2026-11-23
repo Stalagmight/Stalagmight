@@ -8,17 +8,19 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import SplitWeldNotice from './SplitWeldNotice';
 import type { DeleteShotImpact } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 
 export default function DeleteShotChoiceDialog() {
   const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
   const { deleteShot } = useProjectStore();
-  const labels = useIdentityLabels();
+  const prose = useProse();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const lineName = dialogData.lineName as string | undefined;
-  const shotLabel = lineId !== undefined && shotId !== undefined ? labels.shot(lineId, shotId, true) : null;
+  // The shot as a prose pill (RS-PROSE): `Main Line: 4 → 5` in plain words.
+  const shotLabel = lineId !== undefined && shotId !== undefined ? prose.shot(lineId, shotId, true) : null;
 
   const [impact, setImpact] = useState<DeleteShotImpact | null>(null);
   const [impactError, setImpactError] = useState<string | null>(null);
@@ -77,8 +79,8 @@ export default function DeleteShotChoiceDialog() {
   return (
     <DialogWrapper title="Delete Shot" onClose={isLoading ? () => {} : closeDialog} size="md" data-testid="delete-shot-choice-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary">
-          {shotLabel ? `Shot ${shotLabel} is` : 'This shot is'} in the middle of the line. Choose
+        <p className="text-text-secondary" data-testid="delete-shot-choice-lead">
+          <Prose text={shotLabel ? `Shot ${shotLabel} is` : 'This shot is'} /> in the middle of the line. Choose
           whether to split the line or shift geometry.
         </p>
 

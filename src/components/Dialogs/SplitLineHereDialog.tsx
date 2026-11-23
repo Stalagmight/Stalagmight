@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,11 +7,13 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
 import { defaultSplitNames, lineNameProblemMessage, splitNameProblems } from '../../utils/nameValidation';
-import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
+import { useProse } from '../../hooks/useProse';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { splitSecondHalfColor } from '../../utils/colors';
 import { defaultConfig } from '../../types/config';
 import type { SplitAt } from '../../types/ipc/SplitAt';
 import { Button } from '../common/Button';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 
 /**
@@ -28,18 +30,17 @@ import { DialogWrapper } from './DialogWrapper';
 export default function SplitLineHereDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, clearSelection, resolvedTheme } = useUIStore();
-  const { splitLine, project, stations, surveyData, config } = useProjectStore();
+  const { splitLine, project, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
-  const labels = useMemo(
-    () => identityLabels({ surveyData, stations, lines: project?.lines ?? null }),
-    [surveyData, stations, project?.lines]
-  );
+  // The line, the shot and the station the summary names, as prose pills (RS-PROSE).
+  const prose = useProse();
 
   const lineId = dialogData.lineId as number | undefined;
   const at = dialogData.at as SplitAt | undefined;
 
   const line = project?.lines.find((s) => s.id === lineId);
-  const lineName = lineDisplayName(line?.name);
+  // A line gone since the dialog opened reads plain (`Unnamed`); the dialog says it is stale.
+  const lineName = line ? prose.line(line.id) : lineDisplayName(undefined);
   const lineColor = line?.color ?? '#3b82f6';
 
   const shotIndex = at?.type === 'shot' ? (line?.shots.findIndex((s) => s.id === at.shot_id) ?? -1) : -1;
@@ -69,10 +70,10 @@ export default function SplitLineHereDialog() {
     at?.type === 'shot' && shot && lineId !== undefined
       ? `Splitting ${lineName} ${formatLength(at.distance, lengthUnit, 2)} (${Math.round(
           (at.distance / shot.length) * 100
-        )}%) along shot ${labels.shotAt(lineId, shotIndex)}`
+        )}%) along shot ${prose.shotAt(lineId, shotIndex)}`
       : `Splitting ${lineName} at station ${
           at?.type === 'station' && lineId !== undefined
-            ? labels.station({ line_id: lineId, station_index: at.station_index })
+            ? prose.station({ line_id: lineId, station_index: at.station_index })
             : ''
         }`;
 
@@ -167,7 +168,9 @@ export default function SplitLineHereDialog() {
       data-testid="split-line-here-dialog"
     >
       <div className="space-y-4">
-        <p className="text-text-secondary" data-testid="split-here-summary">{summary}</p>
+        <p className="text-text-secondary" data-testid="split-here-summary">
+          <Prose text={summary} />
+        </p>
         <p className="text-sm text-text-secondary" data-testid="split-here-credit-note">
           Each shot keeps its own surveyors, explorers and survey date.
         </p>
