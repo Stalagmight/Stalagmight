@@ -5,7 +5,9 @@
 //!
 //! Random `AppState` commands - every command family (lines, shots, stations,
 //! merges and detaches, closures, datums, the move tools, comments, names,
-//! credit, Sections, settings), the bypass recipes (split shot, delete and
+//! credit, Sections, settings; a merge, a detach and a closure answer their
+//! dialog: a keep or `rest_keep` and the preview's renames, `KeepT` and
+//! `AnswersT`), the bypass recipes (split shot, delete and
 //! split, range delete shift and split, delete last shot and line, Split Line
 //! Here, Combine Lines, create and merge, imports, Add .stalx) and batches -
 //! interleaved with undo, redo, multi-step jumps and save/close/reopen
@@ -683,6 +685,85 @@ impl StationT {
     }
 }
 
+/// Which station a merge or a closure keeps (RS 4.1, 5.2), drawn
+/// symbolically and resolved against the state the move runs on (a replay
+/// resolves it again).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum KeepT {
+    /// No `keep`: Merge keeps the stationary station, Create Loop Closure
+    /// keeps both names (the command's default, a caller with no dialog).
+    #[default]
+    Absent,
+    /// The dialog's default (the preview's `default_keep`).
+    Default,
+    /// The first picked station.
+    A,
+    /// The second picked station.
+    B,
+}
+
+impl KeepT {
+    fn draw(rng: &mut Rng) -> Self {
+        match rng.below(8) {
+            0 | 1 => Self::Absent,
+            2 => Self::Default,
+            3..=5 => Self::A,
+            _ => Self::B,
+        }
+    }
+}
+
+/// How a move answers the name collisions its dialog lists (RS 4.1 step 6):
+/// drawn symbolically, the renames read off the preview when it runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum AnswersT {
+    /// No `renames`: rule L letters every collision (no dialog).
+    #[default]
+    Absent,
+    /// The preview's rule-L answers (the dialog's default).
+    Letters,
+    /// The preview's other answers.
+    Alternatives,
+    /// An empty list: refused when the move makes a collision.
+    Nothing,
+}
+
+impl AnswersT {
+    fn draw(rng: &mut Rng) -> Self {
+        match rng.below(10) {
+            0..=3 => Self::Absent,
+            4..=6 => Self::Letters,
+            7 | 8 => Self::Alternatives,
+            _ => Self::Nothing,
+        }
+    }
+
+    /// The renames this answer sends for a preview's `collisions`; `None`
+    /// for [`Self::Absent`].
+    fn renames(
+        self,
+        collisions: &[crate::models::NameCollisionWire],
+    ) -> Option<Vec<crate::models::StationRename>> {
+        let answer = |c: &crate::models::NameCollisionWire, alternative: bool| {
+            let pick = if alternative {
+                &c.alternative
+            } else {
+                &c.letter
+            };
+            crate::models::StationRename {
+                station_id: pick.station.id,
+                name: pick.to.clone(),
+            }
+        };
+        match self {
+            Self::Absent => None,
+            Self::Letters => Some(collisions.iter().map(|c| answer(c, false)).collect()),
+            Self::Alternatives => Some(collisions.iter().map(|c| answer(c, true)).collect()),
+            Self::Nothing => Some(Vec::new()),
+        }
+    }
+}
+
 /// One mutation, as a value: everything a generator drew, every reference
 /// symbolic. [`Fuzzer::apply_op`] is the only thing that executes one, for a
 /// drawn move and a replayed one alike.
@@ -741,19 +822,35 @@ pub(super) enum Op {
     Merge {
         a: StationT,
         b: StationT,
+        #[serde(default)]
+        keep: KeepT,
+        #[serde(default)]
+        answers: AnswersT,
     },
     /// `UnmergeStationPair`: detaches `b`'s line from the junction.
     Detach {
         a: StationT,
         b: StationT,
+        /// `0`: no `rest_keep`; `n`: the preview's `rest_choices[(n - 1) %
+        /// len]` when it offers any (RS 4.2 case 2).
+        #[serde(default)]
+        rest_keep: u8,
+        #[serde(default)]
+        answers: AnswersT,
     },
     CreateClosure {
         a: StationT,
         b: StationT,
         strategy: ClosureStrategy,
+        #[serde(default)]
+        keep: KeepT,
+        #[serde(default)]
+        answers: AnswersT,
     },
     RemoveClosure {
         closure: u64,
+        #[serde(default)]
+        answers: AnswersT,
     },
     SetZeroDatum {
         station: StationT,
@@ -933,14 +1030,40 @@ impl Op {
                 station.describe(),
                 comment.is_some()
             ),
-            Self::Merge { a, b } => format!("mergeStations({},{})", a.describe(), b.describe()),
-            Self::Detach { a, b } => format!("detachPair({},{})", a.describe(), b.describe()),
-            Self::CreateClosure { a, b, strategy } => format!(
-                "createLoopClosure({},{},{strategy:?})",
+            Self::Merge {
+                a,
+                b,
+                keep,
+                answers,
+            } => format!(
+                "mergeStations({},{},keep={keep:?},answers={answers:?})",
                 a.describe(),
                 b.describe()
             ),
-            Self::RemoveClosure { closure } => format!("removeLoopClosure({closure})"),
+            Self::Detach {
+                a,
+                b,
+                rest_keep,
+                answers,
+            } => format!(
+                "detachPair({},{},rest={rest_keep},answers={answers:?})",
+                a.describe(),
+                b.describe()
+            ),
+            Self::CreateClosure {
+                a,
+                b,
+                strategy,
+                keep,
+                answers,
+            } => format!(
+                "createLoopClosure({},{},{strategy:?},keep={keep:?},answers={answers:?})",
+                a.describe(),
+                b.describe()
+            ),
+            Self::RemoveClosure { closure, answers } => {
+                format!("removeLoopClosure({closure},answers={answers:?})")
+            }
             Self::SetZeroDatum {
                 station, entrance, ..
             } => format!("setZeroDatum({},entrance={entrance:?})", station.describe()),
@@ -2806,7 +2929,12 @@ impl Fuzzer {
 
     fn gen_merge(&mut self, targets: &Targets) -> Option<Op> {
         let (a, b) = self.pick_cross_pair(targets)?;
-        Some(Op::Merge { a, b })
+        Some(Op::Merge {
+            a,
+            b,
+            keep: KeepT::draw(&mut self.rng),
+            answers: AnswersT::draw(&mut self.rng),
+        })
     }
 
     /// Detach one line from a junction (the pair form of Unmerge): any two
@@ -2821,6 +2949,11 @@ impl Fuzzer {
         if second == first {
             second = (first + 1) % slots.len();
         }
+        let rest_keep = if self.rng.chance(50) {
+            0
+        } else {
+            1 + self.rng.below(4) as u8
+        };
         Some(Op::Detach {
             a: StationT {
                 station: *station,
@@ -2830,6 +2963,8 @@ impl Fuzzer {
                 station: *station,
                 line: slots[second].0,
             },
+            rest_keep,
+            answers: AnswersT::draw(&mut self.rng),
         })
     }
 
@@ -2837,6 +2972,7 @@ impl Fuzzer {
         if !targets.closures.is_empty() && self.rng.chance(40) {
             return Some(Op::RemoveClosure {
                 closure: targets.closures[self.rng.below(targets.closures.len())],
+                answers: AnswersT::draw(&mut self.rng),
             });
         }
         // Mostly two stations a closure may tie: in one component (a loop),
@@ -2866,7 +3002,13 @@ impl Fuzzer {
             ClosureStrategy::LeastSquaresWeighted,
             ClosureStrategy::ProportionalByLength,
         ]);
-        Some(Op::CreateClosure { a, b, strategy })
+        Some(Op::CreateClosure {
+            a,
+            b,
+            strategy,
+            keep: KeepT::draw(&mut self.rng),
+            answers: AnswersT::draw(&mut self.rng),
+        })
     }
 
     fn gen_zero_datum(&mut self, targets: &Targets) -> Option<Op> {
@@ -3104,6 +3246,116 @@ impl Fuzzer {
     }
 
     // -----------------------------------------------------------------------
+    // The dialogs' answers (RS 4.1, 4.2, 5.2), resolved on the live state
+    // -----------------------------------------------------------------------
+
+    /// The station at `slot` now, if any.
+    fn station_id_at(&self, slot: StationRef) -> Option<StationId> {
+        self.state
+            .with_project(|p| Ok::<_, String>(p.station_at(slot)))
+            .ok()
+            .flatten()
+    }
+
+    /// A merge's drawn keep and answers, read off the Merge dialog's preview
+    /// (`check_merge_connectivity`): its default keep, and the collisions of
+    /// the keep it resolves to. A pair the preview offers no merge for gets
+    /// the drawn keep as it is (the command refuses it as well).
+    fn merge_answers(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        keep: KeepT,
+        answers: AnswersT,
+    ) -> (Option<StationId>, Option<Vec<crate::models::StationRename>>) {
+        let preview = self
+            .state
+            .check_merge_connectivity(a, b)
+            .ok()
+            .and_then(|c| c.merge_preview);
+        let keep = match keep {
+            KeepT::Absent => None,
+            KeepT::Default => preview.as_ref().map(|m| m.default_keep),
+            KeepT::A => self.station_id_at(a),
+            KeepT::B => self.station_id_at(b),
+        };
+        let collisions = preview.as_ref().and_then(|m| {
+            let shown = keep.unwrap_or_else(|| {
+                // No keep: the command keeps the stationary station, the
+                // one the moving piece joins.
+                self.station_id_at(m.joins).unwrap_or_default()
+            });
+            m.keeps
+                .iter()
+                .find(|k| k.keep == shown)
+                .map(|k| &k.collisions)
+        });
+        let renames = match collisions {
+            Some(collisions) => answers.renames(collisions),
+            None => (answers != AnswersT::Absent).then(Vec::new),
+        };
+        (keep, renames)
+    }
+
+    /// A detach's drawn `rest_keep` and answers, read off the Detach dialog's
+    /// preview (`preview_detach_line`) for the slot `b` (its line comes off
+    /// the junction).
+    fn detach_answers(
+        &self,
+        b: StationRef,
+        rest_keep: u8,
+        answers: AnswersT,
+    ) -> (Option<StationId>, Option<Vec<crate::models::StationRename>>) {
+        let first = self.state.preview_detach_line(b, b.line_id, None).ok();
+        let rest_keep = match (&first, rest_keep) {
+            (_, 0) | (None, _) => None,
+            (Some(p), n) if !p.rest_choices.is_empty() => {
+                Some(p.rest_choices[usize::from(n - 1) % p.rest_choices.len()].id)
+            }
+            _ => None,
+        };
+        let preview = match rest_keep {
+            None => first,
+            Some(_) => self.state.preview_detach_line(b, b.line_id, rest_keep).ok(),
+        };
+        let renames = match &preview {
+            Some(p) => answers.renames(&p.collisions),
+            None => (answers != AnswersT::Absent).then(Vec::new),
+        };
+        (rest_keep, renames)
+    }
+
+    /// A closure's drawn keep and answers, read off the Create Loop Closure
+    /// dialog's preview (`preview_loop_closure`): its default (`None` is
+    /// "Keep both names"), and the collisions of the choice it resolves to.
+    /// `A` or `B` may be an end C1 or C2 refuses (the command refuses it).
+    fn closure_answers(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        strategy: ClosureStrategy,
+        keep: KeepT,
+        answers: AnswersT,
+    ) -> (Option<StationId>, Option<Vec<crate::models::StationRename>>) {
+        let preview = self.state.preview_loop_closure(a, b, strategy).ok();
+        let keep = match keep {
+            KeepT::Absent => None,
+            KeepT::Default => preview.as_ref().and_then(|n| n.default_keep),
+            KeepT::A => self.station_id_at(a),
+            KeepT::B => self.station_id_at(b),
+        };
+        let collisions = preview
+            .as_ref()
+            .and_then(|n| n.options.iter().find(|o| o.keep == keep))
+            .map(|o| &o.collisions);
+        let renames = match collisions {
+            Some(collisions) => answers.renames(collisions),
+            None => (answers != AnswersT::Absent).then(Vec::new),
+        };
+        (keep, renames)
+    }
+
+    // -----------------------------------------------------------------------
     // The one execution path
     // -----------------------------------------------------------------------
 
@@ -3259,53 +3511,79 @@ impl Fuzzer {
                     comment: comment.clone(),
                 })
             }
-            Op::Merge { a, b } => {
+            Op::Merge {
+                a,
+                b,
+                keep,
+                answers,
+            } => {
                 let (Some(station_a), Some(station_b)) =
                     (refs.station(*a, targets), refs.station(*b, targets))
                 else {
                     return refs.skip(&label);
                 };
+                let (keep, renames) = self.merge_answers(station_a, station_b, *keep, *answers);
                 self.state.execute(Command::MergeStations {
                     station_a,
                     station_b,
-                    keep: None,
-                    renames: None,
+                    keep,
+                    renames,
                 })
             }
-            Op::Detach { a, b } => {
+            Op::Detach {
+                a,
+                b,
+                rest_keep,
+                answers,
+            } => {
                 let (Some(station_a), Some(station_b)) =
                     (refs.station(*a, targets), refs.station(*b, targets))
                 else {
                     return refs.skip(&label);
                 };
+                let (rest_keep, renames) = self.detach_answers(station_b, *rest_keep, *answers);
                 self.state.execute(Command::UnmergeStationPair {
                     station_a,
                     station_b,
-                    renames: None,
-                    rest_keep: None,
+                    renames,
+                    rest_keep,
                 })
             }
-            Op::CreateClosure { a, b, strategy } => {
+            Op::CreateClosure {
+                a,
+                b,
+                strategy,
+                keep,
+                answers,
+            } => {
                 let (Some(station_a), Some(station_b)) =
                     (refs.station(*a, targets), refs.station(*b, targets))
                 else {
                     return refs.skip(&label);
                 };
+                let (keep, renames) =
+                    self.closure_answers(station_a, station_b, *strategy, *keep, *answers);
                 self.state.execute(Command::CreateLoopClosure {
                     station_a,
                     station_b,
                     closure_strategy: *strategy,
-                    keep: None,
-                    renames: None,
+                    keep,
+                    renames,
                 })
             }
-            Op::RemoveClosure { closure } => {
+            Op::RemoveClosure { closure, answers } => {
                 let Some(closure_id) = refs.closure(*closure, targets) else {
                     return refs.skip(&label);
                 };
+                let renames = self
+                    .state
+                    .preview_remove_loop_closure(closure_id)
+                    .ok()
+                    .and_then(|naming| answers.renames(&naming.collisions))
+                    .or_else(|| (*answers != AnswersT::Absent).then(Vec::new));
                 self.state.execute(Command::RemoveLoopClosure {
                     closure_id,
-                    renames: None,
+                    renames,
                 })
             }
             Op::SetZeroDatum {

@@ -273,6 +273,15 @@ mod ops_scenario_tests;
     reason = "test helpers: a refused setup step is a broken test"
 )]
 mod ops_test_helpers;
+#[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    reason = "a seeded fuzzer: its per-seed failure lines ARE its output, and a panic is how a \
+              gate test fails"
+)]
+mod rs_property_tests;
 
 pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, ShotSigmas, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};

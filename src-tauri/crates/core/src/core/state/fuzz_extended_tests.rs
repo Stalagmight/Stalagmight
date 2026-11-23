@@ -1096,7 +1096,13 @@ pub(super) fn expose_closure_shapes(fuzzer: &mut Fuzzer) {
             return;
         };
         fuzzer.step_apply(
-            &Op::CreateClosure { a, b, strategy },
+            &Op::CreateClosure {
+                a,
+                b,
+                strategy,
+                keep: super::KeepT::Absent,
+                answers: super::AnswersT::Absent,
+            },
             &mut Refs::identity(),
             &targets,
         );
@@ -1154,6 +1160,8 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
         a: ends[0],
         b: ends[2],
         strategy: ClosureStrategy::Batch,
+        keep: super::KeepT::Absent,
+        answers: super::AnswersT::Absent,
     };
     fuzzer.step_apply(
         &closure,

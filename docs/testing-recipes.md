@@ -35,6 +35,7 @@ windows below are how the wide runs are split.
 | `STALAGMIGHT_RUST_FUZZ_*` | the undo fuzzer |
 | `STALAGMIGHT_RUST_META_*`, `STALAGMIGHT_RUST_FORMAT_*`, `STALAGMIGHT_RUST_CRASH_*`, `STALAGMIGHT_RUST_ADV_*`, `STALAGMIGHT_RUST_CONC_*` | metamorphic, file-format, crash-timing, adversarial, concurrency |
 | `STALAGMIGHT_DATUM_FUZZ_*` | the multi-datum command-chain fuzzer |
+| `STALAGMIGHT_RUST_RS_*` | the kept-and-archived-stations property fuzzer (models crate) |
 | `STALAGMIGHT_RUST_MIGRATE_*`, `STALAGMIGHT_RUST_WIRE_*` | the migration property gate, the wire-equivalence sweep |
 | `STALAGMIGHT_MIGRATION_CORPUS`, `STALAGMIGHT_CORPUS_FILE`, `STALAGMIGHT_FUZZ_WALKS` | the corpus modes (real files, below) |
 | `FZ706_*` | the #706 file-churn fuzz (app crate) |
@@ -46,7 +47,9 @@ windows below are how the wide runs are split.
 drives random `AppState` commands - every command family, the recipes (split
 shot, delete and split, range deletes, Split Line Here, Combine Lines, create
 and merge, imports, Add .stalx) and batches - interleaved with undo, redo,
-multi-step jumps and save/close/reopen crossings. After every move it checks:
+multi-step jumps and save/close/reopen crossings. Merges, detaches and loop
+closures answer their dialogs (a keep, a `rest_keep`, the preview's renames or
+none), resolved through the app's own previews. After every move it checks:
 `validate()` is empty; at every recorded depth the canonical v2 bytes are the
 bytes recorded there; session shot ids are exact in the session and sound
 after a reopen; the counters never go down; the memoised raw layout and
@@ -162,6 +165,38 @@ STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
 | `STALAGMIGHT_RUST_META_CLOSURES` | put a real loop closure in the base project |
 | `STALAGMIGHT_RUST_META_VERBOSE` | print every divergence, not just the seed summary |
 
+### The kept-and-archived-stations properties
+
+`src-tauri/crates/models/src/survey/rs_property_tests.rs` checks the properties
+of the RS plan's section 12 on random synthetic surveys, at the model level:
+merges with either keep and every way of answering their collisions, detaches
+with a `rest_keep`, closures with an allowed keep, "Keep both names" or a
+refused keep, removals, deletes, splits, Combine, reverse, comments, datums and
+Add .stalx. After every step: the model validates, a refusal changes nothing,
+no record goes history while a shot next to its slot is still on a line, every
+comment shown before is shown after or named by the step's preview (its
+report, for a step without one), rule L never letters the identity shown on
+more lines, and a dialog's suggested answers are accepted. Per merge, keeping
+either station gives the same raw layout bit for bit and the same Computed View
+within 1e-6 m, and detaching the archived station's line brings it back; per
+closure, removing it brings back every shown identity. A failure line reads
+`seed N step M: <property id>: <step>: <detail>`.
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-models --lib rs_property
+
+STALAGMIGHT_RUST_RS_SEEDS=1 STALAGMIGHT_RUST_RS_FIRST_SEED=<n> STALAGMIGHT_RUST_RS_TRACE=1 \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-models --lib \
+  rs_property_sweep -- --ignored --nocapture
+```
+
+| env | effect |
+|---|---|
+| `STALAGMIGHT_RUST_RS_SEEDS` | seeds in the window (default 200) |
+| `STALAGMIGHT_RUST_RS_FIRST_SEED` | the window's first seed (default 1) |
+| `STALAGMIGHT_RUST_RS_STEPS` | steps per seed (default 50) |
+| `STALAGMIGHT_RUST_RS_TRACE` | `1` prints every step (a single-seed replay) |
+
 ### The file-format gate
 
 `src-tauri/crates/core/src/core/state/format_property_tests.rs` checks the file
@@ -241,8 +276,9 @@ another survey.
 
 `src-tauri/crates/core/src/core/state/adversarial_tests.rs` fuzzes the command
 layer's VALIDATION with hostile ids, slot indices, floats, strings and shots
-over 26 move kinds (the recipes and the topology commands included, and a
-`Batch` whose second sub-command is hostile). Three invariants: a rejected
+over 30 move kinds (the recipes and the topology commands included, a `Batch`
+whose second sub-command is hostile, and the merge, detach and closure
+dialogs' keeps and renames on live slots). Three invariants: a rejected
 command is a PERFECT no-op on every oracle, the unsaved-changes flag included;
 an accepted command leaves a valid survey; no command ever panics (every move
 runs inside `catch_unwind`, the panic site recorded by a hook).
