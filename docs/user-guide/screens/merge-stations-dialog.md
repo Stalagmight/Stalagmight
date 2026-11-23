@@ -20,6 +20,18 @@ name. Each station is now one pill with its line and name.
 4. **Cancel**: same as 1.
 5. **Merge**
 
+**Keep** chooses which station the merged station is: one choice per
+station, each a pill with its line, name and Station ID. The kept station is
+shown on every line through the merged station; the other is archived with
+its name and comment ("Side / 0 is archived with its comment"), and
+**Detach Line from Station** brings it back. The dialog preselects the
+station that holds a zero datum or GPS fix, else the one on the longest
+line. If a loop closure joins the two stations and hides one of them, the
+dialog keeps the one it shows and says why. If the kept name is already used
+by another station on a line it will be shown on, a row asks how to settle
+it: rename the other station (for example `12` to `12a`) or rename the kept
+one.
+
 When both pieces are already placed by their own
 [zero datum](../concepts/zero-datums-and-gps-fixes.md), a note under the
 stations says which piece moves, how far it moves to meet the other one, and
@@ -44,9 +56,10 @@ that its zero datum becomes a GPS fix.
   the two depths differ, it lists every depth reading the joined station
   averages, each with its line: "Depths 4.0 m (Upstream), 12.5 m (Main Line),
   12.5 m (Far Room) become 9.7 m".
-- Merged stations keep their own names and
-  [Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids):
-  `Main Line / 17` and `Side / 0` stay two stations at one point.
+- Which station is kept changes only names: the survey is placed the same
+  either way. The archived station keeps its own name and
+  [Station ID](../concepts/sections-shots-stations.md#names-and-station-ids)
+  inside the merged station, and the merge never joins two comments.
 - **Undo** reverses a merge, and brings back a loop closure it removed.
 
 The dialog does not open when:
