@@ -294,8 +294,9 @@ pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
 /// Returns `(closures given an archive, closures left archiving nothing by
 /// the normalisation)`, the second in list order.
 ///
-/// RS-M2: the normalisation is the shared model helper
-/// (`Project::normalise_closure_archives`); only the rule K pick is local.
+/// The normalisation is the model's shared helper
+/// (`Project::normalise_closure_archives`); only the rule K pick (per-line
+/// candidates, RS 2) is local.
 pub(crate) fn archive_closures(project: &mut Project) -> (usize, Vec<ClosureId>) {
     let topology = project.topology_arc();
     let picks: Vec<Option<ClosureEnd>> = project

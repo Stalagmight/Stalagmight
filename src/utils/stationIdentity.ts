@@ -167,8 +167,8 @@ function shownIdOfStation(station: Station): number {
  * end its closure's kept end), so every line that identity is shown on is
  * checked, and every slot showing it is its own (a same-line closure shows
  * one identity twice). On one line this is the old per-line check.
- * RS-UI: a foreign slot or a loop end asks whose station it is first
- * (`preview_station_identity`).
+ * A foreign slot or a loop end asks whose station it is first
+ * (`preview_station_identity`, `ShownIdentityPrompt`).
  */
 export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
   const data = src.surveyData;

@@ -434,8 +434,8 @@ export default function UnmergeStationsDialog() {
 /** What every line ends up with after the chosen detach (V-1): its name and
  *  Station ID there, and whether it comes off (with which lines) or stays.
  *  Under RS a line shows its node's one identity, so no line keeps an alias
- *  of its own; RS-UI adds what comes back, the lines that come off together
- *  and the collision rows (RS 7). */
+ *  of its own; what comes back and the lines that come off together are
+ *  `ComesBack`'s, the collision rows `CollisionRows`' (RS 7). */
 function DetachResults({ preview }: { preview: DetachLinePreview }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();

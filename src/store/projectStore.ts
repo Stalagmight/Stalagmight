@@ -433,7 +433,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    *  closure: absent keeps both names), `renames` the dialog's answers to
    *  the name collisions (absent: no dialog, rule L letters them and the
    *  result's `identities` says so), `restKeep` the record the remaining
-   *  junction shows after a detach. RS-UI's dialogs pass them. */
+   *  junction shows after a detach. The kept-station dialogs pass them. */
   mergeStations: (stationA: StationRef, stationB: StationRef, answers?: KeptStationAnswers) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;
   unmergeStationPair: (stationA: StationRef, stationB: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;

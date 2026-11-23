@@ -76,7 +76,8 @@ export type BatchCommand =
   | { type: 'untrack_import'; file_hashes: string[]; line_hashes: string[] }
   // Kept and archived stations (RS 4.1, 5.2): `keep` is the Station ID kept
   // (a closure without it keeps both names), `renames` the dialog's answers
-  // to the name collisions (absent: rule L letters them). RS-UI passes them.
+  // to the name collisions (absent: rule L letters them). The Merge and
+  // Create Loop Closure dialogs pass them.
   | { type: 'create_loop_closure'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy; keep?: number; renames?: StationRename[] }
   | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef; keep?: number; renames?: StationRename[] }
   | { type: 'move_line'; line_id: number; offset: Coordinates }

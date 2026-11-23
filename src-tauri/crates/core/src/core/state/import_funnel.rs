@@ -1677,23 +1677,7 @@ fn import_closure_keep(project: &Project, a: StationId, b: StationId) -> Option<
     let other = if first == a { b } else { a };
     [first, other]
         .into_iter()
-        .find(|&keep| closure_keep_allowed(project, a, b, keep))
-}
-
-/// Whether a closure between `a` and `b` may keep `keep` (RS 5.2): `keep` is
-/// one of the two, the end it archives is archived by no other closure (C1),
-/// and `keep` does not already show that end (C2). RS-M2 adds this rule to
-/// the model as `Project::closure_keep_allowed`; the integrator calls that
-/// one instead.
-fn closure_keep_allowed(project: &Project, a: StationId, b: StationId, keep: StationId) -> bool {
-    let archived = if keep == a {
-        b
-    } else if keep == b {
-        a
-    } else {
-        return false;
-    };
-    a != b && !project.is_closure_archived(archived) && project.shown(keep) != archived
+        .find(|&keep| project.closure_keep_allowed(a, b, keep))
 }
 
 /// Record the file hash and the line content hashes (duplicates skipped), so

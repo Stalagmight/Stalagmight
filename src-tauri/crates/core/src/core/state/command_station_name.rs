@@ -50,11 +50,13 @@ pub(super) fn apply(
 /// renamed (RS: a junction shows its kept station on every line, a loop end
 /// its closure's kept end), so every line it is shown on shows the new name.
 /// `preview_station_identity` says whose station it is and every line the
-/// rename changes; RS-UI asks first on a foreign slot or a loop end (RS 5.4). The name the slot already shows is a no-op before any other
-/// check, as 0.6.0's execute answered it (the pipeline then records nothing
-/// and keeps the redo branch). Otherwise the name must be non-empty, free of
-/// control and invisible formatting characters, and shown for no other
-/// station on a line that shows the renamed identity.
+/// rename changes; the data table and Edit Station ask through it first on
+/// a foreign slot or a loop end (RS 5.4). The name the slot already shows is
+/// a no-op before any other check, as 0.6.0's execute answered it (the
+/// pipeline then records nothing and keeps the redo branch). Otherwise the
+/// name must be non-empty, free of control and invisible formatting
+/// characters, and shown for no other station on a line that shows the
+/// renamed identity.
 fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Result<(), String> {
     let station = named_station(project, slot)?;
     let name = name.trim();

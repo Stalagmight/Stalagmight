@@ -63,7 +63,8 @@ enum Holder {
 
 /// The station Set Station Comment addresses, or 0.6.0's refusal: the
 /// identity the slot shows (RS 5.4: a loop end's comment is its closure's
-/// kept end's; RS-UI asks first whose station it is).
+/// kept end's; the data table and Edit Station ask first whose station it
+/// is, through `preview_station_identity`).
 fn commented_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
     let line = project
         .line(slot.line_id)
