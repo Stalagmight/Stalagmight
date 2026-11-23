@@ -10,9 +10,16 @@
 //!   not written.
 //! - A loop end a closure archives is written under its kept end's name and
 //!   Station ID. These files hold readings only (no coordinates, no
-//!   closures), so a shared name and id is how a name- or id-tying reader
-//!   ties the loop. A closure whose two ends are on one line lists that one
-//!   name and id twice on the line.
+//!   closures), so a shared Station ID is how a reader ties the loop. A
+//!   closure whose two ends are on one line lists that one name and id twice
+//!   on the line.
+//! - Names do not identify a station, even on one line: a junction slot
+//!   whose line's own station a merge archived (the app's dotted slot) and a
+//!   loop end show another station's name, which the line may also give a
+//!   station of its own (RS-FX5: Branch shows Main's 12 at its start and its
+//!   own 12 further on). The Station ID keeps every row unambiguous: the
+//!   dotted slot carries the kept station's id, the one its home line's rows
+//!   carry, and the line's own station its own.
 
 use std::io::Write;
 use std::path::Path;

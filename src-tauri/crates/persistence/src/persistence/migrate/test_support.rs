@@ -1196,16 +1196,20 @@ fn kept_stations(
         }
     }
 
-    // 4. Rule L.
+    // 4. Rule L (RS-FX5): a letter answers a name two native slots of a
+    // line showed (a foreign slot or a loop end counts for no uniqueness),
+    // and never goes to the station shown on more lines.
     let topology = p.topology();
-    let shown_on = |line: LineId| -> Vec<u32> {
+    let native = crate::models::survey::NativeSlots::of(p);
+    let native_on = |line: LineId| -> Vec<u32> {
         p.lines()
             .iter()
             .position(|l| l.id == line)
             .and_then(|position| topology.chain_at(position))
             .unwrap_or(&[])
             .iter()
-            .map(|&n| index.shown(n))
+            .copied()
+            .filter(|&n| native.is_native(n, line))
             .collect()
     };
     for (&id, original) in &original_name {
@@ -1218,21 +1222,18 @@ fn kept_stations(
         if index.is_archived(id) || !station.name.starts_with(original.as_str()) {
             return Err(format!("station {id} renamed, not lettered by rule L"));
         }
-        let lines = p.lines_shown_on(id);
-        if lines.len() < 2 {
-            continue;
-        }
-        let yielded = lines.iter().any(|&line| {
-            shown_on(line).into_iter().any(|other| {
+        let shown = p.lines_shown_on(id).len();
+        let yielded = p.native_lines_of_identity(id).into_iter().any(|line| {
+            native_on(line).into_iter().any(|other| {
                 other != id
                     && original_name.get(&other) == Some(original)
-                    && p.lines_shown_on(other).len() >= lines.len()
+                    && p.lines_shown_on(other).len() >= shown
             })
         });
         if !yielded {
             return Err(format!(
-                "station {id}, shown on {} lines, was lettered for one shown on fewer",
-                lines.len()
+                "station {id}, shown on {shown} lines, was lettered though no native station \
+                 of a line it is native on, shown on as many, showed its name"
             ));
         }
     }

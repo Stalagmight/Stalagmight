@@ -207,11 +207,12 @@ fn the_latest_alias_names_its_line_and_a_nameless_one_shows_the_station() {
 }
 
 /// Steps 3 and 4: each closure archives the end rule K does not keep (M1 on
-/// the 10 m Main, kept S2 on the 40 m Side), and a name the line then shows
-/// twice is lettered by rule L on the station shown on fewer lines: Main's
-/// own "S0" yields to the junction now shown as S0 on Main.
+/// the 10 m Main, kept S2 on the 40 m Side). Main's own station 0 is named
+/// "S0", and Main now shows the junction as S0 at its end with Side's dot:
+/// a foreign slot counts for no uniqueness (RS-FX5), so step 4 letters
+/// nothing and both S0s stay (before RS-FX5, Main's own S0 took "S0a").
 #[test]
-fn an_earlier_closure_archives_its_shorter_end_and_rule_l_letters_the_single_line_station() {
+fn an_earlier_closure_archives_its_shorter_end_and_a_dotted_name_letters_nothing() {
     let stations = [
         "[0,\"S0\"]",
         STATIONS[1],
@@ -228,8 +229,34 @@ fn an_earlier_closure_archives_its_shorter_end_and_rule_l_letters_the_single_lin
     assert_eq!(report.closures_archived, 1);
     assert_eq!(shown_at(p, 0, 1), "S2");
     assert_eq!(p.stations[&1].name, "M1", "its own name is kept, not shown");
-    assert_eq!(p.stations[&0].name, "S0a");
+    assert_eq!(p.stations[&0].name, "S0", "Main's own S0 keeps its name");
     assert_eq!(p.stations[&9].name, "S0", "the junction is never lettered");
+    assert_eq!(shown_at(p, 0, 0), "S0");
+    assert_eq!(shown_at(p, 0, 2), "S0");
+    assert!(!p.is_native_slot(crate::models::StationRef::new(0, 2)));
+    assert_eq!(report.lettered, 0);
+    assert!(report.changes.names.iter().all(|n| !n.lettered));
+}
+
+/// Step 4 still letters a name an earlier file showed twice natively on a
+/// line (U1's own N8 forbade it, so only a crafted file holds one): Main's
+/// stations 0 and 1 are both "M1". Rule L letters the higher Station ID
+/// (a tie on lines and on what the line showed), and the notice lists it.
+#[test]
+fn an_earlier_native_repeat_is_lettered() {
+    let stations = [
+        "[0,\"M1\"]",
+        STATIONS[1],
+        STATIONS[2],
+        STATIONS[3],
+        STATIONS[4],
+    ];
+    let mut decoded = open(&earlier_file("", &stations, &LINES, &[]));
+    let report = decoded.upgrade().unwrap();
+    let p = &decoded.project;
+    assert_eq!(p.validate(), Vec::new());
+    assert_eq!(p.stations[&0].name, "M1");
+    assert_eq!(p.stations[&1].name, "M1a");
     assert_eq!(report.lettered, 1);
     let lettered: Vec<_> = report
         .changes
@@ -238,7 +265,7 @@ fn an_earlier_closure_archives_its_shorter_end_and_rule_l_letters_the_single_lin
         .filter(|n| n.lettered)
         .map(|n| (n.line.as_str(), n.from.as_str(), n.to.as_str()))
         .collect();
-    assert_eq!(lettered, [("Main", "S0", "S0a")]);
+    assert_eq!(lettered, [("Main", "M1", "M1a")]);
 }
 
 /// Step 3 never archives the other end (U-P2-11): a second closure whose

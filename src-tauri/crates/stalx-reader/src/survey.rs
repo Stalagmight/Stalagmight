@@ -116,10 +116,17 @@ pub struct Survey {
     /// recorded), at every position, as the app shows them: a junction's one
     /// name is listed once per section it is on, and a loop end a closure
     /// archives shows the name of the station in [`Survey::shown_as`]. On
-    /// each section, positions showing different stations have different
-    /// names; a closure whose two ends are on one section shows that one name
-    /// twice there. Not unique across the survey: MNemo numbers restart at 0
-    /// in every section.
+    /// each section, the positions showing a section's own station have
+    /// different names; a junction position showing a station another
+    /// section keeps (a merge archived this section's own station there; the
+    /// app draws it with that section's colour dot) and a loop end show
+    /// another station's name and count for no uniqueness, so a section may
+    /// show one name at such a position and again at a station of its own
+    /// (Branch shows Main's 12 at its start and its own 12 further on). A
+    /// closure whose two ends are on one section shows that one name twice
+    /// there. Not unique across the survey: MNemo numbers restart at 0 in
+    /// every section. Tie stations by [`Section::station_ids`], never by
+    /// name.
     pub station_names: Vec<StationName>,
     /// The loop ends a closure archives: each one's Station ID mapped to the
     /// Station ID of the station the app shows in its place (the closure's

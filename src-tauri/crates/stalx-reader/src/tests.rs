@@ -142,23 +142,42 @@ pub(super) fn name_at(survey: &Survey, at: StationId) -> String {
         .unwrap_or_default()
 }
 
-/// On every section, positions that show different stations have different
-/// names (the app's invariant N8): a junction shows its one name on every
-/// section through it, a loop end a closure archives shows the name of the
-/// station `shown_as` maps it to, and only a station shown twice on one
-/// section (a closure with both ends on it) repeats a name there.
+/// On every section, positions that show a station of the section's own
+/// have different names (the app's invariant N8, which since RS-FX5 counts
+/// native slots only): a junction shows its one name on every section
+/// through it, a loop end a closure archives shows the name of the station
+/// `shown_as` maps it to, and only a station shown twice on one section (a
+/// closure with both ends on it) repeats a name there. The reader does not
+/// say which junction position is the dotted one (another section's
+/// station), so junction positions and loop ends are left out of the check.
 pub(super) fn assert_names_unique_per_section(survey: &Survey) {
     let shown_at = |at: StationId| {
         let section = survey.sections.iter().find(|s| s.id == at.section_id)?;
         let id = *section.station_ids.get(at.index as usize)?;
         Some(survey.shown_as.get(&id).copied().unwrap_or(id))
     };
+    let mut sections_of: std::collections::HashMap<u32, std::collections::BTreeSet<u32>> =
+        std::collections::HashMap::new();
+    for section in &survey.sections {
+        for &id in &section.station_ids {
+            sections_of.entry(id).or_default().insert(section.id);
+        }
+    }
+    let exempt = |at: StationId| {
+        let Some(section) = survey.sections.iter().find(|s| s.id == at.section_id) else {
+            return true;
+        };
+        let Some(&id) = section.station_ids.get(at.index as usize) else {
+            return true;
+        };
+        survey.shown_as.contains_key(&id) || sections_of.get(&id).is_some_and(|s| s.len() > 1)
+    };
     for section in &survey.sections {
         let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
         for name in survey
             .station_names
             .iter()
-            .filter(|n| n.station.section_id == section.id)
+            .filter(|n| n.station.section_id == section.id && !exempt(n.station))
         {
             let Some(shown) = shown_at(name.station) else {
                 continue;

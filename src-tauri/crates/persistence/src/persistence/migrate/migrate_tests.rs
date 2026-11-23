@@ -188,7 +188,9 @@ fn a_merge_keeps_the_member_on_the_longest_line() {
 /// Rule K decides, not the map's label: Side is the longer line, so the
 /// junction takes Side:0's identity (its Station ID, name and comment) and
 /// Main:2's own identity is the record naming Main. Ids name the identities
-/// they named in 0.6.0, and Main's own "0" yields to the junction (rule L).
+/// they named in 0.6.0. Main then shows the junction as "0" with Side's dot
+/// beside its own "0", which keeps its name (RS-FX5: a foreign slot counts
+/// for no uniqueness).
 #[test]
 fn a_merge_on_a_longer_side_line_keeps_that_member() {
     let mut p = project();
@@ -220,9 +222,9 @@ fn a_merge_on_a_longer_side_line_keeps_that_member() {
         .iter()
         .map(|c| (c.line.as_str(), c.from.as_str(), c.to.as_str()))
         .collect();
-    // Main now shows the junction as "0" too, so Main's own "0" (one line)
-    // takes the letter.
-    assert_eq!(names, [("Main", "0", "0a"), ("Main", "Junction", "0")]);
+    // Main now shows the junction as "0" too (dotted); Main's own "0" stays.
+    assert_eq!(names, [("Main", "Junction", "0")]);
+    assert_eq!(out.extras.changes.lettered(), 0);
     assert_eq!(out.extras.changes.comments_hidden[0].line, "Main");
 }
 
@@ -252,8 +254,9 @@ fn a_hidden_comment_is_declared_even_when_the_names_match() {
 
 /// RS 8.3: Main:2 is named "2" and so is Side:2. Once Side:0 joins Main:2 on
 /// the longer Main, the junction shows "2" on both lines and Side:0 is a
-/// record naming Side, so Side's own "2" (shown on one line) takes the
-/// letter, and the notice lists both slots.
+/// record naming Side. Side shows the junction's "2" with Main's dot, and
+/// its own "2" keeps its name beside it (RS-FX5): the notice lists the one
+/// slot shown as another station and no letter.
 #[test]
 fn a_junction_shows_its_kept_name_on_every_line() {
     let mut p = project();
@@ -270,13 +273,13 @@ fn a_junction_shows_its_kept_name_on_every_line() {
     assert_eq!(out.project.shown_name(j), Some("2"));
     assert_eq!(
         out.project.stations[&station(&out.project, side, 2)].name,
-        "2a"
+        "2"
     );
     assert_eq!(out.project.validate(), Vec::new());
     let changes = &out.extras.changes;
     assert_eq!(out.report.names_changed, changes.names.len());
-    assert_eq!((changes.shown_as_other(), changes.lettered()), (1, 1));
-    assert_eq!(out.report.stations_renamed, 1);
+    assert_eq!((changes.shown_as_other(), changes.lettered()), (1, 0));
+    assert_eq!(out.report.stations_renamed, 0);
 }
 
 /// A merged member whose Station ID is unusable (out of range: the frozen
@@ -314,12 +317,13 @@ fn a_member_without_a_usable_id_is_archived_under_a_fresh_id() {
     assert_eq!(out.project.shown_name(j), Some("2"));
 }
 
-/// Rule L, not chain order: Side's first station is named "5" and Side joins
-/// Main:5 further along. Chain order would letter the later slot, the
-/// junction; rule L letters the station shown on fewer lines, Side's own
-/// "5", and the junction keeps its name on both lines.
+/// RS-FX5: Side's first station is named "5" and Side joins Main:5 further
+/// along, on the longer Main. Side shows the junction "5" with Main's dot
+/// beside its own "5": a foreign slot counts for no uniqueness, so nothing
+/// is lettered (before RS-FX5, rule L lettered Side's own "5", never the
+/// junction, which chain order would have).
 #[test]
-fn rule_l_never_letters_a_junction_for_a_station_of_one_line() {
+fn a_dotted_junction_letters_nothing() {
     let mut p = project();
     let main = line(&mut p, "Main", &[(90.0, 10.0); 6]);
     let side = line(&mut p, "Side", &[(180.0, 5.0), (190.0, 5.0), (200.0, 5.0)]);
@@ -331,9 +335,45 @@ fn rule_l_never_letters_a_junction_for_a_station_of_one_line() {
     assert_eq!(out.project.stations[&j].name, "5");
     assert_eq!(
         out.project.stations[&station(&out.project, side, 0)].name,
-        "5a"
+        "5"
     );
-    assert_eq!(out.report.stations_renamed, 1);
+    assert!(!out
+        .project
+        .is_native_slot(crate::models::StationRef::new(side, 2)));
+    assert_eq!(out.report.stations_renamed, 0);
+    assert_eq!(out.project.validate(), Vec::new());
+}
+
+/// RS-FX5, a native repeat: a crafted 0.6.0 file naming two stations of a
+/// line alike (0.6.0's own rename refused it). The 0.6.0 load letters one of
+/// them as 0.6.0 showed it, so the line already shows every name once by
+/// its own stations; the migration keeps what 0.6.0 showed and its rule L
+/// has nothing left to letter (on a migrated survey it fires only where
+/// native slots repeat a name, which a 0.6.0 line cannot).
+#[test]
+fn a_name_0_6_0_repeated_is_shown_as_0_6_0_showed_it() {
+    let mut p = project();
+    let main = line(&mut p, "Main", &[(90.0, 10.0); 4]);
+    let key = p.key_for_ref(at(main, 3)).unwrap();
+    p.station_names.insert(key, "1".to_string());
+    let (legacy, out) = migrated(&p);
+    let ids = &legacy.project.station_ids;
+    let id_of = |sr| ids[&legacy.project.key_for_ref(sr).unwrap()];
+    for index in [1, 3] {
+        let shown_by_0_6_0 = legacy.project.station_name_at(at(main, index)).unwrap();
+        assert_eq!(
+            out.project.stations[&id_of(at(main, index))].name,
+            shown_by_0_6_0
+        );
+    }
+    let names: Vec<&str> = [1, 3]
+        .iter()
+        .map(|&i| out.project.stations[&id_of(at(main, i))].name.as_str())
+        .collect();
+    assert_ne!(names[0], names[1], "{names:?}");
+    assert_eq!(out.report.stations_renamed, 0);
+    assert_eq!(out.extras.changes.lettered(), 0);
+    assert_eq!(out.project.validate(), Vec::new());
 }
 
 /// RS 8.3: a 0.6.0 loop closure shows its two ends as one station: the end
