@@ -451,9 +451,11 @@ impl Project {
     /// a node a loop closure archives), or the identity a restore moved the
     /// comment to (RS 4.3) when that one is shown nowhere either. A comment
     /// that is gone (its station deleted, or the text replaced) or that
-    /// another identity shows now and did not before (a restore moved it,
-    /// or Combine's comment pick took or joined it) is not hidden. By
-    /// Station ID.
+    /// another identity shows now and did not hold before (a restore moved
+    /// it, or Combine's comment pick took or joined it) is not hidden. An
+    /// identity that shows the same text as a comment it already held (a
+    /// record the op gave back, RS-FX7) moved nothing: the comment is still
+    /// hidden. By Station ID.
     pub fn hidden_comments(&self, before: &Project) -> Vec<HiddenComment> {
         let shown_before = before.shown_comments();
         if shown_before.is_empty() {
@@ -468,8 +470,8 @@ impl Project {
             let shown_elsewhere = shown_after.iter().any(|(&other, &now)| {
                 other != id
                     && holds_text(now, text)
-                    && shown_before
-                        .get(&other)
+                    && before
+                        .stored_comment(other)
                         .is_none_or(|was| !holds_text(was, text))
             });
             if shown_elsewhere {

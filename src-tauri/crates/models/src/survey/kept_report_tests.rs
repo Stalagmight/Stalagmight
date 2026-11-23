@@ -175,6 +175,49 @@ fn the_detach_preview_names_a_comment_its_promotion_hides() {
     assert_eq!(wire.comments_hidden[0].comment.as_deref(), Some("x3 note"));
 }
 
+/// Farm 647783847b78 again (package RS-FX7; seeds 400167128 and 480011587,
+/// "detach line"): the same promotion, but the station the detach gives
+/// back carries the very text of the comment the promotion hides (two
+/// "sump" notes, or a survey added twice with Add .stalx). The diff took
+/// the restored station's own comment, shown now and not before, for the
+/// hidden one moved there, so neither the preview nor the notice named it.
+/// A comment moved only when the identity showing it now did not hold it
+/// before. Injection: compare with `shown_before` instead of
+/// `before.stored_comment` in `Project::hidden_comments`.
+#[test]
+fn a_restored_station_with_the_same_text_does_not_hide_a_hidden_comment() {
+    let (mut p, x, y, [x1, x3, y1]) = junction_with_a_bridge();
+    let y0 = at(&p, y, 0);
+    p.set_shown_name(y0, "3".to_string());
+    comment(&mut p, x3, "sump");
+    let record = p
+        .station_mut(x1)
+        .unwrap()
+        .archived
+        .iter_mut()
+        .find(|r| r.id == y1)
+        .unwrap();
+    record.comment = Some("sump".to_string());
+    assert_valid(&p);
+    let naming = p.detach_naming(x1, x, None).unwrap();
+    let mut q = p.clone();
+    let out = q.detach_line(x1, x, &[], None).unwrap();
+    assert_valid(&q);
+    assert_eq!(out.sweep.promoted.len(), 1);
+    assert_eq!(
+        out.sweep.promoted[0].kept, y1,
+        "Y's 1 is shown, with its note"
+    );
+    assert!(q.is_archived_id(x3), "X's 3 is archived, with its note");
+    let hidden: Vec<(StationId, StationId, &str)> = naming
+        .comments_hidden
+        .iter()
+        .map(|h| (h.station, h.held_by, h.comment.as_str()))
+        .collect();
+    assert_eq!(hidden, [(x3, x3, "sump")]);
+    assert_eq!(out.identities.hidden, naming.comments_hidden);
+}
+
 /// Farm e546f002311b (seeds 400000326, 400002173, "detach line"): the
 /// detach shows Y's own 1 next to a 1 Y already had, but the promotion its
 /// sweep makes folds that 1 into X's 3, so no collision is left and the

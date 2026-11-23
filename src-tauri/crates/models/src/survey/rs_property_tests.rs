@@ -1622,16 +1622,24 @@ fn rs_properties_hold_on_the_default_seeds() {
     }
 }
 
-/// The farm's first round on the RS integration (package RS-FX1): each seed
+/// The farm's seeds on the RS integration (packages RS-FX1, RS-FX7): each seed
 /// failed with the signature in its comment, at the steps the farm ran it
 /// with (`rs-props` 50, `rs-props-long` 200). Pinned so they stay fixed;
 /// the hand-built tests in `kept_report_tests` pin each mechanism.
-const FARM_SEEDS: [(u32, usize); 9] = [
+const FARM_SEEDS: [(u32, usize); 14] = [
     // 4909b48e2ea4 rs-comment, merge: a loop end merged keeping the other
     // station hid the kept one (model review finding 1).
     (480_000_039, 200),
     // 647783847b78 rs-comment, detach line: a promotion its sweep made.
     (480_000_033, 200),
+    // 647783847b78 again (RS-FX7): the station the detach gave back holds
+    // the same text as the comment the promotion hid, which the diff took
+    // for a move. Every seed of that signature on 51b5191db.
+    (400_146_250, 50),
+    (400_167_128, 50),
+    (480_010_813, 200),
+    (480_011_346, 200),
+    (480_011_587, 200),
     // 7a5ed348b262 rs-comment, delete range: the Split choice's promotion.
     (480_000_143, 200),
     // 56ce8638669d rs-comment, delete shot: a promotion kept a loop end's
