@@ -223,7 +223,7 @@ test.describe('Kept and archived stations (RS)', () => {
       `Rename the station that comes back (Side / 0, Station ID ${sideId * 100_000}) to 0a`,
     );
     await expect(page.getByTestId('unmerge-stations-collision-0-alternative').locator('..')).toHaveText(
-      `Rename Side's own 0 (Station ID ${sideId * 100_000 + 1}) to 0a`,
+      `Rename the 0 that is on Side now (Station ID ${sideId * 100_000 + 1}) to 0a`,
     );
     // RS-FX6, P2-2: the lead follows the answer: rule L's letter first, then
     // the station's own name once the other one takes the letter.

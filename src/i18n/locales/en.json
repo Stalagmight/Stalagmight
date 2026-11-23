@@ -1910,7 +1910,7 @@
       "rename": "Rename {{station}} (Station ID {{id}}) to {{to}}",
       "renameComesBack": "Rename the station that comes back ({{station}}, Station ID {{id}}) to {{to}}",
       "renameKept": "Rename the kept station ({{station}}, Station ID {{id}}) to {{to}}",
-      "renameOwn": "Rename {{line}}'s own {{name}} (Station ID {{id}}) to {{to}}",
+      "renameOwn": "Rename the {{name}} that is on {{line}} now (Station ID {{id}}) to {{to}}",
       "shownAsThroughClosure": "shown as {{station}} through a loop closure",
       "editingDisabled": "Editing is disabled in the current view.",
       "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."

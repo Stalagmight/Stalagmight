@@ -102,7 +102,7 @@ describe('Remove Closure under RS', () => {
     const letter = await screen.findByTestId('remove-closure-collision-0-letter');
     expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 17, Station ID 17) to 17a');
     expect(screen.getByTestId('remove-closure-collision-0-alternative').parentElement).toHaveTextContent(
-      "Rename Side's own 17 (Station ID 71) to 17a",
+      "Rename the 17 that is on Side now (Station ID 71) to 17a",
     );
   });
 

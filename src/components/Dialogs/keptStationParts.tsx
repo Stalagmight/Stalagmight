@@ -11,7 +11,7 @@
  *   lettered instead (usually the kept one). The two stations share a name,
  *   so each answer names the station it renames by its role and Station ID
  *   (RS-FX6, P1-1): "Rename the station that comes back (Side / 0, Station
- *   ID 15) to 0a", "Rename Side's own 0 (Station ID 29) to 0a". The command
+ *   ID 15) to 0a", "Rename the 0 that is on Side now (Station ID 29) to 0a". The command
  *   then carries the answers as `renames`, and refuses a collision left
  *   unanswered, so a dialog that has a preview always sends them (an empty
  *   list included).
@@ -160,8 +160,9 @@ export function answeredName(
  * One answer's words (RS-FX6, P1-1): both stations of a collision have one
  * name, so each answer says which it renames, by its role and Station ID.
  * The dialog's own station by its role ("the station that comes back", "the
- * kept station"), a station of the collision's line by that line ("Side's
- * own 0"), any other by its home line.
+ * kept station"), a station of the collision's line as the one on that line
+ * now ("the 0 that is on Side now": "Side's own 0" fit the station coming
+ * back too, RS-FX8 N5), any other by its home line.
  */
 export function collisionAnswerText(
   suggestion: RenameSuggestion,

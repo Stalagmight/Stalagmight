@@ -129,7 +129,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(row).toHaveTextContent('On Side, 12 would name two stations');
     expect(screen.getByTestId('merge-collision-0-letter')).toBeChecked();
     expect(screen.getByTestId('merge-collision-0-letter').parentElement).toHaveTextContent(
-      "Rename Side's own 12 (Station ID 41) to 12a",
+      "Rename the 12 that is on Side now (Station ID 41) to 12a",
     );
     expect(screen.getByTestId('merge-collision-0-alternative').parentElement).toHaveTextContent(
       'Rename the kept station (Main / 12, Station ID 12) to 12a',
