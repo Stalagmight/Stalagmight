@@ -703,3 +703,56 @@ fn an_upgrade_asks_its_deadline_inside_its_steps() {
     let report = super::upgrade::run(&mut whole, &|| Ok(())).unwrap();
     assert_eq!(report.changes.shown_as_other(), 2_000);
 }
+
+/// Pre-PR review (RS-FX9 item 3): `records` records of station 0 all name
+/// line 1 (A3 allows one). Validation finds `records - 1` repeats, and
+/// salvage repaired each by walking the station's whole record list, so
+/// 200,000 records cost about 4e10 record visits; salvage has no deadline.
+/// The repeats are now grouped per station and settled in one walk of its
+/// records, each repeat still reported. Injection: on 3b6bdf77e this test
+/// takes about a minute here (58 s) against its 10 s bound; it takes about
+/// a second.
+#[test]
+fn salvaging_many_records_naming_one_line_is_linear() {
+    const RECORDS: u64 = 200_000;
+    let mut t = format!(
+        "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,{REQUIRES},\n\
+         \"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+         \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",\
+         \"temperature\":\"degC\"}},\n\
+         \"project\":{{\"name\":\"x\",\"created\":\"2025-01-01T00:00:00Z\",\
+         \"modified\":\"2025-01-01T00:00:00Z\"}},\n\"stations\":[\n[0,\"0\",{{\"archived\":["
+    );
+    for i in 0..RECORDS {
+        let sep = if i == 0 { "" } else { "," };
+        let _ = write!(
+            t,
+            "{sep}{{\"id\":{},\"name\":\"r{i}\",\"lines\":[1]}}",
+            10 + i
+        );
+    }
+    let _ = write!(
+        t,
+        "]}}],\n[1,\"1\"],\n[2,\"2\"]\n],\n\
+         \"counters\":{{\"station\":{},\"closure\":0,\"section\":0}},\n\"lines\":[\n\
+         {{\"id\":0,\"color\":\"#000\",\"start\":0}},\n[\"u0\",1,1.0,0.0,0.0,0.0,0.0],\n\
+         {{\"id\":1,\"color\":\"#000\",\"start\":0}},\n[\"u1\",2,1.0,90.0,0.0,0.0,0.0]\n],\n\
+         \"placements\":[{{\"station\":0,\"x\":0.0,\"y\":0.0}}],\n\"end\":true}}\n",
+        10 + RECORDS
+    );
+    let started = Instant::now();
+    let (project, report) = decode_salvage(t.as_bytes());
+    let elapsed = started.elapsed();
+    let project = project.unwrap();
+    assert!(project.validate().is_empty());
+    let unnamed = report
+        .repairs
+        .iter()
+        .filter(|r| matches!(r, super::Repair::UnnamedArchivedLine { line: 1, .. }))
+        .count();
+    assert_eq!(unnamed, RECORDS as usize - 1);
+    let records = &project.stations[&0].archived;
+    assert_eq!(records[0].lines, [1], "the first record keeps the line");
+    assert!(records[1..].iter().all(|r| r.lines.is_empty()));
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+}
