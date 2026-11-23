@@ -69,6 +69,7 @@ mod ops_closures;
 mod ops_datums;
 mod ops_detach;
 mod ops_merge;
+mod ops_merge_placed;
 mod ops_move;
 mod sweep;
 
@@ -226,6 +227,12 @@ mod ops_datums_tests;
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
 mod ops_detach_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod ops_merge_placed_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
