@@ -142,12 +142,14 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
     }
 }
 
-/// A comment the file gives the station a line is placed on is joined to the
-/// junction's own (the merge rule), never silently replacing it; the
-/// junction keeps its name and its id, and the file's own name for it is kept
-/// as an alias on the branch under a retired id (I-import-export-4).
+/// A line placed onto a station keeps that station (RS 4.1): the junction
+/// keeps its name, its id and its own comment, and the file's own station
+/// there (its name "Z9" and its comment) is archived in the junction as a
+/// record naming the branch, under a fresh Station ID. Comments are never
+/// joined. The receipt says so in a note (not a warning), and a detach gives
+/// the branch the file's station back, comment included.
 #[test]
-fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
+fn a_placement_onto_a_station_archives_the_files_station_and_its_comment() {
     let state = import(config(false, &[], &[(1, "first visit")]));
     let project = state.get_project_state().unwrap();
     let main = project.lines()[0].id;
@@ -172,7 +174,8 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     assert_eq!(station.name, "1", "the junction keeps its name");
     assert_eq!(
         station.comment.as_deref(),
-        Some("first visit\n\nsecond visit")
+        Some("first visit"),
+        "and its own comment: comments are never joined"
     );
     let branch = &project.lines()[1];
     assert_eq!(branch.start, junction, "the branch starts ON the station");
@@ -180,15 +183,12 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
         .stations()
         .map(|s| project.shown_name(s).unwrap().to_string())
         .collect();
-    // The file's name for the junction is not the junction's: it is
-    // archived (a record naming the branch, RS 4.1), the branch shows the
-    // kept junction "1", and the branch's own "1" takes the letter. RS-X:
-    // the record carries the file's comment, and comments are not joined.
+    // The branch shows the kept junction "1", so its own "1" takes the letter.
     assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
-    assert_eq!(project.shown_name(junction), Some("1"));
     let archived = &project.station(junction).unwrap().archived;
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].name, "Z9", "the file's name");
+    assert_eq!(archived[0].comment.as_deref(), Some("second visit"));
     assert_eq!(archived[0].lines, vec![branch.id], "the branch's own");
     assert!(
         project.station(archived[0].id).is_none()
@@ -196,10 +196,23 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
         "a retired id, never a live one"
     );
     assert!(project.validate().is_empty());
-    // "1a" is a seed, not a name the file gave: nothing to report.
+    let receipt = result.import_receipt.unwrap();
+    // "1a" is a seed, not a name the file gave: nothing to warn about.
+    assert_eq!(receipt.warnings, Vec::<String>::new());
     assert_eq!(
-        result.import_receipt.unwrap().warnings,
-        Vec::<String>::new()
+        receipt.info,
+        vec![
+            "Line \"B01\" joins station \"A01 / 1\" and shows it there; the file's own \
+             station \"Z9\" there, with its comment, is archived: Detach Line from Station \
+             brings it back"
+                .to_string()
+        ]
+    );
+    let naming = project.detach_naming(junction, branch.id, None).unwrap();
+    assert_eq!(
+        (naming.id, naming.name.as_str(), naming.comment.as_deref()),
+        (archived[0].id, "Z9", Some("second visit")),
+        "a detach gives the branch the file's station back"
     );
 }
 
@@ -247,7 +260,9 @@ fn imported_external_ids_land_on_their_stations_mirrored_and_undo_with_the_impor
 }
 
 /// A line placed onto a station of an earlier line of the batch: the
-/// junction keeps the id its own line gave it.
+/// junction keeps the id its own line gave it (`FromImporting` keeps the
+/// target line's station, RS 4.1), and the file's other id for it is its
+/// archived station's, under the junction's name (the file gives none).
 #[test]
 fn a_joined_station_keeps_the_external_id_it_already_has() {
     let mut first = config(false, &[], &[]);
@@ -284,6 +299,18 @@ fn a_joined_station_keeps_the_external_id_it_already_has() {
         "the junction keeps A4"
     );
     assert_eq!(ext(b.station(1).unwrap()), Some("B2".to_string()));
+    let records = &project.station(b.start).unwrap().archived;
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        (
+            records[0].name.as_str(),
+            records[0].external.as_deref(),
+            records[0].comment.as_deref(),
+            records[0].lines.clone()
+        ),
+        ("3", Some("B1"), None, vec![b.id])
+    );
+    assert!(project.validate().is_empty());
 }
 
 // ----- a file's own names at a junction (I-import-export-4) -------------------

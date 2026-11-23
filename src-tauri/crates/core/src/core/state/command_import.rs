@@ -81,10 +81,13 @@ fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt
             if dropped == 1 { "was" } else { "were" }
         ));
     }
-    // A station whose file name was taken by the junction its line joins:
-    // the user matches names against the slates, so a suffix is said. Last,
-    // so a file joining many lines cannot push the summaries above out of
-    // the capped list.
+    // What changed a station the user knows or names (RS 9): a file
+    // station a join could not keep, a project station a loop closure now
+    // shows as another, a letter a closure made. Then a station whose file
+    // name was taken by the junction its line joins: the user matches names
+    // against the slates, so a suffix is said. Last, so a file joining many
+    // lines cannot push the summaries above out of the capped list.
+    warnings.extend(outcome.identity_warnings.iter().cloned());
     warnings.extend(outcome.renamed_stations.iter().cloned());
     // "and N more": naming only the first zero-datum line without saying so
     // would read as a claim that it was the only one.
@@ -105,7 +108,10 @@ fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt
         closures_created: outcome.closures_created,
         unit_conversion: None,
         warnings,
-        info: Vec::new(),
+        // The file's stations archived at joins and the closures' archives
+        // (RS 4.1, 9): what the import did by design, so notes that never
+        // turn a clean receipt into a dialog.
+        info: outcome.identity_notes.clone(),
         zero_datum_created,
         // What the file lost has its own field, which the dialog shows in
         // full above the warnings: it is what the user most needs to read.
