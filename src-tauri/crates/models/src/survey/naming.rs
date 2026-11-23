@@ -17,7 +17,7 @@
 //! an identity shown on more lines than the one it collides with is never
 //! lettered, and chain order never decides.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::station_naming::name_with_free_letter;
 use crate::{LineId, StationId, StationRef};
@@ -248,6 +248,10 @@ impl Project {
             return Vec::new();
         }
         let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
+        // Each pair once (a same-line closure shows one identity at two
+        // slots), by a set: a crafted line of one name repeated by every
+        // station must not cost a scan of the repeats per slot.
+        let mut reported: HashSet<(StationId, StationId)> = HashSet::new();
         let mut out: Vec<(&str, StationId, StationId)> = Vec::new();
         for node in chain {
             let Some((name, identity)) = named(node) else {
@@ -255,7 +259,7 @@ impl Project {
             };
             match seen.get(name) {
                 Some(&first) if first != identity => {
-                    if !out.contains(&(name, first, identity)) {
+                    if reported.insert((first, identity)) {
                         out.push((name, first, identity));
                     }
                 }

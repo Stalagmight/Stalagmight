@@ -232,3 +232,56 @@ fn archived_ids_and_counters_stay_in_range() {
         "{report:?}"
     );
 }
+
+/// `text` (a file this build wrote) with every station row renamed by
+/// `name` (its Station ID to its new name), and, with `earlier`, without the
+/// kept-stations feature, as an earlier build of version 2 wrote it.
+fn rewritten(text: &str, earlier: bool, name: impl Fn(u64) -> String) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_stations = false;
+    for row in text.split_inclusive('\n') {
+        if row.starts_with("\"stations\":[") {
+            in_stations = true;
+        } else if in_stations && row.starts_with(']') {
+            in_stations = false;
+        } else if in_stations {
+            let id: u64 = row[1..row.find(',').unwrap()].parse().unwrap();
+            let comma = if row.trim_end().ends_with("],") { "," } else { "" };
+            let _ = writeln!(out, "[{id},{}]{comma}", serde_json::to_string(&name(id)).unwrap());
+            continue;
+        }
+        out.push_str(row);
+    }
+    if earlier {
+        out = out.replacen(REQUIRES, "\"requires\":[]", 1);
+    }
+    out
+}
+
+fn repeats(violations: &[Violation]) -> usize {
+    violations
+        .iter()
+        .filter(|v| matches!(v, Violation::DuplicateStationName { .. }))
+        .count()
+}
+
+/// Data review finding data-1: N8 found each repeat of a line once by a
+/// linear scan of the repeats found so far, so one long line of stations
+/// that all share a name took about 5e9 comparisons before the file was
+/// refused as damaged. Injection: the scan (`out.contains`) back in
+/// `line_name_repeats` takes this test far past its bound.
+#[test]
+fn a_long_line_of_one_repeated_name_is_refused_in_linear_time() {
+    let bytes = encode(&one_line(MAX_SHOTS_PER_LINE), &Extras::default(), Mode::Normal).unwrap();
+    let text = rewritten(text_of(&bytes), false, |_| "x".to_string());
+    let started = Instant::now();
+    let refused = decode(text.as_bytes(), &DecodeOptions::default());
+    let elapsed = started.elapsed();
+    match refused {
+        Err(DecodeError::Invalid { violations }) => {
+            assert_eq!(repeats(&violations), MAX_SHOTS_PER_LINE);
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+}
