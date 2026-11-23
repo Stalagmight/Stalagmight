@@ -50,17 +50,32 @@ export function speleoLockLostMessage(
  * sees an edit session to lose.
  */
 let ownReleaseEpoch = 0;
-let ownReleasesInFlight = 0;
+/** Per project: releases of it in flight, and the epoch it was last touched at. */
+const ownReleases = new Map<string, { inFlight: number; touched: number }>();
+/** The key of a release whose project is not known: it overlaps every refresh. */
+const ANY_PROJECT = '';
 
-/** Run `work`, a release this session starts, under the marker. */
-export async function ownSpeleoRelease<T>(work: () => Promise<T>): Promise<T> {
+function touch(key: string, inFlight: number): void {
   ownReleaseEpoch += 1;
-  ownReleasesInFlight += 1;
+  const entry = ownReleases.get(key) ?? { inFlight: 0, touched: 0 };
+  ownReleases.set(key, { inFlight: entry.inFlight + inFlight, touched: ownReleaseEpoch });
+}
+
+/**
+ * Run `work`, a release this session starts of `projectId`'s lock, under the
+ * marker. Keyed by project (delta review of X4, should-fix 1): a release of
+ * another project's lock (the held-lock prompt's, the sign-out loop's) says
+ * nothing about the open project's, and swallowed its genuine "Editing
+ * stopped". `null` is a release whose project is not known, which overlaps
+ * every refresh.
+ */
+export async function ownSpeleoRelease<T>(projectId: string | null, work: () => Promise<T>): Promise<T> {
+  const key = projectId ?? ANY_PROJECT;
+  touch(key, 1);
   try {
     return await work();
   } finally {
-    ownReleasesInFlight -= 1;
-    ownReleaseEpoch += 1;
+    touch(key, -1);
   }
 }
 
@@ -69,7 +84,14 @@ export function ownReleaseMark(): number {
   return ownReleaseEpoch;
 }
 
-/** Whether a release of this session's own ran, or is running, since `mark`. */
-export function ownReleaseSince(mark: number): boolean {
-  return ownReleasesInFlight > 0 || ownReleaseEpoch !== mark;
+/**
+ * Whether a release of this session's own of `projectId`'s lock (or of an
+ * unknown project's) ran, or is running, since `mark`. A refresh whose project
+ * is not known counts every release, as the marker did before it was keyed.
+ */
+export function ownReleaseSince(mark: number, projectId: string | null): boolean {
+  const overlaps = (entry: { inFlight: number; touched: number } | undefined) =>
+    entry !== undefined && (entry.inFlight > 0 || entry.touched > mark);
+  if (projectId === null) return [...ownReleases.values()].some(overlaps);
+  return overlaps(ownReleases.get(projectId)) || overlaps(ownReleases.get(ANY_PROJECT));
 }

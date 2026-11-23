@@ -160,7 +160,7 @@ export async function releaseSignOutLocks(projects: SignOutProject[]): Promise<S
   const failed: SignOutProject[] = [];
   for (const project of projects) {
     try {
-      await ownSpeleoRelease(() => bounded(
+      await ownSpeleoRelease(project.summary.id, () => bounded(
         invokeIpc('speleodb_release_lock', { projectId: project.summary.id }, {
           purpose: 'hand a lock back before signing out',
         }),

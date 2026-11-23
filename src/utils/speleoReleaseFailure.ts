@@ -193,7 +193,8 @@ export async function settleOpenLockBeforeLeaving(
 ): Promise<boolean> {
   if (!projectOpen || useSpeleoStore.getState().link === null) return true;
   const lockCertain = useSpeleoStore.getState().link?.editState === 'editing';
-  const settle = (releaseLock: boolean) => ownSpeleoRelease(() => invokeIpc<CommandResult>(
+  const openProject = useSpeleoStore.getState().remoteProjectId;
+  const settle = (releaseLock: boolean) => ownSpeleoRelease(openProject, () => invokeIpc<CommandResult>(
     'speleodb_settle_open_lock',
     { releaseLock },
     { purpose: releaseLock ? 'hand back the open project lock before leaving it' : 'keep the open project lock on purpose' },

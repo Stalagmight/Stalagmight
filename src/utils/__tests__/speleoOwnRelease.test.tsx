@@ -111,6 +111,22 @@ describe('a release this session starts is never "Editing stopped"', () => {
     expect(notice()?.kind).toBe('lockLost');
   });
 
+  // Delta review of X4, should-fix 1: the marker was project-blind, so releasing
+  // a stale lock on ANOTHER project (the held-lock prompt, the sign-out loop)
+  // while a refresh of the open project was in flight swallowed that project's
+  // genuine "Editing stopped" - and once the reply turned it read-only, for good.
+  it('a release of another project does not swallow the open project\'s real loss', async () => {
+    // p1 is open and editing; another session of the account hands its lock back.
+    // The held-lock prompt releases a stale lock on p2 while p1's refresh is out.
+    const refresh = overlapping('speleodb_release_lock', null);
+    await act(async () => {
+      await useSpeleoStore.getState().releaseLock('p2');
+      await refresh;
+    });
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(notice()?.kind).toBe('lockLost');
+  });
+
   // The review's trace: SpeleoDiscardChangesDialog -> discardChanges(false); the
   // backend hands the lock back and returns null, and the tree replacement's
   // status re-read sees no holder.
