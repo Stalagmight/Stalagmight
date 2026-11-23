@@ -54,8 +54,9 @@ export async function applySpeleoTreeReplacement(
     // normally drives it. That effect keys on `file_path` + `isLoading`, and an in-place
     // revision swap changes NEITHER: the backend closes and reopens DIFFERENT bytes at
     // the SAME path (`speleodb_revisions.rs`), and the frontend deliberately does not
-    // call `loadProject` (it would short-circuit on the already-open project), so the
-    // effect never re-fires. Without this a restored revision with an unreadable history
+    // call `loadProject` (it would short-circuit on the already-open project, and
+    // its `cancel_loading` would move the backend's session on and end the edit
+    // session the reload kept: sdbdemo2 issues 1 and 2), so the effect never re-fires. Without this a restored revision with an unreadable history
     // showed no banner at all, and restoring a clean revision left the previous tree's
     // banner standing over a healthy project.
     //

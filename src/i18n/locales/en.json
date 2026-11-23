@@ -4157,6 +4157,7 @@
       "lockedBy": "{{email}} is currently editing this project. You can view it, but you cannot make changes.",
       "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
       "failed": "The editing lock could not be acquired. This project is open read-only.",
+      "reloadedNotEditing": "The SpeleoDB version is open, but editing did not start. Resume editing tries again.",
       "continue": "Continue read-only"
     },
     "release": {

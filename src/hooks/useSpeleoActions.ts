@@ -38,9 +38,10 @@ export interface SpeleoActions {
   busy: boolean;
   /** Acquire the write lock + reconcile. Resolves `true` only when we actually
       hold the lock afterwards AND the view is showing it (`editing`, or
-      `fast_forwarded` whose reload landed); `false` on a contended lock, a
-      reported divergence, a reload that was superseded or failed, or a thrown
-      call - all of which already surface their own toast / routing. Callers that
+      `fast_forwarded` whose reload landed and whose re-read status says
+      editing); `false` on a contended lock, a reported divergence, a reload that
+      was superseded or left the project read-only, or a thrown call - all of
+      which already surface their own toast / notice / routing. Callers that
       hand the shell over on success (the held-lock prompt) MUST check it:
       treating a refusal as success there dismisses the prompt and discards the
       remaining locks. */
@@ -92,7 +93,6 @@ export function useSpeleoActions(): SpeleoActions {
   const endBusy = useSpeleoStore((s) => s.endBusy);
   const showToast = useUIStore((s) => s.showToast);
   const openDialog = useUIStore((s) => s.openDialog);
-  const loadProject = useProjectStore((s) => s.loadProject);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
@@ -154,6 +154,22 @@ export function useSpeleoActions(): SpeleoActions {
     [humanizeError, showToast],
   );
 
+  /** After an in-place reload that should have kept or started an edit session
+      (a Start Editing that downloaded a newer revision first, Take the SpeleoDB
+      version while editing): whether the re-read status says editing. When it
+      does not, the read-only notice says so, so the action never ends in silence
+      on a read-only project (sdbdemo2 issues 1 and 2). */
+  const editingAfterReload = useCallback(
+    (issuedFor: ReturnType<typeof speleoProjectSessionIssuedFor>): boolean => {
+      if (useSpeleoStore.getState().link?.editState === 'editing') return true;
+      if (speleoProjectSessionStillCurrent(issuedFor)) {
+        showSpeleoReadOnlyNotice(t('speleodb.readOnlyNotice.reloadedNotEditing'), 'stillReadOnly');
+      }
+      return false;
+    },
+    [t],
+  );
+
   const routeStartEditingResult = useCallback(
     async (
       result: StartEditingResult,
@@ -170,17 +186,15 @@ export function useSpeleoActions(): SpeleoActions {
             showToast(t('speleodb.editBar.toasts.editing'), TOAST_KEYS.SPELEODB_EDITING, 'success');
           }
           return { editing: true, treeReplaced: false, landed: true };
-        case 'fast_forwarded': {
-          const loaded = await loadProject(result.local_path, { acquireLock: false });
-          if (!speleoProjectSessionStillCurrent(issuedFor)) {
-            return { editing: false, treeReplaced: false, landed: false };
-          }
-          return {
-            editing: loaded.success,
-            treeReplaced: true,
-            landed: loaded.success,
-          };
-        }
+        case 'fast_forwarded':
+          // The backend already reopened the newer revision in place and bound
+          // the edit session to it; the caller reconciles the view through
+          // `applySpeleoTreeReplacement`, as the automatic Start Editing after an
+          // open does. Never `loadProject` here: it is a project switch, whose
+          // `cancel_loading` moves the backend's session on and so ends the edit
+          // session the reload just started (sdbdemo2 issues 1 and 2: one click
+          // downloaded and took the lock, and the project stayed read-only).
+          return { editing: true, treeReplaced: true, landed: true };
         case 'locked_by':
           showSpeleoReadOnlyNotice(t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', { email: result.email }), 'stillReadOnly');
           return { editing: false, treeReplaced: false, landed: true };
@@ -194,7 +208,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
       }
     },
-    [applyStartEditing, loadProject, showToast, t],
+    [applyStartEditing, showToast, t],
   );
 
   const startEditing = useCallback(async (): Promise<boolean> => {
@@ -206,8 +220,13 @@ export function useSpeleoActions(): SpeleoActions {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
-      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
-        return false;
+      if (routed.treeReplaced) {
+        if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
+        // The status re-read after the reload is the backend's own answer. A
+        // reload that left the project read-only must say so, never end in
+        // silence (sdbdemo2 issue 2).
+        if (!editingAfterReload(issuedFor)) return false;
+        showToast(t('speleodb.editBar.toasts.editing'), TOAST_KEYS.SPELEODB_EDITING, 'success');
       }
       return routed.editing;
     } catch (e) {
@@ -221,7 +240,7 @@ export function useSpeleoActions(): SpeleoActions {
     } finally {
       endBusy(busyToken);
     }
-  }, [routeStartEditingResult, humanizeError, beginBusy, endBusy]);
+  }, [routeStartEditingResult, humanizeError, beginBusy, endBusy, editingAfterReload, showToast, t]);
 
   const discardChanges = useCallback(
     async (
@@ -292,19 +311,10 @@ export function useSpeleoActions(): SpeleoActions {
           showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE, 'info');
           break;
         case 'fast_forwarded':
-          // See startEditing: the FF reload swapped the tree in the backend, but
-          // loadProject short-circuits on the reopened path - pull geometry + link
-          // state in so Update actually resets the view to the new tip. Clear the stale
-          // selection for the same reason as the startEditing arm.
-          {
-            // Same staleness stop as the startEditing arm: a superseded (or
-            // failed) reload means the swapped tree is not on screen, so the
-            // unguarded `refreshProjectState` below - which overwrites
-            // project/stations/surveyData wholesale - must not paint this
-            // project's state over whatever the user actually opened.
-            const loaded = await loadProject(result.local_path, { acquireLock: false });
-            if (!loaded.success) break;
-          }
+          // The backend reopened the new tip in place, keeping whatever edit
+          // session there was. Reconcile the view through the shared seam (it
+          // stops when the project or login moved on), never `loadProject`: its
+          // `cancel_loading` would end that edit session (see startEditing).
           await applySpeleoTreeReplacement(issuedFor, true);
           break;
         case 'divergence_needed':
@@ -315,7 +325,7 @@ export function useSpeleoActions(): SpeleoActions {
     } finally {
       endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
+  }, [applyUpdate, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
 
   const push = useCallback(
     async (
@@ -571,26 +581,28 @@ export function useSpeleoActions(): SpeleoActions {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    // What the confirmation promised: an edit session goes on editing.
+    const wasEditing = useSpeleoStore.getState().link?.editState === 'editing';
     const busyToken = beginBusy();
     try {
-      // Backend re-pulls + resets the tree to the server tip and returns the
-      // reloaded path. It hands no lock back (demo item 2: the lock is the
-      // account's, and another session of it may be editing under it), so an edit
-      // session carries over the reload and a read-only one stays read-only; the
-      // link status re-read below shows which.
-      const localPath = await invokeIpc<string>('speleodb_take_remote');
-      // If the reload was superseded (the user opened another project mid-pull),
-      // don't claim success: the backend reset already happened, but the view the
-      // caller thinks it reloaded is not showing. Skip the toast + return false so
-      // the divergence dialog doesn't close over a project the user left.
-      //
-      // `acquireLock: false`, like every other in-place reload: the reload keeps
-      // whatever edit session the backend carried, and a read-only project must
-      // not take the lock by itself (data#3). It resumes with Resume editing.
-      const { success } = await loadProject(localPath, { acquireLock: false });
-      if (!success) return false;
+      // Backend re-pulls + resets the tree to the server tip in place. It hands
+      // no lock back (demo item 2: the lock is the account's, and another session
+      // of it may be editing under it), so an edit session carries over the
+      // reload and a read-only one stays read-only; the link status re-read
+      // below shows which. A read-only project never takes the lock by itself
+      // (data#3): it resumes with Resume editing.
+      await invokeIpc<string>('speleodb_take_remote');
+      // Reconcile the view through the shared seam, never `loadProject`: that is
+      // a project switch, and its `cancel_loading` moved the backend's session on,
+      // which ended the edit session the reload had just carried (sdbdemo2 issue
+      // 1: "You keep the write lock and go on editing", then read-only). A false
+      // here is a reload the user left (another project, another login): no
+      // success toast, and the divergence dialog does not close over it.
       if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
+      // The confirmation said editing goes on; when the status says it did not,
+      // the notice says so rather than a silent read-only badge.
+      if (wasEditing) editingAfterReload(issuedFor);
       return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
@@ -598,7 +610,7 @@ export function useSpeleoActions(): SpeleoActions {
     } finally {
       endBusy(busyToken);
     }
-  }, [loadProject, showToast, t, handleError, beginBusy, endBusy]);
+  }, [showToast, t, handleError, beginBusy, endBusy, editingAfterReload]);
 
   return { busy, startEditing, discardChanges, update, push, done, takeRemote };
 }
