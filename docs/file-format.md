@@ -583,11 +583,18 @@ The rules:
    has no placement.
 7. A closure joins two different stations; its ends may be in different
    pieces only if both pieces hold a datum.
-8. No line shows two stations by one name: on each line, slots that show
-   different stations (the shown station of 5.12) have different names. Two
-   slots that show one station (the two ends of a closure on one line) may.
-   Archived stations and the own names of closure-archived ends do not
-   count. Section names are unique in the project (compared exactly).
+8. No line shows two of its own stations by one name: on each line, the
+   **native slots** (a slot whose station shows its own identity on one of
+   its native lines, 5.8) that show different stations have different
+   names. A slot that shows another station's identity does not count: a
+   slot on a line a record of its station names (the app draws the kept
+   station's name with its home line's colour dot) and a slot of a
+   closure-archived end (the kept end's name with the loop mark, 5.12). So
+   a line may show one name at such a slot and again at a station of its
+   own: Branch shows Main's 12 at its start, where Branch's own station was
+   archived, and keeps its own 12 further on. Archived stations and the own
+   names of closure-archived ends do not count either. Section names are
+   unique in the project (compared exactly).
 9. Counters are above every id in use; the station and Section counters
    are at most 2^31 and the closure counter at most 2^53 - 1 (at the bound
    the ids are used up, and Stalagmight refuses an edit that needs another).
@@ -894,9 +901,11 @@ For context; nothing here changes the format. The app's side is
   it, and the
   junction's one comment stays with the kept station; each loop closure
   archives the end that is not on the longest line, in list order, unless
-  rule 12 refuses, and then neither; a name a line now shows for two
-  stations takes a letter suffix (`12` -> `12a`) on the station shown on
-  fewer lines. Stalagmight lists what is shown differently. Until the first
+  rule 12 refuses, and then neither; a name two native slots of a line now
+  show for two stations (rule 8) takes a letter suffix (`12` -> `12a`) on
+  the station shown on fewer lines. A junction slot that shows the kept
+  station or a closure-archived end is no reason for a letter. Stalagmight
+  lists what is shown differently. Until the first
   save the file is untouched but for the local-only rewrites below, which
   keep it as it is; that save keeps the original in the backups folder as for
   a legacy file, and the file's undo history is dropped.

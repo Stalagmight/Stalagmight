@@ -141,9 +141,11 @@ station, A3 a line named by at most one record, A4 a native line, A6 a
 record's `into` names another record of the station that is not history and
 owners never cycle, resolved in one linear walk), closure
 archives (C1 a node archived by at most one closure, C2 no cycle; checked
-before names), the names each line shows (N8: on each line, slots showing
-different shown identities have different names; two slots of one shown
-identity, a same-line closure, may share one), Section names in the
+before names), the names each line shows (N8, RS-FX5: on each line, the
+native slots, `NativeSlots`, showing different identities have different
+names; a foreign slot and a loop end show another station's identity and
+count for no uniqueness, against native slots or each other), Section
+names in the
 project, counters
 above every id in use (archived ids included), the station and Section
 counters at most 2^31 and closure ids and the closure counter within
@@ -625,7 +627,10 @@ the sparse `station_archived` (`Station::archived`) and `station_shown`
   (`candidates`), the default keep, the closure that forces a keep, and per
   keep offered (`keeps`) the lines that will show the kept name, the station
   hidden and every collision with two answers (`NameCollision`: rule L's
-  `letter` and the `alternative` that letters the other station), the loop
+  `letter` and the `alternative` that letters the other station; since
+  RS-FX5 a merge rarely has one, as the lines that show the kept station
+  anew show it through foreign slots: only a closure archive its epilogue
+  drops can repeat a name), the loop
   closure whose archive the keep drops so the kept station is shown at its
   end (`unarchived`) and every other comment the merge hides
   (`comments_hidden`). Detach gives the archived station back on every line
@@ -637,7 +642,8 @@ the sparse `station_archived` (`Station::archived`) and `station_shown`
   collisions, the slots away from the junction that show another station
   afterwards (`shown_elsewhere`) and the comments it hides
   (`comments_hidden`). `preview_loop_closure` (both ends, allowed keeps, default, one
-  option per allowed end plus "Keep both names"), `preview_remove_loop_closure`
+  option per allowed end plus "Keep both names"; no collisions, since an
+  archive makes loop ends only), `preview_remove_loop_closure`
   (what comes back, on which slot, the collisions) and
   `preview_station_identity` (whose station a slot shows, every line a rename
   or comment edit through it changes) are new read-only queries.
@@ -721,7 +727,7 @@ the model:
 | `command_move.rs` | MoveLine, MoveSegment, MoveStation | `move_line`, `move_segment`, `move_station`; a batch moves each station once |
 | `command_credit.rs`, `command_cave_section.rs` | EditShotCredit, the five Section commands | shot credits, `sections` |
 | `import_tracking.rs` | UntrackImport (and the recorded hash tracking) | the import hash lists |
-| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction that keeps the project's station on every line; a different name the file gives it is archived as a record naming the new line under a minted Station ID, so Detach gives the file's station back; a new station whose file name the junction shows is lettered by rule L and reported in the receipt), `append_project` |
+| recipes | Split Line Here, Combine Lines, delete-and-split, split shot at distance / Insert Station, imports and create-and-merge, Add .stalx, settings, elevation | `split_line`, `combine_lines`, `delete_shot_range`, `split_shot_at_distance`, the import funnel (`import_funnel.rs`: a joining placement makes the chosen station the new line's chain station, a junction that keeps the project's station on every line; a different name the file gives it is archived as a record naming the new line under a minted Station ID, so Detach gives the file's station back; a new station whose file name the junction shows is lettered by rule L and reported in the receipt only when the junction's slot on the new line is native, i.e. no record names it there and the target is no loop end, RS-FX5), `append_project` |
 
 Subsystems ported onto the model and the v2 file:
 
@@ -776,18 +782,29 @@ The deviations each package made from the plan are in the plan's "Deviations
   candidates): the candidate on the longest line (`Line::measured_length`,
   Reference shots excluded, exact f64), ties to the lowest Station ID; one
   with no line loses.
-- Rule L (`name_collisions`, `letter_collisions(before)`,
-  `letter_collisions_with`): of the identities sharing a name on a line, all
-  but the strongest take a letter suffix free on every line they are shown
-  on; strongest is shown on the most lines, then already shown on that line
-  before the op, then the lowest Station ID. The letter is the first one
-  free on every line the station is shown on, unless its lines take more
-  than 64 letters in a row between them: then the first letter no slot
-  shows. A pass works out the lines and names it needs once, so a crafted
-  file settles in time linear in its slots. Every automatic path uses it;
-  `uniquify_station_name` is the letter-suffix rule
-  (`crate::station_naming::name_with_free_letter`). `uniquify_line_names`
-  (chain order) is used by no operation.
+- N8 and rule L count native slots only (RS-FX5, `NativeSlots`: no
+  closure archives the slot's node and no record of it names the slot's
+  line). Rule L (`name_collisions`, `letter_collisions(before)`,
+  `letter_collisions_with`): of the identities two native slots of a line
+  show by one name, all but the strongest take a letter suffix free among
+  the native slots of every line they are native on; strongest is shown on
+  the most lines (foreign slots and loop ends included), then shown by a
+  native slot of that line before the op (`native_pairs`), then the lowest
+  Station ID. The letter is the first one free on those lines, unless they
+  take more than 64 letters in a row between them: then the first letter
+  no native slot shows. A pass works out the lines and names it needs once,
+  so a crafted file settles in time linear in its slots. Every automatic
+  path uses it, with the letter-suffix rule
+  (`crate::station_naming::name_with_free_letter`). A rename is checked on
+  the lines its identity is native on (`conflicts_with_name`,
+  `native_lines_of_identity`); `alternative_letters` and `names_around`
+  follow the same rule. Combine's prefix plan reads native names only.
+- Plain text for a slot (`slot_text.rs`): `slot_name_text`, `slot_text`
+  and `shot_text` name a foreign slot `Branch / 12 (Main)` and a loop end
+  `Main / 12 (loop end on Branch)`, so two "12"s on a line read apart;
+  `station_text`, the shot labels of warnings and refusals, history rows
+  and receipts read them (the frontend's `stationLabelOf` words them the
+  same).
 - `is_shot_uuid_taken`, `shot_by_uuid`, `duplicate_shot_uuids`, `mint_shot_uuid`.
 
 ## Tests
