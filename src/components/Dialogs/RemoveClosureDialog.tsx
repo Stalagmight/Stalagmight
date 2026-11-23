@@ -32,6 +32,13 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
   return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
+/** Whether two closure ids are one: an id is a bigint from the store and a
+ *  plain number from an IPC answer (JSON has no bigint), so compare values,
+ *  as the preview's own check does (RS-FX9). */
+function sameClosureId(a: bigint | number | null | undefined, b: bigint | number | null | undefined): boolean {
+  return a !== null && a !== undefined && b !== null && b !== undefined && String(a) === String(b);
+}
+
 /**
  * Remove a loop closure through one of its stations (RS 5.3, 7). Each row is
  * a closure, named by its other end, and says which station comes back when
@@ -135,9 +142,9 @@ export default function RemoveClosureDialog() {
   /** The station a closure hides, by closure id (the rows' "17 comes back"):
    *  for the closure chosen, under the name the answers give it. */
   const hiddenOf = (closureId: bigint): string | null => {
-    const archive = project?.loop_closures?.find((c) => c.id === closureId)?.archived;
+    const archive = project?.loop_closures?.find((c) => sameClosureId(c.id, closureId))?.archived;
     if (!archive) return null;
-    const answered = comesBack && naming?.closure_id === closureId && comesBack.id === archive.station.id;
+    const answered = comesBack && sameClosureId(naming?.closure_id, closureId) && comesBack.id === archive.station.id;
     return displayStationName(answered ? comesBack.name : archive.station.name);
   };
 
@@ -145,11 +152,11 @@ export default function RemoveClosureDialog() {
   // station (ui-6): removing one that hides nothing leaves them so, which
   // "both ends show their own names" would deny.
   const staysShown: string[] = [];
-  const chosen = project?.loop_closures?.find((c) => c.id === selectedClosure?.closureId);
+  const chosen = project?.loop_closures?.find((c) => sameClosureId(c.id, selectedClosure?.closureId));
   for (const end of chosen ? [chosen.station_a, chosen.station_b] : []) {
     const by = labels.shown(end)?.loop_closure;
-    const archive = by === undefined ? undefined : project?.loop_closures?.find((c) => c.id === by)?.archived;
-    if (by !== undefined && by !== chosen?.id && archive) {
+    const archive = by === undefined ? undefined : project?.loop_closures?.find((c) => sameClosureId(c.id, by))?.archived;
+    if (by !== undefined && !sameClosureId(by, chosen?.id) && archive) {
       staysShown.push(
         t('dialogs.closure.staysShownAs', {
           station: identityLabel(archive.station),
