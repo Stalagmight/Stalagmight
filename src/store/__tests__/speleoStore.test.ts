@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   useSpeleoStore,
   PUSH_FAILURE_DIALOGS,
@@ -8,6 +8,8 @@ import {
 } from '../speleoStore';
 import { useProjectStore } from '../projectStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+import { useSpeleoReadOnlyNotice } from '../../utils/autoAcquireSpeleoLock';
+import i18n from '../../i18n';
 
 // The sign-out guard (uploads / discards / hands back locks before a sign-out) has
 // its own suite; here it only has to say "go ahead", or "cancelled" where a case
@@ -307,6 +309,55 @@ describe('speleoStore', () => {
 
   });
 
+  // sdbdemo2 issue 4 (screenshot 21): another session of the same account closed
+  // the project and handed back the lock this one edited under (the account's one
+  // lock; no release can tell its sessions apart). This session's next status
+  // refresh switched to "Ready for editing" and read-only with no word.
+  describe('a refresh that ends the edit session says why', () => {
+    // The open project is this block's own: the scans below read it.
+    afterEach(() => useProjectStore.setState({ project: null }));
+    const editingThen = (reply: SpeleoLinkStatus) => {
+      useProjectStore.setState({ project: { file_path: '/synthetic.stalx' } as never });
+      loggedInAs('me@example.com');
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@example.com' }));
+      useSpeleoReadOnlyNotice.setState({ notice: null });
+      invokeIpcMock.mockResolvedValue(reply);
+      return useSpeleoStore.getState().refreshLinkStatus();
+    };
+
+    it.each([
+      ['the lock was handed back elsewhere', status({ lock_holder: null }), 'speleodb.readOnlyNotice.lockLostReleased', {}],
+      ['someone else holds it', status({ lock_holder: 'other@example.com' }), 'speleodb.readOnlyNotice.lockLostTaken', { email: 'other@example.com' }],
+      ['access no longer allows editing', status({ lock_holder: 'me@example.com', permission: 'READ_ONLY' }), 'speleodb.readOnlyNotice.lockLostPermission', {}],
+    ] as const)('%s', async (_case, reply, key, values) => {
+      await editingThen(reply);
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      const notice = useSpeleoReadOnlyNotice.getState().notice;
+      expect(notice?.kind).toBe('lockLost');
+      expect(notice?.message).toBe(i18n.t(key, values));
+    });
+
+    it.each([
+      ['a refresh that keeps editing', status({ edit_enabled: true, lock_holder: 'me@example.com' })],
+      ['a reply that did not hear from SpeleoDB', status({ permission: null, remote_state: 'unknown' })],
+      ['a refused project (its own surface)', status({ permission: null, access_denied: true })],
+      ['a gate shut while the account still holds the lock', status({ lock_holder: 'ME@example.com' })],
+    ] as const)('says nothing for %s', async (_case, reply) => {
+      await editingThen(reply);
+      expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
+    });
+
+    it('says nothing when the session was not editing', async () => {
+      useProjectStore.setState({ project: { file_path: '/synthetic.stalx' } as never });
+      loggedInAs('me@example.com');
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false }));
+      useSpeleoReadOnlyNotice.setState({ notice: null });
+      invokeIpcMock.mockResolvedValue(status({ lock_holder: null }));
+      await useSpeleoStore.getState().refreshLinkStatus();
+      expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
+    });
+  });
+
   describe('refreshLinkStatus staleness guard', () => {
     it('drops a reply whose link changed under it, so a push cannot be un-cleared', async () => {
       // The self-conflict race, frontend half. The backend reads the link row and
@@ -448,6 +499,8 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().divergence).toBe('start');
       // Stays read-only (not enabled on divergence).
       expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      // sdbdemo2 P3 (16b): the tab keeps saying so after the prompt is cancelled.
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('conflict');
     });
 
   });
@@ -458,6 +511,7 @@ describe('speleoStore', () => {
     it('divergence_needed → divergence origin update', () => {
       useSpeleoStore.getState().applyUpdate({ kind: 'divergence_needed' });
       expect(useSpeleoStore.getState().divergence).toBe('update');
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('conflict');
     });
 
     it('up_to_date clears a stale remote_ahead indicator', () => {
@@ -507,6 +561,7 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('done');
       expect(s.link?.editState).toBe('editing');
+      expect(s.link?.remoteState).toBe('conflict');
     });
 
     it('R3: released with replaced revisions raises the banner that names them', () => {
@@ -550,6 +605,9 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('push');
       expect(s.link?.editState).toBe('editing');
+      // sdbdemo2 P3 (16b): Save Changes refused, then Cancel - the tab still
+      // offers "Resolve synchronization conflict" instead of nothing at all.
+      expect(s.link?.remoteState).toBe('conflict');
     });
 
     it('push_unconfirmed → raises the banner, stays editing', () => {

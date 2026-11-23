@@ -10,7 +10,7 @@ vi.mock('../ipc', () => ({
   getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'error',
 }));
 
-import { guardSpeleoSignOut, releaseSignOutLocks, signOutHasWork, surveySignOut, useSpeleoSignOut } from '../speleoSignOut';
+import { guardSpeleoSignOut, releaseSignOutLocks, signOutHasWork, signOutLocks, surveySignOut, useSpeleoSignOut } from '../speleoSignOut';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import type { SpeleoLocalProjectState, SpeleoProjectSummary } from '../../types/ipc.generated';
@@ -65,15 +65,16 @@ describe('surveySignOut', () => {
     expect(survey.unuploaded).toEqual([]);
   });
 
-  it('locks with nothing un-uploaded - open or not - are simply handed back', async () => {
+  it('locks this run claims with nothing un-uploaded - open or not - are simply handed back', async () => {
     useProjectStore.setState({ project: { file_path: '/c/a/project.stalx' } as never });
     useSpeleoStore.setState({ link: link({ hasUnpushedEdits: false }), remoteProjectId: 'a' });
     serve([summary('a', ME), summary('b', 'DIVER@example.com'), summary('c')],
-      { a: localState({ is_open: true }), b: localState(), c: localState() });
+      { a: localState({ is_open: true, lock_claimed_here: true }), b: localState({ lock_claimed_here: true }), c: localState() });
     const survey = await surveySignOut();
     expect(survey.openProject).toBeNull();
     expect(survey.releasable.map((p) => p.summary.id)).toEqual(['a', 'b']);
     expect(survey.unuploaded).toEqual([]);
+    expect(survey.heldUnclaimed).toEqual([]);
   });
 
   // Demo item 1: SpeleoDB's lock is the account's. A lock this computer never took
@@ -92,7 +93,10 @@ describe('surveySignOut', () => {
       linked: localState(nothingHere),
     });
     const survey = await surveySignOut();
-    expect(survey.releasable.map((p) => p.summary.id)).toEqual(['copy', 'claimed', 'linked']);
+    expect(survey.releasable.map((p) => p.summary.id)).toEqual(['claimed']);
+    // sdbdemo2 issue 5: never claimed by this run, over a copy or a recent file
+    // here - asked about, never handed back by Disconnect.
+    expect(survey.heldUnclaimed.map((p) => p.summary.id)).toEqual(['copy', 'linked']);
 
     // Held only elsewhere: nothing to do, the sign-out goes straight through.
     serve([summary('elsewhere', ME)], { elsewhere: localState(nothingHere) });
@@ -109,6 +113,31 @@ describe('surveySignOut', () => {
     expect(survey.unuploaded.map((p) => [p.summary.id, p.holdsLock])).toEqual([['a', true], ['b', false], ['c', true]]);
     expect(survey.unuploaded[0]?.lastEditAt).toBe('2026-11-09T10:00:00Z');
     expect(survey.releasable).toEqual([]);
+    // Their changes are kept either way; only a lock this run claims is handed
+    // back with them, and these were never claimed here.
+    expect(signOutLocks(survey)).toEqual([]);
+    expect(survey.heldUnclaimed.map((p) => p.summary.id)).toEqual(['a', 'c']);
+  });
+
+  // sdbdemo2 issue 5 (screenshots 27, 28): a second session of the account, with
+  // a copy here, signs out while the first edits. The held-lock prompt warned that
+  // the lock may be another computer's and offered "Release anyway"; Disconnect
+  // listed the same lock as "every project you are editing" and handed it back
+  // behind a plain Disconnect button. A lock this run never claimed is now asked
+  // about, and Disconnect leaves it held.
+  it('a lock this run never claimed, over a copy here, is asked about and not handed back', async () => {
+    serve([summary('shared', ME), summary('mine', ME)], {
+      shared: localState(),
+      mine: localState({ lock_claimed_here: true }),
+    });
+    const survey = await surveySignOut();
+    expect(survey.heldUnclaimed.map((p) => p.summary.id)).toEqual(['shared']);
+    expect(signOutLocks(survey).map((p) => p.summary.id)).toEqual(['mine']);
+
+    serve([summary('shared', ME)], { shared: localState() });
+    const alone = await surveySignOut();
+    expect(signOutHasWork(alone)).toBe(true);
+    expect(signOutLocks(alone)).toEqual([]);
   });
 
   it('a stranded open project (un-uploaded work, no lock) is an un-uploaded row, not the open-project answer', async () => {
@@ -140,7 +169,7 @@ describe('guardSpeleoSignOut', () => {
   });
 
   it('raises the dialog with the survey when something is held, and waits for it', async () => {
-    serve([summary('a', ME)], { a: localState() });
+    serve([summary('a', ME)], { a: localState({ lock_claimed_here: true }) });
     const answer = guardSpeleoSignOut('switch');
     await vi.waitFor(() => expect(useSpeleoSignOut.getState().request).not.toBeNull());
     const request = useSpeleoSignOut.getState().request;
@@ -151,10 +180,15 @@ describe('guardSpeleoSignOut', () => {
   });
 
   it('raises the dialog in its "could not check" state when the server cannot be asked', async () => {
-    invokeIpcMock.mockRejectedValue(new Error('Synthetic: unreachable'));
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Refused',
+    });
     const answer = guardSpeleoSignOut('signOut');
     await vi.waitFor(() => expect(useSpeleoSignOut.getState().request).not.toBeNull());
     expect(useSpeleoSignOut.getState().request?.survey).toBeNull();
+    // sdbdemo2 P3 (screenshot 26): with its cause in plain words, from the start.
+    expect(useSpeleoSignOut.getState().request?.error).toMatch(/^Could not connect to SpeleoDB at https:\/\/sdb\.example/);
     useSpeleoSignOut.getState().request?.settle(true);
     expect(await answer).toBe(true);
   });
@@ -166,7 +200,7 @@ describe('releaseSignOutLocks', () => {
       if (command === 'speleodb_release_lock' && args.projectId === 'b') throw new Error('Synthetic: offline');
       return null;
     });
-    const projects = [summary('a', ME), summary('b', ME)].map((s) => ({ summary: s, holdsLock: true, lastEditAt: null }));
+    const projects = [summary('a', ME), summary('b', ME)].map((s) => ({ summary: s, holdsLock: true, claimedHere: true, lastEditAt: null }));
     const failed = await releaseSignOutLocks(projects);
     expect(failed.map((p) => p.summary.id)).toEqual(['b']);
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_lock', { projectId: 'a' }, expect.anything());
@@ -177,7 +211,7 @@ describe('releaseSignOutLocks', () => {
     vi.useFakeTimers();
     try {
       invokeIpcMock.mockImplementation(() => new Promise(() => {}));
-      const pending = releaseSignOutLocks([{ summary: summary('a', ME), holdsLock: true, lastEditAt: null }]);
+      const pending = releaseSignOutLocks([{ summary: summary('a', ME), holdsLock: true, claimedHere: true, lastEditAt: null }]);
       await vi.advanceTimersByTimeAsync(25_000);
       expect((await pending).map((p) => p.summary.id)).toEqual(['a']);
     } finally {

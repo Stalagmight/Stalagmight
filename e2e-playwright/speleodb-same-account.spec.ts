@@ -138,3 +138,32 @@ test('Save and Close stops on an upload that replaced a revision pushed meanwhil
   await expect(page.getByTestId('speleodb-exit-dialog')).toHaveCount(0);
   expect(await closes()).toBe(1);
 });
+
+// sdbdemo2 issue 4 (screenshot 21): the account's other session closed the
+// project, which hands back the account's one lock (no release can tell the
+// sessions apart). This session's next status refresh found no holder and went
+// read-only with no word. It now says editing stopped, and why.
+test('a refresh that finds the lock handed back elsewhere says editing stopped', async ({ page }) => {
+  await editingRemoteProject(page, 'refused');
+  await page.evaluate((linkStatus) => {
+    const w = window as unknown as TestWindow;
+    // The other session's close: SpeleoDB names no holder; the backend's status
+    // shuts this session's edit gate.
+    w.__MOCK_IPC_OVERRIDES__ = {
+      ...w.__MOCK_IPC_OVERRIDES__,
+      speleodb_link_status: { ...linkStatus, edit_enabled: false, lock_holder: null },
+    };
+    void (w.__E2E_TEST__.speleoStore.getState() as unknown as { refreshLinkStatus: () => Promise<void> })
+      .refreshLinkStatus();
+  }, LINK_STATUS);
+
+  const notice = page.getByTestId('speleodb-read-only-dialog');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('Editing stopped');
+  await expect(notice).toContainText('handed back elsewhere');
+  await expect(notice).toContainText('your changes are kept on this computer');
+  await page.getByTestId('speleodb-read-only-continue').click();
+  await expect(notice).toBeHidden();
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.speleoStore.getState().link?.editState))
+    .toBe('read-only');
+});

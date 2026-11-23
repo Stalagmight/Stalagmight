@@ -66,6 +66,17 @@ describe('SpeleoReleaseFailedDialog', () => {
     expect(screen.getByTestId('speleodb-release-failed-cancel')).toBeEnabled();
   });
 
+  it('a lock not known to be held is not stated as certain (sdbdemo2 P3)', () => {
+    void askReleaseFailure('close', 'Synthetic: could not connect', async () => ({ ok: true }), false);
+    render(<SpeleoReleaseFailedDialog />);
+    const body = screen.getByTestId('speleodb-release-failed-body');
+    expect(body).toHaveTextContent('could not check whether your account holds the SpeleoDB lock');
+    expect(body).toHaveTextContent('If your account holds it, nobody else can edit the project');
+    expect(body).not.toHaveTextContent('Until it is handed back');
+    expect(screen.getByTestId('speleodb-release-failed-choices')).toHaveTextContent('if your account holds it');
+    expect(screen.getByTestId('speleodb-release-failed-choices')).not.toHaveTextContent('reserved for you');
+  });
+
   it.each(['close', 'switch', 'quit'] as const)(
     'lays the choices out like every other dialog (%s): one footer row, Cancel first, Retry last',
     (reason) => {

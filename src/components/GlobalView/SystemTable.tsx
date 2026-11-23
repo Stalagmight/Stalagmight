@@ -38,6 +38,9 @@ interface SystemTableProps {
   /** #270: per-project LOCAL state (un-pushed edits), fetched once for the whole
       list. Empty when the fetch failed - which simply means no row is accented. */
   localStates?: SpeleoLocalStateMap;
+  /** SpeleoDB projects a recent file is linked to: with `localStates`, where this
+      account's lock on a remote row was taken (`resolveSpeleoLock`). */
+  linkedProjectIds?: ReadonlySet<string>;
   /** Toggle/apply sorting when a sortable column header is clicked. */
   onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
@@ -110,6 +113,7 @@ export function SystemTable({
   remoteProjects,
   myEmail,
   localStates = {},
+  linkedProjectIds,
   onSort,
   onSelect,
   onOpen,
@@ -211,6 +215,7 @@ export function SystemTable({
               remoteProjects,
               localStates,
               { ...remoteSummaries, [item.projectId]: item.summary },
+              linkedProjectIds?.has(item.projectId) ?? true,
             ), item.cached);
             return (
               <tr

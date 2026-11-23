@@ -113,7 +113,13 @@ one stays read-only. The held-lock prompt at sign-in says that a lock this accou
 holds may be Stalagmight open on another computer with this account, keeps Not now
 as its default and offers "Release anyway"; a lock this computer cannot have taken
 (no claim of this run, no copy, no recent file linked) is labelled "Held by this
-account, not by this computer", and signing out leaves such a lock alone.
+account, not by this computer", and signing out leaves such a lock alone. The home
+screen uses the same words for the same lock ("You are editing" only for a lock this
+run claims), opening such a project opens it read-only with a notice instead of
+taking the lock over (Resume editing then edits it here too), and Disconnect hands
+back only the locks this run claims: any other lock of the account over a copy here
+is listed with "Release anyway" and left held. A session whose lock another session
+of the account handed back says "Editing stopped" at its next status refresh.
 An upload that landed on top of a revision pushed between that check and the upload
 names it on a banner of its own that stays until dismissed (it stays in the
 Revision History), and every close that ran the upload (the exit and sign-out

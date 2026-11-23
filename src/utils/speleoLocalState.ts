@@ -103,3 +103,23 @@ export function lockNotTakenHere(
     state.lock_claimed_here !== true
   );
 }
+
+/**
+ * Where this account's write lock on `projectId` was taken, as far as this
+ * computer can tell (sdbdemo2 issue 3): `here` when this run holds a claim on it
+ * (`lock_claimed_here`), `elsewhere` when this computer can positively not have
+ * taken it ({@link lockNotTakenHere}), `unknown` otherwise (a copy here, a
+ * failed or missing read, a recent file linked to the project). Only `here`
+ * may say "You are editing": the Home card used to say it for every lock of
+ * the account, right behind the held-lock prompt's "not by this computer".
+ */
+export type SpeleoLockOrigin = 'here' | 'elsewhere' | 'unknown';
+
+export function speleoLockOrigin(
+  states: SpeleoLocalStateMap,
+  projectId: string | null | undefined,
+  linkedHere: boolean,
+): SpeleoLockOrigin {
+  if (projectId && states[projectId]?.lock_claimed_here === true) return 'here';
+  return lockNotTakenHere(states, projectId, linkedHere) ? 'elsewhere' : 'unknown';
+}

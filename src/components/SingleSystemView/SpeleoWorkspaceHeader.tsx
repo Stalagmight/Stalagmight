@@ -32,6 +32,12 @@ export function speleoLockStateLabel(
   if (link.lockHolder && link.lockedByOther) {
     return t('speleodb.lockState.beingEditedBy', { email: link.lockHolder });
   }
+  // This account holds the lock and this session is not editing under it: it
+  // may be another computer's edit session (sdbdemo2 issue 3), and "Read-only"
+  // alone left the user to guess why Resume editing was offered.
+  if (link.lockHolder && emailsMatch(link.lockHolder, session?.userEmail ?? null)) {
+    return t('speleodb.lockState.heldByYourAccount');
+  }
   // Demo item 6. While the connection is unavailable (the header's next line
   // says so) the status could not read the lock: no holder is "not known", not
   // "free", and "Ready for editing" beside the read-only badge read as if this
@@ -67,6 +73,12 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
   // newer_revision_first`), so the line says so where that button is offered.
   const behind = link.remoteState === 'remote_ahead';
   const resumes = link.editState !== 'editing' && canResumeSpeleoEditing(link, session);
+  // sdbdemo2 P3 (screenshot 20): while editing, the line named no next step. The
+  // copy is clean (a copy with changes would be in conflict), and Reload Project
+  // downloads the newer revision and keeps the edit session.
+  const reloads = link.editState === 'editing' && session?.loggedIn === true;
+  const behindKey = resumes ? 'speleodb.workspace.newerOnServerResume'
+    : reloads ? 'speleodb.workspace.newerOnServerReload' : 'speleodb.workspace.newerOnServer';
   return (
     <div className="shrink-0 border-b border-border pb-3 space-y-1" data-testid="speleodb-workspace-project-header">
       <h2 className="font-semibold break-words">{projectName}</h2>
@@ -74,7 +86,7 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
       <p className="text-text-secondary">{!session?.loggedIn ? 'Not connected' : link.serverError ? link.serverError.message : offline(link) ? 'Connection unavailable' : 'Connected'}</p>
       {behind && (
         <p className="text-warning-text" data-testid="speleodb-workspace-newer-on-server">
-          {t(resumes ? 'speleodb.workspace.newerOnServerResume' : 'speleodb.workspace.newerOnServer')}
+          {t(behindKey)}
         </p>
       )}
       {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}

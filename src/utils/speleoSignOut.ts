@@ -10,17 +10,22 @@
  * (a) the OPEN project, when we hold its lock over un-uploaded work: Upload and
  *     disconnect (the normal upload, which releases), Keep on this computer, or
  *     Discard (second "lost forever" confirm, the open project only);
- * (b) every lock the account holds on the server with nothing un-uploaded behind
- *     it: handed back as part of the sign-out, no question asked - except a lock
- *     this computer can positively not have taken (`lockNotTakenHere`: no claim
- *     of this run, no copy, no recent file linked to the project). SpeleoDB's lock
- *     is the account's, so that one is another session's of the same account,
- *     maybe editing under it now; signing out here strands nothing of this
- *     computer's, so it is left alone (demo item 1);
+ * (b) every lock this run holds a claim on (`lock_claimed_here`: taken here, or
+ *     kept by a close) with nothing un-uploaded behind it: handed back as part of
+ *     the sign-out, no question asked;
  * (c) every OTHER cached project of the account with un-uploaded work: always
  *     kept on this computer (the dialog names them and says they can be opened
- *     and uploaded after connecting again); a lock held on one is handed back
- *     with (b). The sign-out never discards another project's work.
+ *     and uploaded after connecting again); a lock this run claims on one is
+ *     handed back with (b). The sign-out never discards another project's work;
+ * (d) every other lock the account holds that this run holds no claim on, where
+ *     this computer has something of the project (a copy, a recent file): it may
+ *     be the lock Stalagmight on another computer with this account is editing
+ *     under, or one a session that did not exit cleanly left (sdbdemo2 issue 5).
+ *     The dialog says so in the held-lock prompt's words and offers "Release
+ *     anyway" per project; Disconnect leaves it held. A lock this computer can
+ *     positively not have taken (`lockNotTakenHere`: no claim, no copy, no recent
+ *     file) strands nothing of this computer's and is left alone without a word
+ *     (demo item 1).
  *
  * Keeping is the non-destructive answer when the upload is not possible
  * (decision 10: edits are never discard-only). The copy keeps its edits, its
@@ -43,6 +48,7 @@ import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 import { emailsMatch } from './email';
 import { invokeIpc } from './ipc';
+import { describeSpeleoError } from './speleoError';
 import { needsSpeleoExitPrompt } from './speleoExit';
 import { fetchSpeleoLocalStates, lockNotTakenHere } from './speleoLocalState';
 
@@ -53,6 +59,8 @@ export interface SignOutProject {
   summary: SpeleoProjectSummary;
   /** This account holds the project's write lock on the server. */
   holdsLock: boolean;
+  /** This run holds a claim on that lock (taken here, or kept by a close). */
+  claimedHere: boolean;
   /** When the local copy was last edited (RFC 3339), if known. */
   lastEditAt: string | null;
 }
@@ -64,6 +72,15 @@ export interface SignOutSurvey {
   releasable: SignOutProject[];
   /** (c) Other cached projects with un-uploaded work (lock held or not). */
   unuploaded: SignOutProject[];
+  /** (d) The account's locks this run never claimed, over a copy or a recent
+      file here: may be another session's; left held unless released anyway. */
+  heldUnclaimed: SignOutProject[];
+}
+
+/** The locks Disconnect hands back besides the open project's: the clean ones
+    and those of the other copies with changes, each one this run claims. */
+export function signOutLocks(survey: SignOutSurvey): SignOutProject[] {
+  return [...survey.releasable, ...survey.unuploaded.filter((p) => p.holdsLock && p.claimedHere)];
 }
 
 /** How long one survey or one release may take before it counts as failed. */
@@ -78,7 +95,8 @@ function bounded<T>(work: Promise<T>, what: string): Promise<T> {
 }
 
 export function signOutHasWork(survey: SignOutSurvey): boolean {
-  return survey.openProject !== null || survey.releasable.length > 0 || survey.unuploaded.length > 0;
+  return survey.openProject !== null || survey.releasable.length > 0 || survey.unuploaded.length > 0 ||
+    survey.heldUnclaimed.length > 0;
 }
 
 /**
@@ -102,14 +120,23 @@ export async function surveySignOut(): Promise<SignOutSurvey> {
   const openId = project ? remoteProjectId : null;
   const openNeedsAnswer = openId !== null && needsSpeleoExitPrompt(link, isDirty);
 
-  const survey: SignOutSurvey = { openProject: null, releasable: [], unuploaded: [] };
+  const survey: SignOutSurvey = { openProject: null, releasable: [], unuploaded: [], heldUnclaimed: [] };
   for (const summary of listed) {
     const state = local[summary.id];
     const entry: SignOutProject = {
       summary,
       holdsLock: emailsMatch(summary.lock_holder, me),
+      claimedHere: state?.lock_claimed_here === true,
       lastEditAt: state?.last_edit_at ?? null,
     };
+    const linkedHere = recentProjects.some((p) => p.speleodb_project_id === summary.id);
+    // (d): the account's lock, never claimed by this run, over something of the
+    // project here. Listed whether or not the copy has changes (those are kept
+    // either way): only its release is a question.
+    if (entry.holdsLock && !entry.claimedHere && !lockNotTakenHere(local, summary.id, linkedHere) &&
+      !(summary.id === openId && openNeedsAnswer)) {
+      survey.heldUnclaimed.push(entry);
+    }
     if (summary.id === openId && openNeedsAnswer) {
       survey.openProject = entry;
       continue;
@@ -118,13 +145,7 @@ export async function surveySignOut(): Promise<SignOutSurvey> {
     // as un-uploaded rather than releasing the lock that may be guarding it.
     const unuploaded = state?.has_unpushed_edits === true || state?.state_unknown === true;
     if (unuploaded) survey.unuploaded.push(entry);
-    else if (entry.holdsLock && !lockNotTakenHere(
-      local,
-      summary.id,
-      recentProjects.some((p) => p.speleodb_project_id === summary.id),
-    )) {
-      survey.releasable.push(entry);
-    }
+    else if (entry.holdsLock && entry.claimedHere) survey.releasable.push(entry);
   }
   return survey;
 }
@@ -156,6 +177,9 @@ interface SignOutRequest {
   kind: SignOutKind;
   /** `null` while the first survey runs; the dialog re-surveys on "Try again". */
   survey: SignOutSurvey | null;
+  /** Why the first survey failed, worded by cause (sdbdemo2 P3, screenshot 26:
+      the cause used to appear only after Try again). */
+  error?: string | null;
   /** Finish: `true` = go ahead and sign out, `false` = the sign-out is cancelled. */
   settle: (proceed: boolean) => void;
 }
@@ -164,7 +188,7 @@ export const useSpeleoSignOut = create<{ request: SignOutRequest | null }>(() =>
 
 let nextId = 0;
 
-function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Promise<boolean> {
+function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null, error: string | null = null): Promise<boolean> {
   useSpeleoSignOut.getState().request?.settle(false);
   return new Promise<boolean>((resolve) => {
     const id = ++nextId;
@@ -175,7 +199,7 @@ function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Pro
       if (useSpeleoSignOut.getState().request?.id === id) useSpeleoSignOut.setState({ request: null });
       resolve(proceed);
     };
-    useSpeleoSignOut.setState({ request: { id, kind, survey, settle } });
+    useSpeleoSignOut.setState({ request: { id, kind, survey, error, settle } });
   });
 }
 
@@ -187,12 +211,14 @@ function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Pro
 export async function guardSpeleoSignOut(kind: SignOutKind): Promise<boolean> {
   if (useSpeleoStore.getState().session?.loggedIn !== true) return true;
   let survey: SignOutSurvey | null;
+  let error: string | null = null;
   try {
     survey = await surveySignOut();
-  } catch {
-    // Could not look: say so rather than guess. The dialog offers Try again.
+  } catch (e) {
+    // Could not look: say so, and why, rather than guess. The dialog offers Try again.
     survey = null;
+    error = describeSpeleoError(e);
   }
   if (survey && !signOutHasWork(survey)) return true;
-  return openSignOutDialog(kind, survey);
+  return openSignOutDialog(kind, survey, error);
 }

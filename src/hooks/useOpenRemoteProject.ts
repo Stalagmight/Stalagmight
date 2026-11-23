@@ -377,7 +377,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         hasUnpushedEdits: result.has_unpushed_edits === true,
         ...(result.offline ? { takeLock: false, successToast: {
           message: offlineOpenMessage(t, result),
-          key: 'speleodb-offline-open',
+          key: TOAST_KEYS.SPELEODB_OFFLINE_OPEN,
           kind: 'warning' as const,
         } } : {}),
         ...(result.read_only ? { successToast: readOnlyOpenToast(t, result) } : {}),

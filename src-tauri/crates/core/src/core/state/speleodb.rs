@@ -892,15 +892,40 @@ impl AppState {
     /// acquire whose holder check failed, the unwind whose release could not
     /// tell) is covered, and no path that leaves none is.
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
-        self.speleodb_start_editing_flow().map_err(|mut refusal| {
-            if !self.edit_enabled() && self.speleodb_close_would_hand_back() {
-                refusal.lock_may_be_held = Some(true);
-            }
-            refusal
-        })
+        self.speleodb_start_editing_resuming(true)
     }
 
-    fn speleodb_start_editing_flow(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+    /// The automatic Start Editing after an open (sdbdemo2 issue 3): the same
+    /// verb, except that it does not take over a lock the ACCOUNT already holds
+    /// while this run holds no claim on it. SpeleoDB's lock is the account's, so
+    /// that lock may be the one Stalagmight open on another computer with this
+    /// account is editing under, and the held-lock prompt has just said so. It
+    /// answers `LockedBy` with this account's own email instead, before any
+    /// request but the holder read: the project opens read-only and the notice
+    /// says why; Resume editing (the plain verb) then edits it here too, on
+    /// purpose. A lock this run claims (taken here, or kept by a close) is
+    /// resumed as before.
+    pub fn speleodb_start_editing_after_open(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_resuming(false)
+    }
+
+    fn speleodb_start_editing_resuming(
+        &self,
+        resume_held: bool,
+    ) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_flow(resume_held)
+            .map_err(|mut refusal| {
+                if !self.edit_enabled() && self.speleodb_close_would_hand_back() {
+                    refusal.lock_may_be_held = Some(true);
+                }
+                refusal
+            })
+    }
+
+    fn speleodb_start_editing_flow(
+        &self,
+        resume_held: bool,
+    ) -> Result<StartEditingResult, SpeleoErrorDto> {
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
         // token, the mutex holder) that another lock operation could invalidate,
@@ -1015,8 +1040,16 @@ impl AppState {
             // Unheld -> this call took it: record the acquisition, hand it back if we
             // walk away.
             Ok(None) => (true, false),
-            // Already ours -> inherited: no authorship, and never hand it back.
+            // Already ours -> inherited: no authorship, and never hand it back. The
+            // automatic Start Editing after an open stops short of such a lock when
+            // this run never claimed it (sdbdemo2 issue 3; see
+            // `speleodb_start_editing_after_open`): nothing was acquired yet.
             Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                if !resume_held && !self.speleodb_holds_claim(&link.project_id) {
+                    return Ok(StartEditingResult::LockedBy {
+                        email: Some(holder),
+                    });
+                }
                 (false, true)
             }
             // Someone else's, and the acquire below still succeeded -> they released in
