@@ -1948,3 +1948,51 @@ the others refine RS-T's "T5 under RS".
   metamorphic module pins 580006372 and the three seeds above, each with
   its injection, and `a_placement_past_the_surveys_digits_is_reported`
   shows the tolerance is not vacuous.
+
+## Deviations (package RS-FX8)
+
+Decisions the fixes after the second real-app capture (issues N1 to N7)
+took where this page is silent or the code disagreed, each with its reason.
+
+- **A line name anchors on an own station (N1).** A branch starting on a
+  junction anchored its name on the junction, where the junction's station
+  label sits; both are offset in em from one point, so they overlap at every
+  zoom and only one of them ever shows (the junction's label lost in the
+  capture, the branch's name in the Playwright survey). Not
+  RS-made, but RS makes a branch on a kept station the common shape. The
+  name now anchors on the first non-reference station that is no junction
+  slot (its Station ID on another slot of the SoA, `junctionSlots`) and no
+  loop end; a line whose every station is shared (a one-shot tie) takes the
+  middle of its first shot. The other fix the issue offered, giving station
+  labels priority over line names, was not taken: a name revealed from z10
+  cannot vanish at the 13.5 band (the reveal is monotone in zoom), so it
+  would have to lose from the start and a branch would never be named. The
+  #699 ranks (real line first) are unchanged.
+- **A line-name toggle needs no rebuild (N1).** A toggle reruns the reveal
+  over the emitted labels only, and a label that never clears is not
+  emitted, so a station label a name beat could not come back when names
+  were turned off. A build now also emits, hidden at an unreachable reveal,
+  every label that overlaps a shown line name at the build zoom
+  (`shadowedByKind`); the rerun then shows it. Line names are few, so this
+  adds few labels; the other kinds keep the documented approximation (a
+  label freed beyond the emit set waits for the next settle).
+- **Remove Closure and Merge follow the answers (N2).** As Detach since
+  P2-2: Remove Closure's row and sentence name the returning station as the
+  chosen answer leaves it, and Merge's "will show" and loop-end sentences
+  name the kept station so.
+- **The Name column is 112 px wide (N3)**, enough for a three-digit name
+  and "(loop end)"; a longer qualifier truncates, never the name.
+- **Merge's Detach sentence names its station and comes first (N4):**
+  "Detach Line from Station brings Lower / 3 back.", then what stays inside.
+- **The other collision answer (N5)** reads "Rename the 0 that is on Side
+  now (Station ID 29) to 0a": "Side's own 0" fit the returning station too.
+- **The rename prompt (N6)** names the lines once, on its button. The grid's
+  `onEdit` may return `EDIT_HELD`, and the grid then keeps its cursor on the
+  edited cell; the stations grid returns it when it asks whose station a
+  cell shows. A cursor that moved on with Enter pointed at the next row
+  while the prompt was about this one.
+- **Every station that goes with the remaining junction (N7).** When the
+  detached line keeps the junction, the lines that come off take every other
+  archived station with them, inside the one they get back (RS-FX4); the
+  dialog names them all for either pick, not only those under the picked
+  one. History records stay with the junction and are not named.
