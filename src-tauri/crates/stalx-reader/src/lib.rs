@@ -9,8 +9,9 @@
 //!   whitespace between those tokens is tolerated) is decoded by the app's own
 //!   decoder, which checks the format, version, conventions and the survey's
 //!   invariants. Its `archived-stations` feature (kept stations: a junction
-//!   shows one station on every line, the others archived in it, and a loop
-//!   closure may show one end as the other) is known; a version 2 file
+//!   shows one station on every line, the others archived in it, each under
+//!   the station it was archived with, and a loop closure may show one end
+//!   as the other) is known; a version 2 file
 //!   without it, which an earlier build of version 2 wrote, is upgraded as the
 //!   app upgrades it when it opens it (`docs/file-format.md` section 12);
 //! - an SQLite `.stalx` (the format before version 2) is opened by the frozen

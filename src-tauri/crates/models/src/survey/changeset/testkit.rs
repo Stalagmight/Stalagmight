@@ -1246,6 +1246,7 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
             if let Some(record) = st.archived.first_mut() {
                 record.name.push('!');
                 record.lines.push(u32::MAX);
+                record.into = Some(record.into.map_or(u32::MAX - 1, |o| o ^ 1));
             }
             return Some("a station it records");
         }

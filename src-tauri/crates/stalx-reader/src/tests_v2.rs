@@ -542,3 +542,54 @@ fn an_earlier_version_2_file_reads_upgraded() {
     assert_eq!(name_at(&survey, at(side, 0)), "M2");
     assert_eq!(name_at(&survey, at(side, 1)), "M2a");
 }
+
+/// Record owners (RS-FX4): a junction merged into another with a record of
+/// its own reads as the junction it is (each slot shows the kept station,
+/// the archived ones nowhere), and a file whose record owners cycle is
+/// corrupt, refused at once. Injection: drop A6 from `validate` and the
+/// cycle reads.
+#[test]
+fn record_owners_read_and_a_cycle_is_corrupt() {
+    let (mut project, hub) = hub_project();
+    let far = project
+        .add_line(meta("Far"), StartAt::New, vec![leg(0.0)])
+        .unwrap();
+    let far_start = project.line(far).unwrap().start;
+    project.set_placement(far_start, -400.0, 90.0).unwrap();
+    let loose_start = project.line(hub.loose).unwrap().start;
+    let far_end = *project.line_stations(far).unwrap().last().unwrap();
+    let branch_end = *project.line_stations(hub.branch).unwrap().last().unwrap();
+    // Far's end merged into Loose's start (Loose's kept), then that junction
+    // into Branch's end (Branch's kept): Far's station is archived inside
+    // Loose's, which is archived in Branch's end.
+    project
+        .merge_stations_auto(far_end, loose_start, loose_start)
+        .unwrap();
+    project
+        .merge_stations_auto(loose_start, branch_end, branch_end)
+        .unwrap();
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    let records = &project.station(branch_end).unwrap().archived;
+    assert_eq!(
+        records.iter().map(|r| (r.id, r.into)).collect::<Vec<_>>(),
+        [(far_end, Some(loose_start)), (loose_start, None)]
+    );
+    let bytes = encoded(&project);
+    let survey = read_bytes(&bytes, &ReadOptions::default()).unwrap();
+    let kept = project.station(branch_end).unwrap().name.clone();
+    for (section, index) in [(hub.loose, 0), (far, 1), (hub.branch, 1)] {
+        assert_eq!(name_at(&survey, at(section, index)), kept);
+    }
+    let loose = survey.sections.iter().find(|s| s.id == hub.loose).unwrap();
+    assert_eq!(loose.station_ids[0], branch_end);
+    super::tests::assert_names_unique_per_section(&survey);
+
+    let own = format!("{{\"id\":{loose_start},\"name\":");
+    let cycle = edited(
+        &bytes,
+        &own,
+        &format!("{{\"id\":{loose_start},\"into\":{far_end},\"name\":"),
+    );
+    let err = read_bytes(&cycle, &ReadOptions::default()).unwrap_err();
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Corrupt), "{err}");
+}
