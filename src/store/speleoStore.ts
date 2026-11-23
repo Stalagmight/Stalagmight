@@ -19,7 +19,12 @@ import type {
 import { invokeIpc } from '../utils/ipc';
 import { emailsMatch } from '../utils/email';
 import { endpointsMatch } from '../utils/speleoEndpoint';
-import { speleoLockLostMessage } from '../utils/speleoLockLost';
+import {
+  ownReleaseMark,
+  ownReleaseSince,
+  ownSpeleoRelease,
+  speleoLockLostMessage,
+} from '../utils/speleoLockLost';
 import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useProjectStore } from './projectStore';
 
@@ -80,6 +85,15 @@ export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'no_anchor' }
   | PushFailedBanner;
+
+/** This session's own release of the open project's lock landed: the edit
+    session is over by its own hand, so a later status that names no holder is no
+    loss (pre-PR review of the X3 round, must-fix 1). */
+export function markOwnReleaseEnded(): void {
+  useSpeleoStore.setState((state) => (state.link?.editState === 'editing'
+    ? { link: { ...state.link, editState: 'read-only' } }
+    : {}));
+}
 
 /** A hand-off verb found SpeleoDB diverged from the copy: the SpeleoDB tab says so
     ("Resolve synchronization conflict") from now on, not only while the prompt it
@@ -924,6 +938,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       const seq = ++linkStatusSeq;
       const requestedLink = get().link;
       const requestedGeneration = get().sessionGeneration;
+      const releaseMark = ownReleaseMark();
       try {
         const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
         if (get().sessionGeneration !== requestedGeneration) return;
@@ -937,7 +952,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // sdbdemo2 issue 4: a refresh that ends an edit session because SpeleoDB
         // no longer gives this account the lock (another session of the account
         // handed it back, someone else holds it, access changed) says so.
-        const lost = speleoLockLostMessage(requestedLink, status, get().session?.userEmail ?? null);
+        // Not when this session's own release overlapped the refresh: that lock was
+        // given back here, not lost (pre-PR review, must-fix 1).
+        const lost = ownReleaseSince(releaseMark)
+          ? null
+          : speleoLockLostMessage(requestedLink, status, get().session?.userEmail ?? null);
         get().seedFromStatus(status);
         if (lost) showSpeleoReadOnlyNotice(lost, 'lockLost');
       } catch {
@@ -1071,7 +1090,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
-    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    await ownSpeleoRelease(() => invokeIpc<null>('speleodb_release_lock', { projectId }));
+    // The OPEN project's own lock, released here: its edit session is over by this
+    // session's hand, not lost (pre-PR review, must-fix 1).
+    if (projectId === get().remoteProjectId) markOwnReleaseEnded();
     // Optimistic local update (avoids a full re-scan per release when the user frees
     // several one by one): drop this lock from the prompt's list and mark the project
     // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.

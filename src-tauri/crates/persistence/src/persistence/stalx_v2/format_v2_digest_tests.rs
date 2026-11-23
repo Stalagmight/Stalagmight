@@ -62,6 +62,12 @@ fn what_is_not_survey_content_leaves_the_digest_as_it_is() {
         }
         let mut touched = p.clone();
         touched.modified_at += chrono::Duration::seconds(90);
+        // The next ids to hand out are allocation state: an add and its Undo
+        // leave them advanced over a body that is BASE's again (pre-PR review
+        // of the X3 round, should-fix 2).
+        touched.counters.next_section_id += 1;
+        touched.counters.next_station_id += 1;
+        touched.counters.next_closure_id += 1;
         assert_eq!(digest_of(&touched, &other), digest, "seed {seed}");
 
         // A local-only rewrite copies the survey verbatim.
@@ -130,10 +136,6 @@ fn every_survey_change_changes_the_digest() {
     let mut settings = p.clone();
     settings.settings.validation.warn_shot_length_max += 1.0;
     changed("a validation threshold", &settings, &extras);
-
-    let mut counters = p.clone();
-    counters.counters.next_section_id += 1;
-    changed("a counter", &counters, &extras);
 
     let mut mode = extras.clone();
     if let Some(link) = mode.speleodb.as_mut() {

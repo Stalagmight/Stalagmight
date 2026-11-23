@@ -53,6 +53,22 @@ it('a lock this account already holds opens read-only and says so in the prompt\
   expect(notice?.message).not.toContain('diver@example.com');
 });
 
+// Pre-PR review of the X3 round, should-fix 3: the own-account branch ran before
+// the check for un-uploaded work, so a copy holding changes never heard they are
+// kept. The held-lock words stay, with the kept-changes sentence.
+it('a lock this account already holds over our own un-uploaded work says the changes are kept', async () => {
+  useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' } });
+  useSpeleoStore.setState((state) => ({ link: state.link ? { ...state.link, hasUnpushedEdits: true } : null }));
+  ipc.mockResolvedValue({ kind: 'locked_by', email: 'diver@example.com' });
+  await autoAcquireSpeleoLock('/remote.stalx', () => true);
+  const notice = useSpeleoReadOnlyNotice.getState().notice;
+  expect(notice?.kind).toBe('opened');
+  expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.heldByYourAccountKeepsChanges'));
+  expect(notice?.message).toContain('Your changes are kept on this computer');
+  expect(notice?.message).toContain('another computer with this account');
+  expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+});
+
 // Opened over our own un-uploaded work (a fast-forward local copy, or "Open my
 // local copy"): someone else holding the lock must not read as "your work is gone".
 it('says local changes are kept when someone else holds the lock over our own work', async () => {

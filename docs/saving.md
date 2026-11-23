@@ -556,8 +556,9 @@ So whether a copy has un-uploaded work is decided by the survey it holds
 
 - **Recorded.** `local.speleodb.base_survey` is the digest of the BASE
   revision's survey (`stalx_v2::survey_digest`: every member an upload carries
-  that is survey content, without `project.modified` and the link's endpoint
-  and name, bound to the BASE id; [file-format.md section 12](file-format.md#12-how-stalagmight-saves)).
+  that is survey content, without `project.modified`, the id `counters` (Undo
+  never hands an id back, so an add and its Undo leave them advanced) and the
+  link's endpoint and name, bound to the BASE id; [file-format.md section 12](file-format.md#12-how-stalagmight-saves)).
   It is written at every install of bytes known to be the BASE revision's
   (`PreparedDownload::cache_bytes`, which records it only when the caller named
   the revision it downloaded and that revision is the link's BASE: a pull and a

@@ -4,6 +4,7 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { ownSpeleoRelease } from '../utils/speleoLockLost';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, } from '../utils/speleoError';
@@ -233,7 +234,7 @@ export function useRevertRevision() {
         // this process's lock, so unwind that provenance-scoped claim before classifying
         // the false result as ordinary contention or failure.
         if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await ownSpeleoRelease(() => invokeIpc<null>('speleodb_release_lock_acquired_here')).catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock taken before the project changed',
               e,
@@ -290,7 +291,7 @@ export function useRevertRevision() {
       // name the smaller problem; a stranded lock stays visible in the held-lock
       // resume prompt.
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-        await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+        await ownSpeleoRelease(() => invokeIpc<null>('speleodb_release_lock_acquired_here')).catch((e: unknown) => {
           console.warn('revert: could not release the lock taken before the project changed', e);
         });
         return { kind: 'project_changed' };
@@ -310,7 +311,7 @@ export function useRevertRevision() {
           quiet: true,
         });
         if (!applied) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await ownSpeleoRelease(() => invokeIpc<null>('speleodb_release_lock_acquired_here')).catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock after the project changed during restore',
               e,

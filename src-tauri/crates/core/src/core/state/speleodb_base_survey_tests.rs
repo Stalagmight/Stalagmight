@@ -503,6 +503,62 @@ fn an_edit_taken_back_and_saved_counts_as_clean() {
     }
 }
 
+/// An added Section taken back with Undo and saved counts as clean too, though
+/// the id counters stay advanced: Undo never hands an id back, so the counters
+/// are not BASE's. They are allocation state, not survey content (nothing in
+/// the body uses the ids they would hand out next), so the digest leaves them
+/// out (pre-PR review of the X3 round, should-fix 2: the docs said an edit
+/// taken back by hand or with Undo counts as clean, and an Add plus Undo did
+/// not).
+///
+/// Injection: hash `counters` again (drop it from the digest's `NOT_SURVEY`)
+/// and the save leaves the mark set.
+#[test]
+fn an_added_section_undone_and_saved_counts_as_clean() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let (endpoint, repo, dest) = setup(temp.path(), None);
+        let state = open_for_editing(&endpoint, &dest);
+        let before = state.get_project_state().expect("open");
+        let added = state.execute(Command::CreateCaveSection {
+            name: "Synthetic section".to_owned(),
+            color: "#336699".to_owned(),
+            line_ids: Vec::new(),
+        });
+        assert!(added.success, "add: {:?}", added.error);
+        save(&state);
+        assert!(open_link(&state).has_unpushed_edits);
+        assert!(state.undo().success);
+        let undone = state.get_project_state().expect("open");
+        assert_eq!(undone.sections, before.sections, "the Section is gone");
+        assert_ne!(
+            decoded(&dest).project.counters.next_section_id,
+            0,
+            "precondition: the file has counters"
+        );
+
+        let saved = save(&state);
+
+        assert_eq!(
+            saved.speleodb_unpushed_cleared,
+            Some(true),
+            "the frontend is told"
+        );
+        assert!(!open_link(&state).has_unpushed_edits);
+        assert!(!link_on_disk(&dest).expect("linked").has_unpushed_edits);
+        assert!(!listed_unpushed(&state));
+        let mut on_disk = survey_at(&dest);
+        let server = downloaded_survey(BASE, &repo);
+        assert!(
+            on_disk.counters.next_section_id > server.counters.next_section_id,
+            "Undo kept the Section id handed out"
+        );
+        on_disk.counters = server.counters.clone();
+        assert_eq!(on_disk, server, "the survey itself is BASE's");
+    });
+}
+
 /// A confirmed upload records the digest of what went up: the copy's BASE is
 /// now that revision, so a crash after the next edit leaves nothing un-uploaded
 /// either.

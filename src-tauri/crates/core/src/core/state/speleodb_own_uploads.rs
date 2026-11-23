@@ -242,6 +242,7 @@ impl AppState {
             sync::replaced_by_upload(upload_base, landed, &history.commits),
             unanswered,
             &my_email,
+            sync::history_records_descriptions(&history.commits),
         );
         if replaced.is_empty() {
             return;

@@ -565,9 +565,12 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
             | HttpError::Middleware(reqwest_middleware::Error::Reqwest(error)),
         ) => network_error(error),
         // No middleware is installed; were one to fail, nothing is known of it.
-        ApiOpError::Transport(HttpError::Middleware(error)) => SpeleoDbError::Transport {
+        // Its text is not kept: it may carry the request URL (the project id is in
+        // the path), which every other arm strips, and `without_url` cannot reach
+        // into a middleware's own error (pre-PR review of the X3 round, nit 6).
+        ApiOpError::Transport(HttpError::Middleware(_)) => SpeleoDbError::Transport {
             cause: TransportCause::Unknown,
-            detail: error.to_string(),
+            detail: "a request middleware failed".into(),
         },
         ApiOpError::Transport(HttpError::Timeout) => SpeleoDbError::Transport {
             cause: TransportCause::Timeout,

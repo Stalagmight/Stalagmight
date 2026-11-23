@@ -203,7 +203,9 @@ regions). Read the comment blocks in those two files plus
   no longer gives this account the lock the session was editing under (another
   session of the account handed it back, someone else took it, access changed), the
   read-only notice says "Editing stopped" and why; work at risk behind a read-only
-  badge is a modal, not a state change to notice.
+  badge is a modal, not a state change to notice. A release this session made
+  itself (Discard and hand back the lock, Done, Switch to Read Only, a close) is
+  not a loss and never raises it.
 - **An upload that replaced someone's revision is a banner, and stops an exit.**
   When a SpeleoDB upload lands on top of a revision another session uploaded
   between the push's check and the upload (R3), the upload succeeded but that

@@ -33,6 +33,7 @@ import { useSpeleoStore } from '../store/speleoStore';
 import type { CommandResult } from '../types/commands';
 import { invokeIpc } from './ipc';
 import { describeSpeleoError, describeTransportCause } from './speleoError';
+import { ownSpeleoRelease } from './speleoLockLost';
 
 /** What the user is leaving the project for. Picks the wording only. */
 export type ReleaseFailureReason = 'close' | 'switch' | 'quit';
@@ -192,11 +193,11 @@ export async function settleOpenLockBeforeLeaving(
 ): Promise<boolean> {
   if (!projectOpen || useSpeleoStore.getState().link === null) return true;
   const lockCertain = useSpeleoStore.getState().link?.editState === 'editing';
-  const settle = (releaseLock: boolean) => invokeIpc<CommandResult>(
+  const settle = (releaseLock: boolean) => ownSpeleoRelease(() => invokeIpc<CommandResult>(
     'speleodb_settle_open_lock',
     { releaseLock },
     { purpose: releaseLock ? 'hand back the open project lock before leaving it' : 'keep the open project lock on purpose' },
-  );
+  ));
   let result: CommandResult;
   try {
     // A missing reply reports nothing, which is not "nothing to release".
