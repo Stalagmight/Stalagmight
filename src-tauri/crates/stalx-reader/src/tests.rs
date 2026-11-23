@@ -240,15 +240,20 @@ fn reads_every_part_of_a_current_file() {
     // is seeded from its index, as the app does on open). The junction keeps
     // Main's "2" on both sections (RS 8.3: Main is longer, Side's own start
     // is archived). The closure archives Side:2 (Main:4 is on the longer
-    // line), which is then shown nowhere by its own name: it keeps its "2"
-    // unlettered (the reader lists each station's own name; RS-X: the shown
-    // name per slot).
+    // line), so that slot shows Main:4's "17" (RS 9: the shown name per
+    // slot, `shown_as` naming the kept end); its own "2" is shown nowhere
+    // and is never lettered.
     let name = |at: StationId| name_at(&survey, at);
     assert_eq!(
         [0, 1, 2, 3, 4].map(|i| name(id(main.id, i))),
         ["0", "1", "2", "3", "17"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "17"]);
+    assert_eq!(
+        survey.shown_as.get(&side.station_ids[2]),
+        Some(&main.station_ids[4]),
+        "the archived end maps to its kept end"
+    );
     assert_eq!(survey.station_names.len(), 8);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.unresolved_references, 0);
@@ -492,8 +497,8 @@ fn a_file_without_station_names_reads_with_seeded_names() {
     let survey = read_file(&path).unwrap();
 
     // One per position, seeded from the index; the junction has Main's on
-    // both sections, and Side's own "2", the closure's archived end, keeps
-    // its own name (RS 8.3, as above).
+    // both sections, and Side:2, the closure's archived end, shows its kept
+    // end Main:4's seeded "4" (RS 8.3 and 9, as above).
     assert_eq!(survey.station_names.len(), 8);
     let (main, side) = (survey.sections[0].id, survey.sections[1].id);
     let name = |section_id, index| name_at(&survey, StationId { section_id, index });
@@ -501,7 +506,7 @@ fn a_file_without_station_names_reads_with_seeded_names() {
         [0, 1, 2, 3, 4].map(|i| name(main, i)),
         ["0", "1", "2", "3", "4"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "4"]);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
