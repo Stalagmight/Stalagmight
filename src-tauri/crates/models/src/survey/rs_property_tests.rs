@@ -790,15 +790,17 @@ impl Fuzz {
                             ctx.hidden_named.insert(promotion.archived);
                         }
                     }
-                    Err(e) => return (
-                        label.clone(),
-                        Err(fail(
-                            "rs-preview",
-                            format!(
+                    Err(e) => {
+                        return (
+                            label.clone(),
+                            Err(fail(
+                                "rs-preview",
+                                format!(
                                 "{label}: the delete went through, its preview was refused ({e})"
                             ),
-                        )),
-                    ),
+                            )),
+                        )
+                    }
                 }
                 ctx.lettered
                     .extend(edited.report.identities.lettered.iter().cloned());
@@ -841,15 +843,17 @@ impl Fuzz {
                             ctx.hidden_named.insert(promotion.archived);
                         }
                     }
-                    Err(e) => return (
-                        label.clone(),
-                        Err(fail(
-                            "rs-preview",
-                            format!(
+                    Err(e) => {
+                        return (
+                            label.clone(),
+                            Err(fail(
+                                "rs-preview",
+                                format!(
                                 "{label}: the delete went through, its preview was refused ({e})"
                             ),
-                        )),
-                    ),
+                            )),
+                        )
+                    }
                 }
                 ctx.lettered
                     .extend(edited.report.identities.lettered.iter().cloned());
