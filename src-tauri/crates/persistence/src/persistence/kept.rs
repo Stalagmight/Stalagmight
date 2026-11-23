@@ -53,6 +53,10 @@ pub struct CommentHidden {
     pub line: String,
     /// The station's name as the file showed it at that slot.
     pub station: String,
+    /// The identity (Station ID) whose comment the slot showed: one station
+    /// on several lines hides one comment, which the notice counts and
+    /// names once, with its lines (RS-FX6).
+    pub identity: StationId,
 }
 
 /// A loop closure an upgrade left archiving nothing because the end rule K
@@ -399,6 +403,7 @@ fn slot_changes(
                 comments.push(CommentHidden {
                     line: label(line.id),
                     station: was.name.clone(),
+                    identity: was.identity,
                 });
             }
             if name_changed || comment_hidden {
@@ -412,7 +417,11 @@ fn slot_changes(
     (names, comments, order)
 }
 
-/// The closures `ids` as the notice names them, ends by their shown names.
+/// The closures `ids` as the notice names them, each end as the user made
+/// the closure: by its slot's text, except a loop end of another closure,
+/// which is named by its own identity and what it is shown as now (RS-FX6:
+/// "Main / M4 (now shown as Side / S4)", not "Side / S4 (loop end on
+/// Main)", which reads like a closure across one Side shot).
 fn closures_keep_both(project: &Project, ids: &[ClosureId]) -> Vec<ClosureKeepsBoth> {
     let ids: BTreeSet<ClosureId> = ids.iter().copied().collect();
     project
@@ -420,8 +429,33 @@ fn closures_keep_both(project: &Project, ids: &[ClosureId]) -> Vec<ClosureKeepsB
         .iter()
         .filter(|c| ids.contains(&c.id))
         .map(|c| ClosureKeepsBoth {
-            a: project.station_text(c.a, c.a_via),
-            b: project.station_text(c.b, c.b_via),
+            a: closure_end_text(project, c.a, c.a_via),
+            b: closure_end_text(project, c.b, c.b_via),
         })
         .collect()
+}
+
+/// One closure end for [`closures_keep_both`]: `Main / M4 (now shown as
+/// Side / S4)` when a closure archives the end's node, else its slot text.
+fn closure_end_text(project: &Project, node: StationId, via: Option<LineId>) -> String {
+    if !project.is_closure_archived(node) {
+        return project.station_text(node, via);
+    }
+    let identity = |id: StationId, fallback: Option<LineId>| {
+        let name = project
+            .stations
+            .get(&id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        match project.home_line(id).or(fallback) {
+            Some(line) => format!("{} / {name}", project.line_label_of(line)),
+            None => name,
+        }
+    };
+    let shown = project.shown(node);
+    format!(
+        "{} (now shown as {})",
+        identity(node, via),
+        identity(shown, None)
+    )
 }

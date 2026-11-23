@@ -289,8 +289,17 @@ fn a_closure_c1_refuses_keeps_both_names_and_is_reported() {
     let archived: Vec<_> = p.closures.iter().map(|c| c.archived).collect();
     assert_eq!(archived, [Some(ClosureEnd::A), None]);
     assert_eq!(report.changes.closures_keep_both.len(), 1);
+    // The refused closure was made as Main / M1 - Side / S1: its end M1 is
+    // the first closure's loop end, named by its own identity and what it
+    // shows now (RS-FX6, P2-8), not "Side / S2 (loop end on Main)", which
+    // read like a closure across one Side shot. Injection: name the end by
+    // `station_text` again.
+    let keeps_both = &report.changes.closures_keep_both[0];
+    assert_eq!(keeps_both.a, "Main / M1 (now shown as Side / S2)");
+    assert_eq!(keeps_both.b, "Side / S1");
     assert_eq!(report.changes.comments_hidden.len(), 1);
     assert_eq!(report.changes.comments_hidden[0].station, "M1");
+    assert_eq!(report.changes.comments_hidden[0].identity, 1);
 }
 
 /// A junction whose every line knew it by an alias (A4 as written) shows the
