@@ -1233,6 +1233,7 @@
       "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",
       "restLead": "The lines that come off show:",
       "restChoice": "{{station}} (Station ID {{id}})",
+      "restFailed": "That choice could not be checked, so the lines that come off show the station chosen for them.",
       "lettersStay": "A name that took a letter earlier because of this station keeps it."
     },
     "saveConflict": {
