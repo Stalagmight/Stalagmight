@@ -247,3 +247,57 @@ fn an_earlier_revision_is_converted_on_install() {
         assert_eq!(notice.file, ConversionFile::Downloaded);
     });
 }
+
+/// Add .stalx and Merge Projects say that an earlier source was converted
+/// as it was read, counting what its lines show differently (RS 8.2): the
+/// copy renumbers lines and Station IDs, so the note names no station. The
+/// source file is left as it was.
+#[test]
+fn add_and_merge_say_an_earlier_source_was_converted() {
+    crate::app_dirs::init_for_test();
+    let dir = TempDir::new().unwrap();
+    let path = write_earlier(dir.path(), "earlier-source");
+    let original = std::fs::read(&path).unwrap();
+    let mut decoded = stalx_v2::decode(&original, &DecodeOptions::default()).unwrap();
+    let report = decoded.upgrade().expect("an earlier file is upgraded");
+    let counts = super::conversion_notice::ConversionNotice::of_upgrade(&report)
+        .expect("the upgrade changes what a line shows")
+        .counts()
+        .join(", ");
+
+    let (state, _) = super::project_add_tests::open_target(dir.path(), false);
+    let added = super::project_add_tests::add(&state, &path);
+    assert!(added.success, "{:?}", added.error);
+    let info = added.import_receipt.expect("a receipt").info;
+    assert_eq!(
+        info,
+        vec![format!(
+            "'earlier-source.stalx' was written by an earlier version and was converted as it \
+             was read (the file itself is unchanged): {counts}"
+        )]
+    );
+
+    let other = write_earlier(dir.path(), "earlier-other");
+    let output = dir.path().join("merged.stalx");
+    let merged = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: vec![path.clone(), other],
+        output_path: output,
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let notes: Vec<&str> = merged
+        .warnings
+        .iter()
+        .filter(|w| w.code == "SOURCE_CONVERTED")
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(notes.len(), 2, "one per source: {:?}", merged.warnings);
+    for note in notes {
+        assert!(
+            note.contains("was written by an earlier version") && note.ends_with(&counts),
+            "{note}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

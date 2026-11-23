@@ -133,6 +133,9 @@ pub(crate) enum ConversionOriginal {
 /// sentence; more are counted there and listed behind Details.
 pub(crate) const NAMES_INLINE: usize = 3;
 
+/// The clause of a notice whose only difference is an unexplained one.
+const SOMETHING_CHANGED: &str = "some stations are placed differently than in the old version";
+
 /// `1 {one}` or `{n} {many}`.
 fn count(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
@@ -280,62 +283,84 @@ impl ConversionNotice {
             .then_some(notice)
     }
 
-    /// The banner's view. `saved`: the project file is already in the new
-    /// format (a closed file's Recents rename or link strip upgraded it
-    /// before this open); ignored for a downloaded revision.
-    pub(crate) fn view(&self, saved: bool) -> ConversionNoticeView {
-        let mut changes = Vec::new();
+    /// What a source an Add .stalx or a Merge Projects read was converted
+    /// with, counted and named nowhere (RS 8.2, 8.3): the copy renumbers its
+    /// lines and Station IDs, so the banner's "Side / 0" would not match
+    /// what the user then sees. The banner's order; never empty.
+    pub(crate) fn counts(&self) -> Vec<String> {
+        let mut out = self.geometry_clauses();
+        out.extend(self.identity_counts());
+        if out.is_empty() {
+            out.push(SOMETHING_CHANGED.to_owned());
+        }
+        out
+    }
+
+    /// The moves, depth changes and stations not placed, one clause each.
+    fn geometry_clauses(&self) -> Vec<String> {
+        let mut out = Vec::new();
         if self.slots_moved > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} moved {}",
                 count(self.slots_moved, "station", "stations"),
                 by(self.slots_moved, self.max_displacement_m)
             ));
         }
         if self.depth_changed > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} changed depth {}",
                 count(self.depth_changed, "station", "stations"),
                 by(self.depth_changed, self.max_depth_change_m)
             ));
         }
         if self.unplaced > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} could not be placed",
                 count(self.unplaced, "station", "stations")
             ));
         }
+        out
+    }
+
+    /// What lines show differently, counted by kind.
+    fn identity_counts(&self) -> Vec<String> {
         let identity = &self.changes;
-        let entries = identity_entries(identity);
+        [
+            (
+                identity.shown_as_other(),
+                "station is now shown under another station's name",
+                "stations are now shown under another station's name",
+            ),
+            (
+                identity.lettered(),
+                "station now has a letter suffix",
+                "stations now have a letter suffix",
+            ),
+            (
+                identity.comments_hidden.len(),
+                "station's comment is now hidden",
+                "stations' comments are now hidden",
+            ),
+            (
+                identity.closures_keep_both.len(),
+                "loop closure keeps both names",
+                "loop closures keep both names",
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, one, many)| count(n, one, many))
+        .collect()
+    }
+
+    /// The banner's view. `saved`: the project file is already in the new
+    /// format (a closed file's Recents rename or link strip upgraded it
+    /// before this open); ignored for a downloaded revision.
+    pub(crate) fn view(&self, saved: bool) -> ConversionNoticeView {
+        let mut changes = self.geometry_clauses();
+        let entries = identity_entries(&self.changes);
         let details = if entries.len() > NAMES_INLINE {
-            let counted = [
-                (
-                    identity.shown_as_other(),
-                    "station is now shown under another station's name",
-                    "stations are now shown under another station's name",
-                ),
-                (
-                    identity.lettered(),
-                    "station now has a letter suffix",
-                    "stations now have a letter suffix",
-                ),
-                (
-                    identity.comments_hidden.len(),
-                    "station's comment is now hidden",
-                    "stations' comments are now hidden",
-                ),
-                (
-                    identity.closures_keep_both.len(),
-                    "loop closure keeps both names",
-                    "loop closures keep both names",
-                ),
-            ];
-            changes.extend(
-                counted
-                    .into_iter()
-                    .filter(|(n, _, _)| *n > 0)
-                    .map(|(n, one, many)| count(n, one, many)),
-            );
+            changes.extend(self.identity_counts());
             entries
         } else {
             changes.extend(entries);
@@ -344,8 +369,9 @@ impl ConversionNotice {
         if changes.is_empty() {
             // `of`, `of_migration` and `of_upgrade` raise no notice without
             // one of the counts above; never "0 stations moved" all the same.
-            changes.push("some stations are placed differently than in the old version".to_owned());
+            changes.push(SOMETHING_CHANGED.to_owned());
         }
+        let identity = &self.changes;
         let file = match (self.original, saved) {
             (ConversionOriginal::SpeleoDbRevision, _) => ConversionFile::Downloaded,
             (ConversionOriginal::LocalFile, false) => ConversionFile::NotYetSaved,

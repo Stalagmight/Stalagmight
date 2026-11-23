@@ -80,6 +80,24 @@ describe('MergeProjectsDialog warning surfacing', () => {
     expect(closeDialog).toHaveBeenCalled();
   });
 
+  it('names every converted source in the one toast (RS 8.2, 8.3)', async () => {
+    const converted: ValidationWarning = {
+      code: 'SOURCE_CONVERTED',
+      message:
+        "'B' was written by an earlier version and was converted as it was read (the file itself is unchanged): 1 station now has a letter suffix",
+      severity: 'warning',
+    };
+    mergeProjects.mockResolvedValue(ok([SURFACE_ELEVATION_WARNING, converted]));
+
+    render(<MergeProjectsDialog />);
+    await userEvent.click(await screen.findByTestId('merge-projects-confirm-button'));
+
+    expect(showToast).toHaveBeenCalledTimes(1);
+    const [message] = showToast.mock.calls[0] as [string];
+    expect(message).toContain(SURFACE_ELEVATION_WARNING.message);
+    expect(message).toContain(converted.message);
+  });
+
   it('does not toast when the merge succeeds with no warnings', async () => {
     mergeProjects.mockResolvedValue(ok([]));
 

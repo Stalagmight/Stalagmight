@@ -35,6 +35,11 @@ pub(super) struct SourceProject {
     /// The SpeleoDB project the source is linked to, by name. Never copied:
     /// it only words one receipt line.
     pub(super) link_name: Option<String>,
+    /// What converting an older source changed that its lines show (a 0.6.0
+    /// file migrated, or a version 2 file an earlier build wrote upgraded,
+    /// RS 8.2 and 8.3), as the open's banner would have said it. The source
+    /// file itself is never written; the receipt counts it.
+    pub(super) converted: Option<super::conversion_notice::ConversionNotice>,
 }
 
 /// The largest `.stalx` an add or a merge reads: the ceiling a SpeleoDB
@@ -79,6 +84,7 @@ impl AppState {
             project: opened.project,
             ignores: opened.file.extras.ignored_warnings,
             link_name,
+            converted: opened.file.conversion,
         })
     }
 }
