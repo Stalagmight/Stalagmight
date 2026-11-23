@@ -2125,21 +2125,6 @@ fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
     }
 }
 
-/// Farm dbf19ed85330 (sg-migration, "wire-unexplained | removed_comments",
-/// seed 35006357): a range delete over a migrated loop end (a 0.6.0
-/// closure's end, archived by the migration, RS 8.3) whose node has no
-/// comment of its own: the slot showed its kept end's comment, which the
-/// delete does not remove, so the port lists none where 0.6.0 listed the
-/// slot's copy. The wire-equivalence oracle now explains it (RS 5.1).
-/// Injection: drop the `shows_anothers_comment` retain in
-/// `wire_equivalence_tests::range_impact`.
-#[test]
-fn farm_seed_range_delete_over_a_loop_end_lists_no_comment() {
-    if let Err(f) = run_seed(35_006_357) {
-        panic!("seed 35006357: {} {}", f.class, f.detail);
-    }
-}
-
 /// Farm finding dbf19ed85330 (`wire-unexplained | removed_comments`, seeds
 /// 35006357, 35007676, 35010268 and 35010327): a 0.6.0 loop end with an
 /// empty comment, which the migration archives behind its closure's kept
@@ -2149,7 +2134,10 @@ fn farm_seed_range_delete_over_a_loop_end_lists_no_comment() {
 /// comment, and the wire oracle filtered empty legacy comments only where
 /// the slot now shows none, so it called the difference unexplained.
 /// Injection: record a slot in `empty_comments` only when its wire comment
-/// is gone (the oracle before the fix) and all four seeds fail.
+/// is gone (the oracle before the fix) and all four seeds fail. RS-FX1
+/// pinned 35006357 too, with a looser excuse (any slot showing another
+/// station whose node has no comment now); the integration keeps only this
+/// one, which cannot also excuse a non-empty 0.6.0 comment the port lost.
 #[test]
 fn farm_seeds_an_empty_comment_on_an_archived_loop_end_is_no_comment() {
     for seed in [35_006_357, 35_007_676, 35_010_268, 35_010_327] {
