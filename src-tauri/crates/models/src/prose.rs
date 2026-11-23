@@ -274,7 +274,7 @@ pub fn line_part(line_id: Option<LineId>, name: &str, quoted: bool) -> ProsePart
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "tests")]
+#[expect(clippy::unwrap_used, clippy::panic, reason = "tests")]
 mod tests {
     use super::*;
 
