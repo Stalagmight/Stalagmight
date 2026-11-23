@@ -686,6 +686,13 @@ export default function GlobalView() {
     [recentProjects, remoteSummaries]
   );
   const { states: localStates, loaded: localStatesLoaded, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
+  // SpeleoDB projects a recent file is linked to (every recent, hidden or not, as
+  // the held-lock prompt reads them): a lock of this account on one of them may
+  // be this computer's, so its card never says "not by this computer".
+  const linkedProjectIds = useMemo(
+    () => new Set(allRecentProjects.map((p) => p.speleodb_project_id).filter((id): id is string => !!id)),
+    [allRecentProjects],
+  );
 
   // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
   // for the recents badges. `prompt`-less, so it never re-raises the held-lock
@@ -1131,6 +1138,7 @@ export default function GlobalView() {
                   remoteProjects={remoteProjects}
                   myEmail={speleoEmail}
                   localStates={localStates}
+                  linkedProjectIds={linkedProjectIds}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleOpenFromList}
@@ -1169,6 +1177,7 @@ export default function GlobalView() {
                           remoteProjects,
                           localStates,
                           remoteSummaries,
+                          linkedProjectIds.has(item.projectId),
                         )}
                         cached={item.cached}
                         busy={remoteBusy}

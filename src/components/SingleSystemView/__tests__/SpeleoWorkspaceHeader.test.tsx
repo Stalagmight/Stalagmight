@@ -27,6 +27,12 @@ describe('SpeleoDB workspace lock-state copy', () => {
     expect(lockLine({ lockHolder: 'editor@example.com', lockedByOther: true }))
       .toHaveTextContent(/^Currently being edited by editor@example.com$/);
   });
+  // sdbdemo2 issue 3: a session of this account that is not editing under the
+  // account's lock (another computer may be) said only "Read-only".
+  it('says the account holds the lock while this session is read-only under it', () => {
+    expect(lockLine({ lockHolder: 'ME@example.com' }))
+      .toHaveTextContent(/^Read-only - your account holds the write lock$/);
+  });
   it('says "Ready for editing" when the lock is free and we may take it', () => {
     expect(lockLine({})).toHaveTextContent(/^Ready for editing$/);
   });

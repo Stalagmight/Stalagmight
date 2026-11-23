@@ -73,6 +73,18 @@ test('a lock another session of the account may hold is kept by default', async 
   expect(await releases(page)).toEqual([]);
 });
 
+// sdbdemo2 issue 3 (screenshots 11, 12): the Home card behind the prompt said
+// "You are editing" while the prompt said "not by this computer". It now says
+// what the prompt says, before and after Not now.
+test('the Home card says what the prompt says about the lock', async ({ page }) => {
+  await signInWithALockHeldElsewhere(page);
+  const card = page.locator('[data-testid$="remote-a-speleo-lock"]');
+  await expect(card).toHaveText('Held by this account, not by this computer');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('speleodb-held-lock-dialog')).toBeHidden();
+  await expect(card).toHaveText('Held by this account, not by this computer');
+});
+
 test('Release anyway still hands the lock back', async ({ page }) => {
   await signInWithALockHeldElsewhere(page);
   await page.getByTestId('speleodb-held-lock-release-a').click();

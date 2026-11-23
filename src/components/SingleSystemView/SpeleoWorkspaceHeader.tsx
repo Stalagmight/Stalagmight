@@ -32,6 +32,12 @@ export function speleoLockStateLabel(
   if (link.lockHolder && link.lockedByOther) {
     return t('speleodb.lockState.beingEditedBy', { email: link.lockHolder });
   }
+  // This account holds the lock and this session is not editing under it: it
+  // may be another computer's edit session (sdbdemo2 issue 3), and "Read-only"
+  // alone left the user to guess why Resume editing was offered.
+  if (link.lockHolder && emailsMatch(link.lockHolder, session?.userEmail ?? null)) {
+    return t('speleodb.lockState.heldByYourAccount');
+  }
   // Demo item 6. While the connection is unavailable (the header's next line
   // says so) the status could not read the lock: no holder is "not known", not
   // "free", and "Ready for editing" beside the read-only badge read as if this

@@ -3993,6 +3993,7 @@
       "beingEditedBy": "Currently being edited by {{email}}",
       "readyForEditing": "Ready for editing",
       "readOnly": "Read-only",
+      "heldByYourAccount": "Read-only - your account holds the write lock",
       "offlineFree": "Offline - the lock was free when last checked",
       "offlineHeldBy": "Offline - {{email}} was editing when last checked",
       "offlineHeldByYou": "Offline - your account held the lock when last checked",
@@ -4001,6 +4002,8 @@
     "recentBadge": {
       "remote": "Linked to SpeleoDB",
       "lockedByYou": "Linked to SpeleoDB - you are editing",
+      "heldByThisAccount": "Linked to SpeleoDB - held by this account",
+      "heldNotHere": "Linked to SpeleoDB - held by this account, not by this computer",
       "lockedByOther": "Linked to SpeleoDB - currently being edited by {{email}}"
     },
     "projectListing": {
@@ -4014,6 +4017,7 @@
       },
       "lockedBy": "Currently being edited by {{email}}",
       "lockedByYou": "You are editing",
+      "heldByThisAccount": "Held by this account",
       "unlocked": "Ready for editing",
       "lockUnknown": "Editing status unknown",
       "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date.",
@@ -4158,6 +4162,7 @@
       "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
       "failed": "The editing lock could not be acquired. This project is open read-only.",
       "reloadedNotEditing": "The SpeleoDB version is open, but editing did not start. Resume editing tries again.",
+      "heldByYourAccount": "Your account already holds this project's write lock. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so the project opened read-only. Resume editing edits it here too.",
       "continue": "Continue read-only"
     },
     "release": {
