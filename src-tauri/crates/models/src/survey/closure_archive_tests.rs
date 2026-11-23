@@ -7,7 +7,7 @@
 //! the dialogs' reads, and create-then-remove restoring every shown
 //! identity. Fully synthetic data.
 
-use crate::StationRef;
+use crate::{KeepRefusalReason, StationRef};
 
 use super::archive_tests::{record, shown, slot_bits, undo_is_exact};
 use super::ops_test_helpers::{assert_valid, branch, free_line, gps_at, ok, origin, run, xy_all};
@@ -84,6 +84,7 @@ fn a_closure_keeps_one_end_and_archives_the_other() {
         ClosureKeepChoices {
             allowed: vec![b3, a4],
             rule_k: Some(b3),
+            rule_k_refused: None,
             default: Some(b3),
         },
         "rule K: B is the longer line"
@@ -145,11 +146,13 @@ fn a_keep_must_pass_c1_and_c2_else_keep_both_names_is_the_default() {
     let (a4, b3, c1) = (at(&p, a, 4), at(&p, b, 3), at(&p, c, 1));
     close_b3_on_a4(&mut p, a, b);
     // C1: keeping C's end (rule K: 100 m) would archive B3 a second time.
+    // The refusal names that reason: the OTHER end is already a loop end.
     assert_eq!(
         p.closure_keep_choices(b3, c1),
         ClosureKeepChoices {
             allowed: vec![b3],
             rule_k: Some(c1),
+            rule_k_refused: Some(KeepRefusalReason::OtherEndArchived),
             default: None,
         }
     );
@@ -174,6 +177,7 @@ fn a_keep_must_pass_c1_and_c2_else_keep_both_names_is_the_default() {
         ClosureKeepChoices {
             allowed: vec![],
             rule_k: Some(b3),
+            rule_k_refused: Some(KeepRefusalReason::KeptShowsOtherEnd),
             default: None,
         }
     );

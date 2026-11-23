@@ -216,6 +216,7 @@ impl Project {
             ends,
             allowed: choices.allowed,
             rule_k: choices.rule_k,
+            rule_k_refused: choices.rule_k_refused,
             default_keep: choices.default,
             options,
         })
