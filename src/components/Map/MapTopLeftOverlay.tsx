@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 import { AlertTriangleIcon, FitToViewIcon, LockIcon } from '../common/icons';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import {
   PILL_LABEL_CLS,
@@ -64,12 +65,13 @@ const SHOW_WARNINGS_CLS =
  * What the Closures Computed View left out (#737), as one notice: the loop
  * closures it skips because they span a single shot, the parts of the survey
  * whose solve failed and are drawn measured, and the GPS fixes far from their
- * surveyed positions that it is bent onto (#741). All have Warnings-tab
- * entries, which the button opens. Renders nothing for an empty report.
+ * surveyed positions that it is bent onto (#741), the largest one's station a
+ * prose pill (RS-PROSE). All have Warnings-tab entries, which the button opens.
+ * Renders nothing for an empty report.
  */
 function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
   const { t } = useTranslation();
-  const identity = useIdentityLabels();
+  const prose = useProse();
   const openWarningsTab = useUIStore((s) => s.openWarningsTab);
   const skipped = report.skipped_closures.length;
   const failed = report.failures.length;
@@ -88,11 +90,13 @@ function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
         )}
         {largest && (
           <span data-testid="adjustment-notice-far-gps-fix">
-            {t('map.geometry.farGpsFixes', {
-              count: far.length,
-              station: identity.station(largest.station, true),
-              gap: formatDatumMetres(largest.gap_m),
-            })}
+            <Prose
+              text={t('map.geometry.farGpsFixes', {
+                count: far.length,
+                station: prose.station(largest.station, true),
+                gap: formatDatumMetres(largest.gap_m),
+              })}
+            />
           </span>
         )}
       </span>

@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle, getMapLabels } from './helpers/app';
 import type { LineSeed } from './helpers/app';
 import { expectSpoken, prosePillKinds } from './helpers/proseText';
+import { expectProse } from './helpers/proseSentence';
 
 /**
  * Kept and archived stations in the four dialogs (plan 2026-11-23, RS 6 and
@@ -287,8 +288,12 @@ test.describe('Kept and archived stations (RS)', () => {
         .setSelection({ type: 'station', stationRef: at });
     }, ref(mainId!, 3));
     // "Archived here" lists Third's station inside Side's.
-    await expect(page.getByTestId(`station-detail-record-${sideId! * 100_000}-inside`)).toContainText(
+    await expectProse(
+      page
+        .getByTestId(`station-detail-record-${sideId! * 100_000}-inside`)
+        .getByTestId(`station-detail-record-${thirdId! * 100_000}-text`),
       `0 (Station ID ${thirdId! * 100_000}), Third's own station`,
+      ['station', 'line'],
     );
 
     // Detaching Third gives back Side / 0, on Side and Third together.

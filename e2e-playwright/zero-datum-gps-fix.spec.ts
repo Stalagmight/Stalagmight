@@ -14,6 +14,7 @@ import {
   type LineSeed,
 } from './helpers/app';
 import { expectSpoken, prosePillKinds } from './helpers/proseText';
+import { expectProse } from './helpers/proseSentence';
 
 const lineSeeds: LineSeed[] = [
   {
@@ -222,8 +223,11 @@ test.describe('Second zero datum in a connected survey (#741)', () => {
     }, b);
 
     const notice = page.getByTestId('adjustment-notice');
-    await expect(notice.getByTestId('adjustment-notice-far-gps-fix')).toHaveText(
+    // The station is a prose pill (RS-PROSE) that reads as its plain label.
+    await expectProse(
+      notice.getByTestId('adjustment-notice-far-gps-fix'),
       'Bent to a GPS fix at Entrance B / 1, 43 m from its surveyed position. Check it.',
+      ['station'],
       { timeout: 10000 }
     );
     await page.evaluate(() => (window as unknown as { __E2E_TEST__: E2EStores }).__E2E_TEST__.uiStore.getState().setGeometryMode('measured', 'e2e'));

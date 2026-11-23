@@ -36,8 +36,12 @@ import { useProjectStore, projectSwitched } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
 import { lineDisplayName } from '../../utils/stationIdentity';
-import { dmpFileStationLabel, dmpFileStationName, suggestionTargetStationLabel } from '../../utils/importStationNames';
+import { dmpFileStationName, suggestionTargetStationLabel } from '../../utils/importStationNames';
+import { dmpFileStationPart, suggestionTargetStationProse } from '../../utils/importStationProse';
+import { proseToken } from '../../utils/prose';
+import { Prose } from '../common/Prose';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
@@ -846,6 +850,7 @@ export default function DmpNewImportDialog({
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
+  const prose = useProse();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
   // Responsive preview - fills the available column so it never overflows the
@@ -3835,16 +3840,17 @@ export default function DmpNewImportDialog({
                   </p>
                 </div>
 
-                {/* Connection description */}
+                {/* Connection description: both stations as prose pills (RS-PROSE), the incoming
+                    one neutral (not in the project yet, so no line of its own to colour it). */}
                 <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
                   <div className="text-sm">
-                    <span className="font-medium">{dmpFileStationLabel(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, wizardLineName(currentSuggestion!.importLineIndex) ?? currentSuggestion!.importLineName)}</span>
+                    <span className="font-medium" data-testid="wizard-connection-from"><Prose text={proseToken(dmpFileStationPart(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, wizardLineName(currentSuggestion!.importLineIndex) ?? currentSuggestion!.importLineName))} /></span>
                   </div>
                   <div className="text-text-secondary text-sm my-1">
                     {t('dialogs.dmpNewImport.connectsTo')}
                   </div>
                   <div className="text-sm">
-                    <span className="font-medium">{suggestionTargetStationLabel(labels, currentSuggestion!, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex, wizardLineName)}</span>
+                    <span className="font-medium" data-testid="wizard-connection-to"><Prose text={suggestionTargetStationProse(prose, currentSuggestion!, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex, wizardLineName)} /></span>
                     {isImportTarget && (
                       <span className="ml-1 text-xs text-text-secondary">(importing)</span>
                     )}

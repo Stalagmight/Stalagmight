@@ -6,6 +6,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { formatFixed } from '../../i18n/format';
 import { gasAssumptionsSummary } from '../../utils/gasAssumptionsSummary';
 import { formatGasLength, formatPressure, formatVolume } from '../../utils/formatGas';
@@ -36,6 +38,10 @@ export function GasPlanPanel() {
   const { t } = useTranslation();
   // Stations are shown by name with their line (`Main Line / 17`): names are only line-unique.
   const identity = useIdentityLabels();
+  // The out-of-reach sentence names its turn station as a prose pill
+  // (RS-PROSE); the origin, endpoint, way-point and marked-point readouts are
+  // values in rows, plain labels.
+  const prose = useProse();
   const {
     originChosen,
     originPickArmed,
@@ -513,12 +519,14 @@ export function GasPlanPanel() {
               rather than leaving the diver to wonder where their endpoint went. */}
           {endpointOutOfReach && (
             <p className="text-xs opacity-70" data-testid="gas-endpoint-out-of-reach">
-              {t(
-                turnTowardEndpoint
-                  ? 'gasPanel.route.endpointOutOfReach'
-                  : 'gasPanel.route.endpointUnusable',
-                { station: identity.planStation(endpointOutOfReach) }
-              )}
+              <Prose
+                text={t(
+                  turnTowardEndpoint
+                    ? 'gasPanel.route.endpointOutOfReach'
+                    : 'gasPanel.route.endpointUnusable',
+                  { station: prose.planStation(endpointOutOfReach) }
+                )}
+              />
             </p>
           )}
 

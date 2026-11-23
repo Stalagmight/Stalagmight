@@ -17,6 +17,8 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
 import { formatShotLabel } from '../../utils/formatters';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { computeOverlapPairs, needsDirectionReversal, type MergeOption } from '../../utils/overlapHelpers';
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
 import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
@@ -98,6 +100,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   );
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
   const labels = useIdentityLabels();
+  // The connection description names both slots as prose pills (RS-PROSE);
+  // the merge-station options and the alternatives' buttons keep `stationOn`.
+  const prose = useProse();
   // `Main Line / 17`, the slot's plain label (`Side / 12 (Main)` for a
   // foreign slot). The suggestion names the same lines the project does.
   const stationOn = useCallback(
@@ -514,14 +519,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {/* Connection description */}
             <div className="p-3 rounded border border-border bg-surface-alt space-y-2">
               <div className="text-sm">
-                <span className="font-medium">
-                  {stationOn(currentSuggestion!.orphanLineId, displayOrphanStation)}
+                <span className="font-medium" data-testid="orphan-connection-from">
+                  <Prose text={prose.station({ line_id: currentSuggestion!.orphanLineId, station_index: displayOrphanStation }, true)} />
                 </span>
               </div>
               <div className="text-xs text-text-secondary">
                 &rarr;{' '}
-                <span className="font-medium text-text-primary">
-                  {stationOn(currentSuggestion!.targetLineId, displayTargetStation)}
+                <span className="font-medium text-text-primary" data-testid="orphan-connection-to">
+                  <Prose text={prose.station({ line_id: currentSuggestion!.targetLineId, station_index: displayTargetStation }, true)} />
                 </span>
               </div>
             </div>
