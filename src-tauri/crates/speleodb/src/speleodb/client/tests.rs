@@ -1779,12 +1779,12 @@ fn a_middleware_failure_keeps_no_url() {
     let error = api_error::<()>(ApiOpError::Transport(HttpError::Middleware(
         reqwest_middleware::Error::middleware(failure),
     )));
-    match error {
-        SpeleoDbError::Transport { cause, detail } => {
-            assert_eq!(cause, TransportCause::Unknown);
-            assert!(!detail.contains("https://"), "{detail}");
-            assert!(!detail.contains("11111111-1111"), "{detail}");
-        }
-        other => panic!("expected a transport failure, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            &error,
+            SpeleoDbError::Transport { cause: TransportCause::Unknown, detail }
+                if !detail.contains("https://") && !detail.contains("11111111-1111")
+        ),
+        "a transport failure with no URL in its detail: {error:?}"
+    );
 }
