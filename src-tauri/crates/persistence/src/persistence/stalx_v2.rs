@@ -23,7 +23,10 @@
 //!   SpeleoDB copy that holds exactly its BASE revision from one with
 //!   un-uploaded work.
 //!
-//! Nothing in the app uses this module yet; the SQLite format is untouched.
+//! This is the format the app opens, saves and uploads. A 0.6.0 (SQLite)
+//! `.stalx` is only read: converted on open by [`super::migrate`] (after
+//! [`super::legacy_settle`] on a copy), and its SpeleoDB link read by
+//! [`super::legacy_link`]; nothing writes the SQLite format any more.
 
 mod atomic;
 mod canon;
