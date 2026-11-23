@@ -1617,42 +1617,39 @@ fn archive_import_closures(
             };
             project.home_line(identity).or(via)
         };
-        match closure.archive() {
-            Some((archived, kept)) => {
-                let own = project.station(archived).map_or("", |s| s.name.as_str());
-                let hidden = station_label(project, line_of(archived, archived), own);
-                let shown = station_label(
-                    project,
-                    line_of(project.shown(kept), kept),
-                    project.shown_name(kept).unwrap_or_default(),
-                );
-                if archived < first_new_station {
-                    outcome.identity_warnings.push(format!(
-                        "Loop closure: station \"{hidden}\", already in the project, is now \
-                         shown as \"{shown}\": Remove Closure brings its name back"
-                    ));
-                } else {
-                    outcome.identity_notes.push(format!(
-                        "Loop closure: station \"{hidden}\" is shown as \"{shown}\": Remove \
-                         Closure brings its own name back"
-                    ));
-                }
-            }
-            None => {
-                // Each end as the user sees it (an end another closure
-                // archives shows its kept end).
-                let end = |node: StationId| {
-                    let shown = project.shown(node);
-                    let name = project.shown_name(node).unwrap_or_default();
-                    station_label(project, line_of(shown, node), name)
-                };
-                outcome.identity_notes.push(format!(
-                    "Loop closure between \"{}\" and \"{}\" shows both names: neither end can \
-                     be shown as the other",
-                    end(closure.a),
-                    end(closure.b)
-                ));
-            }
+        let Some((archived, kept)) = closure.archive() else {
+            // Each end as the user sees it (an end another closure archives
+            // shows its kept end).
+            let end = |node: StationId| {
+                let shown = project.shown(node);
+                let name = project.shown_name(node).unwrap_or_default();
+                station_label(project, line_of(shown, node), name)
+            };
+            outcome.identity_notes.push(format!(
+                "Loop closure between \"{}\" and \"{}\" shows both names: neither end can be \
+                 shown as the other",
+                end(closure.a),
+                end(closure.b)
+            ));
+            continue;
+        };
+        let own = project.station(archived).map_or("", |s| s.name.as_str());
+        let hidden = station_label(project, line_of(archived, archived), own);
+        let shown = station_label(
+            project,
+            line_of(project.shown(kept), kept),
+            project.shown_name(kept).unwrap_or_default(),
+        );
+        if archived < first_new_station {
+            outcome.identity_warnings.push(format!(
+                "Loop closure: station \"{hidden}\", already in the project, is now shown as \
+                 \"{shown}\": Remove Closure brings its name back"
+            ));
+        } else {
+            outcome.identity_notes.push(format!(
+                "Loop closure: station \"{hidden}\" is shown as \"{shown}\": Remove Closure \
+                 brings its own name back"
+            ));
         }
     }
     for letter in lettered {

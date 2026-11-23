@@ -14,7 +14,7 @@ use super::import_funnel::{self, ImportRequest, RefusedLine};
 use super::project_add_tests::{add, at, fixed_time, meta, open_target, shot as fixed_shot};
 use super::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
-use crate::models::survey::{ClosureEnd, ClosureStrategy, Project, StartAt};
+use crate::models::survey::{ClosureEnd, ClosureStrategy, LoopClosure, Project, StartAt};
 use crate::models::{
     ImportClosure, ImportLineConfig, ImportPlacement, ImportReceipt, LineId, ShotData, StationId,
     StationRef, MAX_STATION_ID,
@@ -139,8 +139,8 @@ fn line_id(project: &Project, name: &str) -> LineId {
         .lines()
         .iter()
         .find(|l| l.name.as_deref() == Some(name))
-        .unwrap_or_else(|| panic!("no line {name}"))
-        .id
+        .map(|l| l.id)
+        .unwrap()
 }
 
 /// The node at station `index` of the line named `name`.
@@ -415,6 +415,35 @@ fn a_join_onto_a_closure_archived_station_shows_its_kept_end() {
     assert_valid(&p);
 }
 
+/// The New Line dialog's line snapped onto a station (create line and
+/// merge) gives no file identity: the target is kept, nothing is archived,
+/// and the new line is native there (no dot), its own station named like
+/// the target lettered.
+#[test]
+fn create_line_and_merge_keeps_the_target_and_archives_nothing() {
+    let state = with_main();
+    let main = line_id(&project(&state), "Main");
+    let result = state.execute_create_and_merge(
+        Some("New".to_string()),
+        None,
+        None,
+        "#00ff00".to_string(),
+        None,
+        vec![shot(0.0, 2.0), shot(40.0, 2.0), shot(80.0, 2.0)],
+        0,
+        StationRef::new(main, 2),
+        crate::models::ClosureStrategy::Batch,
+    );
+    assert!(result.success, "{:?}", result.error);
+    let p = project(&state);
+    let junction = node(&p, "Main", 2);
+    assert_eq!(node(&p, "New", 0), junction);
+    assert!(p.station(junction).unwrap().archived.is_empty());
+    assert!(!p.is_foreign_slot(StationRef::new(line_id(&p, "New"), 0)));
+    assert_eq!(shown(&p, "New"), ["2", "1", "2a", "3"]);
+    assert_valid(&p);
+}
+
 // ----- closures (RS 9) ---------------------------------------------------------------
 
 /// Rule K keeps the end on the longest line, whichever end the file names
@@ -523,7 +552,7 @@ fn an_imported_closure_falls_back_to_the_allowed_end_then_to_none() {
     let p = project(&state);
     let (b1, c1) = (node(&p, "B", 1), node(&p, "C", 1));
     let (a2, a4, a6) = (node(&p, "A", 2), node(&p, "A", 4), node(&p, "A", 6));
-    let archives: Vec<_> = p.closures.iter().map(|c| c.archive()).collect();
+    let archives: Vec<_> = p.closures.iter().map(LoopClosure::archive).collect();
     assert_eq!(
         archives,
         vec![Some((b1, a2)), Some((c1, a4)), Some((a6, b1)), None]

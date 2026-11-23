@@ -203,7 +203,6 @@ mod import_commands_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::indexing_slicing,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod import_identity_tests;
